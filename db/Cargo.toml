@@ -1,0 +1,11 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rim_core = {path = "../rim_core" }
+entity = {path = "../entity"}
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+sea-orm = "2.0.0-rc.16"

@@ -1,0 +1,15 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+api = {path = "../api"}
+log = "0.4.28"
+actix-web = "4.11.0"
+logging = {path = "../logging"}
+dotenvy = "0.15.7"
+config = "0.15.18"
+serde = { version = "1.0.228", features = ["derive"] }
+async-graphql-actix-web = "7.0.17"
+async-graphql = "7.0.17"

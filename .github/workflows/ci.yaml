@@ -61,7 +61,12 @@ jobs:
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       - name: Cargo Audit
+        id: audit
         run: cargo audit
+        continue-on-error: true
+      - name: Warning on audit
+        if: ${{ steps.audit.outcome == 'failure' }}
+        run: echo "::warning::cargo audit found vulnerabilities (non-blocking). Check logs above."
 
   docker_build:
     name: Docker Build

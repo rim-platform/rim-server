@@ -1,0 +1,10 @@
+[package]
+name = "rim_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+anyhow = "1.0.100"
+entity = {path = "../entity"}
+serde_json = "1.0.145"
