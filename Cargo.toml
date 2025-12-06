@@ -4,4 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-sea-orm = { version = "1.1.7", features = ["sqlx-postgres", "runtime-tokio", "with-uuid"] }
+
+[workspace]
+resolver = "3"
+members = ["api", "rim_core", "db",
+    "entity",
+    "logging",
+    "migration",
+    "server", "services",
+]
