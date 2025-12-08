@@ -2,34 +2,31 @@
 macro_rules! impl_repository_for_entity {
     (
         $repo_ty:ty,
-        $model_ty:ty,
-        $column_ty:ty,
-        $id_ty:ty,
-        $entity:ty
+        $entity:ty,
+        $model:ty,
+        $model_id:ty
     ) => {
         #[async_trait]
-        impl Repository<$model_ty, $id_ty> for $repo_ty {
-            async fn get_by_id(&self, id: $id_ty) -> anyhow::Result<Option<$model_ty>> {
-                let model = <$entity>::find_by_id(id)
+        impl Repository for $repo_ty {
+            type Model = $model;
+            type Id = $model_id;
+
+            async fn get_by_id(&self, id: Self::Id) -> anyhow::Result<Option<Self::Model>> {
+                let user = <$entity>::find_by_id(id)
                     .one(&self.db)
                     .await?;
-
-                Ok(model)
+                Ok(user.map(Into::into))
             }
 
-            async fn get_all(&self) -> anyhow::Result<Vec<$model_ty>> {
-                let models = <$entity>::find()
-                    .order_by_asc(<$column_ty>::Id)
+            async fn get_all(&self) -> anyhow::Result<Vec<Self::Model>> {
+                let users = <$entity>::find()
                     .all(&self.db)
                     .await?;
-
-                Ok(models)
+                Ok(users.into_iter().map(Into::into).collect())
             }
 
-            async fn delete_by_id(&self, id: $id_ty) -> anyhow::Result<()> {
-                <$entity>::delete_by_id(id)
-                    .exec(&self.db)
-                    .await?;
+            async fn delete_by_id(&self, id: Self::Id) -> anyhow::Result<()> {
+                <$entity>::delete_by_id(id).exec(&self.db).await?;
                 Ok(())
             }
         }

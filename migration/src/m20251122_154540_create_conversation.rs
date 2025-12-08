@@ -27,7 +27,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Conversation::Table)
                     .if_not_exists()
-                    .col(pk_auto(Conversation::Id))
+                    .col(uuid_uniq(Conversation::Id).primary_key())
                     .col(
                         enumeration(
                             Conversation::ConversationType,
@@ -51,21 +51,9 @@ impl MigrationTrait for Migration {
             Table::create()
                 .table(ConversationMember::Table)
                 .if_not_exists()
-                .col(
-                    pk_auto(
-                        ConversationMember::Id
-                    )
-                )
-                .col(
-                    integer(
-                        ConversationMember::UserId
-                    ).not_null()
-                )
-                .col(
-                    integer(
-                        ConversationMember::ConversationId
-                    ).not_null()
-                )
+                .col(uuid_uniq(ConversationMember::Id).primary_key())
+                .col(uuid(ConversationMember::UserId).not_null())
+                .col(uuid(ConversationMember::ConversationId).not_null())
                 .foreign_key(
                     ForeignKey::create()
                         .name("fk-conversation-member")

@@ -1,9 +1,0 @@
-pub mod repository;
-pub mod user_repository;
-pub mod server_repository;
-pub mod server_member_repository;
-pub mod conversation_repository;
-pub mod conversation_member_repository;
-pub mod message_thread_repository;
-pub mod message_repository;
-pub mod message_attachment_repository;

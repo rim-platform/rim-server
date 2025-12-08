@@ -5,12 +5,12 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "message")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub message_thread_id: i32,
-    pub parent_message_id: Option<i32>,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub message_thread_id: Uuid,
+    pub parent_message_id: Option<Uuid>,
     pub sent_at: DateTimeWithTimeZone,
-    pub sent_by: i32,
+    pub sent_by: Uuid,
     pub text: String,
     pub is_deleted: bool,
     pub has_attachments: bool,

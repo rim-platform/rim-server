@@ -1,0 +1,18 @@
+use chrono::{DateTime, Utc};
+use crate::model_id;
+
+model_id!(UserId);
+
+pub struct User {
+    pub id: UserId,
+    pub username: String,
+    pub password_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_login_at: DateTime<Utc>,
+}
+
+pub struct NewUser {
+    pub username: String,
+    pub password: String,
+}
