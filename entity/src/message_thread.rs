@@ -5,10 +5,10 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "message_thread")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub conversation_id: i32,
-    pub first_message_id: Option<i32>,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub first_message_id: Option<Uuid>,
     pub created_at: DateTimeWithTimeZone,
     pub last_message_at: DateTimeWithTimeZone,
 }

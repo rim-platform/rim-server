@@ -25,7 +25,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Server::Table)
                     .if_not_exists()
-                    .col(pk_auto(Server::Id))
+                    .col(uuid_uniq(Server::Id).primary_key())
                     .col(string(Server::Name))
                     .col(
                         timestamp_with_time_zone(Server::CreatedAt)
@@ -46,9 +46,9 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ServerMember::Table)
                     .if_not_exists()
-                    .col(pk_auto(ServerMember::Id))
-                    .col(integer(ServerMember::ServerId).not_null())
-                    .col(integer(ServerMember::UserId).not_null())
+                    .col(uuid_uniq(ServerMember::Id).primary_key())
+                    .col(uuid(ServerMember::ServerId).not_null())
+                    .col(uuid(ServerMember::UserId).not_null())
                     .col(enumeration(ServerMember::MemberRole, ServerMemberRole::Table, [
                             ServerMemberRole::Moderator,
                             ServerMemberRole::Guest,

@@ -1,11 +1,14 @@
 use sea_orm::ColumnTrait;
-use sea_orm::QueryOrder;
 use async_trait::async_trait;
 use crate::impl_repository_for_entity;
 use entity::conversation_member;
-use rim_core::repositories::repository::Repository;
+use rim_core::repository::repository::Repository;
 use sea_orm::{ActiveModelTrait, DbConn, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait, Set};
-use rim_core::repositories::conversation_member_repository::ConversationMemberRepository;
+use sea_orm::prelude::Uuid;
+use rim_core::conversation::model::{ConversationId};
+use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::user::model::UserId;
 
 pub struct SeaOrmConversationMemberRepository {
     db: DbConn,
@@ -18,43 +21,39 @@ impl SeaOrmConversationMemberRepository {
 }
 
 
-type Id = i32;
-
 impl_repository_for_entity!(
     SeaOrmConversationMemberRepository,
-    conversation_member::Model,
-    conversation_member::Column,
-    Id,
-    conversation_member::Entity
+    conversation_member::Entity,
+    ConversationMember,
+    ConversationMemberId
 );
 
 
 #[async_trait]
-impl ConversationMemberRepository<conversation_member::Model, Id>
-for SeaOrmConversationMemberRepository {
+impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
     async fn add_member(
         &self,
-        conversation_id: Id,
-        user_id: Id,
-    ) -> anyhow::Result<conversation_member::Model> {
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> anyhow::Result<Self::Model> {
         let active = conversation_member::ActiveModel {
-            conversation_id: Set(conversation_id),
-            user_id: Set(user_id),
+            conversation_id: Set(conversation_id.into()),
+            user_id: Set(user_id.into()),
             ..Default::default()
         };
 
         let inserted = active.insert(&self.db).await?;
-        Ok(inserted)
+        Ok(inserted.into())
     }
 
     async fn remove_member(
         &self,
-        conversation_id: Id,
-        user_id: Id,
+        conversation_id: ConversationId,
+        user_id: UserId,
     ) -> anyhow::Result<()> {
         conversation_member::Entity::delete_many()
-            .filter(conversation_member::Column::ConversationId.eq(conversation_id))
-            .filter(conversation_member::Column::UserId.eq(user_id))
+            .filter(conversation_member::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
             .exec(&self.db)
             .await?;
         Ok(())
@@ -62,12 +61,12 @@ for SeaOrmConversationMemberRepository {
 
     async fn get_members_for_conversation(
         &self,
-        conversation_id: Id,
-    ) -> anyhow::Result<Vec<conversation_member::Model>> {
+        conversation_id: ConversationId,
+    ) -> anyhow::Result<Vec<Self::Model>> {
         let members = conversation_member::Entity::find()
-            .filter(conversation_member::Column::ConversationId.eq(conversation_id))
+            .filter(conversation_member::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
             .all(&self.db)
             .await?;
-        Ok(members)
+        Ok(members.into_iter().map(Into::into).collect())
     }
 }

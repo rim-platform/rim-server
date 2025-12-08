@@ -7,9 +7,12 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["api", "rim_core", "db",
+members = [
+    "api",
+    "rim_core",
+    "db",
     "entity",
     "logging",
     "migration",
-    "server", "services",
+    "server",
 ]
