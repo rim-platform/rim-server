@@ -1,5 +1,5 @@
-use rim_core::message::model::{Message};
-use crate::{message};
+use crate::message;
+use rim_core::message::model::Message;
 
 impl From<message::Model> for Message {
     fn from(m: message::Model) -> Self {

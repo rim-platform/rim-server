@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use crate::model_id;
+use chrono::{DateTime, Utc};
 
 model_id!(ServerId);
 
@@ -9,4 +9,3 @@ pub struct Server {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
-

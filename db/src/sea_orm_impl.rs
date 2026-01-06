@@ -1,8 +1,0 @@
-pub mod user;
-pub mod server;
-pub mod server_member;
-pub mod conversation;
-pub mod conversation_member;
-pub mod message_thread;
-pub mod message;
-pub mod message_attachment;

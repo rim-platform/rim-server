@@ -1,12 +1,11 @@
-use async_trait::async_trait;
 use crate::conversation::model::ConversationId;
 use crate::message::model::MessageId;
 use crate::message_thread::model::{MessageThread, MessageThreadId};
 use crate::repository::repository::Repository;
+use async_trait::async_trait;
 
 #[async_trait]
-pub trait MessageThreadRepository<Model = MessageThread, Id = MessageThreadId>: Repository
-{
+pub trait MessageThreadRepository: Repository<Model = MessageThread, Id = MessageThreadId> {
     async fn create_thread(
         &self,
         conversation_id: ConversationId,

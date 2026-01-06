@@ -1,5 +1,5 @@
-use rim_core::message_attachment::model::{MessageAttachment};
-use crate::{message_attachment};
+use crate::message_attachment;
+use rim_core::message_attachment::model::MessageAttachment;
 
 impl From<message_attachment::Model> for MessageAttachment {
     fn from(m: message_attachment::Model) -> Self {

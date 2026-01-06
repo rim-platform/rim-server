@@ -10,6 +10,7 @@ pub struct Model {
     pub id: Uuid,
     pub conversation_type: ConversationType,
     pub created_at: DateTimeWithTimeZone,
+    pub server_id: Uuid,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -18,6 +19,14 @@ pub enum Relation {
     ConversationMember,
     #[sea_orm(has_many = "super::message_thread::Entity")]
     MessageThread,
+    #[sea_orm(
+        belongs_to = "super::server::Entity",
+        from = "Column::ServerId",
+        to = "super::server::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    Server,
 }
 
 impl Related<super::conversation_member::Entity> for Entity {
@@ -29,6 +38,12 @@ impl Related<super::conversation_member::Entity> for Entity {
 impl Related<super::message_thread::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MessageThread.def()
+    }
+}
+
+impl Related<super::server::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Server.def()
     }
 }
 

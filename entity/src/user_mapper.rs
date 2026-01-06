@@ -1,5 +1,5 @@
-use rim_core::user::model::{User};
 use crate::user;
+use rim_core::user::model::User;
 
 impl From<user::Model> for User {
     fn from(m: user::Model) -> Self {

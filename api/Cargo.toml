@@ -1,8 +1,0 @@
-[package]
-name = "api"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-actix-web = "4.11.0"
-async-graphql = "7.0.17"

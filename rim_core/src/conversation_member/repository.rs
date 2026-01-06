@@ -1,11 +1,12 @@
-use async_trait::async_trait;
 use crate::conversation::model::ConversationId;
 use crate::conversation_member::model::{ConversationMember, ConversationMemberId};
 use crate::repository::repository::Repository;
 use crate::user::model::UserId;
+use async_trait::async_trait;
 
 #[async_trait]
-pub trait ConversationMemberRepository<Model = ConversationMember, Id = ConversationMemberId>: Repository
+pub trait ConversationMemberRepository:
+    Repository<Model = ConversationMember, Id = ConversationMemberId>
 {
     async fn add_member(
         &self,
@@ -23,4 +24,10 @@ pub trait ConversationMemberRepository<Model = ConversationMember, Id = Conversa
         &self,
         conversation_id: ConversationId,
     ) -> anyhow::Result<Vec<Self::Model>>;
+
+    async fn is_member(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> anyhow::Result<bool>;
 }
