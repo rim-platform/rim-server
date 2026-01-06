@@ -1,12 +1,11 @@
-use async_trait::async_trait;
 use crate::repository::repository::Repository;
 use crate::server::model::ServerId;
 use crate::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use crate::user::model::UserId;
+use async_trait::async_trait;
 
 #[async_trait]
-pub trait ServerMemberRepository<Model = ServerMember, Id = ServerMemberId>: Repository
-{
+pub trait ServerMemberRepository: Repository<Model = ServerMember, Id = ServerMemberId> {
     async fn add_member(
         &self,
         server_id: ServerId,
@@ -23,5 +22,7 @@ pub trait ServerMemberRepository<Model = ServerMember, Id = ServerMemberId>: Rep
 
     async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> anyhow::Result<()>;
 
-    async fn get_members_for_server(&self, server_id: ServerId) -> anyhow::Result<Vec<Self::Model>>;
+    async fn get_members_for_server(&self, server_id: ServerId)
+    -> anyhow::Result<Vec<Self::Model>>;
+    async fn is_member(&self, server_id: ServerId, user_id: UserId) -> anyhow::Result<bool>;
 }

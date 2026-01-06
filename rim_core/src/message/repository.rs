@@ -1,19 +1,14 @@
-use async_trait::async_trait;
-use crate::message::model::{Message, MessageId};
+use crate::message::model::{Message, MessageId, NewMessage};
 use crate::message_thread::model::MessageThreadId;
 use crate::repository::repository::Repository;
 use crate::user::model::UserId;
+use async_trait::async_trait;
 
 #[async_trait]
-pub trait MessageRepository<Model = Message, Id = MessageId>: Repository
-{
+pub trait MessageRepository: Repository<Model = Message, Id = MessageId> {
     async fn create_message(
         &self,
-        thread_id: MessageThreadId,
-        parent_message_id: Option<Self::Id>,
-        sent_by: UserId,
-        text: &str,
-        has_attachments: bool,
+        new_message: &NewMessage,
     ) -> anyhow::Result<Self::Model>;
 
     async fn delete_message(&self, message_id: Self::Id) -> anyhow::Result<()>;

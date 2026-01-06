@@ -1,7 +1,7 @@
-use chrono::{DateTime, Utc};
 use crate::model_id;
-use crate::user::model::UserId;
 use crate::server::model::ServerId;
+use crate::user::model::UserId;
+use chrono::{DateTime, Utc};
 
 model_id!(ServerMemberId);
 

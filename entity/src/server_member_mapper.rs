@@ -1,7 +1,7 @@
-use std::str::FromStr;
-use sea_orm::{ActiveEnum, ColIdx};
-use rim_core::server_member::model::{ServerMember, ServerMemberRole};
 use crate::{sea_orm_active_enums, server_member};
+use rim_core::server_member::model::{ServerMember, ServerMemberRole};
+use sea_orm::ActiveEnum;
+use std::str::FromStr;
 
 impl From<server_member::Model> for ServerMember {
     fn from(m: server_member::Model) -> Self {

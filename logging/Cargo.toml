@@ -1,9 +1,0 @@
-[package]
-name = "logging"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-chrono = "0.4.42"
-log = "0.4.28"
-dotenvy = "0.15.7"

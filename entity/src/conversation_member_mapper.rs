@@ -1,5 +1,5 @@
-use rim_core::conversation_member::model::{ConversationMember};
-use crate::{conversation_member};
+use crate::conversation_member;
+use rim_core::conversation_member::model::ConversationMember;
 
 impl From<conversation_member::Model> for ConversationMember {
     fn from(m: conversation_member::Model) -> Self {

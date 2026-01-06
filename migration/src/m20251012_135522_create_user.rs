@@ -12,23 +12,17 @@ impl MigrationTrait for Migration {
                     .table(User::Table)
                     .if_not_exists()
                     .col(uuid_uniq(User::Id).primary_key())
-                    .col(string(User::Username)
-                        .not_null()
-                        .string_len(32)
-                    )
-                    .col(string(User::PasswordHash)
-                        .not_null()
-                        .string_len(64)
-                    )
+                    .col(string(User::Username).not_null().string_len(32))
+                    .col(string(User::PasswordHash).not_null().string_len(64))
                     .col(
                         timestamp_with_time_zone(User::CreatedAt)
                             .not_null()
-                            .default(Expr::current_timestamp())
+                            .default(Expr::current_timestamp()),
                     )
                     .col(
                         timestamp_with_time_zone(User::UpdatedAt)
                             .not_null()
-                            .default(Expr::current_timestamp())
+                            .default(Expr::current_timestamp()),
                     )
                     .col(timestamp_with_time_zone(User::LastLoginAt))
                     .to_owned(),

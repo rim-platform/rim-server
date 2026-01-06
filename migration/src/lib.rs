@@ -1,6 +1,5 @@
 pub use sea_orm_migration::prelude::*;
 
-
 pub struct Migrator;
 
 #[async_trait::async_trait]

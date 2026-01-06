@@ -10,5 +10,14 @@ pub struct MessageAttachment {
     pub file_size: i64,
     pub file_name: String,
     pub mime_type: String,
-    pub metadata: Option<serde_json::Value>
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub struct NewMessageAttachment {
+    pub storage_url: String,
+    pub message_id: MessageId,
+    pub file_size: i64,
+    pub file_name: String,
+    pub mime_type: String,
+    pub metadata: Option<serde_json::Value>,
 }

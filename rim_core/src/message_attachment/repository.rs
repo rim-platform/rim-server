@@ -1,10 +1,11 @@
-use async_trait::async_trait;
 use crate::message::model::MessageId;
 use crate::message_attachment::model::{MessageAttachment, MessageAttachmentId};
 use crate::repository::repository::Repository;
+use async_trait::async_trait;
 
 #[async_trait]
-pub trait MessageAttachmentRepository<Model = MessageAttachment, Id = MessageAttachmentId>: Repository
+pub trait MessageAttachmentRepository:
+    Repository<Model = MessageAttachment, Id = MessageAttachmentId>
 {
     async fn add_attachment(
         &self,

@@ -1,5 +1,5 @@
-use sea_orm_migration::{prelude::*, schema::*};
 use crate::m20251122_154540_create_conversation::Conversation;
+use sea_orm_migration::{prelude::*, schema::*};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -19,12 +19,12 @@ impl MigrationTrait for Migration {
                     .col(timestamp_with_time_zone(MessageThread::LastMessageAt))
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk-thread-conversation-id")
+                            .name("fk-message_thread-conversation-id")
                             .from(MessageThread::Table, MessageThread::ConversationId)
                             .to(Conversation::Table, Conversation::Id)
-                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_delete(ForeignKeyAction::Cascade),
                     )
-                    .to_owned()
+                    .to_owned(),
             )
             .await?;
         manager
@@ -38,32 +38,33 @@ impl MigrationTrait for Migration {
                     .col(
                         timestamp_with_time_zone(Message::SentAt)
                             .not_null()
-                            .default(Expr::current_timestamp())
+                            .default(Expr::current_timestamp()),
                     )
                     .col(uuid(Message::SentBy).not_null())
-                    .col(string(Message::Text).string_len(1024).not_null())
+                    .col(string(Message::Text).string_len(1024).null())
                     .col(boolean(Message::IsDeleted).not_null().default(false))
                     .col(boolean(Message::HasAttachments).not_null().default(false))
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk-message-thread-id")
+                            .name("fk-message-message_thread-id")
                             .from(Message::Table, Message::MessageThreadId)
                             .to(MessageThread::Table, MessageThread::Id)
-                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_delete(ForeignKeyAction::Cascade),
                     )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk-parent-message-id")
                             .from(Message::Table, Message::ParentMessageId)
                             .to(Message::Table, Message::Id)
-                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_delete(ForeignKeyAction::Cascade),
                     )
                     .check(
-                        Expr::col(Message::Text).is_not_null()
-                            .or(Expr::col(Message::HasAttachments).eq(true))
+                        Expr::cust("length(trim(text)) > 0")
+                            .or(Expr::col(Message::HasAttachments).eq(true)),
                     )
-                    .to_owned()
-            ).await?;
+                    .to_owned(),
+            )
+            .await?;
         manager
             .create_table(
                 Table::create()
@@ -73,7 +74,7 @@ impl MigrationTrait for Migration {
                     .col(
                         string(MessageAttachment::StorageUrl)
                             .not_null()
-                            .string_len(1024)
+                            .string_len(1024),
                     )
                     .col(uuid(MessageAttachment::MessageId).not_null())
                     .col(big_integer(MessageAttachment::FileSize).not_null())
@@ -85,10 +86,11 @@ impl MigrationTrait for Migration {
                             .name("fk-attachment-message-id")
                             .from(MessageAttachment::Table, MessageAttachment::MessageId)
                             .to(Message::Table, Message::Id)
-                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_delete(ForeignKeyAction::Cascade),
                     )
-                    .to_owned()
-            ).await
+                    .to_owned(),
+            )
+            .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

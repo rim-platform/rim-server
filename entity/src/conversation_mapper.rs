@@ -1,8 +1,8 @@
-use std::str::FromStr;
-use sea_orm::ActiveEnum;
-use rim_core::conversation::model::{Conversation};
-use rim_core::conversation::model::ConversationType;
 use crate::{conversation, sea_orm_active_enums};
+use rim_core::conversation::model::Conversation;
+use rim_core::conversation::model::ConversationType;
+use sea_orm::ActiveEnum;
+use std::str::FromStr;
 
 impl From<conversation::Model> for Conversation {
     fn from(m: conversation::Model) -> Self {
@@ -10,10 +10,10 @@ impl From<conversation::Model> for Conversation {
             id: m.id.into(),
             created_at: m.created_at.into(),
             conversation_type: ConversationType::from_str(
-                m.conversation_type
-                    .into_value()
-                    .as_str()
-            ).unwrap(),
+                m.conversation_type.into_value().as_str(),
+            )
+            .unwrap(),
+            server_id: m.server_id.into(),
         }
     }
 }

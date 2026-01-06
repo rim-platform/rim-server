@@ -11,7 +11,7 @@ pub struct Model {
     pub parent_message_id: Option<Uuid>,
     pub sent_at: DateTimeWithTimeZone,
     pub sent_by: Uuid,
-    pub text: String,
+    pub text: Option<String>,
     pub is_deleted: bool,
     pub has_attachments: bool,
 }

@@ -1,5 +1,5 @@
-use rim_core::message_thread::model::{MessageThread};
-use crate::{message_thread};
+use crate::message_thread;
+use rim_core::message_thread::model::MessageThread;
 
 impl From<message_thread::Model> for MessageThread {
     fn from(m: message_thread::Model) -> Self {

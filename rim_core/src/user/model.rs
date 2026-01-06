@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use crate::model_id;
+use chrono::{DateTime, Utc};
 
 model_id!(UserId);
 
