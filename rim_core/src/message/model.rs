@@ -1,11 +1,12 @@
+use crate::message_attachment::model::NewMessageAttachment;
 use crate::message_thread::model::MessageThreadId;
 use crate::model_id;
 use crate::user::model::UserId;
 use chrono::{DateTime, Utc};
-use crate::message_attachment::model::NewMessageAttachment;
 
 model_id!(MessageId);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub id: MessageId,
     pub message_thread_id: MessageThreadId,
@@ -17,6 +18,7 @@ pub struct Message {
     pub has_attachments: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMessage {
     pub text: Option<String>,
     pub sent_by: UserId,

@@ -1,12 +1,13 @@
-use crate::impl_repository_for_entity;
 use async_trait::async_trait;
 use entity::message_attachment;
 use rim_core::message::model::MessageId;
 use rim_core::message_attachment::model::{MessageAttachment, MessageAttachmentId};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
-use rim_core::repository::repository::Repository;
+use rim_core::repository::error::RepoResult;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+
+use crate::error::map_db_err;
 
 pub struct SeaOrmMessageAttachmentRepository {
     pub db: DbConn,
@@ -17,15 +18,18 @@ impl SeaOrmMessageAttachmentRepository {
         Self { db }
     }
 }
-impl_repository_for_entity!(
-    SeaOrmMessageAttachmentRepository,
-    message_attachment::Entity,
-    MessageAttachment,
-    MessageAttachmentId
-);
 
 #[async_trait]
 impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
+    async fn get_by_id(&self, id: MessageAttachmentId) -> RepoResult<Option<MessageAttachment>> {
+        let model = message_attachment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
     async fn add_attachment(
         &self,
         message_id: MessageId,
@@ -34,7 +38,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         file_size: i64,
         mime_type: &str,
         metadata: Option<sea_orm::prelude::Json>,
-    ) -> anyhow::Result<Self::Model> {
+    ) -> RepoResult<MessageAttachment> {
         let active = message_attachment::ActiveModel {
             message_id: Set(message_id.into()),
             storage_url: Set(storage_url.to_owned()),
@@ -45,18 +49,19 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             ..Default::default()
         };
 
-        let inserted = active.insert(&self.db).await?;
+        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(inserted.into())
     }
 
     async fn get_attachments_for_message(
         &self,
         message_id: MessageId,
-    ) -> anyhow::Result<Vec<Self::Model>> {
+    ) -> RepoResult<Vec<MessageAttachment>> {
         let atts = message_attachment::Entity::find()
             .filter(message_attachment::Column::MessageId.eq::<Uuid>(message_id.into()))
             .all(&self.db)
-            .await?;
+            .await
+            .map_err(map_db_err)?;
         Ok(atts.into_iter().map(Into::into).collect())
     }
 }

@@ -1,11 +1,12 @@
 pub mod conversation;
-pub mod user;
-pub mod server;
-pub mod server_member;
-pub mod message_thread;
 pub mod message;
 pub mod message_attachment;
+pub mod message_thread;
+pub mod server;
+pub mod server_member;
+pub mod user;
 
+use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::user::model::UserId;
 use thiserror::Error;
 
@@ -31,6 +32,12 @@ pub enum ServiceError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("dependency unavailable")]
+    Unavailable,
+
+    #[error("dependency timed out")]
+    Timeout,
+
     #[error("permission denied")]
     PermissionDenied,
 
@@ -39,3 +46,21 @@ pub enum ServiceError {
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+pub fn map_repo_error(err: RepoError) -> ServiceError {
+    match err.kind() {
+        RepoErrorKind::NotFound => ServiceError::NotFound,
+        RepoErrorKind::Conflict => {
+            ServiceError::Conflict(err.message().unwrap_or("conflict").to_string())
+        }
+        RepoErrorKind::Timeout => ServiceError::Timeout,
+        RepoErrorKind::Unavailable => ServiceError::Unavailable,
+        RepoErrorKind::InvalidData | RepoErrorKind::Internal => ServiceError::Internal,
+        RepoErrorKind::Unsupported => ServiceError::Internal,
+        RepoErrorKind::Canceled => ServiceError::Internal,
+        RepoErrorKind::PreconditionFailed => {
+            ServiceError::Conflict("precondition failed".to_string())
+        }
+        _ => ServiceError::Internal,
+    }
+}

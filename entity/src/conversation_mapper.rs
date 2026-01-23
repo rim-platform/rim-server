@@ -9,6 +9,7 @@ impl From<conversation::Model> for Conversation {
         Self {
             id: m.id.into(),
             created_at: m.created_at.into(),
+            last_activity_at: m.last_activity_at.into(),
             conversation_type: ConversationType::from_str(
                 m.conversation_type.into_value().as_str(),
             )

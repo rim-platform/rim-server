@@ -2,9 +2,11 @@ use crate::model_id;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
 use chrono::{DateTime, Utc};
+use std::fmt;
 
 model_id!(ServerMemberId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ServerMemberRole {
     Owner,
     Moderator,
@@ -22,18 +24,40 @@ impl ServerMemberRole {
 }
 
 impl std::str::FromStr for ServerMemberRole {
-    type Err = anyhow::Error;
+    type Err = ParseServerMemberRoleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "owner" => Ok(ServerMemberRole::Owner),
             "moderator" => Ok(ServerMemberRole::Moderator),
             "guest" => Ok(ServerMemberRole::Guest),
-            other => Err(anyhow::anyhow!("Unknown role: {other}")),
+            other => Err(ParseServerMemberRoleError::new(other)),
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseServerMemberRoleError {
+    input: String,
+}
+
+impl ParseServerMemberRoleError {
+    pub fn new(input: impl Into<String>) -> Self {
+        Self {
+            input: input.into(),
+        }
+    }
+}
+
+impl fmt::Display for ParseServerMemberRoleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown server member role: {}", self.input)
+    }
+}
+
+impl std::error::Error for ParseServerMemberRoleError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerMember {
     pub id: ServerMemberId,
     pub server_id: ServerId,
