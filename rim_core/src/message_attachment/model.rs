@@ -3,6 +3,7 @@ use crate::model_id;
 
 model_id!(MessageAttachmentId);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageAttachment {
     pub id: MessageAttachmentId,
     pub storage_url: String,
@@ -13,6 +14,7 @@ pub struct MessageAttachment {
     pub metadata: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMessageAttachment {
     pub storage_url: String,
     pub message_id: MessageId,

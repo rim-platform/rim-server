@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::ServiceResult;
 use crate::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
-use crate::user::dto::{UserDto};
+use crate::user::dto::UserDto;
 
 #[async_trait]
 pub trait UserService: Send + Sync {

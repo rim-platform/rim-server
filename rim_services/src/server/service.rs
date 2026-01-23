@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::ServiceResult;
 use crate::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
-use crate::server::dto::{ServerDto};
+use crate::server::dto::ServerDto;
 
 #[async_trait]
 pub trait ServerService: Send + Sync {

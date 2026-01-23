@@ -1,9 +1,9 @@
 use crate::config::RIMConfig;
 use actix_web::{App, HttpServer, guard, web};
-use rim_api::graphql::index_graphiql;
-use rim_api::new_schema;
 use async_graphql_actix_web::GraphQL;
 use log::{debug, info};
+use rim_api::graphql::index_graphiql;
+use rim_api::new_schema;
 
 pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     info!("Starting RIM server...");

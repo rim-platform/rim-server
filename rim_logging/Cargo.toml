@@ -5,5 +5,8 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4.42"
-log = "0.4.28"
 dotenvy = "0.15.7"
+log = "0.4.28"
+tracing = "0.1.41"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json", "time"] }

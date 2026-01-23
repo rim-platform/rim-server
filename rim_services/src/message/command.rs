@@ -1,7 +1,10 @@
 use crate::Actor;
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
+use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
+
+use crate::message::dto::MessagePageCursor;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -39,10 +42,12 @@ pub struct ListMessagesQuery {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
 
-    pub parent_message_id: Option<MessageId>,
+    pub thread_id: rim_core::message_thread::model::MessageThreadId,
 
-    pub offset: u32,
+    pub dir: PageDir,
+    pub cursor: Option<MessagePageCursor>,
     pub limit: u32,
+    pub include_deleted: bool,
 }
 
 #[derive(Debug, Clone)]

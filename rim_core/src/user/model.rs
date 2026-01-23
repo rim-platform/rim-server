@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 
 model_id!(UserId);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub id: UserId,
     pub username: String,
@@ -12,6 +13,7 @@ pub struct User {
     pub last_login_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUser {
     pub username: String,
     pub password: String,

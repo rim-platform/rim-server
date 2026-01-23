@@ -1,12 +1,12 @@
 use crate::message::model::MessageId;
 use crate::message_attachment::model::{MessageAttachment, MessageAttachmentId};
-use crate::repository::repository::Repository;
+use crate::repository::error::RepoResult;
 use async_trait::async_trait;
 
 #[async_trait]
-pub trait MessageAttachmentRepository:
-    Repository<Model = MessageAttachment, Id = MessageAttachmentId>
-{
+pub trait MessageAttachmentRepository: Send + Sync {
+    async fn get_by_id(&self, id: MessageAttachmentId) -> RepoResult<Option<MessageAttachment>>;
+
     async fn add_attachment(
         &self,
         message_id: MessageId,
@@ -15,10 +15,10 @@ pub trait MessageAttachmentRepository:
         file_size: i64,
         mime_type: &str,
         metadata: Option<serde_json::Value>,
-    ) -> anyhow::Result<Self::Model>;
+    ) -> RepoResult<MessageAttachment>;
 
     async fn get_attachments_for_message(
         &self,
         message_id: MessageId,
-    ) -> anyhow::Result<Vec<Self::Model>>;
+    ) -> RepoResult<Vec<MessageAttachment>>;
 }

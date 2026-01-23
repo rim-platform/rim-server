@@ -4,7 +4,8 @@ use crate::ServiceResult;
 use crate::message::command::{
     DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, SendMessageCmd,
 };
-use crate::message::dto::{MessageDto};
+use crate::message::dto::{MessageDto, MessagePageCursor};
+use rim_core::repository::pagination::Page;
 
 #[async_trait]
 pub trait MessageService: Send + Sync {
@@ -12,7 +13,10 @@ pub trait MessageService: Send + Sync {
 
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto>;
 
-    async fn list_messages(&self, query: ListMessagesQuery) -> ServiceResult<Vec<MessageDto>>;
+    async fn list_messages(
+        &self,
+        query: ListMessagesQuery,
+    ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto>;
 

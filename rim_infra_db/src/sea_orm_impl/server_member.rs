@@ -1,13 +1,15 @@
-use crate::impl_repository_for_entity;
 use async_trait::async_trait;
 use entity::server_member;
-use rim_core::repository::repository::Repository;
+use rim_core::repository::error::RepoResult;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+
+use crate::error::map_db_err;
+use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 pub struct SeaOrmServerMemberRepository {
     pub db: DbConn,
@@ -19,21 +21,37 @@ impl SeaOrmServerMemberRepository {
     }
 }
 
-impl_repository_for_entity!(
-    SeaOrmServerMemberRepository,
-    server_member::Entity,
-    ServerMember,
-    ServerMemberId
-);
-
 #[async_trait]
 impl ServerMemberRepository for SeaOrmServerMemberRepository {
+    async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>> {
+        let model = server_member::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(model.map(Into::into))
+    }
+
+    async fn get_member(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Option<ServerMember>> {
+        let model = server_member::Entity::find()
+            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
     async fn add_member(
         &self,
         server_id: ServerId,
         user_id: UserId,
         role: ServerMemberRole,
-    ) -> anyhow::Result<Self::Model> {
+    ) -> RepoResult<ServerMember> {
         let active = server_member::ActiveModel {
             server_id: Set(server_id.into()),
             user_id: Set(user_id.into()),
@@ -41,7 +59,7 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
             ..Default::default()
         };
 
-        let inserted = active.insert(&self.db).await?;
+        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(inserted.into())
     }
 
@@ -50,47 +68,51 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
         server_id: ServerId,
         user_id: UserId,
         role: ServerMemberRole,
-    ) -> anyhow::Result<()> {
-        if let Some(member) = server_member::Entity::find()
+    ) -> RepoResult<()> {
+        let member = server_member::Entity::find()
             .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
             .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
             .one(&self.db)
-            .await?
-        {
-            let mut active: server_member::ActiveModel = member.into();
-            active.member_role = Set(role.into());
-            active.update(&self.db).await?;
+            .await
+            .map_err(map_db_err)?;
+
+        let Some(member) = member else {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
+        };
+
+        let mut active: server_member::ActiveModel = member.into();
+        active.member_role = Set(role.into());
+        active.update(&self.db).await.map_err(map_db_err)?;
+
+        Ok(())
+    }
+
+    async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()> {
+        let res = server_member::Entity::delete_many()
+            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        if res.rows_affected == 0 {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
         }
 
         Ok(())
     }
 
-    async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> anyhow::Result<()> {
-        server_member::Entity::delete_many()
-            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
-            .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
-            .exec(&self.db)
-            .await?;
-        Ok(())
-    }
-
-    async fn get_members_for_server(
-        &self,
-        server_id: ServerId,
-    ) -> anyhow::Result<Vec<Self::Model>> {
+    async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>> {
         let members = server_member::Entity::find()
             .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
             .all(&self.db)
-            .await?;
+            .await
+            .map_err(map_db_err)?;
 
         Ok(members.into_iter().map(Into::into).collect())
     }
 
-    async fn is_member(&self, server_id: ServerId, user_id: UserId) -> anyhow::Result<bool> {
-        let exist = server_member::Entity::find_by_id(server_id)
-            .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
-            .one(&self.db)
-            .await?;
-        Ok(exist.is_some())
+    async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool> {
+        Ok(self.get_member(server_id, user_id).await?.is_some())
     }
 }
