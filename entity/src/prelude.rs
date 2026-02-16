@@ -2,9 +2,11 @@
 
 pub use super::conversation::Entity as Conversation;
 pub use super::conversation_member::Entity as ConversationMember;
+pub use super::invite::Entity as Invite;
 pub use super::message::Entity as Message;
 pub use super::message_attachment::Entity as MessageAttachment;
 pub use super::message_thread::Entity as MessageThread;
 pub use super::server::Entity as Server;
 pub use super::server_member::Entity as ServerMember;
+pub use super::session::Entity as Session;
 pub use super::user::Entity as User;

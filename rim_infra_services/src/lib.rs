@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod conversation;
 pub mod message;
 pub mod message_attachment;
@@ -10,6 +11,7 @@ mod util;
 
 use std::sync::Arc;
 
+use rim_core::auth::repository::{InviteRepository, SessionRepository};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::repository::MessageRepository;
@@ -29,6 +31,8 @@ pub struct AppRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub user_repo: Arc<dyn UserRepository>,
+    pub session_repo: Arc<dyn SessionRepository>,
+    pub invite_repo: Arc<dyn InviteRepository>,
 }
 
 #[derive(Clone)]
@@ -71,6 +75,15 @@ pub struct ServerMemberRepos {
 #[derive(Clone)]
 pub struct UserRepos {
     pub user_repo: Arc<dyn UserRepository>,
+}
+
+#[derive(Clone)]
+pub struct AuthRepos {
+    pub user_repo: Arc<dyn UserRepository>,
+    pub server_repo: Arc<dyn ServerRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub session_repo: Arc<dyn SessionRepository>,
+    pub invite_repo: Arc<dyn InviteRepository>,
 }
 
 #[derive(Clone)]
@@ -125,6 +138,16 @@ impl AppRepos {
     pub fn for_user(&self) -> UserRepos {
         UserRepos {
             user_repo: Arc::clone(&self.user_repo),
+        }
+    }
+
+    pub fn for_auth(&self) -> AuthRepos {
+        AuthRepos {
+            user_repo: Arc::clone(&self.user_repo),
+            server_repo: Arc::clone(&self.server_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            session_repo: Arc::clone(&self.session_repo),
+            invite_repo: Arc::clone(&self.invite_repo),
         }
     }
 

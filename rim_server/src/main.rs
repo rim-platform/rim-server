@@ -5,7 +5,8 @@ pub(crate) mod config;
 mod server;
 
 fn initialize() {
-    init_logging().expect("Unable to init logger");
+    // Avoid panicking if logger is already initialized (tests, embedding, etc.).
+    let _ = init_logging();
     log::info!("Initializing application...");
     log::info!("Initializing DB");
 }

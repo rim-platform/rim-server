@@ -9,6 +9,7 @@ edition = "2024"
 resolver = "3"
 members = [
     "rim_api",
+    "rim_auth",
     "rim_core",
     "rim_infra_db",
     "entity",

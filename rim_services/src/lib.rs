@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod conversation;
 pub mod message;
 pub mod message_attachment;

@@ -18,6 +18,8 @@ pub enum Relation {
     Conversation,
     #[sea_orm(has_many = "super::server_member::Entity")]
     ServerMember,
+    #[sea_orm(has_many = "super::invite::Entity")]
+    Invite,
 }
 
 impl Related<super::conversation::Entity> for Entity {
@@ -29,6 +31,12 @@ impl Related<super::conversation::Entity> for Entity {
 impl Related<super::server_member::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ServerMember.def()
+    }
+}
+
+impl Related<super::invite::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Invite.def()
     }
 }
 

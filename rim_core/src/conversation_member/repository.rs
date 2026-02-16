@@ -25,11 +25,8 @@ pub trait ConversationMemberRepository: Send + Sync {
         conversation_id: ConversationId,
     ) -> RepoResult<Vec<ConversationMember>>;
 
-    async fn is_member(
-        &self,
-        conversation_id: ConversationId,
-        user_id: UserId
-    ) -> RepoResult<bool>;
+    async fn is_member(&self, conversation_id: ConversationId, user_id: UserId)
+    -> RepoResult<bool>;
 
     async fn list_member_ids(&self, conversation_id: ConversationId) -> RepoResult<Vec<UserId>>;
 }

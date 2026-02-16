@@ -10,4 +10,6 @@ pub trait UserRepository: Send + Sync {
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>>;
 
     async fn delete_by_username(&self, username: &str) -> RepoResult<()>;
+
+    async fn any_users_exist(&self) -> RepoResult<bool>;
 }
