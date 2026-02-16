@@ -10,3 +10,4 @@ tracing = "0.1.41"
 
 rim_core = { path = "../rim_core" }
 rim_services = { path = "../rim_services" }
+rim_auth = { path = "../rim_auth" }

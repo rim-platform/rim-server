@@ -11,6 +11,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20251122_154540_create_conversation::Migration),
             Box::new(m20251123_105135_create_threads_message::Migration),
             Box::new(m20260122_120000_add_conversation_last_activity_at::Migration),
+            Box::new(m20260212_000001_create_sessions_and_invites::Migration),
+            Box::new(m20260212_000002_expand_user_password_hash::Migration),
         ]
     }
 }
@@ -19,3 +21,5 @@ mod m20251029_222439_create_server;
 mod m20251122_154540_create_conversation;
 mod m20251123_105135_create_threads_message;
 mod m20260122_120000_add_conversation_last_activity_at;
+mod m20260212_000001_create_sessions_and_invites;
+mod m20260212_000002_expand_user_password_hash;

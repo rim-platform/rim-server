@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod conversation;
 pub mod conversation_member;
 mod macros;

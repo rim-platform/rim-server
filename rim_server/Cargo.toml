@@ -5,6 +5,14 @@ edition = "2024"
 
 [dependencies]
 rim_api = {path = "../rim_api" }
+rim_core = { path = "../rim_core" }
+rim_infra_db = { path = "../rim_infra_db" }
+rim_infra_services = { path = "../rim_infra_services" }
+rim_services = { path = "../rim_services" }
+sea-orm = "2.0.0-rc.20"
+chrono = "0.4.42"
+rim_auth = { path = "../rim_auth" }
+http = "1.4.0"
 log = "0.4.28"
 actix-web = "4.11.0"
 rim_logging = {path = "../rim_logging" }
@@ -13,3 +21,4 @@ config = "0.15.18"
 serde = { version = "1.0.228", features = ["derive"] }
 async-graphql-actix-web = "7.0.17"
 async-graphql = "7.0.17"
+async-graphql-parser = "7.0.17"
