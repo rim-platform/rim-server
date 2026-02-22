@@ -119,6 +119,7 @@ pub enum Conversation {
     ConversationType,
     CreatedAt,
     ServerId,
+    MainThreadId,
 }
 
 #[derive(DeriveIden)]

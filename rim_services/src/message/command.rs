@@ -42,8 +42,6 @@ pub struct ListMessagesQuery {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
 
-    pub thread_id: rim_core::message_thread::model::MessageThreadId,
-
     pub dir: PageDir,
     pub cursor: Option<MessagePageCursor>,
     pub limit: u32,

@@ -43,10 +43,19 @@ pub enum ServiceError {
     PermissionDenied,
 
     #[error("internal error")]
-    Internal,
+    Internal(#[source] Option<anyhow::Error>),
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+impl ServiceError {
+    pub fn internal<E>(err: E) -> Self
+    where
+        E: Into<anyhow::Error>,
+    {
+        Self::Internal(Some(err.into()))
+    }
+}
 
 pub fn map_repo_error(err: RepoError) -> ServiceError {
     match err.kind() {
@@ -56,12 +65,12 @@ pub fn map_repo_error(err: RepoError) -> ServiceError {
         }
         RepoErrorKind::Timeout => ServiceError::Timeout,
         RepoErrorKind::Unavailable => ServiceError::Unavailable,
-        RepoErrorKind::InvalidData | RepoErrorKind::Internal => ServiceError::Internal,
-        RepoErrorKind::Unsupported => ServiceError::Internal,
-        RepoErrorKind::Canceled => ServiceError::Internal,
+        RepoErrorKind::InvalidData | RepoErrorKind::Internal => ServiceError::internal(err),
+        RepoErrorKind::Unsupported => ServiceError::internal(err),
+        RepoErrorKind::Canceled => ServiceError::internal(err),
         RepoErrorKind::PreconditionFailed => {
             ServiceError::Conflict("precondition failed".to_string())
         }
-        _ => ServiceError::Internal,
+        _ => ServiceError::internal(err),
     }
 }

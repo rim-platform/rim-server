@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 thiserror = "2.0.17"
 async-trait = "0.1.89"
+anyhow = "1.0.99"
 rim_core = {path = "../rim_core"}
 
 serde = { version = "1.0.228", features = ["derive"], optional = true }
