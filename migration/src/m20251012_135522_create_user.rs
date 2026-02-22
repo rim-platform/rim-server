@@ -24,7 +24,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
-                    .col(timestamp_with_time_zone(User::LastLoginAt))
+                    .col(
+                        timestamp_with_time_zone(User::LastLoginAt)
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
                     .to_owned(),
             )
             .await

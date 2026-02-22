@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use tracing::{info, instrument};
 
+use rim_core::repository::error::RepoErrorKind;
 use rim_core::message::model::NewMessage;
 use rim_core::repository::pagination::SortOrder;
 use rim_services::message::command::{
@@ -103,7 +104,7 @@ impl MessageService for DefaultMessageService {
         .await?;
 
         // Validate conversation exists and belongs to the server.
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             cmd.conversation_id,
             cmd.server_id,
@@ -129,21 +130,13 @@ impl MessageService for DefaultMessageService {
             }
         };
 
-        let (thread_id, parent_message_id) = match cmd.parent_message_id {
-            None => {
-                // Root message => create a new thread.
-                let thread = self
-                    .repos
-                    .message_thread_repo
-                    .create_thread(cmd.conversation_id)
-                    .await
-                    .map_err(rim_services::map_repo_error)?;
+        // v0 semantics: conversation has a dedicated "main thread" for the default timeline.
+        // Root messages and replies (quotes) are both persisted into this thread.
+        let main_thread_id = conv.main_thread_id;
 
-                info!(thread_id = %thread.id, "created thread for root message");
-                (thread.id, None)
-            }
+        let parent_message_id = match cmd.parent_message_id {
+            None => None,
             Some(parent_id) => {
-                // Reply => use parent's thread.
                 let parent = self
                     .repos
                     .message_repo
@@ -152,14 +145,15 @@ impl MessageService for DefaultMessageService {
                     .map_err(rim_services::map_repo_error)?
                     .ok_or(ServiceError::NotFound)?;
 
-                let _thread = self
-                    .ensure_thread_in_conversation(parent.message_thread_id, cmd.conversation_id)
-                    .await?;
-
-                info!(thread_id = %parent.message_thread_id, parent_message_id = %parent_id, "replying in existing thread");
-                (parent.message_thread_id, Some(parent_id))
+                if parent.message_thread_id != main_thread_id {
+                    // For now, only allow replying to messages in the main timeline.
+                    return Err(ServiceError::NotFound);
+                }
+                Some(parent_id)
             }
         };
+
+        let thread_id = main_thread_id;
 
         let new_message = NewMessage {
             text,
@@ -178,15 +172,33 @@ impl MessageService for DefaultMessageService {
 
         info!(message_id = %message.id, thread_id = %thread_id, is_reply = parent_message_id.is_some(), "created message");
 
-        // Root message: bind thread -> root message.
+        // Ensure main thread has a first_message_id set.
+        // (After the backfill migration it should already be set, but keep this idempotent.)
         if parent_message_id.is_none() {
-            self.repos
+            if let Some(thread) = self
+                .repos
                 .message_thread_repo
-                .set_first_message(thread_id, message.id)
+                .get_by_id(thread_id)
                 .await
-                .map_err(rim_services::map_repo_error)?;
-
-            info!(thread_id = %thread_id, root_message_id = %message.id, "bound thread root message");
+                .map_err(rim_services::map_repo_error)?
+            {
+                if thread.first_message_id.is_none() {
+                    let res = self
+                        .repos
+                        .message_thread_repo
+                        .set_first_message(thread_id, message.id)
+                        .await;
+                    match res {
+                        Ok(()) => {
+                            info!(thread_id = %thread_id, root_message_id = %message.id, "bound main thread first message");
+                        }
+                        Err(e) if matches!(e.kind(), RepoErrorKind::Conflict) => {
+                            // Another request likely raced and set it first; safe to ignore.
+                        }
+                        Err(e) => return Err(rim_services::map_repo_error(e)),
+                    }
+                }
+            }
         }
 
         // Update activity.
@@ -259,7 +271,7 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             query.conversation_id,
             query.server_id,
@@ -270,14 +282,14 @@ impl MessageService for DefaultMessageService {
             .await?;
 
         let _thread = self
-            .ensure_thread_in_conversation(query.thread_id, query.conversation_id)
+            .ensure_thread_in_conversation(conv.main_thread_id, query.conversation_id)
             .await?;
 
         let page = self
             .repos
             .message_repo
             .list_messages(
-                query.thread_id,
+                conv.main_thread_id,
                 query.limit,
                 query.dir,
                 query.cursor.map(Into::into),

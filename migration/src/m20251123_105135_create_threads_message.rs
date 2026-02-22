@@ -101,7 +101,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(DeriveIden)]
-enum MessageThread {
+pub enum MessageThread {
     Table,
     Id,
     ConversationId,

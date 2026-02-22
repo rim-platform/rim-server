@@ -15,6 +15,7 @@ impl From<conversation::Model> for Conversation {
             )
             .unwrap(),
             server_id: m.server_id.into(),
+            main_thread_id: m.main_thread_id.into(),
         }
     }
 }

@@ -7,6 +7,7 @@ use rim_api::auth_intent::{AuthIntent, AuthIntentCtx, insert_auth_intent_ctx};
 use rim_api::build_schema;
 use rim_api::graphql::index_graphiql;
 use sea_orm::Database;
+use tracing::{Instrument, info_span};
 
 use std::sync::Arc;
 
@@ -19,9 +20,16 @@ use rim_infra_db::sea_orm_impl::{
 };
 use rim_infra_services::AppRepos;
 use rim_infra_services::auth::DefaultAuthService;
+use rim_infra_services::conversation::DefaultConversationService;
+use rim_infra_services::message::DefaultMessageService;
+use rim_infra_services::thread::DefaultThreadService;
 use rim_services::auth::service::AuthService;
+use rim_services::conversation::service::ConversationService;
+use rim_services::message::service::MessageService;
+use rim_services::message_thread::service::ThreadService;
 
 use rim_api::query::AuthActorCtx;
+use uuid::Uuid;
 
 pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     info!("Starting RIM server...");
@@ -73,7 +81,18 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
         chrono::Duration::days(i64::from(config.session_ttl_days)),
     ));
 
-    let schema: AppSchema = build_schema(Arc::clone(&auth_service));
+    let conversation_service: Arc<dyn ConversationService> =
+        Arc::new(DefaultConversationService::new(repos.for_conversation()));
+    let message_service: Arc<dyn MessageService> =
+        Arc::new(DefaultMessageService::new(repos.for_message()));
+    let thread_service: Arc<dyn ThreadService> = Arc::new(DefaultThreadService::new(repos.for_thread()));
+
+    let schema: AppSchema = build_schema(
+        Arc::clone(&auth_service),
+        Arc::clone(&conversation_service),
+        Arc::clone(&message_service),
+        Arc::clone(&thread_service),
+    );
 
     HttpServer::new(move || {
         let schema = schema.clone();
@@ -93,27 +112,126 @@ async fn graphql_handler(
     req: HttpRequest,
     gql: GraphQLRequest,
 ) -> GraphQLResponse {
-    if let Err(resp) = enforce_csrf(&req, &gql.0) {
-        return resp;
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::now_v7().to_string());
+
+    let op_name = gql
+        .0
+        .operation_name
+        .clone()
+        .unwrap_or_else(|| "".to_string());
+    let has_mutation = graphql_has_mutation(&gql.0);
+    let span = info_span!(
+        "graphql.request",
+        request_id = %request_id,
+        operation_name = %op_name,
+        has_operation_name = %(!op_name.is_empty()),
+        has_mutation = %has_mutation
+    );
+
+    async move {
+        if let Err(resp) = enforce_csrf(&req, &gql.0) {
+            return resp;
+        }
+        // `Schema::data` is only available via GraphQL execution context, so we inject auth here via
+        // AppData instead.
+        let session_repo = req
+            .app_data::<web::Data<Arc<dyn rim_core::auth::repository::SessionRepository>>>()
+            .map(|d| Arc::clone(d.get_ref()));
+
+        let (actor, session_id) = match session_repo {
+            Some(repo) => extract_actor_and_session_id(&req, repo.as_ref()).await,
+            None => (None, None),
+        };
+        let actor_ctx = AuthActorCtx::new(actor, session_id);
+        let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
+
+        let request = gql.into_inner().data(actor_ctx);
+        let (request, auth_intent) = insert_auth_intent_ctx(request);
+        let resp = schema.execute(request).await;
+
+        if !resp.errors.is_empty() {
+            for e in &resp.errors {
+                // Server-side visibility: log full GraphQL error details.
+                // Client response remains unchanged.
+                let code = e
+                    .extensions
+                    .as_ref()
+                    .and_then(|ext| ext.get("code"))
+                    .and_then(|v| match v {
+                        async_graphql::Value::String(s) => Some(s.as_str()),
+                        async_graphql::Value::Enum(n) => Some(n.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("UNKNOWN");
+
+                if code == "INTERNAL" || code == "UNKNOWN" {
+                    if let Some(src) = &e.source {
+                        tracing::error!(
+                            request_id = %request_id,
+                            actor_user_id = ?actor_user_id,
+                            code = %code,
+                            source = ?src,
+                            "graphql internal error source"
+                        );
+                    }
+                    tracing::error!(
+                        request_id = %request_id,
+                        actor_user_id = ?actor_user_id,
+                        code = %code,
+                        message = %e.message,
+                        path = ?e.path,
+                        locations = ?e.locations,
+                        extensions = ?e.extensions,
+                        "graphql error"
+                    );
+                } else {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        actor_user_id = ?actor_user_id,
+                        code = %code,
+                        message = %e.message,
+                        path = ?e.path,
+                        locations = ?e.locations,
+                        extensions = ?e.extensions,
+                        "graphql error"
+                    );
+                }
+            }
+        }
+
+        let mut resp = resp;
+        // Add request_id for correlation (safe to expose).
+        for e in &mut resp.errors {
+            let ext = e.extensions.get_or_insert_with(Default::default);
+            if ext.get("request_id").is_none() {
+                ext.set("request_id", request_id.clone());
+            }
+        }
+
+        let gql_resp = GraphQLResponse::from(resp);
+        apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req)
     }
-    // `Schema::data` is only available via GraphQL execution context, so we inject auth here via
-    // AppData instead.
-    let session_repo = req
-        .app_data::<web::Data<Arc<dyn rim_core::auth::repository::SessionRepository>>>()
-        .map(|d| Arc::clone(d.get_ref()));
+    .instrument(span)
+    .await
+}
 
-    let (actor, session_id) = match session_repo {
-        Some(repo) => extract_actor_and_session_id(&req, repo.as_ref()).await,
-        None => (None, None),
+fn graphql_has_mutation(req: &async_graphql::Request) -> bool {
+    let doc = match async_graphql_parser::parse_query(req.query.as_str()) {
+        Ok(d) => d,
+        Err(_) => return false,
     };
-    let actor_ctx = AuthActorCtx::new(actor, session_id);
 
-    let request = gql.into_inner().data(actor_ctx);
-    let (request, auth_intent) = insert_auth_intent_ctx(request);
-    let resp = schema.execute(request).await;
-
-    let gql_resp = GraphQLResponse::from(resp);
-    apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req)
+    doc.operations.iter().any(|(_, op)| {
+        matches!(
+            op.node.ty,
+            async_graphql_parser::types::OperationType::Mutation
+        )
+    })
 }
 
 fn enforce_csrf(req: &HttpRequest, gql: &async_graphql::Request) -> Result<(), GraphQLResponse> {

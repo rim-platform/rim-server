@@ -65,6 +65,10 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
             return Err(RepoError::new(RepoErrorKind::NotFound));
         };
 
+        if thread.first_message_id.is_some() {
+            return Err(RepoError::new(RepoErrorKind::Conflict));
+        }
+
         let mut active: message_thread::ActiveModel = thread.into();
         active.first_message_id = Set(Some(message_id.into()));
         active.update(&self.db).await.map_err(map_db_err)?;

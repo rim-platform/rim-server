@@ -7,6 +7,6 @@ edition = "2024"
 rim_core = {path = "../rim_core" }
 entity = {path = "../entity"}
 async-trait = "0.1.89"
-sea-orm = "2.0.0-rc.16"
+sea-orm = "2.0.0-rc.20"
 chrono = "0.4.42"
 sqlx-core = "0.8.6"

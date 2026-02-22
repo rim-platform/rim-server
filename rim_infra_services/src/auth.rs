@@ -110,6 +110,7 @@ impl AuthService for DefaultAuthService {
         password: &str,
         server_name: &str,
     ) -> ServiceResult<BootstrapResultDto> {
+        info!(username = %username, "check bootstrap secret");
         let expected = self
             .bootstrap_secret
             .as_deref()
@@ -120,8 +121,10 @@ impl AuthService for DefaultAuthService {
 
         self.ensure_no_users_exist().await?;
 
-        let password_hash = hash_password(password).map_err(|_| ServiceError::Internal)?;
+        info!(username = %username, "hash the password");
+        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
+        info!(username = %username, "add user");
         let user = self
             .repos
             .user_repo
@@ -132,6 +135,7 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        info!(username = %username, "add server");
         let server = self
             .repos
             .server_repo
@@ -139,6 +143,7 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        info!(username = %username, "add member");
         let _member = self
             .repos
             .server_member_repo
@@ -146,6 +151,7 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        info!(username = %username, "create session");
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
 
         info!(user_id = %user.id, server_id = %server.id, "bootstrapped instance");
@@ -169,8 +175,7 @@ impl AuthService for DefaultAuthService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::PermissionDenied)?;
 
-        let ok =
-            verify_password(password, &user.password_hash).map_err(|_| ServiceError::Internal)?;
+        let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
         if !ok {
             return Err(ServiceError::PermissionDenied);
         }
@@ -289,9 +294,6 @@ impl AuthService for DefaultAuthService {
                 return Err(ServiceError::PermissionDenied);
             }
         }
-        if inv.use_count >= inv.max_uses {
-            return Err(ServiceError::PermissionDenied);
-        }
 
         // Ensure username not taken.
         if self
@@ -307,7 +309,7 @@ impl AuthService for DefaultAuthService {
             ));
         }
 
-        let password_hash = hash_password(password).map_err(|_| ServiceError::Internal)?;
+        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
         let user = self
             .repos
             .user_repo
@@ -325,11 +327,16 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        self.repos
+        let consumed = self
+            .repos
             .invite_repo
-            .increment_use_count(inv.id)
+            .try_consume(inv.id)
             .await
             .map_err(rim_services::map_repo_error)?;
+        if !consumed {
+            // Don't leak whether it's exhausted vs missing.
+            return Err(ServiceError::PermissionDenied);
+        }
 
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
 

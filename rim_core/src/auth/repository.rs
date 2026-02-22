@@ -19,6 +19,10 @@ pub trait InviteRepository: Send + Sync {
     async fn get_by_id(&self, id: InviteId) -> RepoResult<Option<Invite>>;
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Invite>>;
     async fn create_invite(&self, invite: NewInvite) -> RepoResult<Invite>;
-    async fn increment_use_count(&self, id: InviteId) -> RepoResult<()>;
+    /// Atomically consumes one invite use.
+    ///
+    /// Returns `true` if the invite was consumed (use_count incremented), `false` if it was
+    /// already exhausted or missing.
+    async fn try_consume(&self, id: InviteId) -> RepoResult<bool>;
     async fn revoke_invite(&self, id: InviteId) -> RepoResult<()>;
 }

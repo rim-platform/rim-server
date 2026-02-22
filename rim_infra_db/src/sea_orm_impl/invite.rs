@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::invite;
+use sea_orm::ExprTrait;
+use sea_orm::prelude::{Expr, Uuid};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
 
 use crate::error::map_db_err;
@@ -54,20 +56,23 @@ impl InviteRepository for SeaOrmInviteRepository {
         Ok(res.into())
     }
 
-    async fn increment_use_count(&self, id: InviteId) -> RepoResult<()> {
-        let Some(model) = invite::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-        else {
-            return Ok(());
-        };
+    async fn try_consume(&self, id: InviteId) -> RepoResult<bool> {
+        // Atomic update: increment use_count only if below max_uses.
+        let res =
+            invite::Entity::update_many()
+                .filter(invite::Column::Id.eq::<Uuid>(id.into()))
+                .filter(sea_orm::Condition::all().add(
+                    Expr::col(invite::Column::UseCount).lt(Expr::col(invite::Column::MaxUses)),
+                ))
+                .col_expr(
+                    invite::Column::UseCount,
+                    Expr::col(invite::Column::UseCount).add(1),
+                )
+                .exec(&self.db)
+                .await
+                .map_err(map_db_err)?;
 
-        let mut active_model: invite::ActiveModel = model.into();
-        let current = active_model.use_count.clone().take().unwrap_or(0);
-        active_model.use_count = Set(current + 1);
-        active_model.update(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+        Ok(res.rows_affected == 1)
     }
 
     async fn revoke_invite(&self, id: InviteId) -> RepoResult<()> {
