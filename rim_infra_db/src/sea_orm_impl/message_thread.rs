@@ -40,6 +40,7 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
     async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread> {
         let now: DateTimeWithTimeZone = chrono::Utc::now().into();
         let active = message_thread::ActiveModel {
+            id: Set(MessageThreadId::new().into()),
             conversation_id: Set(conversation_id.into()),
             first_message_id: Set(None),
             created_at: Set(now.into()),

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use entity::{conversation, conversation_member};
+use entity::{conversation, conversation_member, message_thread};
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::{
     ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
@@ -15,6 +15,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, JoinType, QueryFilter,
     QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set,
 };
+use sea_orm::TransactionTrait;
 
 use crate::error::map_db_err;
 
@@ -44,14 +45,53 @@ impl ConversationRepository for SeaOrmConversationRepository {
         conversation_type: ConversationType,
         server_id: ServerId,
     ) -> RepoResult<Conversation> {
-        let active = conversation::ActiveModel {
-            conversation_type: Set(conversation_type.into()),
-            server_id: Set(server_id.into()),
-            ..Default::default()
-        };
+        // Insert conversation and its main thread in a single transaction.
+        // The conversation holds a NOT NULL FK to `message_thread` via `main_thread_id`.
+        let inserted = self
+            .db
+            .transaction::<_, conversation::Model, RepoError>(|txn| {
+                let conversation_id = ConversationId::new();
+                let main_thread_id = rim_core::message_thread::model::MessageThreadId::new();
+                let now = chrono::Utc::now();
 
-        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
-        Ok(inserted.into())
+                Box::pin(async move {
+                    // Insert conversation first so the thread FK is satisfied.
+                    let active = conversation::ActiveModel {
+                        id: Set(conversation_id.into()),
+                        conversation_type: Set(conversation_type.into()),
+                        server_id: Set(server_id.into()),
+                        main_thread_id: Set(main_thread_id.into()),
+                        ..Default::default()
+                    };
+                    active.insert(txn).await.map_err(map_db_err)?;
+
+                    let thread_active = message_thread::ActiveModel {
+                        id: Set(main_thread_id.into()),
+                        conversation_id: Set(conversation_id.into()),
+                        first_message_id: Set(None),
+                        created_at: Set(now.into()),
+                        last_message_at: Set(now.into()),
+                    };
+                    thread_active.insert(txn).await.map_err(map_db_err)?;
+
+                    // Return the conversation.
+                    let inserted = conversation::Entity::find_by_id(conversation_id)
+                        .one(txn)
+                        .await
+                        .map_err(map_db_err)?
+                        .expect("conversation must exist after insert");
+                    Ok(inserted)
+                })
+            })
+            .await
+            .map_err(|e| match e {
+                sea_orm::TransactionError::Connection(db) => map_db_err(db),
+                sea_orm::TransactionError::Transaction(err) => err,
+            })?;
+
+        return Ok(inserted.into());
+
+        // unreachable: returned above
     }
 
     async fn find_direct_between_users(

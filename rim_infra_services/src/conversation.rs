@@ -17,6 +17,12 @@ use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 use crate::ConversationRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
+#[cfg(test)]
+use crate::test_support::conversation::{
+    ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter, ConversationReposPorts,
+    ServerMemberRepoPortAdapter,
+};
+
 #[derive(Clone)]
 pub struct DefaultConversationService {
     repos: ConversationRepos,
@@ -25,6 +31,17 @@ pub struct DefaultConversationService {
 impl DefaultConversationService {
     pub fn new(repos: ConversationRepos) -> Self {
         Self { repos }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_tests(repos: ConversationReposPorts) -> Self {
+        Self::new(ConversationRepos {
+            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(repos.conversation_repo)),
+            conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
+                repos.conversation_member_repo,
+            )),
+            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(repos.server_member_repo)),
+        })
     }
 
     async fn to_dto(

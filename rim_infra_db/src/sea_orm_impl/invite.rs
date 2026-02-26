@@ -41,6 +41,7 @@ impl InviteRepository for SeaOrmInviteRepository {
 
     async fn create_invite(&self, inv: NewInvite) -> RepoResult<Invite> {
         let active_model = invite::ActiveModel {
+            id: Set(InviteId::new().into()),
             server_id: Set(inv.server_id.into()),
             created_by_user_id: Set(inv.created_by_user_id.into()),
             token_hash: Set(inv.token_hash),

@@ -19,6 +19,9 @@ pub mod types;
 pub mod mutation;
 pub mod query;
 
+#[cfg(test)]
+mod tests;
+
 pub fn build_schema(
     auth_service: Arc<dyn AuthService>,
     conversation_service: Arc<dyn ConversationService>,
@@ -26,6 +29,11 @@ pub fn build_schema(
     thread_service: Arc<dyn ThreadService>,
 ) -> AppSchema {
     Schema::build(Query, Mutation, EmptySubscription)
+        // Default per-request auth intent container.
+        // Actix inserts a fresh one per request; tests that execute schema directly may rely on this.
+        .data(std::sync::Arc::new(crate::auth_intent::AuthIntentCtx::default()))
+        // Default auth actor context (unauthenticated by default).
+        .data(crate::query::AuthActorCtx::default())
         .data(auth_service)
         .data(conversation_service)
         .data(message_service)

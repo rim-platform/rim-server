@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(any(test, feature = "mocks"))]
+use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message::command::{
@@ -8,6 +10,7 @@ use crate::message::dto::{MessageDto, MessagePageCursor};
 use rim_core::repository::pagination::Page;
 
 #[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageService: Send + Sync {
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto>;
 

@@ -53,6 +53,7 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
         role: ServerMemberRole,
     ) -> RepoResult<ServerMember> {
         let active = server_member::ActiveModel {
+            id: Set(ServerMemberId::new().into()),
             server_id: Set(server_id.into()),
             user_id: Set(user_id.into()),
             member_role: Set(role.into()),

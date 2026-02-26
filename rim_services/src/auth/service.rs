@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(any(test, feature = "mocks"))]
+use mockall::automock;
 use chrono::{DateTime, Utc};
 
 use crate::auth::dto::{
@@ -8,6 +10,7 @@ use crate::{Actor, ServiceResult};
 use rim_core::server::model::ServerId;
 
 #[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait AuthService: Send + Sync {
     async fn bootstrap(
         &self,

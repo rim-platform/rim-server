@@ -22,8 +22,8 @@ impl MigrationTrait for Migration {
                             .default(Expr::current_timestamp()),
                     )
                     .col(timestamp_with_time_zone(Session::ExpiresAt).not_null())
-                    .col(timestamp_with_time_zone(Session::LastSeenAt))
-                    .col(timestamp_with_time_zone(Session::RevokedAt))
+                    .col(timestamp_with_time_zone(Session::LastSeenAt).null())
+                    .col(timestamp_with_time_zone(Session::RevokedAt).null())
                     .col(string(Session::UserAgent).null().string_len(512))
                     .col(string(Session::Ip).null().string_len(64))
                     .foreign_key(

@@ -17,7 +17,7 @@ use rim_services::Actor;
 
 use crate::ids::parse_uuid_id;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AuthActorCtx {
     actor: Option<rim_core::user::model::UserId>,
     session_id: Option<rim_core::auth::model::SessionId>,

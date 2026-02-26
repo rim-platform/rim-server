@@ -9,3 +9,6 @@ pub mod repository;
 pub mod server;
 pub mod server_member;
 pub mod user;
+
+#[cfg(test)]
+mod tests;

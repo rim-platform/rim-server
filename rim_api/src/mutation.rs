@@ -123,11 +123,12 @@ impl Mutation {
             .await
             .map_err(map_service_error)?;
 
-        ctx.data_unchecked::<AuthIntentCtx>()
-            .set(AuthIntent::SetSession {
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
                 csrf_token: res.csrf_token,
             });
+        }
 
         Ok(BootstrapPayload {
             user_id: ID(res.user_id.to_string()),
@@ -142,11 +143,12 @@ impl Mutation {
             .await
             .map_err(map_service_error)?;
 
-        ctx.data_unchecked::<AuthIntentCtx>()
-            .set(AuthIntent::SetSession {
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
                 csrf_token: res.csrf_token,
             });
+        }
 
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
@@ -168,8 +170,9 @@ impl Mutation {
             .await
             .map_err(map_service_error)?;
 
-        ctx.data_unchecked::<AuthIntentCtx>()
-            .set(AuthIntent::ClearSession);
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::ClearSession);
+        }
         Ok(true)
     }
 
@@ -212,11 +215,12 @@ impl Mutation {
             .await
             .map_err(map_service_error)?;
 
-        ctx.data_unchecked::<AuthIntentCtx>()
-            .set(AuthIntent::SetSession {
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
                 csrf_token: res.csrf_token,
             });
+        }
 
         Ok(AcceptInvitePayload {
             user_id: ID(res.user_id.to_string()),

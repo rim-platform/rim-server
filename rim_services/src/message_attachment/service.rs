@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(any(test, feature = "mocks"))]
+use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message_attachment::command::{
@@ -7,6 +9,7 @@ use crate::message_attachment::command::{
 use crate::message_attachment::dto::{AttachmentDto, UploadTicketDto};
 
 #[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageAttachmentService: Send + Sync {
     async fn create_attachment(&self, cmd: CreateAttachmentCmd) -> ServiceResult<UploadTicketDto>;
 

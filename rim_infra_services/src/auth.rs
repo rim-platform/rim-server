@@ -16,6 +16,12 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::AuthRepos;
 use crate::util::ensure_server_owner;
 
+#[cfg(test)]
+use crate::test_support::auth::{
+    AuthReposPorts, InviteRepoPortAdapter, ServerMemberRepoPortAdapter, ServerRepoPortAdapter,
+    SessionRepoPortAdapter, UserRepoPortAdapter,
+};
+
 #[derive(Clone)]
 pub struct DefaultAuthService {
     repos: AuthRepos,
@@ -30,6 +36,27 @@ impl DefaultAuthService {
             bootstrap_secret,
             session_ttl,
         }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_tests(
+        repos: AuthReposPorts,
+        bootstrap_secret: Option<String>,
+        session_ttl: Duration,
+    ) -> Self {
+        Self::new(
+            AuthRepos {
+                user_repo: std::sync::Arc::new(UserRepoPortAdapter(repos.user_repo)),
+                server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
+                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                    repos.server_member_repo,
+                )),
+                session_repo: std::sync::Arc::new(SessionRepoPortAdapter(repos.session_repo)),
+                invite_repo: std::sync::Arc::new(InviteRepoPortAdapter(repos.invite_repo)),
+            },
+            bootstrap_secret,
+            session_ttl,
+        )
     }
 
     fn new_csrf_token() -> String {
@@ -133,7 +160,10 @@ impl AuthService for DefaultAuthService {
                 password: password_hash,
             })
             .await
-            .map_err(rim_services::map_repo_error)?;
+            .map_err(|e| {
+                tracing::error!(error = %e, kind = ?e.kind(), "create_user failed");
+                rim_services::map_repo_error(e)
+            })?;
 
         info!(username = %username, "add server");
         let server = self
@@ -141,7 +171,10 @@ impl AuthService for DefaultAuthService {
             .server_repo
             .create_server(server_name)
             .await
-            .map_err(rim_services::map_repo_error)?;
+            .map_err(|e| {
+                tracing::error!(error = %e, kind = ?e.kind(), "create_server failed");
+                rim_services::map_repo_error(e)
+            })?;
 
         info!(username = %username, "add member");
         let _member = self

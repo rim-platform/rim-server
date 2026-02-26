@@ -10,6 +10,11 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::AttachmentRepos;
 use crate::util::ensure_server_member;
 
+#[cfg(test)]
+use crate::test_support::attachment::{
+    AttachmentReposPorts, MessageAttachmentRepoPortAdapter, ServerMemberRepoPortAdapter,
+};
+
 #[derive(Clone)]
 pub struct DefaultMessageAttachmentService {
     repos: AttachmentRepos,
@@ -18,6 +23,18 @@ pub struct DefaultMessageAttachmentService {
 impl DefaultMessageAttachmentService {
     pub fn new(repos: AttachmentRepos) -> Self {
         Self { repos }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_tests(repos: AttachmentReposPorts) -> Self {
+        Self::new(AttachmentRepos {
+            message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
+                repos.message_attachment_repo,
+            )),
+            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                repos.server_member_repo,
+            )),
+        })
     }
 }
 
