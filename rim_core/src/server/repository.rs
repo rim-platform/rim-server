@@ -2,8 +2,11 @@ use crate::repository::error::RepoResult;
 use crate::server::model::{Server, ServerId};
 use crate::user::model::UserId;
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait ServerRepository: Send + Sync {
     async fn get_by_id(&self, id: ServerId) -> RepoResult<Option<Server>>;
 

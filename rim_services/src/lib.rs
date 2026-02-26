@@ -12,6 +12,7 @@ use rim_core::user::model::UserId;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Actor {
     pub user_id: UserId,
 }
@@ -74,3 +75,6 @@ pub fn map_repo_error(err: RepoError) -> ServiceError {
         _ => ServiceError::internal(err),
     }
 }
+
+#[cfg(test)]
+mod tests;

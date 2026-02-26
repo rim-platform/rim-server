@@ -7,6 +7,7 @@ use std::fmt;
 model_id!(ConversationId);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConversationType {
     Direct,
     Group,

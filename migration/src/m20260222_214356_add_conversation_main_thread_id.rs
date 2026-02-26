@@ -1,5 +1,4 @@
 use crate::m20251122_154540_create_conversation::Conversation;
-use crate::m20251123_105135_create_threads_message::MessageThread;
 use sea_orm_migration::{prelude::*, schema::*};
 
 #[derive(DeriveMigrationName)]
@@ -17,17 +16,9 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        manager
-            .create_foreign_key(
-                ForeignKey::create()
-                    .name("fk-conversation-main-thread-id")
-                    .from(Conversation::Table, Conversation::MainThreadId)
-                    .to(MessageThread::Table, MessageThread::Id)
-                    .on_delete(ForeignKeyAction::SetNull)
-                    .on_update(ForeignKeyAction::Cascade)
-                    .to_owned(),
-            )
-            .await?;
+        // NOTE: We intentionally do NOT add a FK from conversation.main_thread_id -> message_thread.id.
+        // A conversation requires a main thread, and a thread requires a conversation (message_thread.conversation_id FK).
+        // Enforcing both as immediate FKs creates a cycle that makes inserts impossible without DEFERRABLE constraints.
 
         // Backfill main thread for existing conversations.
         //

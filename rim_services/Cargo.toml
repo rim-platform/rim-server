@@ -12,6 +12,14 @@ rim_core = {path = "../rim_core"}
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 chrono = "0.4.42"
 
+[dev-dependencies]
+mockall = "0.13"
+
+[dependencies.mockall]
+version = "0.13"
+optional = true
+
 [features]
 default = []
 serde = ["dep:serde"]
+mocks = ["dep:mockall"]

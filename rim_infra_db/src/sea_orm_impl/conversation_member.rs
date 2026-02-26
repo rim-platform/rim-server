@@ -39,6 +39,7 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
         user_id: UserId,
     ) -> RepoResult<ConversationMember> {
         let active = conversation_member::ActiveModel {
+            id: Set(ConversationMemberId::new().into()),
             conversation_id: Set(conversation_id.into()),
             user_id: Set(user_id.into()),
             ..Default::default()

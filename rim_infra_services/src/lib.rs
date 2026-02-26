@@ -7,7 +7,34 @@ pub mod server_member;
 pub mod thread;
 pub mod user;
 
-mod util;
+pub(crate) mod util;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod auth_unit_tests;
+
+#[cfg(test)]
+mod conversation_unit_tests;
+
+#[cfg(test)]
+mod message_unit_tests;
+
+#[cfg(test)]
+mod thread_unit_tests;
+
+#[cfg(test)]
+mod server_unit_tests;
+
+#[cfg(test)]
+mod server_member_unit_tests;
+
+#[cfg(test)]
+mod user_unit_tests;
+
+#[cfg(test)]
+mod message_attachment_unit_tests;
 
 use std::sync::Arc;
 

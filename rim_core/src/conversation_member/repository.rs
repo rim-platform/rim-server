@@ -3,8 +3,11 @@ use crate::conversation_member::model::{ConversationMember, ConversationMemberId
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait ConversationMemberRepository: Send + Sync {
     async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
 

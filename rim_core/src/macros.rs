@@ -27,5 +27,26 @@ macro_rules! model_id {
                 write!(f, "{}", self.0)
             }
         }
+
+        #[cfg(feature = "serde")]
+        impl ::serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: ::serde::Serializer,
+            {
+                self.0.serialize(serializer)
+            }
+        }
+
+        #[cfg(feature = "serde")]
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: ::serde::Deserializer<'de>,
+            {
+                let id = ::uuid::Uuid::deserialize(deserializer)?;
+                Ok(Self(id))
+            }
+        }
     };
 }

@@ -54,6 +54,18 @@ fn classify_sqlx_error(err: &sqlx_core::error::Error) -> (RepoErrorKind, Option<
 fn classify_error_chain(err: &(dyn StdError + 'static)) -> Option<(RepoErrorKind, Option<String>)> {
     let mut cur: Option<&(dyn StdError + 'static)> = Some(err);
     while let Some(e) = cur {
+        // SeaORM `DbErr` often wraps the SQLx error in its Display, but the StdError chain may
+        // contain an intermediate `sea_orm::SqlxError` wrapper. Try to detect that by walking the
+        // chain and attempting downcasts at each hop.
+        if let Some(db_err) = e.downcast_ref::<DbErr>() {
+            // Unwrap nested SeaORM errors that commonly wrap SQLx.
+            cur = db_err.source();
+            continue;
+        }
+        if let Some(sqlx_wrapper) = e.downcast_ref::<sea_orm::SqlxError>() {
+            cur = sqlx_wrapper.source();
+            continue;
+        }
         if let Some(sqlx_err) = e.downcast_ref::<sqlx_core::error::Error>() {
             return Some(classify_sqlx_error(sqlx_err));
         }
@@ -62,7 +74,21 @@ fn classify_error_chain(err: &(dyn StdError + 'static)) -> Option<(RepoErrorKind
     None
 }
 
-pub(crate) fn map_db_err(err: DbErr) -> RepoError {
+fn classify_db_err_by_display(err: &DbErr) -> Option<(RepoErrorKind, Option<String>)> {
+    // Fallback for cases where the error chain doesn't expose `sqlx_core::Error` as a concrete
+    // type we can downcast to.
+    let s = err.to_string();
+    if s.contains("violates foreign key constraint") {
+        return Some((RepoErrorKind::Conflict, None));
+    }
+    if s.contains("violates unique constraint") {
+        return Some((RepoErrorKind::Conflict, None));
+    }
+    None
+}
+
+pub fn map_db_err(err: DbErr) -> RepoError {
+    tracing::error!(db_err = %err, "sea_orm db error");
     // First: map SeaORM variants that are meaningful across DBs.
     let base_kind = match &err {
         DbErr::RecordNotFound(_) => Some(RepoErrorKind::NotFound),
@@ -78,10 +104,11 @@ pub(crate) fn map_db_err(err: DbErr) -> RepoError {
     };
 
     // Second: try to map based on the wrapped SQLx error (portable, DB-agnostic).
-    let (kind, message) = match classify_error_chain(&err) {
-        Some((kind, msg)) => (kind, msg),
-        None => (base_kind.unwrap_or(RepoErrorKind::Internal), None),
-    };
+    let (kind, message) =
+        match classify_error_chain(&err).or_else(|| classify_db_err_by_display(&err)) {
+            Some((kind, msg)) => (kind, msg),
+            None => (base_kind.unwrap_or(RepoErrorKind::Internal), None),
+        };
 
     if let Some(message) = message {
         RepoError::with_message_and_source(kind, message, err)

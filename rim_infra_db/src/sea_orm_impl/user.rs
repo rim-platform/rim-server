@@ -31,6 +31,7 @@ impl UserRepository for SeaOrmUserRepository {
 
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User> {
         let user = user::ActiveModel {
+            id: Set(UserId::new().into()),
             username: Set(user_data.username.to_owned()),
             password_hash: Set(user_data.password.to_owned()),
             ..Default::default()

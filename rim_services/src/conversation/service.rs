@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(any(test, feature = "mocks"))]
+use mockall::automock;
 
 use crate::ServiceResult;
 use crate::conversation::command::{
@@ -9,6 +11,7 @@ use crate::conversation::dto::{ChannelPageCursor, ConversationDto, InboxPageCurs
 use rim_core::repository::pagination::Page;
 
 #[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationService: Send + Sync {
     async fn create_conversation(
         &self,

@@ -35,7 +35,11 @@ jobs:
       - name: Run Tests
         env:
           DATABASE_URL: "postgres://postgres:postgres@localhost:5432/testdb"
-        run: cargo test --all -- --test-threads=1
+        run: |
+          cargo test --workspace -- --test-threads=1
+          cargo test -p rim_infra_db --features db-tests -- --test-threads=1
+          cargo test -p rim_api --features e2e-tests -- --test-threads=1
+          cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 
   lint:
     name: Lint & Format
@@ -50,7 +54,58 @@ jobs:
       - name: Format Check
         run: cargo fmt --all -- --check
       - name: Lint Check (Clippy)
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  coverage:
+    name: Coverage (LCOV)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install lcov
+        run: sudo apt-get update && sudo apt-get install -y lcov
+      - name: Generate Coverage (partial LCOVs)
+        env:
+          DATABASE_URL: "postgres://postgres:postgres@localhost:5432/testdb"
+        run: |
+          mkdir -p coverage/partials
+          # Keep coverage stable-toolchain compatible.
+          # Branch coverage requires nightly (-Z coverage-options=branch).
+          cargo llvm-cov --workspace --lcov --output-path coverage/partials/unit.info -- --test-threads=1
+          cargo llvm-cov -p rim_infra_db --features db-tests --lcov --output-path coverage/partials/infra_db.info -- --test-threads=1
+          cargo llvm-cov -p rim_api --features e2e-tests --lcov --output-path coverage/partials/api_e2e.info -- --test-threads=1
+          cargo llvm-cov -p rim_infra_services --features infra-db-tests --lcov --output-path coverage/partials/infra_services.info -- --test-threads=1
+      - name: Merge LCOV
+        run: |
+          lcov -a coverage/partials/unit.info \
+               -a coverage/partials/infra_db.info \
+               -a coverage/partials/api_e2e.info \
+               -a coverage/partials/infra_services.info \
+               -o coverage/lcov.info
+      - name: Enforce Coverage Thresholds
+        run: python3 .github/scripts/lcov_gate.py coverage/lcov.info 95 0
+      - name: Generate HTML Report
+        run: genhtml coverage/lcov.info --output-directory coverage/html
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
 
   security_audit:
     name: Security Audit

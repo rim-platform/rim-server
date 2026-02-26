@@ -2,8 +2,11 @@ use crate::message::model::MessageId;
 use crate::message_attachment::model::{MessageAttachment, MessageAttachmentId};
 use crate::repository::error::RepoResult;
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait MessageAttachmentRepository: Send + Sync {
     async fn get_by_id(&self, id: MessageAttachmentId) -> RepoResult<Option<MessageAttachment>>;
 

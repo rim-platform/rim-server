@@ -1,10 +1,13 @@
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 
 use crate::auth::model::{Invite, InviteId, NewInvite, NewSession, Session, SessionId};
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait SessionRepository: Send + Sync {
     async fn get_by_id(&self, id: SessionId) -> RepoResult<Option<Session>>;
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Session>>;
@@ -15,6 +18,7 @@ pub trait SessionRepository: Send + Sync {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait InviteRepository: Send + Sync {
     async fn get_by_id(&self, id: InviteId) -> RepoResult<Option<Invite>>;
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Invite>>;

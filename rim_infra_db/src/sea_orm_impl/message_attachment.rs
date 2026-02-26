@@ -40,6 +40,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         metadata: Option<sea_orm::prelude::Json>,
     ) -> RepoResult<MessageAttachment> {
         let active = message_attachment::ActiveModel {
+            id: Set(MessageAttachmentId::new().into()),
             message_id: Set(message_id.into()),
             storage_url: Set(storage_url.to_owned()),
             file_name: Set(file_name.to_owned()),

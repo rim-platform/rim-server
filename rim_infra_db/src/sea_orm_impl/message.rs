@@ -37,6 +37,7 @@ impl MessageRepository for SeaOrmMessageRepository {
 
     async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message> {
         let active = message::ActiveModel {
+            id: Set(MessageId::new().into()),
             message_thread_id: Set(new_message.message_thread_id.into()),
             parent_message_id: Set(new_message.parent_message_id.map(Into::into)),
             sent_by: Set(new_message.sent_by.into()),

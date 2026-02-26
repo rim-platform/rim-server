@@ -33,6 +33,7 @@ impl ServerRepository for SeaOrmServerRepository {
 
     async fn create_server(&self, name: &str) -> RepoResult<Server> {
         let new_server = server::ActiveModel {
+            id: Set(ServerId::new().into()),
             name: Set(name.to_owned()),
             ..Default::default()
         };
@@ -57,7 +58,7 @@ impl ServerRepository for SeaOrmServerRepository {
 
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>> {
         let servers = server::Entity::find()
-            .join(JoinType::InnerJoin, server_member::Relation::Server.def())
+            .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
             .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
             .all(&self.db)
             .await

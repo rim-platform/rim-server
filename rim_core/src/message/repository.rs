@@ -3,6 +3,8 @@ use crate::message_thread::model::MessageThreadId;
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir, SortOrder};
 use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageCursor {
@@ -11,6 +13,7 @@ pub struct MessageCursor {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait MessageRepository: Send + Sync {
     async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
 

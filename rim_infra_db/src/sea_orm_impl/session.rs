@@ -41,9 +41,13 @@ impl SessionRepository for SeaOrmSessionRepository {
 
     async fn create_session(&self, s: NewSession) -> RepoResult<Session> {
         let active_model = session::ActiveModel {
+            id: Set(SessionId::new().into()),
             user_id: Set(s.user_id.into()),
             token_hash: Set(s.token_hash),
             expires_at: Set(s.expires_at.into()),
+            // Newly created sessions are active.
+            last_seen_at: Set(None),
+            revoked_at: Set(None),
             user_agent: Set(s.user_agent),
             ip: Set(s.ip),
             ..Default::default()

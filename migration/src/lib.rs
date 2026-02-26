@@ -15,6 +15,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260212_000002_expand_user_password_hash::Migration),
             Box::new(m20260216_230500_fix_user_last_login_at_not_null::Migration),
             Box::new(m20260222_214356_add_conversation_main_thread_id::Migration),
+            Box::new(m20260223_220000_make_session_revoked_last_seen_nullable::Migration),
         ]
     }
 }
@@ -27,3 +28,4 @@ mod m20260212_000001_create_sessions_and_invites;
 mod m20260212_000002_expand_user_password_hash;
 mod m20260216_230500_fix_user_last_login_at_not_null;
 mod m20260222_214356_add_conversation_main_thread_id;
+mod m20260223_220000_make_session_revoked_last_seen_nullable;
