@@ -8,6 +8,7 @@ use rim_core::user::model::UserId;
 use sea_orm::ColumnTrait;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, DbConn, EntityTrait, QueryFilter, Set};
+use std::collections::HashMap;
 
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -42,7 +43,6 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
             id: Set(ConversationMemberId::new().into()),
             conversation_id: Set(conversation_id.into()),
             user_id: Set(user_id.into()),
-            ..Default::default()
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
@@ -102,5 +102,33 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
             .map_err(map_db_err)?;
 
         Ok(members.into_iter().map(|m| m.user_id.into()).collect())
+    }
+
+    async fn list_member_ids_for_conversations(
+        &self,
+        conversation_ids: &[ConversationId],
+    ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>> {
+        if conversation_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let ids = conversation_ids
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<Uuid>>();
+        let members = conversation_member::Entity::find()
+            .filter(conversation_member::Column::ConversationId.is_in(ids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        let mut out = HashMap::<ConversationId, Vec<UserId>>::new();
+        for member in members {
+            out.entry(member.conversation_id.into())
+                .or_default()
+                .push(member.user_id.into());
+        }
+        Ok(out)
     }
 }

@@ -37,7 +37,8 @@ pub struct Message {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
     pub conversation_id: async_graphql::ID,
-    pub thread_id: async_graphql::ID,
+    pub thread_id: Option<async_graphql::ID>,
+    pub root_thread_id: Option<async_graphql::ID>,
     pub author_id: async_graphql::ID,
     pub text: Option<String>,
     pub has_attachments: bool,
@@ -52,7 +53,10 @@ impl From<rim_services::message::dto::MessageDto> for Message {
             id: async_graphql::ID(value.id.to_string()),
             server_id: async_graphql::ID(value.server_id.to_string()),
             conversation_id: async_graphql::ID(value.conversation_id.to_string()),
-            thread_id: async_graphql::ID(value.thread_id.to_string()),
+            thread_id: value.thread_id.map(|id| async_graphql::ID(id.to_string())),
+            root_thread_id: value
+                .root_thread_id
+                .map(|id| async_graphql::ID(id.to_string())),
             author_id: async_graphql::ID(value.author_id.to_string()),
             text: value.text,
             has_attachments: value.has_attachments,

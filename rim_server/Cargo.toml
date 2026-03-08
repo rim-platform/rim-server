@@ -22,5 +22,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 async-graphql-actix-web = "7.0.17"
 async-graphql = "7.0.17"
 async-graphql-parser = "7.0.17"
+async-trait = "0.1.89"
 tracing = "0.1.41"
 uuid = { version = "1.19.0", features = ["v7"] }

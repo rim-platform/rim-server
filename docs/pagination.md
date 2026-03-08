@@ -15,14 +15,16 @@ consistent semantics across all storage backends.
 
 ## Cursor Comparison Rules
 
-For a cursor `(ts, id)`:
+For a cursor `(ts, id)`, comparisons are applied relative to the endpoint's display order.
 
-- `Before` filter:
-  - `(ts < cursor.ts) OR (ts == cursor.ts AND id < cursor.id)`
-- `After` filter:
-  - `(ts > cursor.ts) OR (ts == cursor.ts AND id > cursor.id)`
+- For `ASC` endpoints:
+  - `Before`: `(ts < cursor.ts) OR (ts == cursor.ts AND id < cursor.id)`
+  - `After`: `(ts > cursor.ts) OR (ts == cursor.ts AND id > cursor.id)`
+- For `DESC` endpoints:
+  - `Before`: `(ts > cursor.ts) OR (ts == cursor.ts AND id > cursor.id)`
+  - `After`: `(ts < cursor.ts) OR (ts == cursor.ts AND id < cursor.id)`
 
-The DB query must always include an `ORDER BY` that matches the cursor fields.
+The DB query must always include an `ORDER BY` that matches the endpoint order.
 
 ## Page Fields
 
@@ -41,15 +43,12 @@ This allows a client to implement infinite scroll by repeatedly calling the same
 
 Given the returned `items` and a request `dir`:
 
-- `next` points to the "edge" that is further in the requested direction:
-  - for `After`: cursor of the *maximum* key in `items`
-  - for `Before`: cursor of the *minimum* key in `items`
-- `prev` is the opposite edge:
-  - for `After`: cursor of the *minimum* key in `items`
-  - for `Before`: cursor of the *maximum* key in `items`
-
-Where "minimum/maximum" are defined by the endpoint's sort key, independent of the endpoint's
-display order.
+- For `ASC` endpoints:
+  - `After`: `next = max`, `prev = min`
+  - `Before`: `next = min`, `prev = max`
+- For `DESC` endpoints:
+  - `After`: `next = min`, `prev = max`
+  - `Before`: `next = max`, `prev = min`
 
 If `items` is empty, both cursors are `None`.
 

@@ -11,7 +11,9 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
 };
+use std::collections::HashMap;
 
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -37,18 +39,92 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn get_by_root_message(
+        &self,
+        message_id: MessageId,
+    ) -> RepoResult<Option<MessageThread>> {
+        let model = message_thread::Entity::find()
+            .filter(message_thread::Column::FirstMessageId.eq::<Uuid>(message_id.into()))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
+    async fn get_thread_ids_by_root_messages(
+        &self,
+        message_ids: &[MessageId],
+    ) -> RepoResult<HashMap<MessageId, MessageThreadId>> {
+        if message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let ids = message_ids
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<Uuid>>();
+        let models = message_thread::Entity::find()
+            .filter(message_thread::Column::FirstMessageId.is_in(ids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models
+            .into_iter()
+            .filter_map(|model| {
+                model
+                    .first_message_id
+                    .map(|root_id| (root_id.into(), model.id.into()))
+            })
+            .collect())
+    }
+
     async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread> {
         let now: DateTimeWithTimeZone = chrono::Utc::now().into();
         let active = message_thread::ActiveModel {
             id: Set(MessageThreadId::new().into()),
             conversation_id: Set(conversation_id.into()),
             first_message_id: Set(None),
-            created_at: Set(now.into()),
-            last_message_at: Set(now.into()),
-            ..Default::default()
+            created_at: Set(now),
+            last_message_at: Set(now),
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
+        Ok(inserted.into())
+    }
+
+    async fn create_thread_for_root(
+        &self,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+    ) -> RepoResult<MessageThread> {
+        let conversation_id_uuid: Uuid = conversation_id.into();
+        let message_id_uuid: Uuid = message_id.into();
+
+        let inserted = self
+            .db
+            .transaction::<_, message_thread::Model, RepoError>(|txn| {
+                Box::pin(async move {
+                    let now: DateTimeWithTimeZone = chrono::Utc::now().into();
+                    let active = message_thread::ActiveModel {
+                        id: Set(MessageThreadId::new().into()),
+                        conversation_id: Set(conversation_id_uuid),
+                        first_message_id: Set(Some(message_id_uuid)),
+                        created_at: Set(now),
+                        last_message_at: Set(now),
+                    };
+
+                    active.insert(txn).await.map_err(map_db_err)
+                })
+            })
+            .await
+            .map_err(|e| match e {
+                sea_orm::TransactionError::Connection(db) => map_db_err(db),
+                sea_orm::TransactionError::Transaction(err) => err,
+            })?;
+
         Ok(inserted.into())
     }
 
@@ -109,24 +185,25 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         let mut q = message_thread::Entity::find()
             .filter(message_thread::Column::ConversationId.eq::<Uuid>(conversation_id.into()));
 
+        let has_cursor = cursor.is_some();
         if let Some(cursor) = cursor {
             let cursor_id: Uuid = cursor.thread_id.into();
             let cursor_ts: DateTimeWithTimeZone = cursor.last_message_at.into();
 
             let cond = match dir {
                 PageDir::Before => Condition::any()
-                    .add(message_thread::Column::LastMessageAt.lt(cursor_ts))
-                    .add(
-                        Condition::all()
-                            .add(message_thread::Column::LastMessageAt.eq(cursor_ts))
-                            .add(message_thread::Column::Id.lt(cursor_id)),
-                    ),
-                PageDir::After => Condition::any()
                     .add(message_thread::Column::LastMessageAt.gt(cursor_ts))
                     .add(
                         Condition::all()
                             .add(message_thread::Column::LastMessageAt.eq(cursor_ts))
                             .add(message_thread::Column::Id.gt(cursor_id)),
+                    ),
+                PageDir::After => Condition::any()
+                    .add(message_thread::Column::LastMessageAt.lt(cursor_ts))
+                    .add(
+                        Condition::all()
+                            .add(message_thread::Column::LastMessageAt.eq(cursor_ts))
+                            .add(message_thread::Column::Id.lt(cursor_id)),
                     ),
             };
 
@@ -137,14 +214,19 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
             .order_by_desc(message_thread::Column::LastMessageAt)
             .order_by_desc(message_thread::Column::Id);
 
-        let items = q
-            .limit(limit as u64)
+        let mut items = q
+            .limit((limit + 1) as u64)
             .all(&self.db)
             .await
             .map_err(map_db_err)?
             .into_iter()
             .map(Into::into)
             .collect::<Vec<MessageThread>>();
+
+        let has_more_in_dir = items.len() > limit as usize;
+        if has_more_in_dir {
+            items.truncate(limit as usize);
+        }
 
         // Fixed ordering: `last_message_at DESC, id DESC`.
         let min = items.last().map(|t| ThreadCursor {
@@ -156,9 +238,16 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
             thread_id: t.id,
         });
 
+        let has_opposite = has_cursor && !items.is_empty();
         let (next, prev) = match dir {
-            PageDir::After => (max, min),
-            PageDir::Before => (min, max),
+            PageDir::After => (
+                has_more_in_dir.then_some(min).flatten(),
+                has_opposite.then_some(max).flatten(),
+            ),
+            PageDir::Before => (
+                has_more_in_dir.then_some(max).flatten(),
+                has_opposite.then_some(min).flatten(),
+            ),
         };
 
         Ok(Page::new(items, next, prev))

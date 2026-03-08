@@ -11,7 +11,8 @@ pub struct MessageDto {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
 
-    pub thread_id: rim_core::message_thread::model::MessageThreadId,
+    pub thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
+    pub root_thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
 
     pub author_id: UserId,
 

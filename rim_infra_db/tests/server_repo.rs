@@ -53,7 +53,14 @@ async fn get_servers_for_user_returns_joined_servers() {
     let s1 = server_repo.create_server("s1").await.unwrap();
     let s2 = server_repo.create_server("s2").await.unwrap();
 
-    assert_eq!(server_repo.get_servers_for_user(user_id).await.unwrap().len(), 0);
+    assert_eq!(
+        server_repo
+            .get_servers_for_user(user_id)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 
     let _ = member_repo
         .add_member(s1.id, user_id, ServerMemberRole::Guest)

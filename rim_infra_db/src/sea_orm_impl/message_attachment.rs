@@ -47,7 +47,6 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             file_size: Set(file_size),
             mime_type: Set(mime_type.to_owned()),
             metadata: Set(metadata),
-            ..Default::default()
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;

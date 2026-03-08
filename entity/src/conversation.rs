@@ -12,13 +12,14 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     pub last_activity_at: DateTimeWithTimeZone,
     pub server_id: Uuid,
-    pub main_thread_id: Uuid,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(has_many = "super::conversation_member::Entity")]
     ConversationMember,
+    #[sea_orm(has_many = "super::message::Entity")]
+    Message,
     #[sea_orm(has_many = "super::message_thread::Entity")]
     MessageThread,
     #[sea_orm(
@@ -40,6 +41,12 @@ impl Related<super::conversation_member::Entity> for Entity {
 impl Related<super::message_thread::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MessageThread.def()
+    }
+}
+
+impl Related<super::message::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Message.def()
     }
 }
 

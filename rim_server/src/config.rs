@@ -34,7 +34,7 @@ impl RIMConfig {
             .set_default("session_ttl_days", 30)?
             .add_source(Environment::with_prefix("RIM"))
             .add_source(Environment::default());
-        Ok(c.build()?.try_deserialize()?)
+        c.build()?.try_deserialize()
     }
 }
 

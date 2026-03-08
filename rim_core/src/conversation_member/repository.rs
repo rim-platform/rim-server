@@ -5,6 +5,7 @@ use crate::user::model::UserId;
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
+use std::collections::HashMap;
 
 #[async_trait]
 #[cfg_attr(test, automock)]
@@ -32,4 +33,9 @@ pub trait ConversationMemberRepository: Send + Sync {
     -> RepoResult<bool>;
 
     async fn list_member_ids(&self, conversation_id: ConversationId) -> RepoResult<Vec<UserId>>;
+
+    async fn list_member_ids_for_conversations(
+        &self,
+        conversation_ids: &[ConversationId],
+    ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>>;
 }

@@ -82,10 +82,10 @@ mod tests {
         server_member_repo
             .expect_get_member()
             .returning(move |_sid, uid| {
-                let role = if uid == actor_id {
+                let role = if uid == actor_id || uid == target_id {
                     ServerMemberRole::Owner
                 } else {
-                    ServerMemberRole::Owner
+                    ServerMemberRole::Guest
                 };
                 Ok(Some(ServerMember {
                     id: ServerMemberId::new(),
@@ -180,6 +180,9 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied | ServiceError::NotFound), "got: {err:?}");
+        assert!(
+            matches!(err, ServiceError::PermissionDenied | ServiceError::NotFound),
+            "got: {err:?}"
+        );
     }
 }

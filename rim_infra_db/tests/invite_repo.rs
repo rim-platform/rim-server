@@ -4,6 +4,7 @@ mod support;
 
 use rim_core::auth::model::NewInvite;
 use rim_core::auth::repository::InviteRepository;
+use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::repository::UserRepository;
@@ -11,7 +12,6 @@ use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-use rim_core::server::repository::ServerRepository;
 
 #[tokio::test]
 async fn create_get_by_id_and_token_hash_and_revoke() {

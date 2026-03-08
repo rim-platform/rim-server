@@ -26,9 +26,7 @@ mod tests {
     async fn get_me_returns_not_found_when_missing() {
         let actor_id = UserId::new();
         let mut user_repo = MockUserRepo::new();
-        user_repo
-            .expect_get_by_id()
-            .returning(|_id| Ok(None));
+        user_repo.expect_get_by_id().returning(|_id| Ok(None));
 
         let svc = DefaultUserService::new_for_tests(UserReposPorts {
             user_repo: Arc::new(user_repo),

@@ -2,19 +2,19 @@
 
 mod support;
 
-use rim_core::message_attachment::repository::MessageAttachmentRepository;
-use rim_core::message_attachment::model::MessageAttachmentId;
-use rim_core::message::model::NewMessage;
-use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
-use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
-use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
-use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
-use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_core::conversation::model::ConversationType;
-use rim_core::server::repository::ServerRepository;
 use rim_core::conversation::repository::ConversationRepository;
-use rim_core::message_thread::repository::MessageThreadRepository;
+use rim_core::message::model::NewMessage;
 use rim_core::message::repository::MessageRepository;
+use rim_core::message_attachment::model::MessageAttachmentId;
+use rim_core::message_attachment::repository::MessageAttachmentRepository;
+use rim_core::message_thread::repository::MessageThreadRepository;
+use rim_core::server::repository::ServerRepository;
+use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
+use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
+use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 
 #[tokio::test]
 async fn add_get_and_list_attachments_for_message() {
@@ -37,7 +37,8 @@ async fn add_get_and_list_attachments_for_message() {
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
     let msg = msg_repo
         .create_message(&NewMessage {
-            message_thread_id: thread.id,
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
             parent_message_id: None,
             sent_by: rim_core::user::model::UserId::new(),
             text: Some("t".to_string()),
@@ -46,17 +47,16 @@ async fn add_get_and_list_attachments_for_message() {
         .await
         .unwrap();
 
-    assert_eq!(repo.get_attachments_for_message(msg.id).await.unwrap().len(), 0);
+    assert_eq!(
+        repo.get_attachments_for_message(msg.id)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 
     let att = repo
-        .add_attachment(
-            msg.id,
-            "url",
-            "file.txt",
-            123,
-            "text/plain",
-            None,
-        )
+        .add_attachment(msg.id, "url", "file.txt", 123, "text/plain", None)
         .await
         .unwrap();
 
@@ -67,5 +67,10 @@ async fn add_get_and_list_attachments_for_message() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, att.id);
 
-    assert!(repo.get_by_id(MessageAttachmentId::new()).await.unwrap().is_none());
+    assert!(
+        repo.get_by_id(MessageAttachmentId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

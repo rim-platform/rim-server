@@ -82,5 +82,10 @@ async fn find_by_username_and_delete_by_username_and_any_users_exist() {
     assert_eq!(found.id, created.id);
 
     repo.delete_by_username("u_test_find").await.unwrap();
-    assert!(repo.find_by_username("u_test_find").await.unwrap().is_none());
+    assert!(
+        repo.find_by_username("u_test_find")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

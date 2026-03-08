@@ -3,13 +3,13 @@
 mod support;
 
 use rim_core::repository::error::RepoErrorKind;
+use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
-use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-use rim_core::server::repository::ServerRepository;
 
 #[tokio::test]
 async fn add_get_is_member_get_by_id_and_list_members() {
@@ -107,4 +107,36 @@ async fn change_member_role_and_remove_member_errors() {
 
     repo.remove_member(server.id, u).await.unwrap();
     assert!(repo.get_member(server.id, u).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn add_member_conflicts_on_duplicate_server_membership() {
+    let Some(conn) = support::db_conn_or_skip().await else {
+        return;
+    };
+    support::reset_db(&conn).await;
+
+    let server_repo = SeaOrmServerRepository::new(conn.clone());
+    let repo = SeaOrmServerMemberRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
+
+    let server = server_repo.create_server("s").await.unwrap();
+    let user_id = user_repo
+        .create_user(rim_core::user::model::NewUser {
+            username: "dup-server-member".to_string(),
+            password: "pw".to_string(),
+        })
+        .await
+        .unwrap()
+        .id;
+
+    repo.add_member(server.id, user_id, ServerMemberRole::Guest)
+        .await
+        .unwrap();
+
+    let err = repo
+        .add_member(server.id, user_id, ServerMemberRole::Guest)
+        .await
+        .unwrap_err();
+    assert!(matches!(err.kind(), RepoErrorKind::Conflict));
 }

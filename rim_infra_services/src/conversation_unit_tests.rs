@@ -3,8 +3,9 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
-    use rim_core::conversation::repository::{ConversationActivityCursor, ConversationCreatedCursor};
-    use rim_core::message_thread::model::MessageThreadId;
+    use rim_core::conversation::repository::{
+        ConversationActivityCursor, ConversationCreatedCursor,
+    };
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
@@ -17,7 +18,8 @@ mod tests {
 
     use crate::conversation::DefaultConversationService;
     use crate::test_support::conversation::{
-        ConversationReposPorts, MockConversationMemberRepo, MockConversationRepo, MockServerMemberRepo,
+        ConversationReposPorts, MockConversationMemberRepo, MockConversationRepo,
+        MockServerMemberRepo,
     };
 
     fn base_repos() -> (
@@ -37,7 +39,6 @@ mod tests {
             id: ConversationId::new(),
             server_id,
             conversation_type: ConversationType::Direct,
-            main_thread_id: MessageThreadId::new(),
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -63,8 +64,38 @@ mod tests {
             .create_conversation(CreateConversationCmd {
                 actor: Actor::new(actor_id),
                 server_id,
-                participants: ConversationParticipants::DirectMessage { other_user_id: actor_id },
+                participants: ConversationParticipants::DirectMessage {
+                    other_user_id: actor_id,
+                },
                 title: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn create_conversation_rejects_title_in_v0() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let (conversation_repo, conversation_member_repo, mut server_member_repo) = base_repos();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let err = svc
+            .create_conversation(CreateConversationCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                participants: ConversationParticipants::Channel,
+                title: Some("not yet".to_string()),
             })
             .await
             .unwrap_err();
@@ -89,9 +120,12 @@ mod tests {
             .expect_find_direct_between_users()
             .returning(move |_sid, _a, _b| Ok(Some(existing.clone())));
         conversation_repo.expect_create_conversation().never();
+        conversation_repo
+            .expect_create_conversation_with_members()
+            .never();
         conversation_member_repo
             .expect_list_member_ids()
-            .returning(|_cid| Ok(vec![]));
+            .returning(|_conversation_id| Ok(vec![]));
 
         let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
             conversation_repo: Arc::new(conversation_repo),
@@ -103,7 +137,9 @@ mod tests {
             .create_conversation(CreateConversationCmd {
                 actor: Actor::new(actor_id),
                 server_id,
-                participants: ConversationParticipants::DirectMessage { other_user_id: other_id },
+                participants: ConversationParticipants::DirectMessage {
+                    other_user_id: other_id,
+                },
                 title: None,
             })
             .await
@@ -148,6 +184,83 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn list_methods_batch_member_ids() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let c1 = conv(server_id);
+        let c2 = conv(server_id);
+
+        let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
+            base_repos();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let c1_inbox = c1.clone();
+        let c2_inbox = c2.clone();
+        conversation_repo
+            .expect_list_inbox_conversations_for_user()
+            .return_once(move |_, _, _, _, _| Ok(Page::new(vec![c1_inbox, c2_inbox], None, None)));
+
+        let c1_id = c1.id;
+        let c2_id = c2.id;
+        conversation_member_repo
+            .expect_list_member_ids_for_conversations()
+            .times(2)
+            .returning(move |ids| {
+                let mut out = std::collections::HashMap::new();
+                for id in ids {
+                    out.insert(*id, vec![actor_id]);
+                }
+                Ok(out)
+            });
+
+        let c1_channels = c1.clone();
+        let c2_channels = c2.clone();
+        conversation_repo
+            .expect_list_channels_for_user()
+            .return_once(move |_, _, _, _, _| {
+                Ok(Page::new(vec![c1_channels, c2_channels], None, None))
+            });
+
+        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let inbox = svc
+            .list_inbox_conversations(
+                rim_services::conversation::command::ListInboxConversationsQuery {
+                    actor: Actor::new(actor_id),
+                    server_id,
+                    dir: PageDir::After,
+                    cursor: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(inbox.items.len(), 2);
+        assert_eq!(inbox.items[0].member_ids, vec![actor_id]);
+
+        let channels = svc
+            .list_channels(rim_services::conversation::command::ListChannelsQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                dir: PageDir::After,
+                cursor: None,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(channels.items.len(), 2);
+        assert_eq!(channels.items[1].member_ids, vec![actor_id]);
+
+        assert_ne!(c1_id, c2_id);
     }
 
     #[tokio::test]
@@ -207,15 +320,19 @@ mod tests {
             });
 
         conversation_member_repo
-            .expect_list_member_ids()
-            .returning(|_cid| Ok(vec![]));
+            .expect_list_member_ids_for_conversations()
+            .return_once(move |ids| {
+                let mut out = std::collections::HashMap::new();
+                for id in ids {
+                    out.insert(*id, vec![]);
+                }
+                Ok(out)
+            });
 
         // Also satisfy channels path even if not called.
         conversation_repo
             .expect_list_channels_for_user()
-            .returning(|_uid, _sid, _limit, _dir, _cursor| {
-                Ok(Page::new(vec![], None, None))
-            });
+            .returning(|_uid, _sid, _limit, _dir, _cursor| Ok(Page::new(vec![], None, None)));
 
         let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
             conversation_repo: Arc::new(conversation_repo),
@@ -224,17 +341,28 @@ mod tests {
         });
 
         let page = svc
-            .list_inbox_conversations(rim_services::conversation::command::ListInboxConversationsQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                limit: 10,
-                dir: PageDir::After,
-                cursor: None,
-            })
+            .list_inbox_conversations(
+                rim_services::conversation::command::ListInboxConversationsQuery {
+                    actor: Actor::new(actor_id),
+                    server_id,
+                    limit: 10,
+                    dir: PageDir::After,
+                    cursor: None,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(page.items.len(), 2);
 
-        let _ = (ConversationActivityCursor { last_activity_at: chrono::Utc::now(), conversation_id: ConversationId::new() }, ConversationCreatedCursor { created_at: chrono::Utc::now(), conversation_id: ConversationId::new() });
+        let _ = (
+            ConversationActivityCursor {
+                last_activity_at: chrono::Utc::now(),
+                conversation_id: ConversationId::new(),
+            },
+            ConversationCreatedCursor {
+                created_at: chrono::Utc::now(),
+                conversation_id: ConversationId::new(),
+            },
+        );
     }
 }

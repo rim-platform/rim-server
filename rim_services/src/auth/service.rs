@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
-use chrono::{DateTime, Utc};
 
 use crate::auth::dto::{
     AcceptInviteResultDto, BootstrapResultDto, CreateInviteResultDto, LoginResultDto,

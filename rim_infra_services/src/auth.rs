@@ -322,10 +322,10 @@ impl AuthService for DefaultAuthService {
         if inv.revoked_at.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
-        if let Some(expires_at) = inv.expires_at {
-            if expires_at < Utc::now() {
-                return Err(ServiceError::PermissionDenied);
-            }
+        if let Some(expires_at) = inv.expires_at
+            && expires_at < Utc::now()
+        {
+            return Err(ServiceError::PermissionDenied);
         }
 
         // Ensure username not taken.

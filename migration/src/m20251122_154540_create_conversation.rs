@@ -113,6 +113,7 @@ enum ConversationType {
 }
 
 #[derive(DeriveIden)]
+#[allow(clippy::enum_variant_names)]
 pub enum Conversation {
     Table,
     Id,
