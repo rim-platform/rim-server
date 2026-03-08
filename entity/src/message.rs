@@ -7,7 +7,8 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    pub message_thread_id: Uuid,
+    pub conversation_id: Uuid,
+    pub thread_id: Option<Uuid>,
     pub parent_message_id: Option<Uuid>,
     pub sent_at: DateTimeWithTimeZone,
     pub sent_by: Uuid,
@@ -29,13 +30,21 @@ pub enum Relation {
     #[sea_orm(has_many = "super::message_attachment::Entity")]
     MessageAttachment,
     #[sea_orm(
+        belongs_to = "super::conversation::Entity",
+        from = "Column::ConversationId",
+        to = "super::conversation::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    Conversation,
+    #[sea_orm(
         belongs_to = "super::message_thread::Entity",
-        from = "Column::MessageThreadId",
+        from = "Column::ThreadId",
         to = "super::message_thread::Column::Id",
         on_update = "NoAction",
         on_delete = "Cascade"
     )]
-    MessageThread,
+    Thread,
 }
 
 impl Related<super::message_attachment::Entity> for Entity {
@@ -44,9 +53,15 @@ impl Related<super::message_attachment::Entity> for Entity {
     }
 }
 
+impl Related<super::conversation::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Conversation.def()
+    }
+}
+
 impl Related<super::message_thread::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::MessageThread.def()
+        Relation::Thread.def()
     }
 }
 

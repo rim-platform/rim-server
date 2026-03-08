@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod map_repo_error {
-    use crate::{map_repo_error, ServiceError};
+    use crate::{ServiceError, map_repo_error};
     use rim_core::repository::error::{RepoError, RepoErrorKind};
 
     #[test]

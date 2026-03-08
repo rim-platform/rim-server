@@ -31,6 +31,13 @@ pub trait ConversationRepository: Send + Sync {
         server_id: ServerId,
     ) -> RepoResult<Conversation>;
 
+    async fn create_conversation_with_members(
+        &self,
+        conversation_type: ConversationType,
+        server_id: ServerId,
+        member_ids: &[UserId],
+    ) -> RepoResult<Conversation>;
+
     async fn find_direct_between_users(
         &self,
         server_id: ServerId,

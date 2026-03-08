@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use tracing::{info, instrument};
 
-use rim_core::repository::error::RepoErrorKind;
 use rim_core::message::model::NewMessage;
 use rim_core::repository::pagination::SortOrder;
 use rim_services::message::command::{
-    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, ListThreadMessagesQuery,
+    SendMessageCmd, SendThreadMessageCmd,
 };
 use rim_services::message::dto::{MessageDto, MessagePageCursor};
 use rim_services::message::service::MessageService;
@@ -33,13 +33,19 @@ impl DefaultMessageService {
     #[cfg(test)]
     pub fn new_for_tests(repos: MessageReposPorts) -> Self {
         Self::new(MessageRepos {
-            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(repos.conversation_repo)),
+            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
+                repos.conversation_repo,
+            )),
             conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
                 repos.conversation_member_repo,
             )),
             message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
-            message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(repos.message_thread_repo)),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(repos.server_member_repo)),
+            message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
+                repos.message_thread_repo,
+            )),
+            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                repos.server_member_repo,
+            )),
         })
     }
 
@@ -60,6 +66,58 @@ impl DefaultMessageService {
         Ok(())
     }
 
+    async fn to_dto(
+        &self,
+        message: rim_core::message::model::Message,
+        server_id: rim_core::server::model::ServerId,
+    ) -> ServiceResult<MessageDto> {
+        let root_thread_id = if message.thread_id.is_none() {
+            self.repos
+                .message_thread_repo
+                .get_by_root_message(message.id)
+                .await
+                .map_err(rim_services::map_repo_error)?
+                .map(|thread| thread.id)
+        } else {
+            None
+        };
+
+        Ok(MessageDto {
+            id: message.id,
+            server_id,
+            conversation_id: message.conversation_id,
+            thread_id: message.thread_id,
+            root_thread_id,
+            author_id: message.sent_by,
+            text: message.text,
+            has_attachments: message.has_attachments,
+            parent_message_id: message.parent_message_id,
+            is_deleted: message.is_deleted,
+            sent_at: message.sent_at,
+        })
+    }
+
+    fn to_dto_with_root_thread_id(
+        &self,
+        message: rim_core::message::model::Message,
+        server_id: rim_core::server::model::ServerId,
+        root_thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
+    ) -> MessageDto {
+        MessageDto {
+            id: message.id,
+            server_id,
+            conversation_id: message.conversation_id,
+            thread_id: message.thread_id,
+            root_thread_id,
+            author_id: message.sent_by,
+            text: message.text,
+            has_attachments: message.has_attachments,
+            parent_message_id: message.parent_message_id,
+            is_deleted: message.is_deleted,
+            sent_at: message.sent_at,
+        }
+    }
+
     async fn ensure_thread_in_conversation(
         &self,
         thread_id: rim_core::message_thread::model::MessageThreadId,
@@ -78,26 +136,6 @@ impl DefaultMessageService {
         }
 
         Ok(thread)
-    }
-
-    async fn to_dto(
-        &self,
-        message: rim_core::message::model::Message,
-        server_id: rim_core::server::model::ServerId,
-        conversation_id: rim_core::conversation::model::ConversationId,
-    ) -> ServiceResult<MessageDto> {
-        Ok(MessageDto {
-            id: message.id,
-            server_id,
-            conversation_id,
-            thread_id: message.message_thread_id,
-            author_id: message.sent_by,
-            text: message.text,
-            has_attachments: message.has_attachments,
-            parent_message_id: message.parent_message_id,
-            is_deleted: message.is_deleted,
-            sent_at: message.sent_at,
-        })
     }
 }
 
@@ -123,7 +161,7 @@ impl MessageService for DefaultMessageService {
         .await?;
 
         // Validate conversation exists and belongs to the server.
-        let conv = ensure_conversation_in_server(
+        let _conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             cmd.conversation_id,
             cmd.server_id,
@@ -149,10 +187,6 @@ impl MessageService for DefaultMessageService {
             }
         };
 
-        // v0 semantics: conversation has a dedicated "main thread" for the default timeline.
-        // Root messages and replies (quotes) are both persisted into this thread.
-        let main_thread_id = conv.main_thread_id;
-
         let parent_message_id = match cmd.parent_message_id {
             None => None,
             Some(parent_id) => {
@@ -164,20 +198,18 @@ impl MessageService for DefaultMessageService {
                     .map_err(rim_services::map_repo_error)?
                     .ok_or(ServiceError::NotFound)?;
 
-                if parent.message_thread_id != main_thread_id {
-                    // For now, only allow replying to messages in the main timeline.
+                if parent.conversation_id != cmd.conversation_id || parent.thread_id.is_some() {
                     return Err(ServiceError::NotFound);
                 }
                 Some(parent_id)
             }
         };
 
-        let thread_id = main_thread_id;
-
         let new_message = NewMessage {
+            conversation_id: cmd.conversation_id,
             text,
             sent_by: cmd.actor.user_id,
-            message_thread_id: thread_id,
+            thread_id: None,
             parent_message_id,
             attachments: vec![],
         };
@@ -189,45 +221,7 @@ impl MessageService for DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        info!(message_id = %message.id, thread_id = %thread_id, is_reply = parent_message_id.is_some(), "created message");
-
-        // Ensure main thread has a first_message_id set.
-        // (After the backfill migration it should already be set, but keep this idempotent.)
-        if parent_message_id.is_none() {
-            if let Some(thread) = self
-                .repos
-                .message_thread_repo
-                .get_by_id(thread_id)
-                .await
-                .map_err(rim_services::map_repo_error)?
-            {
-                if thread.first_message_id.is_none() {
-                    let res = self
-                        .repos
-                        .message_thread_repo
-                        .set_first_message(thread_id, message.id)
-                        .await;
-                    match res {
-                        Ok(()) => {
-                            info!(thread_id = %thread_id, root_message_id = %message.id, "bound main thread first message");
-                        }
-                        Err(e) if matches!(e.kind(), RepoErrorKind::Conflict) => {
-                            // Another request likely raced and set it first; safe to ignore.
-                        }
-                        Err(e) => return Err(rim_services::map_repo_error(e)),
-                    }
-                }
-            }
-        }
-
-        // Update activity.
-        self.repos
-            .message_thread_repo
-            .touch_last_message_at(thread_id, message.sent_at)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-
-        info!(thread_id = %thread_id, "updated thread activity");
+        info!(message_id = %message.id, is_reply = parent_message_id.is_some(), "created timeline message");
 
         self.repos
             .conversation_repo
@@ -240,8 +234,99 @@ impl MessageService for DefaultMessageService {
             "updated conversation activity"
         );
 
-        self.to_dto(message, cmd.server_id, cmd.conversation_id)
+        self.to_dto(message, cmd.server_id).await
+    }
+
+    async fn send_thread_message(&self, cmd: SendThreadMessageCmd) -> ServiceResult<MessageDto> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        let _conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+
+        self.ensure_conversation_member(cmd.conversation_id, cmd.actor.user_id)
+            .await?;
+
+        if !cmd.attachments.is_empty() {
+            return Err(ServiceError::Validation(
+                "attachments are not supported in v0".to_string(),
+            ));
+        }
+
+        let thread = self
+            .ensure_thread_in_conversation(cmd.thread_id, cmd.conversation_id)
+            .await?;
+
+        let text = cmd.text.as_deref().map(str::trim).map(ToString::to_string);
+        let text = match text {
+            Some(t) if !t.is_empty() => Some(t),
+            _ => {
+                return Err(ServiceError::Validation(
+                    "message text must be non-empty".to_string(),
+                ));
+            }
+        };
+
+        let parent_message_id = match cmd.parent_message_id {
+            None => None,
+            Some(parent_id) => {
+                let parent = self
+                    .repos
+                    .message_repo
+                    .get_by_id(parent_id)
+                    .await
+                    .map_err(rim_services::map_repo_error)?
+                    .ok_or(ServiceError::NotFound)?;
+
+                let is_root_parent =
+                    thread.first_message_id == Some(parent.id) && parent.thread_id.is_none();
+                let is_thread_parent = parent.thread_id == Some(cmd.thread_id);
+                let valid_parent = is_root_parent || is_thread_parent;
+
+                if parent.conversation_id != cmd.conversation_id || !valid_parent {
+                    return Err(ServiceError::NotFound);
+                }
+                Some(parent_id)
+            }
+        };
+
+        let message = self
+            .repos
+            .message_repo
+            .create_message(&NewMessage {
+                conversation_id: cmd.conversation_id,
+                text,
+                sent_by: cmd.actor.user_id,
+                thread_id: Some(cmd.thread_id),
+                parent_message_id,
+                attachments: vec![],
+            })
             .await
+            .map_err(rim_services::map_repo_error)?;
+
+        self.repos
+            .message_thread_repo
+            .touch_last_message_at(cmd.thread_id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        self.repos
+            .conversation_repo
+            .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        info!(message_id = %message.id, thread_id = %cmd.thread_id, "created thread message");
+
+        self.to_dto(message, cmd.server_id).await
     }
 
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto> {
@@ -270,13 +355,11 @@ impl MessageService for DefaultMessageService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        // Ensure message belongs to the conversation.
-        let _thread = self
-            .ensure_thread_in_conversation(msg.message_thread_id, query.conversation_id)
-            .await?;
+        if msg.conversation_id != query.conversation_id || msg.thread_id.is_some() {
+            return Err(ServiceError::NotFound);
+        }
 
-        self.to_dto(msg, query.server_id, query.conversation_id)
-            .await
+        self.to_dto(msg, query.server_id).await
     }
 
     async fn list_messages(
@@ -290,7 +373,7 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
-        let conv = ensure_conversation_in_server(
+        let _conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             query.conversation_id,
             query.server_id,
@@ -300,15 +383,80 @@ impl MessageService for DefaultMessageService {
         self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
             .await?;
 
-        let _thread = self
-            .ensure_thread_in_conversation(conv.main_thread_id, query.conversation_id)
+        let page = self
+            .repos
+            .message_repo
+            .list_messages(
+                query.conversation_id,
+                None,
+                query.limit,
+                query.dir,
+                query.cursor.map(Into::into),
+                query.include_deleted,
+                SortOrder::Desc,
+            )
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let root_message_ids = page
+            .items
+            .iter()
+            .filter(|m| m.thread_id.is_none())
+            .map(|m| m.id)
+            .collect::<Vec<_>>();
+        let root_thread_ids = self
+            .repos
+            .message_thread_repo
+            .get_thread_ids_by_root_messages(&root_message_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let mut items = Vec::with_capacity(page.items.len());
+        for m in page.items {
+            let root_thread_id = if m.thread_id.is_none() {
+                root_thread_ids.get(&m.id).copied()
+            } else {
+                None
+            };
+            items.push(self.to_dto_with_root_thread_id(m, query.server_id, root_thread_id));
+        }
+
+        Ok(rim_core::repository::pagination::Page::new(
+            items,
+            page.next.map(Into::into),
+            page.prev.map(Into::into),
+        ))
+    }
+
+    async fn list_thread_messages(
+        &self,
+        query: ListThreadMessagesQuery,
+    ) -> ServiceResult<rim_core::repository::pagination::Page<MessageDto, MessagePageCursor>> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        let _conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            query.conversation_id,
+            query.server_id,
+        )
+        .await?;
+
+        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
+            .await?;
+        self.ensure_thread_in_conversation(query.thread_id, query.conversation_id)
             .await?;
 
         let page = self
             .repos
             .message_repo
             .list_messages(
-                conv.main_thread_id,
+                query.conversation_id,
+                Some(query.thread_id),
                 query.limit,
                 query.dir,
                 query.cursor.map(Into::into),
@@ -320,10 +468,7 @@ impl MessageService for DefaultMessageService {
 
         let mut items = Vec::with_capacity(page.items.len());
         for m in page.items {
-            items.push(
-                self.to_dto(m, query.server_id, query.conversation_id)
-                    .await?,
-            );
+            items.push(self.to_dto_with_root_thread_id(m, query.server_id, None));
         }
 
         Ok(rim_core::repository::pagination::Page::new(
@@ -359,10 +504,9 @@ impl MessageService for DefaultMessageService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        // Ensure message belongs to conversation.
-        let _thread = self
-            .ensure_thread_in_conversation(msg.message_thread_id, cmd.conversation_id)
-            .await?;
+        if msg.conversation_id != cmd.conversation_id || msg.thread_id.is_some() {
+            return Err(ServiceError::NotFound);
+        }
 
         if msg.sent_by != cmd.actor.user_id {
             return Err(ServiceError::PermissionDenied);
@@ -382,8 +526,7 @@ impl MessageService for DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        self.to_dto(updated, cmd.server_id, cmd.conversation_id)
-            .await
+        self.to_dto(updated, cmd.server_id).await
     }
 
     async fn delete_message(&self, cmd: DeleteMessageCmd) -> ServiceResult<()> {
@@ -419,9 +562,9 @@ impl MessageService for DefaultMessageService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        let _thread = self
-            .ensure_thread_in_conversation(msg.message_thread_id, cmd.conversation_id)
-            .await?;
+        if msg.conversation_id != cmd.conversation_id || msg.thread_id.is_some() {
+            return Err(ServiceError::NotFound);
+        }
 
         if msg.sent_by != cmd.actor.user_id {
             return Err(ServiceError::PermissionDenied);

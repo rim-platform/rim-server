@@ -12,7 +12,10 @@ mod tests {
     use rim_services::{Actor, ServiceError};
 
     use crate::auth::DefaultAuthService;
-    use crate::test_support::auth::{AuthReposPorts, MockInviteRepo, MockServerMemberRepo, MockServerRepo, MockSessionRepo, MockUserRepo};
+    use crate::test_support::auth::{
+        AuthReposPorts, MockInviteRepo, MockServerMemberRepo, MockServerRepo, MockSessionRepo,
+        MockUserRepo,
+    };
 
     fn repos() -> (
         MockUserRepo,
@@ -46,10 +49,7 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc
-            .bootstrap("secret", "u", "p", "s")
-            .await
-            .unwrap_err();
+        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
@@ -70,10 +70,7 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc
-            .bootstrap("secret", "u", "p", "s")
-            .await
-            .unwrap_err();
+        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
@@ -152,7 +149,8 @@ mod tests {
         let invite_id = InviteId::new();
         let now = chrono::Utc::now();
 
-        let (mut user_repo, server_repo, server_member_repo, session_repo, mut invite_repo) = repos();
+        let (mut user_repo, server_repo, server_member_repo, session_repo, mut invite_repo) =
+            repos();
         user_repo.expect_find_by_username().returning(move |_u| {
             Ok(Some(User {
                 id: existing_user_id,
@@ -192,10 +190,7 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc
-            .accept_invite("token", "taken", "pw")
-            .await
-            .unwrap_err();
+        let err = svc.accept_invite("token", "taken", "pw").await.unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(m) if m.contains("username")));
     }
 
@@ -205,9 +200,14 @@ mod tests {
 
         let (mut user_repo, server_repo, server_member_repo, session_repo, invite_repo) = repos();
         user_repo.expect_any_users_exist().returning(|| Ok(false));
-        user_repo.expect_create_user().returning(move |_new: NewUser| {
-            Err(RepoError::with_message(RepoErrorKind::Conflict, "duplicate"))
-        });
+        user_repo
+            .expect_create_user()
+            .returning(move |_new: NewUser| {
+                Err(RepoError::with_message(
+                    RepoErrorKind::Conflict,
+                    "duplicate",
+                ))
+            });
 
         let mut server_repo = server_repo;
         server_repo.expect_create_server().never();
@@ -228,10 +228,7 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc
-            .bootstrap("secret", "u", "p", "s")
-            .await
-            .unwrap_err();
+        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(m) if m == "duplicate"));
 
         let _ = now;
@@ -244,20 +241,23 @@ mod tests {
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo) = repos();
+        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo) =
+            repos();
 
         user_repo.expect_any_users_exist().returning(|| Ok(false));
-        user_repo.expect_create_user().returning(move |new: NewUser| {
-            assert_eq!(new.username, "u");
-            Ok(User {
-                id: user_id,
-                username: new.username,
-                password_hash: new.password,
-                created_at: now,
-                updated_at: now,
-                last_login_at: now,
-            })
-        });
+        user_repo
+            .expect_create_user()
+            .returning(move |new: NewUser| {
+                assert_eq!(new.username, "u");
+                Ok(User {
+                    id: user_id,
+                    username: new.username,
+                    password_hash: new.password,
+                    created_at: now,
+                    updated_at: now,
+                    last_login_at: now,
+                })
+            });
 
         server_repo.expect_create_server().returning(move |name| {
             assert_eq!(name, "s");

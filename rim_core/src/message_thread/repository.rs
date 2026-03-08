@@ -6,6 +6,7 @@ use crate::repository::pagination::{Page, PageDir};
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThreadCursor {
@@ -18,10 +19,24 @@ pub struct ThreadCursor {
 pub trait MessageThreadRepository: Send + Sync {
     async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
 
+    async fn get_by_root_message(&self, message_id: MessageId)
+    -> RepoResult<Option<MessageThread>>;
+
+    async fn get_thread_ids_by_root_messages(
+        &self,
+        message_ids: &[MessageId],
+    ) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
+
     /// Creates an empty thread. For the typical "thread per root message" flow, you create a
     /// thread first, then create the root message with that thread id, then call
     /// `set_first_message`.
     async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread>;
+
+    async fn create_thread_for_root(
+        &self,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+    ) -> RepoResult<MessageThread>;
 
     async fn set_first_message(
         &self,

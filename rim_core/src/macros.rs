@@ -4,6 +4,12 @@ macro_rules! model_id {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name(::uuid::Uuid);
 
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl $name {
             pub fn new() -> Self {
                 Self(::uuid::Uuid::now_v7())

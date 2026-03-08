@@ -4,14 +4,16 @@ use rim_services::auth::service::AuthService;
 use rim_services::conversation::command::CreateConversationCmd;
 use rim_services::conversation::service::ConversationService;
 use rim_services::message::command::SendMessageCmd;
-use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd};
+use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd, SendThreadMessageCmd};
 use rim_services::message::service::MessageService;
+use rim_services::message_thread::command::CreateThreadCmd;
+use rim_services::message_thread::service::ThreadService;
 use rim_services::{Actor, ServiceError};
 
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::ids::parse_uuid_id;
 use crate::query::AuthActorCtx;
-use crate::types::{Conversation, Message};
+use crate::types::{Conversation, Message, Thread};
 
 pub struct Mutation;
 
@@ -75,6 +77,15 @@ pub struct SendMessageInput {
 }
 
 #[derive(InputObject)]
+pub struct SendThreadMessageInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub thread_id: ID,
+    pub text: String,
+    pub parent_message_id: Option<ID>,
+}
+
+#[derive(InputObject)]
 pub struct CreateConversationInput {
     pub server_id: ID,
 
@@ -103,6 +114,13 @@ pub struct DeleteMessageInput {
     pub server_id: ID,
     pub conversation_id: ID,
     pub message_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct CreateThreadInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub root_message_id: ID,
 }
 
 #[Object]
@@ -245,13 +263,13 @@ impl Mutation {
 
         let msg = svc
             .send_message(SendMessageCmd {
-            actor: Actor::new(actor),
-            server_id,
-            conversation_id,
-            text: Some(input.text),
-            parent_message_id,
-            attachments: vec![],
-        })
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                text: Some(input.text),
+                parent_message_id,
+                attachments: vec![],
+            })
             .await
             .map_err(map_service_error)?;
 
@@ -297,6 +315,44 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         Ok(conv.into())
+    }
+
+    async fn send_thread_message(
+        &self,
+        ctx: &Context<'_>,
+        input: SendThreadMessageInput,
+    ) -> Result<Message> {
+        let actor = ctx
+            .data_unchecked::<AuthActorCtx>()
+            .actor()
+            .ok_or_else(|| Error::new("unauthenticated"))?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let thread_id =
+            parse_uuid_id::<rim_core::message_thread::model::MessageThreadId>(&input.thread_id)?;
+        let parent_message_id = input
+            .parent_message_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::message::model::MessageId>)
+            .transpose()?;
+
+        let msg = svc
+            .send_thread_message(SendThreadMessageCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                thread_id,
+                text: Some(input.text),
+                parent_message_id,
+                attachments: vec![],
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(msg.into())
     }
 
     async fn edit_message(&self, ctx: &Context<'_>, input: EditMessageInput) -> Result<Message> {
@@ -348,6 +404,32 @@ impl Mutation {
         .map_err(map_service_error)?;
 
         Ok(true)
+    }
+
+    async fn create_thread(&self, ctx: &Context<'_>, input: CreateThreadInput) -> Result<Thread> {
+        let actor = ctx
+            .data_unchecked::<AuthActorCtx>()
+            .actor()
+            .ok_or_else(|| Error::new("unauthenticated"))?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let root_message_id =
+            parse_uuid_id::<rim_core::message::model::MessageId>(&input.root_message_id)?;
+
+        let thread = svc
+            .create_thread(CreateThreadCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                root_message_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(thread.into())
     }
 }
 

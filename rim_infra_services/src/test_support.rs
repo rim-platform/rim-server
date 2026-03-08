@@ -2,10 +2,10 @@
 pub mod auth {
     use async_trait::async_trait;
     use rim_core::auth::model::{Invite, InviteId, NewInvite, NewSession, Session, SessionId};
-    use rim_core::repository::error::{RepoResult};
-    use rim_core::user::model::{NewUser, User, UserId};
+    use rim_core::repository::error::RepoResult;
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::user::model::{NewUser, User, UserId};
 
     #[async_trait]
     pub trait UserRepo: Send + Sync {
@@ -205,7 +205,10 @@ pub mod auth {
             ))
         }
 
-        async fn get_members_for_server(&self, _server_id: ServerId) -> RepoResult<Vec<ServerMember>> {
+        async fn get_members_for_server(
+            &self,
+            _server_id: ServerId,
+        ) -> RepoResult<Vec<ServerMember>> {
             Err(rim_core::repository::error::RepoError::new(
                 rim_core::repository::error::RepoErrorKind::Unsupported,
             ))
@@ -291,6 +294,7 @@ pub mod conversation {
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
+    use std::collections::HashMap;
 
     #[async_trait]
     pub trait ConversationRepo: Send + Sync {
@@ -298,6 +302,13 @@ pub mod conversation {
             &self,
             conversation_type: ConversationType,
             server_id: ServerId,
+        ) -> RepoResult<Conversation>;
+
+        async fn create_conversation_with_members(
+            &self,
+            conversation_type: ConversationType,
+            server_id: ServerId,
+            member_ids: &[UserId],
         ) -> RepoResult<Conversation>;
 
         async fn find_direct_between_users(
@@ -336,8 +347,11 @@ pub mod conversation {
             user_id: UserId,
         ) -> RepoResult<ConversationMember>;
 
-        async fn is_member(&self, conversation_id: ConversationId, user_id: UserId)
-        -> RepoResult<bool>;
+        async fn is_member(
+            &self,
+            conversation_id: ConversationId,
+            user_id: UserId,
+        ) -> RepoResult<bool>;
 
         async fn remove_member(
             &self,
@@ -345,7 +359,13 @@ pub mod conversation {
             user_id: UserId,
         ) -> RepoResult<()>;
 
-        async fn list_member_ids(&self, conversation_id: ConversationId) -> RepoResult<Vec<UserId>>;
+        async fn list_member_ids(&self, conversation_id: ConversationId)
+        -> RepoResult<Vec<UserId>>;
+
+        async fn list_member_ids_for_conversations(
+            &self,
+            conversation_ids: &[ConversationId],
+        ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>>;
     }
 
     #[async_trait]
@@ -358,6 +378,7 @@ pub mod conversation {
         #[async_trait]
         impl ConversationRepo for ConversationRepo {
             async fn create_conversation(&self, conversation_type: ConversationType, server_id: ServerId) -> RepoResult<Conversation>;
+            async fn create_conversation_with_members(&self, conversation_type: ConversationType, server_id: ServerId, member_ids: &[UserId]) -> RepoResult<Conversation>;
             async fn find_direct_between_users(&self, server_id: ServerId, user_a: UserId, user_b: UserId) -> RepoResult<Option<Conversation>>;
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
             async fn list_inbox_conversations_for_user(&self, user_id: UserId, server_id: ServerId, limit: u32, dir: PageDir, cursor: Option<ConversationActivityCursor>) -> RepoResult<Page<Conversation, ConversationActivityCursor>>;
@@ -373,6 +394,7 @@ pub mod conversation {
             async fn is_member(&self, conversation_id: ConversationId, user_id: UserId) -> RepoResult<bool>;
             async fn remove_member(&self, conversation_id: ConversationId, user_id: UserId) -> RepoResult<()>;
             async fn list_member_ids(&self, conversation_id: ConversationId) -> RepoResult<Vec<UserId>>;
+            async fn list_member_ids_for_conversations(&self, conversation_ids: &[ConversationId]) -> RepoResult<HashMap<ConversationId, Vec<UserId>>>;
         }
     }
 
@@ -406,7 +428,20 @@ pub mod conversation {
             conversation_type: ConversationType,
             server_id: ServerId,
         ) -> RepoResult<Conversation> {
-            self.0.create_conversation(conversation_type, server_id).await
+            self.0
+                .create_conversation(conversation_type, server_id)
+                .await
+        }
+
+        async fn create_conversation_with_members(
+            &self,
+            conversation_type: ConversationType,
+            server_id: ServerId,
+            member_ids: &[UserId],
+        ) -> RepoResult<Conversation> {
+            self.0
+                .create_conversation_with_members(conversation_type, server_id, member_ids)
+                .await
         }
 
         async fn find_direct_between_users(
@@ -497,14 +532,29 @@ pub mod conversation {
             self.0.is_member(conversation_id, user_id).await
         }
 
-        async fn list_member_ids(&self, conversation_id: ConversationId) -> RepoResult<Vec<UserId>> {
+        async fn list_member_ids(
+            &self,
+            conversation_id: ConversationId,
+        ) -> RepoResult<Vec<UserId>> {
             self.0.list_member_ids(conversation_id).await
+        }
+
+        async fn list_member_ids_for_conversations(
+            &self,
+            conversation_ids: &[ConversationId],
+        ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>> {
+            self.0
+                .list_member_ids_for_conversations(conversation_ids)
+                .await
         }
     }
 
     #[async_trait]
     impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepoPortAdapter {
-        async fn get_by_id(&self, _id: rim_core::server_member::model::ServerMemberId) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
+        async fn get_by_id(
+            &self,
+            _id: rim_core::server_member::model::ServerMemberId,
+        ) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -702,7 +752,10 @@ pub mod server_member {
             role: ServerMemberRole,
         ) -> RepoResult<ServerMember>;
         async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
-        async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
+        async fn get_members_for_server(
+            &self,
+            server_id: ServerId,
+        ) -> RepoResult<Vec<ServerMember>>;
     }
 
     mockall::mock! {
@@ -789,7 +842,10 @@ pub mod server_member {
             self.0.remove_member(server_id, user_id).await
         }
 
-        async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>> {
+        async fn get_members_for_server(
+            &self,
+            server_id: ServerId,
+        ) -> RepoResult<Vec<ServerMember>> {
             self.0.get_members_for_server(server_id).await
         }
 
@@ -831,7 +887,10 @@ pub mod user {
             self.0.get_by_id(id).await
         }
 
-        async fn create_user(&self, _user_data: rim_core::user::model::NewUser) -> RepoResult<User> {
+        async fn create_user(
+            &self,
+            _user_data: rim_core::user::model::NewUser,
+        ) -> RepoResult<User> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -859,7 +918,8 @@ pub mod attachment {
 
     #[async_trait]
     pub trait MessageAttachmentRepo: Send + Sync {
-        async fn get_by_id(&self, id: MessageAttachmentId) -> RepoResult<Option<MessageAttachment>>;
+        async fn get_by_id(&self, id: MessageAttachmentId)
+        -> RepoResult<Option<MessageAttachment>>;
     }
 
     #[async_trait]
@@ -896,7 +956,10 @@ pub mod attachment {
     impl rim_core::message_attachment::repository::MessageAttachmentRepository
         for MessageAttachmentRepoPortAdapter
     {
-        async fn get_by_id(&self, id: MessageAttachmentId) -> RepoResult<Option<MessageAttachment>> {
+        async fn get_by_id(
+            &self,
+            id: MessageAttachmentId,
+        ) -> RepoResult<Option<MessageAttachment>> {
             self.0.get_by_id(id).await
         }
 
@@ -922,7 +985,10 @@ pub mod attachment {
 
     #[async_trait]
     impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepoPortAdapter {
-        async fn get_by_id(&self, _id: rim_core::server_member::model::ServerMemberId) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
+        async fn get_by_id(
+            &self,
+            _id: rim_core::server_member::model::ServerMemberId,
+        ) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -980,6 +1046,7 @@ pub mod message {
     use rim_core::repository::pagination::{Page, PageDir, SortOrder};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
+    use std::collections::HashMap;
 
     #[async_trait]
     pub trait ConversationRepo: Send + Sync {
@@ -993,17 +1060,22 @@ pub mod message {
 
     #[async_trait]
     pub trait ConversationMemberRepo: Send + Sync {
-        async fn is_member(&self, conversation_id: ConversationId, user_id: UserId)
-        -> RepoResult<bool>;
+        async fn is_member(
+            &self,
+            conversation_id: ConversationId,
+            user_id: UserId,
+        ) -> RepoResult<bool>;
     }
 
     #[async_trait]
     pub trait MessageRepo: Send + Sync {
         async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
         async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message>;
+        #[allow(clippy::too_many_arguments)]
         async fn list_messages(
             &self,
-            thread_id: MessageThreadId,
+            conversation_id: ConversationId,
+            thread_id: Option<MessageThreadId>,
             limit: u32,
             dir: PageDir,
             cursor: Option<MessageCursor>,
@@ -1015,12 +1087,25 @@ pub mod message {
             message_id: MessageId,
             new_text: String,
         ) -> RepoResult<Message>;
-        async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()> ;
+        async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
     }
 
     #[async_trait]
     pub trait ThreadRepo: Send + Sync {
         async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+        async fn get_by_root_message(
+            &self,
+            message_id: MessageId,
+        ) -> RepoResult<Option<MessageThread>>;
+        async fn get_thread_ids_by_root_messages(
+            &self,
+            message_ids: &[MessageId],
+        ) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
+        async fn create_thread_for_root(
+            &self,
+            conversation_id: ConversationId,
+            message_id: MessageId,
+        ) -> RepoResult<MessageThread>;
         async fn set_first_message(
             &self,
             thread_id: MessageThreadId,
@@ -1061,7 +1146,7 @@ pub mod message {
         impl MessageRepo for MessageRepo {
             async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
             async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message>;
-            async fn list_messages(&self, thread_id: MessageThreadId, limit: u32, dir: PageDir, cursor: Option<MessageCursor>, include_deleted: bool, order: SortOrder) -> RepoResult<Page<Message, MessageCursor>>;
+            async fn list_messages(&self, conversation_id: ConversationId, thread_id: Option<MessageThreadId>, limit: u32, dir: PageDir, cursor: Option<MessageCursor>, include_deleted: bool, order: SortOrder) -> RepoResult<Page<Message, MessageCursor>>;
             async fn update_message_text(&self, message_id: MessageId, new_text: String) -> RepoResult<Message>;
             async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
         }
@@ -1072,6 +1157,9 @@ pub mod message {
         #[async_trait]
         impl ThreadRepo for ThreadRepo {
             async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+            async fn get_by_root_message(&self, message_id: MessageId) -> RepoResult<Option<MessageThread>>;
+            async fn get_thread_ids_by_root_messages(&self, message_ids: &[MessageId]) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
+            async fn create_thread_for_root(&self, conversation_id: ConversationId, message_id: MessageId) -> RepoResult<MessageThread>;
             async fn set_first_message(&self, thread_id: MessageThreadId, message_id: MessageId) -> RepoResult<()>;
             async fn touch_last_message_at(&self, thread_id: MessageThreadId, at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
         }
@@ -1114,6 +1202,15 @@ pub mod message {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
+        async fn create_conversation_with_members(
+            &self,
+            _conversation_type: rim_core::conversation::model::ConversationType,
+            _server_id: ServerId,
+            _member_ids: &[UserId],
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn find_direct_between_users(
             &self,
             _server_id: ServerId,
@@ -1130,7 +1227,9 @@ pub mod message {
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::conversation::repository::ConversationActivityCursor>,
-        ) -> RepoResult<Page<Conversation, rim_core::conversation::repository::ConversationActivityCursor>> {
+        ) -> RepoResult<
+            Page<Conversation, rim_core::conversation::repository::ConversationActivityCursor>,
+        > {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1141,7 +1240,9 @@ pub mod message {
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::conversation::repository::ConversationCreatedCursor>,
-        ) -> RepoResult<Page<Conversation, rim_core::conversation::repository::ConversationCreatedCursor>> {
+        ) -> RepoResult<
+            Page<Conversation, rim_core::conversation::repository::ConversationCreatedCursor>,
+        > {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1196,7 +1297,17 @@ pub mod message {
             self.0.is_member(conversation_id, user_id).await
         }
 
-        async fn list_member_ids(&self, _conversation_id: ConversationId) -> RepoResult<Vec<UserId>> {
+        async fn list_member_ids(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<Vec<UserId>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn list_member_ids_for_conversations(
+            &self,
+            _conversation_ids: &[ConversationId],
+        ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
     }
@@ -1207,13 +1318,19 @@ pub mod message {
             self.0.get_by_id(id).await
         }
 
+        async fn get_by_ids(&self, ids: &[MessageId]) -> RepoResult<HashMap<MessageId, Message>> {
+            let _ = ids;
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message> {
             self.0.create_message(new_message).await
         }
 
         async fn list_messages(
             &self,
-            thread_id: MessageThreadId,
+            conversation_id: ConversationId,
+            thread_id: Option<MessageThreadId>,
             limit: u32,
             dir: PageDir,
             cursor: Option<MessageCursor>,
@@ -1221,11 +1338,23 @@ pub mod message {
             order: SortOrder,
         ) -> RepoResult<Page<Message, MessageCursor>> {
             self.0
-                .list_messages(thread_id, limit, dir, cursor, include_deleted, order)
+                .list_messages(
+                    conversation_id,
+                    thread_id,
+                    limit,
+                    dir,
+                    cursor,
+                    include_deleted,
+                    order,
+                )
                 .await
         }
 
-        async fn update_message_text(&self, message_id: MessageId, new_text: String) -> RepoResult<Message> {
+        async fn update_message_text(
+            &self,
+            message_id: MessageId,
+            new_text: String,
+        ) -> RepoResult<Message> {
             self.0.update_message_text(message_id, new_text).await
         }
 
@@ -1240,7 +1369,34 @@ pub mod message {
             self.0.get_by_id(id).await
         }
 
-        async fn create_thread(&self, _conversation_id: ConversationId) -> RepoResult<MessageThread> {
+        async fn get_by_root_message(
+            &self,
+            message_id: MessageId,
+        ) -> RepoResult<Option<MessageThread>> {
+            self.0.get_by_root_message(message_id).await
+        }
+
+        async fn get_thread_ids_by_root_messages(
+            &self,
+            message_ids: &[MessageId],
+        ) -> RepoResult<HashMap<MessageId, MessageThreadId>> {
+            self.0.get_thread_ids_by_root_messages(message_ids).await
+        }
+
+        async fn create_thread_for_root(
+            &self,
+            conversation_id: ConversationId,
+            message_id: MessageId,
+        ) -> RepoResult<MessageThread> {
+            self.0
+                .create_thread_for_root(conversation_id, message_id)
+                .await
+        }
+
+        async fn create_thread(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<MessageThread> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1266,14 +1422,18 @@ pub mod message {
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::message_thread::repository::ThreadCursor>,
-        ) -> RepoResult<Page<MessageThread, rim_core::message_thread::repository::ThreadCursor>> {
+        ) -> RepoResult<Page<MessageThread, rim_core::message_thread::repository::ThreadCursor>>
+        {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
     }
 
     #[async_trait]
     impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepoPortAdapter {
-        async fn get_by_id(&self, _id: rim_core::server_member::model::ServerMemberId) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
+        async fn get_by_id(
+            &self,
+            _id: rim_core::server_member::model::ServerMemberId,
+        ) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1331,6 +1491,7 @@ pub mod thread {
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
+    use std::collections::HashMap;
 
     #[async_trait]
     pub trait ConversationRepo: Send + Sync {
@@ -1339,18 +1500,42 @@ pub mod thread {
 
     #[async_trait]
     pub trait ConversationMemberRepo: Send + Sync {
-        async fn is_member(&self, conversation_id: ConversationId, user_id: UserId)
-        -> RepoResult<bool>;
+        async fn is_member(
+            &self,
+            conversation_id: ConversationId,
+            user_id: UserId,
+        ) -> RepoResult<bool>;
     }
 
     #[async_trait]
     pub trait MessageRepo: Send + Sync {
         async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
+        async fn get_by_ids(&self, ids: &[MessageId]) -> RepoResult<HashMap<MessageId, Message>>;
     }
 
     #[async_trait]
     pub trait ThreadRepo: Send + Sync {
         async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+        async fn get_by_root_message(
+            &self,
+            message_id: MessageId,
+        ) -> RepoResult<Option<MessageThread>>;
+        async fn get_thread_ids_by_root_messages(
+            &self,
+            message_ids: &[MessageId],
+        ) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
+        async fn create_thread(&self, conversation_id: ConversationId)
+        -> RepoResult<MessageThread>;
+        async fn create_thread_for_root(
+            &self,
+            conversation_id: ConversationId,
+            message_id: MessageId,
+        ) -> RepoResult<MessageThread>;
+        async fn set_first_message(
+            &self,
+            thread_id: MessageThreadId,
+            message_id: MessageId,
+        ) -> RepoResult<()>;
         async fn list_threads_for_conversation(
             &self,
             conversation_id: ConversationId,
@@ -1386,6 +1571,7 @@ pub mod thread {
         #[async_trait]
         impl MessageRepo for MessageRepo {
             async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
+            async fn get_by_ids(&self, ids: &[MessageId]) -> RepoResult<HashMap<MessageId, Message>>;
         }
     }
 
@@ -1394,6 +1580,11 @@ pub mod thread {
         #[async_trait]
         impl ThreadRepo for ThreadRepo {
             async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+            async fn get_by_root_message(&self, message_id: MessageId) -> RepoResult<Option<MessageThread>>;
+            async fn get_thread_ids_by_root_messages(&self, message_ids: &[MessageId]) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
+            async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread>;
+            async fn create_thread_for_root(&self, conversation_id: ConversationId, message_id: MessageId) -> RepoResult<MessageThread>;
+            async fn set_first_message(&self, thread_id: MessageThreadId, message_id: MessageId) -> RepoResult<()>;
             async fn list_threads_for_conversation(&self, conversation_id: ConversationId, limit: u32, dir: PageDir, cursor: Option<ThreadCursor>) -> RepoResult<Page<MessageThread, ThreadCursor>>;
         }
     }
@@ -1435,6 +1626,15 @@ pub mod thread {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
+        async fn create_conversation_with_members(
+            &self,
+            _conversation_type: rim_core::conversation::model::ConversationType,
+            _server_id: ServerId,
+            _member_ids: &[UserId],
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn find_direct_between_users(
             &self,
             _server_id: ServerId,
@@ -1451,7 +1651,9 @@ pub mod thread {
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::conversation::repository::ConversationActivityCursor>,
-        ) -> RepoResult<Page<Conversation, rim_core::conversation::repository::ConversationActivityCursor>> {
+        ) -> RepoResult<
+            Page<Conversation, rim_core::conversation::repository::ConversationActivityCursor>,
+        > {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1462,7 +1664,9 @@ pub mod thread {
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::conversation::repository::ConversationCreatedCursor>,
-        ) -> RepoResult<Page<Conversation, rim_core::conversation::repository::ConversationCreatedCursor>> {
+        ) -> RepoResult<
+            Page<Conversation, rim_core::conversation::repository::ConversationCreatedCursor>,
+        > {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
@@ -1517,7 +1721,17 @@ pub mod thread {
             self.0.is_member(conversation_id, user_id).await
         }
 
-        async fn list_member_ids(&self, _conversation_id: ConversationId) -> RepoResult<Vec<UserId>> {
+        async fn list_member_ids(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<Vec<UserId>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn list_member_ids_for_conversations(
+            &self,
+            _conversation_ids: &[ConversationId],
+        ) -> RepoResult<HashMap<ConversationId, Vec<UserId>>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
     }
@@ -1528,13 +1742,21 @@ pub mod thread {
             self.0.get_by_id(id).await
         }
 
-        async fn create_message(&self, _new_message: &rim_core::message::model::NewMessage) -> RepoResult<Message> {
+        async fn get_by_ids(&self, ids: &[MessageId]) -> RepoResult<HashMap<MessageId, Message>> {
+            self.0.get_by_ids(ids).await
+        }
+
+        async fn create_message(
+            &self,
+            _new_message: &rim_core::message::model::NewMessage,
+        ) -> RepoResult<Message> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
         async fn list_messages(
             &self,
-            _thread_id: rim_core::message_thread::model::MessageThreadId,
+            _conversation_id: ConversationId,
+            _thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<rim_core::message::repository::MessageCursor>,
@@ -1563,16 +1785,43 @@ pub mod thread {
             self.0.get_by_id(id).await
         }
 
-        async fn create_thread(&self, _conversation_id: ConversationId) -> RepoResult<MessageThread> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
+        async fn get_by_root_message(
+            &self,
+            message_id: MessageId,
+        ) -> RepoResult<Option<MessageThread>> {
+            self.0.get_by_root_message(message_id).await
+        }
+
+        async fn get_thread_ids_by_root_messages(
+            &self,
+            message_ids: &[MessageId],
+        ) -> RepoResult<HashMap<MessageId, MessageThreadId>> {
+            self.0.get_thread_ids_by_root_messages(message_ids).await
+        }
+
+        async fn create_thread(
+            &self,
+            conversation_id: ConversationId,
+        ) -> RepoResult<MessageThread> {
+            self.0.create_thread(conversation_id).await
+        }
+
+        async fn create_thread_for_root(
+            &self,
+            conversation_id: ConversationId,
+            message_id: MessageId,
+        ) -> RepoResult<MessageThread> {
+            self.0
+                .create_thread_for_root(conversation_id, message_id)
+                .await
         }
 
         async fn set_first_message(
             &self,
-            _thread_id: MessageThreadId,
-            _message_id: MessageId,
+            thread_id: MessageThreadId,
+            message_id: MessageId,
         ) -> RepoResult<()> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
+            self.0.set_first_message(thread_id, message_id).await
         }
 
         async fn touch_last_message_at(
@@ -1598,7 +1847,10 @@ pub mod thread {
 
     #[async_trait]
     impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepoPortAdapter {
-        async fn get_by_id(&self, _id: rim_core::server_member::model::ServerMemberId) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
+        async fn get_by_id(
+            &self,
+            _id: rim_core::server_member::model::ServerMemberId,
+        ) -> RepoResult<Option<rim_core::server_member::model::ServerMember>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 

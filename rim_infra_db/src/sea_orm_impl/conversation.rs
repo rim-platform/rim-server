@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use entity::{conversation, conversation_member, message_thread};
+use entity::{conversation, conversation_member};
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::{
     ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
@@ -13,9 +13,8 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, JoinType, QueryFilter,
-    QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set,
+    QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set, TransactionTrait,
 };
-use sea_orm::TransactionTrait;
 
 use crate::error::map_db_err;
 
@@ -45,41 +44,55 @@ impl ConversationRepository for SeaOrmConversationRepository {
         conversation_type: ConversationType,
         server_id: ServerId,
     ) -> RepoResult<Conversation> {
-        // Insert conversation and its main thread in a single transaction.
-        // The conversation holds a NOT NULL FK to `message_thread` via `main_thread_id`.
+        let active = conversation::ActiveModel {
+            id: Set(ConversationId::new().into()),
+            conversation_type: Set(conversation_type.into()),
+            server_id: Set(server_id.into()),
+            ..Default::default()
+        };
+
+        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
+        Ok(inserted.into())
+    }
+
+    async fn create_conversation_with_members(
+        &self,
+        conversation_type: ConversationType,
+        server_id: ServerId,
+        member_ids: &[UserId],
+    ) -> RepoResult<Conversation> {
+        let server_id_uuid: Uuid = server_id.into();
+        let member_ids = member_ids
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<Uuid>>();
+
         let inserted = self
             .db
             .transaction::<_, conversation::Model, RepoError>(|txn| {
-                let conversation_id = ConversationId::new();
-                let main_thread_id = rim_core::message_thread::model::MessageThreadId::new();
-                let now = chrono::Utc::now();
-
                 Box::pin(async move {
-                    // Insert conversation first so the thread FK is satisfied.
                     let active = conversation::ActiveModel {
-                        id: Set(conversation_id.into()),
+                        id: Set(ConversationId::new().into()),
                         conversation_type: Set(conversation_type.into()),
-                        server_id: Set(server_id.into()),
-                        main_thread_id: Set(main_thread_id.into()),
+                        server_id: Set(server_id_uuid),
                         ..Default::default()
                     };
-                    active.insert(txn).await.map_err(map_db_err)?;
 
-                    let thread_active = message_thread::ActiveModel {
-                        id: Set(main_thread_id.into()),
-                        conversation_id: Set(conversation_id.into()),
-                        first_message_id: Set(None),
-                        created_at: Set(now.into()),
-                        last_message_at: Set(now.into()),
-                    };
-                    thread_active.insert(txn).await.map_err(map_db_err)?;
+                    let inserted = active.insert(txn).await.map_err(map_db_err)?;
 
-                    // Return the conversation.
-                    let inserted = conversation::Entity::find_by_id(conversation_id)
-                        .one(txn)
-                        .await
-                        .map_err(map_db_err)?
-                        .expect("conversation must exist after insert");
+                    for user_id in member_ids {
+                        let member = conversation_member::ActiveModel {
+                            id: Set(
+                                rim_core::conversation_member::model::ConversationMemberId::new()
+                                    .into(),
+                            ),
+                            conversation_id: Set(inserted.id),
+                            user_id: Set(user_id),
+                        };
+                        member.insert(txn).await.map_err(map_db_err)?;
+                    }
+
                     Ok(inserted)
                 })
             })
@@ -89,9 +102,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                 sea_orm::TransactionError::Transaction(err) => err,
             })?;
 
-        return Ok(inserted.into());
-
-        // unreachable: returned above
+        Ok(inserted.into())
     }
 
     async fn find_direct_between_users(
@@ -149,24 +160,25 @@ impl ConversationRepository for SeaOrmConversationRepository {
                     .to_owned(),
             );
 
+        let has_cursor = cursor.is_some();
         if let Some(cursor) = cursor {
             let cursor_id: Uuid = cursor.conversation_id.into();
             let cursor_ts: DateTimeWithTimeZone = cursor.last_activity_at.into();
 
             let cond = match dir {
                 PageDir::Before => Condition::any()
-                    .add(conversation::Column::LastActivityAt.lt(cursor_ts))
-                    .add(
-                        Condition::all()
-                            .add(conversation::Column::LastActivityAt.eq(cursor_ts))
-                            .add(conversation::Column::Id.lt(cursor_id)),
-                    ),
-                PageDir::After => Condition::any()
                     .add(conversation::Column::LastActivityAt.gt(cursor_ts))
                     .add(
                         Condition::all()
                             .add(conversation::Column::LastActivityAt.eq(cursor_ts))
                             .add(conversation::Column::Id.gt(cursor_id)),
+                    ),
+                PageDir::After => Condition::any()
+                    .add(conversation::Column::LastActivityAt.lt(cursor_ts))
+                    .add(
+                        Condition::all()
+                            .add(conversation::Column::LastActivityAt.eq(cursor_ts))
+                            .add(conversation::Column::Id.lt(cursor_id)),
                     ),
             };
             q = q.filter(cond);
@@ -176,14 +188,19 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .order_by_desc(conversation::Column::LastActivityAt)
             .order_by_desc(conversation::Column::Id);
 
-        let items = q
-            .limit(limit as u64)
+        let mut items = q
+            .limit((limit + 1) as u64)
             .all(&self.db)
             .await
             .map_err(map_db_err)?
             .into_iter()
             .map(Into::into)
             .collect::<Vec<Conversation>>();
+
+        let has_more_in_dir = items.len() > limit as usize;
+        if has_more_in_dir {
+            items.truncate(limit as usize);
+        }
 
         // Fixed ordering: `last_activity_at DESC, id DESC`.
         let min = items.last().map(|c| ConversationActivityCursor {
@@ -195,9 +212,16 @@ impl ConversationRepository for SeaOrmConversationRepository {
             conversation_id: c.id,
         });
 
+        let has_opposite = has_cursor && !items.is_empty();
         let (next, prev) = match dir {
-            PageDir::After => (max, min),
-            PageDir::Before => (min, max),
+            PageDir::After => (
+                has_more_in_dir.then_some(min).flatten(),
+                has_opposite.then_some(max).flatten(),
+            ),
+            PageDir::Before => (
+                has_more_in_dir.then_some(max).flatten(),
+                has_opposite.then_some(min).flatten(),
+            ),
         };
 
         Ok(Page::new(items, next, prev))
@@ -224,6 +248,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                     .to_owned(),
             );
 
+        let has_cursor = cursor.is_some();
         if let Some(cursor) = cursor {
             let cursor_id: Uuid = cursor.conversation_id.into();
             let cursor_ts: DateTimeWithTimeZone = cursor.created_at.into();
@@ -252,14 +277,19 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .order_by_asc(conversation::Column::CreatedAt)
             .order_by_asc(conversation::Column::Id);
 
-        let items = q
-            .limit(limit as u64)
+        let mut items = q
+            .limit((limit + 1) as u64)
             .all(&self.db)
             .await
             .map_err(map_db_err)?
             .into_iter()
             .map(Into::into)
             .collect::<Vec<Conversation>>();
+
+        let has_more_in_dir = items.len() > limit as usize;
+        if has_more_in_dir {
+            items.truncate(limit as usize);
+        }
 
         // Fixed ordering: `created_at ASC, id ASC`.
         let min = items.first().map(|c| ConversationCreatedCursor {
@@ -271,9 +301,16 @@ impl ConversationRepository for SeaOrmConversationRepository {
             conversation_id: c.id,
         });
 
+        let has_opposite = has_cursor && !items.is_empty();
         let (next, prev) = match dir {
-            PageDir::After => (max, min),
-            PageDir::Before => (min, max),
+            PageDir::After => (
+                has_more_in_dir.then_some(max).flatten(),
+                has_opposite.then_some(min).flatten(),
+            ),
+            PageDir::Before => (
+                has_more_in_dir.then_some(min).flatten(),
+                has_opposite.then_some(max).flatten(),
+            ),
         };
 
         Ok(Page::new(items, next, prev))

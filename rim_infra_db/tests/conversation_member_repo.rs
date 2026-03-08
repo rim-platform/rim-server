@@ -2,16 +2,16 @@
 
 mod support;
 
+use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::repository::error::RepoErrorKind;
+use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
-use rim_core::conversation::model::ConversationType;
-use rim_core::server::repository::ServerRepository;
-use rim_core::conversation::repository::ConversationRepository;
-use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
@@ -97,4 +97,36 @@ async fn remove_member_success_and_not_found() {
     let _ = repo.add_member(conv.id, u).await.unwrap();
     repo.remove_member(conv.id, u).await.unwrap();
     assert_eq!(repo.is_member(conv.id, u).await.unwrap(), false);
+}
+
+#[tokio::test]
+async fn add_member_conflicts_on_duplicate_conversation_membership() {
+    let Some(conn) = support::db_conn_or_skip().await else {
+        return;
+    };
+    support::reset_db(&conn).await;
+
+    let server_repo = SeaOrmServerRepository::new(conn.clone());
+    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
+    let repo = SeaOrmConversationMemberRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
+
+    let server = server_repo.create_server("s").await.unwrap();
+    let conv = conv_repo
+        .create_conversation(ConversationType::Group, server.id)
+        .await
+        .unwrap();
+    let user_id = user_repo
+        .create_user(rim_core::user::model::NewUser {
+            username: "dup-conv-member".to_string(),
+            password: "pw".to_string(),
+        })
+        .await
+        .unwrap()
+        .id;
+
+    repo.add_member(conv.id, user_id).await.unwrap();
+
+    let err = repo.add_member(conv.id, user_id).await.unwrap_err();
+    assert!(matches!(err.kind(), RepoErrorKind::Conflict));
 }

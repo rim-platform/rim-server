@@ -111,6 +111,7 @@ pub enum MessageThread {
 }
 
 #[derive(DeriveIden)]
+#[allow(clippy::enum_variant_names)]
 enum Message {
     Table,
     Id,

@@ -15,9 +15,9 @@ impl From<server_member::Model> for ServerMember {
     }
 }
 
-impl Into<sea_orm_active_enums::ServerMemberRole> for ServerMemberRole {
-    fn into(self) -> sea_orm_active_enums::ServerMemberRole {
-        match self {
+impl From<ServerMemberRole> for sea_orm_active_enums::ServerMemberRole {
+    fn from(value: ServerMemberRole) -> Self {
+        match value {
             ServerMemberRole::Owner => sea_orm_active_enums::ServerMemberRole::Owner,
             ServerMemberRole::Guest => sea_orm_active_enums::ServerMemberRole::Guest,
             ServerMemberRole::Moderator => sea_orm_active_enums::ServerMemberRole::Moderator,

@@ -15,14 +15,13 @@ impl From<conversation::Model> for Conversation {
             )
             .unwrap(),
             server_id: m.server_id.into(),
-            main_thread_id: m.main_thread_id.into(),
         }
     }
 }
 
-impl Into<sea_orm_active_enums::ConversationType> for ConversationType {
-    fn into(self) -> sea_orm_active_enums::ConversationType {
-        match self {
+impl From<ConversationType> for sea_orm_active_enums::ConversationType {
+    fn from(value: ConversationType) -> Self {
+        match value {
             ConversationType::Channel => sea_orm_active_enums::ConversationType::Channel,
             ConversationType::Group => sea_orm_active_enums::ConversationType::Group,
             ConversationType::Direct => sea_orm_active_enums::ConversationType::Direct,

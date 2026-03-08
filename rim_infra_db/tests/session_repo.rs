@@ -2,11 +2,11 @@
 
 mod support;
 
-use rim_core::auth::repository::SessionRepository;
 use rim_core::auth::model::NewSession;
+use rim_core::auth::repository::SessionRepository;
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-use rim_core::user::repository::UserRepository;
 
 #[tokio::test]
 async fn create_get_by_id_and_token_hash() {
@@ -40,7 +40,13 @@ async fn create_get_by_id_and_token_hash() {
     assert!(session_repo.get_by_id(s.id).await.unwrap().is_some());
     let by_hash = session_repo.get_by_token_hash("th").await.unwrap().unwrap();
     assert_eq!(by_hash.id, s.id);
-    assert!(session_repo.get_by_token_hash("missing").await.unwrap().is_none());
+    assert!(
+        session_repo
+            .get_by_token_hash("missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

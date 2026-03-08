@@ -1,4 +1,3 @@
-use crate::message_thread::model::MessageThreadId;
 use crate::model_id;
 use crate::server::model::ServerId;
 use chrono::{DateTime, Utc};
@@ -55,8 +54,6 @@ pub struct Conversation {
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
     pub server_id: ServerId,
-
-    pub main_thread_id: MessageThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -4,7 +4,8 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message::command::{
-    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, ListThreadMessagesQuery,
+    SendMessageCmd, SendThreadMessageCmd,
 };
 use crate::message::dto::{MessageDto, MessagePageCursor};
 use rim_core::repository::pagination::Page;
@@ -14,11 +15,18 @@ use rim_core::repository::pagination::Page;
 pub trait MessageService: Send + Sync {
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto>;
 
+    async fn send_thread_message(&self, cmd: SendThreadMessageCmd) -> ServiceResult<MessageDto>;
+
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto>;
 
     async fn list_messages(
         &self,
         query: ListMessagesQuery,
+    ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
+
+    async fn list_thread_messages(
+        &self,
+        query: ListThreadMessagesQuery,
     ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto>;

@@ -1,6 +1,7 @@
 use crate::Actor;
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
+use rim_core::message_thread::model::MessageThreadId;
 use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
 
@@ -17,6 +18,18 @@ pub struct SendMessageCmd {
 
     pub parent_message_id: Option<MessageId>,
 
+    pub attachments: Vec<MessageAttachmentRef>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SendThreadMessageCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub thread_id: MessageThreadId,
+    pub text: Option<String>,
+    pub parent_message_id: Option<MessageId>,
     pub attachments: Vec<MessageAttachmentRef>,
 }
 
@@ -42,6 +55,19 @@ pub struct ListMessagesQuery {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
 
+    pub dir: PageDir,
+    pub cursor: Option<MessagePageCursor>,
+    pub limit: u32,
+    pub include_deleted: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ListThreadMessagesQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub thread_id: MessageThreadId,
     pub dir: PageDir,
     pub cursor: Option<MessagePageCursor>,
     pub limit: u32,

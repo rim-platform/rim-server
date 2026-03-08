@@ -14,10 +14,10 @@ pub type AppSchema = Schema<Query, Mutation, EmptySubscription>;
 pub mod auth_intent;
 pub mod graphql;
 pub mod ids;
-pub mod pagination;
-pub mod types;
 pub mod mutation;
+pub mod pagination;
 pub mod query;
+pub mod types;
 
 #[cfg(test)]
 mod tests;
@@ -31,7 +31,9 @@ pub fn build_schema(
     Schema::build(Query, Mutation, EmptySubscription)
         // Default per-request auth intent container.
         // Actix inserts a fresh one per request; tests that execute schema directly may rely on this.
-        .data(std::sync::Arc::new(crate::auth_intent::AuthIntentCtx::default()))
+        .data(std::sync::Arc::new(
+            crate::auth_intent::AuthIntentCtx::default(),
+        ))
         // Default auth actor context (unauthenticated by default).
         .data(crate::query::AuthActorCtx::default())
         .data(auth_service)

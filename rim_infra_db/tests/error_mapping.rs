@@ -5,9 +5,9 @@ mod support;
 use rim_core::auth::model::{NewInvite, NewSession};
 use rim_core::auth::repository::{InviteRepository, SessionRepository};
 use rim_core::repository::error::RepoErrorKind;
+use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
@@ -97,7 +97,6 @@ async fn map_db_err_fk_violation_is_conflict() {
         })
         .await
         .unwrap_err();
-
 
     assert_eq!(err.kind(), RepoErrorKind::Conflict);
 }

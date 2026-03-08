@@ -15,7 +15,8 @@ mod tests {
     #[tokio::test]
     async fn create_server_validates_name() {
         let actor_id = UserId::new();
-        let (server_repo, server_member_repo) = (MockServerRepo::new(), MockServerMemberRepo::new());
+        let (server_repo, server_member_repo) =
+            (MockServerRepo::new(), MockServerMemberRepo::new());
         let svc = DefaultServerService::new_for_tests(ServerReposPorts {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),

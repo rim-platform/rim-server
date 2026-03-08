@@ -39,7 +39,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
 
     let db = Database::connect(&config.database_url)
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     let user_repo: Arc<dyn rim_core::user::repository::UserRepository> =
         Arc::new(SeaOrmUserRepository::new(db.clone()));
@@ -85,7 +85,8 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
         Arc::new(DefaultConversationService::new(repos.for_conversation()));
     let message_service: Arc<dyn MessageService> =
         Arc::new(DefaultMessageService::new(repos.for_message()));
-    let thread_service: Arc<dyn ThreadService> = Arc::new(DefaultThreadService::new(repos.for_thread()));
+    let thread_service: Arc<dyn ThreadService> =
+        Arc::new(DefaultThreadService::new(repos.for_thread()));
 
     let schema: AppSchema = build_schema(
         Arc::clone(&auth_service),
@@ -119,11 +120,7 @@ async fn graphql_handler(
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::now_v7().to_string());
 
-    let op_name = gql
-        .0
-        .operation_name
-        .clone()
-        .unwrap_or_else(|| "".to_string());
+    let op_name = gql.0.operation_name.clone().unwrap_or_default();
     let has_mutation = graphql_has_mutation(&gql.0);
     let span = info_span!(
         "graphql.request",
@@ -144,7 +141,13 @@ async fn graphql_handler(
             .map(|d| Arc::clone(d.get_ref()));
 
         let (actor, session_id) = match session_repo {
-            Some(repo) => extract_actor_and_session_id(&req, repo.as_ref()).await,
+            Some(repo) => match extract_actor_and_session_id(&req, repo.as_ref()).await {
+                Ok(v) => v,
+                Err(err) => {
+                    tracing::error!(request_id = %request_id, error = ?err, "failed to extract auth session");
+                    return internal_graphql_error_response("failed to validate session");
+                }
+            },
             None => (None, None),
         };
         let actor_ctx = AuthActorCtx::new(actor, session_id);
@@ -234,6 +237,7 @@ fn graphql_has_mutation(req: &async_graphql::Request) -> bool {
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn enforce_csrf(req: &HttpRequest, gql: &async_graphql::Request) -> Result<(), GraphQLResponse> {
     // Allowlist auth mutations that establish/clear session.
     const ALLOW: &[&str] = &["bootstrap", "login", "accept_invite", "logout"];
@@ -293,32 +297,42 @@ fn enforce_csrf(req: &HttpRequest, gql: &async_graphql::Request) -> Result<(), G
 async fn extract_actor_and_session_id(
     req: &HttpRequest,
     session_repo: &dyn rim_core::auth::repository::SessionRepository,
-) -> (
-    Option<rim_core::user::model::UserId>,
-    Option<rim_core::auth::model::SessionId>,
-) {
+) -> Result<
+    (
+        Option<rim_core::user::model::UserId>,
+        Option<rim_core::auth::model::SessionId>,
+    ),
+    rim_core::repository::error::RepoError,
+> {
     let cookie = match req.cookie(COOKIE_SESSION) {
         Some(c) => c,
-        None => return (None, None),
+        None => return Ok((None, None)),
     };
 
     let token_hash = hash_token(cookie.value());
-    let sess = match session_repo.get_by_token_hash(&token_hash).await {
-        Ok(s) => s,
-        Err(_) => return (None, None),
-    };
+    let sess = session_repo.get_by_token_hash(&token_hash).await?;
     let Some(sess) = sess else {
-        return (None, None);
+        return Ok((None, None));
     };
 
     if sess.revoked_at.is_some() {
-        return (None, None);
+        return Ok((None, None));
     }
     if sess.expires_at <= chrono::Utc::now() {
-        return (None, None);
+        return Ok((None, None));
     }
 
-    (Some(sess.user_id), Some(sess.id))
+    Ok((Some(sess.user_id), Some(sess.id)))
+}
+
+fn internal_graphql_error_response(message: &str) -> GraphQLResponse {
+    let mut response =
+        async_graphql::Response::from_errors(vec![async_graphql::ServerError::new(message, None)]);
+    for error in &mut response.errors {
+        let ext = error.extensions.get_or_insert_with(Default::default);
+        ext.set("code", "INTERNAL");
+    }
+    GraphQLResponse::from(response)
 }
 
 const COOKIE_SESSION: &str = "rim_session";
@@ -406,5 +420,126 @@ fn append_set_cookie(
             }
             async_graphql::BatchResponse::Batch(rs)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test::TestRequest;
+    use async_trait::async_trait;
+    use rim_core::auth::model::{NewSession, Session, SessionId};
+    use rim_core::auth::repository::SessionRepository;
+    use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
+    use rim_core::user::model::UserId;
+    use std::sync::Mutex;
+
+    struct FakeSessionRepo {
+        session: Mutex<Option<RepoResult<Option<Session>>>>,
+    }
+
+    impl FakeSessionRepo {
+        fn new(session: RepoResult<Option<Session>>) -> Self {
+            Self {
+                session: Mutex::new(Some(session)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SessionRepository for FakeSessionRepo {
+        async fn get_by_id(&self, _id: SessionId) -> RepoResult<Option<Session>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn get_by_token_hash(&self, _token_hash: &str) -> RepoResult<Option<Session>> {
+            self.session
+                .lock()
+                .unwrap()
+                .take()
+                .expect("fake session response not configured")
+        }
+
+        async fn create_session(&self, _session: NewSession) -> RepoResult<Session> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn touch_last_seen_at(&self, _id: SessionId) -> RepoResult<()> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn revoke_session(&self, _id: SessionId) -> RepoResult<()> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn revoke_all_for_user(&self, _user_id: UserId) -> RepoResult<u64> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+    }
+
+    fn session_cookie_request(token: &str) -> HttpRequest {
+        TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(
+                COOKIE_SESSION,
+                token.to_string(),
+            ))
+            .to_http_request()
+    }
+
+    fn active_session() -> Session {
+        Session {
+            id: SessionId::new(),
+            user_id: UserId::new(),
+            token_hash: hash_token("session-token"),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            revoked_at: None,
+            created_at: chrono::Utc::now(),
+            last_seen_at: Some(chrono::Utc::now()),
+            user_agent: None,
+            ip: None,
+        }
+    }
+
+    #[actix_web::test]
+    async fn extract_actor_and_session_id_returns_error_on_repo_failure() {
+        let req = session_cookie_request("session-token");
+        let repo = FakeSessionRepo::new(Err(RepoError::with_message(
+            RepoErrorKind::Unavailable,
+            "db unavailable",
+        )));
+
+        let result = extract_actor_and_session_id(&req, &repo).await;
+
+        assert!(matches!(result, Err(err) if matches!(err.kind(), RepoErrorKind::Unavailable)));
+    }
+
+    #[actix_web::test]
+    async fn extract_actor_and_session_id_returns_anonymous_for_expired_session() {
+        let req = session_cookie_request("session-token");
+        let mut session = active_session();
+        session.expires_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+        let repo = FakeSessionRepo::new(Ok(Some(session)));
+
+        let result = extract_actor_and_session_id(&req, &repo).await.unwrap();
+
+        assert_eq!(result, (None, None));
+    }
+
+    #[test]
+    fn internal_graphql_error_response_sets_internal_code() {
+        let resp = internal_graphql_error_response("failed to validate session");
+        let async_graphql::BatchResponse::Single(resp) = resp.0 else {
+            panic!("expected single response");
+        };
+
+        assert_eq!(resp.errors.len(), 1);
+        assert_eq!(resp.errors[0].message, "failed to validate session");
+        assert_eq!(
+            resp.errors[0]
+                .extensions
+                .as_ref()
+                .and_then(|ext| ext.get("code")),
+            Some(&async_graphql::Value::from("INTERNAL"))
+        );
     }
 }

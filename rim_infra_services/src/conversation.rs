@@ -36,11 +36,15 @@ impl DefaultConversationService {
     #[cfg(test)]
     pub fn new_for_tests(repos: ConversationReposPorts) -> Self {
         Self::new(ConversationRepos {
-            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(repos.conversation_repo)),
+            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
+                repos.conversation_repo,
+            )),
             conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
                 repos.conversation_member_repo,
             )),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(repos.server_member_repo)),
+            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                repos.server_member_repo,
+            )),
         })
     }
 
@@ -63,6 +67,20 @@ impl DefaultConversationService {
             member_ids,
         })
     }
+
+    fn to_dto_with_members(
+        &self,
+        conversation: rim_core::conversation::model::Conversation,
+        member_ids: Vec<rim_core::user::model::UserId>,
+    ) -> ConversationDto {
+        ConversationDto {
+            id: conversation.id,
+            server_id: conversation.server_id,
+            conversation_type: conversation.conversation_type,
+            title: None,
+            member_ids,
+        }
+    }
 }
 
 #[async_trait]
@@ -76,6 +94,16 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: CreateConversationCmd,
     ) -> ServiceResult<ConversationDto> {
+        if cmd
+            .title
+            .as_deref()
+            .is_some_and(|title| !title.trim().is_empty())
+        {
+            return Err(ServiceError::Validation(
+                "conversation titles are not supported in v0".to_string(),
+            ));
+        }
+
         ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
@@ -125,10 +153,12 @@ impl ConversationService for DefaultConversationService {
                 }
             };
 
+        let member_count = member_ids.len();
+
         let conversation = self
             .repos
             .conversation_repo
-            .create_conversation(conv_type, cmd.server_id)
+            .create_conversation_with_members(conv_type, cmd.server_id, &member_ids)
             .await
             .map_err(rim_services::map_repo_error)?;
 
@@ -137,17 +167,6 @@ impl ConversationService for DefaultConversationService {
             conversation_type = ?conversation.conversation_type,
             "created conversation"
         );
-
-        let member_count = member_ids.len();
-
-        for user_id in member_ids {
-            let _ = self
-                .repos
-                .conversation_member_repo
-                .add_member(conversation.id, user_id)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-        }
 
         info!(
             conversation_id = %conversation.id,
@@ -215,9 +234,21 @@ impl ConversationService for DefaultConversationService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
+        let member_ids_by_conversation = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids_for_conversations(&conversation_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
         let mut items = Vec::with_capacity(page.items.len());
         for conv in page.items {
-            items.push(self.to_dto(conv).await?);
+            let member_ids = member_ids_by_conversation
+                .get(&conv.id)
+                .cloned()
+                .unwrap_or_default();
+            items.push(self.to_dto_with_members(conv, member_ids));
         }
 
         Ok(Page::new(
@@ -251,9 +282,21 @@ impl ConversationService for DefaultConversationService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
+        let member_ids_by_conversation = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids_for_conversations(&conversation_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
         let mut items = Vec::with_capacity(page.items.len());
         for conv in page.items {
-            items.push(self.to_dto(conv).await?);
+            let member_ids = member_ids_by_conversation
+                .get(&conv.id)
+                .cloned()
+                .unwrap_or_default();
+            items.push(self.to_dto_with_members(conv, member_ids));
         }
 
         Ok(Page::new(

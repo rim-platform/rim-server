@@ -76,8 +76,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use rim_core::conversation::model::{Conversation, ConversationType};
-    use rim_core::conversation::repository::{ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository};
-    use rim_core::message_thread::model::MessageThreadId;
+    use rim_core::conversation::repository::{
+        ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
+    };
     use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::{Server, ServerId};
@@ -116,7 +117,10 @@ mod tests {
         ));
         assert!(matches!(
             rim_services::map_repo_error(
-                member_repo.remove_member(server_id, user_id).await.unwrap_err()
+                member_repo
+                    .remove_member(server_id, user_id)
+                    .await
+                    .unwrap_err()
             ),
             ServiceError::Internal(_)
         ));
@@ -180,7 +184,10 @@ mod tests {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
-        async fn get_members_for_server(&self, _server_id: ServerId) -> RepoResult<Vec<ServerMember>> {
+        async fn get_members_for_server(
+            &self,
+            _server_id: ServerId,
+        ) -> RepoResult<Vec<ServerMember>> {
             Ok(vec![])
         }
 
@@ -229,6 +236,15 @@ mod tests {
             &self,
             _conversation_type: ConversationType,
             _server_id: ServerId,
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn create_conversation_with_members(
+            &self,
+            _conversation_type: ConversationType,
+            _server_id: ServerId,
+            _member_ids: &[UserId],
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
@@ -323,7 +339,9 @@ mod tests {
     #[tokio::test]
     async fn ensure_server_exists_returns_not_found() {
         let repo = FakeServerRepo { server: None };
-        let err = ensure_server_exists(&repo, ServerId::new()).await.unwrap_err();
+        let err = ensure_server_exists(&repo, ServerId::new())
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
     }
 
@@ -347,7 +365,6 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 last_activity_at: chrono::Utc::now(),
                 server_id: other_server,
-                main_thread_id: MessageThreadId::new(),
             }),
         };
 
