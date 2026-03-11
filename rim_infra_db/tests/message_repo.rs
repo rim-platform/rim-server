@@ -29,7 +29,7 @@ async fn create_get_update_text_and_soft_delete() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -87,7 +87,7 @@ async fn list_messages_respects_include_deleted_and_ordering() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -162,7 +162,7 @@ async fn timeline_listing_excludes_thread_messages() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -239,7 +239,7 @@ async fn desc_pagination_advances_to_older_messages() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
 

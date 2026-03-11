@@ -62,6 +62,7 @@ TRUNCATE TABLE
   message_attachment,
   message,
   message_thread,
+  user_command,
   invite,
   session,
   server_member,

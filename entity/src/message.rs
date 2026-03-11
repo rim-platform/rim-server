@@ -30,6 +30,14 @@ pub enum Relation {
     #[sea_orm(has_many = "super::message_attachment::Entity")]
     MessageAttachment,
     #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::SentBy",
+        to = "super::user::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Restrict"
+    )]
+    User,
+    #[sea_orm(
         belongs_to = "super::conversation::Entity",
         from = "Column::ConversationId",
         to = "super::conversation::Column::Id",
@@ -50,6 +58,12 @@ pub enum Relation {
 impl Related<super::message_attachment::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MessageAttachment.def()
+    }
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
     }
 }
 

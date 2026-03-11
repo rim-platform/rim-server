@@ -29,12 +29,14 @@ pub trait ConversationRepository: Send + Sync {
         &self,
         conversation_type: ConversationType,
         server_id: ServerId,
+        title: Option<String>,
     ) -> RepoResult<Conversation>;
 
     async fn create_conversation_with_members(
         &self,
         conversation_type: ConversationType,
         server_id: ServerId,
+        title: Option<String>,
         member_ids: &[UserId],
     ) -> RepoResult<Conversation>;
 

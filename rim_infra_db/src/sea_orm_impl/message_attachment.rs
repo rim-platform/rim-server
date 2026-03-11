@@ -4,10 +4,12 @@ use rim_core::message::model::MessageId;
 use rim_core::message_attachment::model::{MessageAttachment, MessageAttachmentId};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::repository::error::RepoResult;
+use rim_core::repository::error::{RepoError, RepoErrorKind};
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
 
 use crate::error::map_db_err;
+use std::collections::HashMap;
 
 pub struct SeaOrmMessageAttachmentRepository {
     pub db: DbConn,
@@ -63,5 +65,66 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             .await
             .map_err(map_db_err)?;
         Ok(atts.into_iter().map(Into::into).collect())
+    }
+
+    async fn get_attachments_for_messages(
+        &self,
+        message_ids: &[MessageId],
+    ) -> RepoResult<HashMap<MessageId, Vec<MessageAttachment>>> {
+        if message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let ids = message_ids
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<Uuid>>();
+        let atts = message_attachment::Entity::find()
+            .filter(message_attachment::Column::MessageId.is_in(ids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        let mut out: HashMap<MessageId, Vec<MessageAttachment>> = HashMap::new();
+        for att in atts.into_iter().map(Into::<MessageAttachment>::into) {
+            out.entry(att.message_id).or_default().push(att);
+        }
+        Ok(out)
+    }
+
+    async fn update_attachment(
+        &self,
+        id: MessageAttachmentId,
+        storage_url: String,
+        metadata: Option<serde_json::Value>,
+    ) -> RepoResult<MessageAttachment> {
+        let model = message_attachment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: message_attachment::ActiveModel = model.into();
+        active.storage_url = Set(storage_url);
+        active.metadata = Set(metadata);
+
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
+
+    async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()> {
+        let model = message_attachment::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        let Some(model) = model else {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
+        };
+
+        let active: message_attachment::ActiveModel = model.into();
+        active.delete(&self.db).await.map_err(map_db_err)?;
+        Ok(())
     }
 }

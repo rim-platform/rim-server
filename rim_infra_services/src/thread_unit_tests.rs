@@ -25,6 +25,7 @@ mod tests {
             id: ConversationId::new(),
             server_id,
             conversation_type: rim_core::conversation::model::ConversationType::Channel,
+            title: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }

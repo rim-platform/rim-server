@@ -4,6 +4,7 @@ use crate::repository::error::RepoResult;
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
+use std::collections::HashMap;
 
 #[async_trait]
 #[cfg_attr(test, automock)]
@@ -24,4 +25,18 @@ pub trait MessageAttachmentRepository: Send + Sync {
         &self,
         message_id: MessageId,
     ) -> RepoResult<Vec<MessageAttachment>>;
+
+    async fn get_attachments_for_messages(
+        &self,
+        message_ids: &[MessageId],
+    ) -> RepoResult<HashMap<MessageId, Vec<MessageAttachment>>>;
+
+    async fn update_attachment(
+        &self,
+        id: MessageAttachmentId,
+        storage_url: String,
+        metadata: Option<serde_json::Value>,
+    ) -> RepoResult<MessageAttachment>;
+
+    async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()>;
 }

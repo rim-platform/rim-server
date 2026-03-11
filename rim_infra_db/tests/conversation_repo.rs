@@ -27,12 +27,13 @@ async fn create_conversation_and_get_by_id() {
     let repo = SeaOrmConversationRepository::new(conn.clone());
     let server = server_repo.create_server("s").await.unwrap();
     let conv = repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, Some("Team".to_string()))
         .await
         .unwrap();
 
     let fetched = repo.get_by_id(conv.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, conv.id);
+    assert_eq!(fetched.title.as_deref(), Some("Team"));
 }
 
 #[tokio::test]
@@ -66,7 +67,12 @@ async fn create_conversation_with_members_is_atomic() {
         .id;
 
     let conv = repo
-        .create_conversation_with_members(ConversationType::Group, server.id, &[u1, u2])
+        .create_conversation_with_members(
+            ConversationType::Group,
+            server.id,
+            Some("Project".to_string()),
+            &[u1, u2],
+        )
         .await
         .unwrap();
 
@@ -74,6 +80,7 @@ async fn create_conversation_with_members_is_atomic() {
     assert_eq!(member_ids.len(), 2);
     assert!(member_ids.contains(&u1));
     assert!(member_ids.contains(&u2));
+    assert_eq!(conv.title.as_deref(), Some("Project"));
 }
 
 #[tokio::test]
@@ -115,7 +122,7 @@ async fn find_direct_between_users() {
     );
 
     let conv = conv_repo
-        .create_conversation(ConversationType::Direct, server.id)
+        .create_conversation(ConversationType::Direct, server.id, None)
         .await
         .unwrap();
     let _ = member_repo.add_member(conv.id, u1).await.unwrap();
@@ -141,7 +148,7 @@ async fn touch_last_activity_at_updates_and_not_found() {
     let _user_repo = SeaOrmUserRepository::new(conn.clone());
     let server = server_repo.create_server("s").await.unwrap();
     let conv = repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
 
@@ -181,15 +188,15 @@ async fn list_inbox_conversations_paginates_and_orders() {
 
     // Create 3 inbox conversations for user.
     let c1 = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let c2 = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let c3 = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let _ = member_repo.add_member(c1.id, u).await.unwrap();
@@ -258,11 +265,19 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
         .id;
 
     let c1 = conv_repo
-        .create_conversation(ConversationType::Channel, server.id)
+        .create_conversation(
+            ConversationType::Channel,
+            server.id,
+            Some("alpha".to_string()),
+        )
         .await
         .unwrap();
     let c2 = conv_repo
-        .create_conversation(ConversationType::Channel, server.id)
+        .create_conversation(
+            ConversationType::Channel,
+            server.id,
+            Some("beta".to_string()),
+        )
         .await
         .unwrap();
     let _ = member_repo.add_member(c1.id, u).await.unwrap();
@@ -273,6 +288,7 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
         .await
         .unwrap();
     assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items[0].title.as_deref(), Some("alpha"));
     // ASC ordering by created_at.
     assert!(page.items[0].created_at <= page.items[1].created_at);
 

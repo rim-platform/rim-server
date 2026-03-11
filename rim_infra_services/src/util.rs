@@ -135,7 +135,7 @@ mod tests {
         assert!(matches!(
             rim_services::map_repo_error(
                 conv_repo
-                    .create_conversation(ConversationType::Channel, server_id)
+                    .create_conversation(ConversationType::Channel, server_id, None)
                     .await
                     .unwrap_err()
             ),
@@ -236,6 +236,7 @@ mod tests {
             &self,
             _conversation_type: ConversationType,
             _server_id: ServerId,
+            _title: Option<String>,
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
@@ -244,6 +245,7 @@ mod tests {
             &self,
             _conversation_type: ConversationType,
             _server_id: ServerId,
+            _title: Option<String>,
             _member_ids: &[UserId],
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
@@ -362,6 +364,7 @@ mod tests {
             conv: Some(Conversation {
                 id: ConversationId::new(),
                 conversation_type: ConversationType::Channel,
+                title: None,
                 created_at: chrono::Utc::now(),
                 last_activity_at: chrono::Utc::now(),
                 server_id: other_server,

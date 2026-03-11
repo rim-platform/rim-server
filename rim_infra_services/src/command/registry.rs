@@ -1,0 +1,196 @@
+use rim_services::command::dto::{
+    CommandArgumentDto, CommandArgumentTypeDto, CommandContextDto, CommandDefinitionDto,
+    CommandExecutionTargetDto, CommandSourceKindDto, CommandSurfaceDto,
+};
+
+pub(super) fn builtin_commands() -> Vec<CommandDefinitionDto> {
+    vec![
+        CommandDefinitionDto {
+            id: "chat.post_message".to_string(),
+            title: "Post Message".to_string(),
+            description: "Send a message to a conversation.".to_string(),
+            category: "Chat".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::Backend,
+            arguments: vec![
+                CommandArgumentDto {
+                    name: "server_id".to_string(),
+                    title: "Server".to_string(),
+                    description: "Workspace/server identifier.".to_string(),
+                    argument_type: CommandArgumentTypeDto::WorkspaceId,
+                    required: true,
+                    default_value: None,
+                    allowed_values: None,
+                },
+                CommandArgumentDto {
+                    name: "conversation_id".to_string(),
+                    title: "Conversation".to_string(),
+                    description: "Target conversation identifier.".to_string(),
+                    argument_type: CommandArgumentTypeDto::ConversationId,
+                    required: true,
+                    default_value: None,
+                    allowed_values: None,
+                },
+                CommandArgumentDto {
+                    name: "text".to_string(),
+                    title: "Text".to_string(),
+                    description: "Message body.".to_string(),
+                    argument_type: CommandArgumentTypeDto::String,
+                    required: true,
+                    default_value: None,
+                    allowed_values: None,
+                },
+            ],
+            required_context: vec![],
+            required_capabilities: vec!["chat.write".to_string()],
+            visible_in_palette: true,
+            visible_in_context_menus: false,
+            keybind_capable: false,
+            dangerous: false,
+            user_command_id: None,
+        },
+        CommandDefinitionDto {
+            id: "chat.create_group".to_string(),
+            title: "Create Group".to_string(),
+            description: "Create a new group conversation.".to_string(),
+            category: "Chat".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::Backend,
+            arguments: vec![
+                CommandArgumentDto {
+                    name: "server_id".to_string(),
+                    title: "Server".to_string(),
+                    description: "Workspace/server identifier.".to_string(),
+                    argument_type: CommandArgumentTypeDto::WorkspaceId,
+                    required: true,
+                    default_value: None,
+                    allowed_values: None,
+                },
+                CommandArgumentDto {
+                    name: "member_ids".to_string(),
+                    title: "Members".to_string(),
+                    description: "Member ids to include in the group.".to_string(),
+                    argument_type: CommandArgumentTypeDto::String,
+                    required: true,
+                    default_value: None,
+                    allowed_values: None,
+                },
+                CommandArgumentDto {
+                    name: "title".to_string(),
+                    title: "Title".to_string(),
+                    description: "Optional group title.".to_string(),
+                    argument_type: CommandArgumentTypeDto::String,
+                    required: false,
+                    default_value: None,
+                    allowed_values: None,
+                },
+            ],
+            required_context: vec![],
+            required_capabilities: vec!["chat.write".to_string()],
+            visible_in_palette: true,
+            visible_in_context_menus: false,
+            keybind_capable: true,
+            dangerous: false,
+            user_command_id: None,
+        },
+        CommandDefinitionDto {
+            id: "workspace.open_command_palette".to_string(),
+            title: "Open Command Palette".to_string(),
+            description: "Open the command palette UI.".to_string(),
+            category: "Workspace".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::DesktopLocal,
+            arguments: vec![],
+            required_context: vec![],
+            required_capabilities: vec![],
+            visible_in_palette: false,
+            visible_in_context_menus: false,
+            keybind_capable: true,
+            dangerous: false,
+            user_command_id: None,
+        },
+        CommandDefinitionDto {
+            id: "workspace.cycle_recent_activity".to_string(),
+            title: "Cycle Recent Activity".to_string(),
+            description: "Move through recent activity targets in order.".to_string(),
+            category: "Workspace".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::DesktopLocal,
+            arguments: vec![],
+            required_context: vec![],
+            required_capabilities: vec![],
+            visible_in_palette: true,
+            visible_in_context_menus: false,
+            keybind_capable: true,
+            dangerous: false,
+            user_command_id: None,
+        },
+        CommandDefinitionDto {
+            id: "chat.reply_to_selected_message".to_string(),
+            title: "Reply To Selected Message".to_string(),
+            description: "Reply to the selected message using current context.".to_string(),
+            category: "Chat".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::Backend,
+            arguments: vec![CommandArgumentDto {
+                name: "text".to_string(),
+                title: "Text".to_string(),
+                description: "Reply message body.".to_string(),
+                argument_type: CommandArgumentTypeDto::String,
+                required: true,
+                default_value: None,
+                allowed_values: None,
+            }],
+            required_context: vec![
+                "workspace".to_string(),
+                "conversation".to_string(),
+                "selected_message".to_string(),
+            ],
+            required_capabilities: vec!["chat.write".to_string()],
+            visible_in_palette: true,
+            visible_in_context_menus: true,
+            keybind_capable: true,
+            dangerous: false,
+            user_command_id: None,
+        },
+    ]
+}
+
+pub(super) fn context_has_key(context: Option<&CommandContextDto>, key: &str) -> bool {
+    let Some(context) = context else {
+        return false;
+    };
+
+    match key {
+        "workspace" => context.workspace_id.is_some(),
+        "conversation" => context.conversation_id.is_some(),
+        "thread" => context.thread_id.is_some(),
+        "selected_text" => context
+            .selected_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty()),
+        "selected_message" => context.selected_message_id.is_some(),
+        "selected_messages" => !context.selected_message_ids.is_empty(),
+        "focused_surface" => context.focused_surface.is_some(),
+        "active_panel" => context.active_panel.is_some(),
+        _ => false,
+    }
+}
+
+pub(super) fn command_matches_surface(
+    definition: &CommandDefinitionDto,
+    surface: CommandSurfaceDto,
+    context: Option<&CommandContextDto>,
+) -> bool {
+    match surface {
+        CommandSurfaceDto::Palette => definition.visible_in_palette,
+        CommandSurfaceDto::ContextMenu => {
+            definition.visible_in_context_menus
+                && definition
+                    .required_context
+                    .iter()
+                    .all(|key| context_has_key(context, key))
+        }
+        CommandSurfaceDto::KeybindPicker => definition.keybind_capable,
+    }
+}

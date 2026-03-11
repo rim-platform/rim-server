@@ -57,3 +57,10 @@ pub struct AcceptInviteResultDto {
     pub session_token: String,
     pub csrf_token: String,
 }
+
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RequestAuthResultDto {
+    pub user_id: Option<UserId>,
+    pub session_id: Option<rim_core::auth::model::SessionId>,
+}

@@ -31,7 +31,7 @@ async fn add_get_and_list_attachments_for_message() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -66,6 +66,25 @@ async fn add_get_and_list_attachments_for_message() {
     let list = repo.get_attachments_for_message(msg.id).await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, att.id);
+
+    let updated = repo
+        .update_attachment(
+            att.id,
+            "attachment://ready".to_string(),
+            Some(serde_json::json!({ "status": "ready" })),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.storage_url, "attachment://ready");
+
+    repo.delete_attachment(att.id).await.unwrap();
+    assert!(repo.get_by_id(att.id).await.unwrap().is_none());
+    assert!(
+        repo.get_attachments_for_message(msg.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     assert!(
         repo.get_by_id(MessageAttachmentId::new())

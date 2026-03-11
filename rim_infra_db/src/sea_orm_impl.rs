@@ -1,6 +1,7 @@
 pub mod conversation;
 pub mod conversation_member;
 pub mod invite;
+pub mod keybind;
 pub mod message;
 pub mod message_attachment;
 pub mod message_thread;
@@ -8,3 +9,4 @@ pub mod server;
 pub mod server_member;
 pub mod session;
 pub mod user;
+pub mod user_command;

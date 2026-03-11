@@ -28,7 +28,7 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
 
@@ -79,7 +79,7 @@ async fn remove_member_success_and_not_found() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
 
@@ -113,7 +113,7 @@ async fn add_member_conflicts_on_duplicate_conversation_membership() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let user_id = user_repo

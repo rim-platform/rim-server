@@ -118,6 +118,7 @@ pub enum Conversation {
     Table,
     Id,
     ConversationType,
+    Title,
     CreatedAt,
     ServerId,
     MainThreadId,

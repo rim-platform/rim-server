@@ -20,6 +20,10 @@ impl MigratorTrait for Migrator {
             Box::new(m20260308_213715_remove_legacy_thread_columns::Migration),
             Box::new(m20260308_215130_add_unique_thread_root_message::Migration),
             Box::new(m20260308_224258_add_membership_uniqueness::Migration),
+            Box::new(m20260309_222347_add_conversation_title::Migration),
+            Box::new(m20260310_220344_create_user_command::Migration),
+            Box::new(m20260310_230745_add_safe_schema_hardening::Migration),
+            Box::new(m20260310_235420_create_keybind::Migration),
         ]
     }
 }
@@ -37,3 +41,7 @@ mod m20260308_210831_add_conversation_owned_messages;
 mod m20260308_213715_remove_legacy_thread_columns;
 mod m20260308_215130_add_unique_thread_root_message;
 mod m20260308_224258_add_membership_uniqueness;
+mod m20260309_222347_add_conversation_title;
+mod m20260310_220344_create_user_command;
+mod m20260310_230745_add_safe_schema_hardening;
+mod m20260310_235420_create_keybind;

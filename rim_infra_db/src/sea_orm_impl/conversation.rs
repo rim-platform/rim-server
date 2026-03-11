@@ -43,11 +43,13 @@ impl ConversationRepository for SeaOrmConversationRepository {
         &self,
         conversation_type: ConversationType,
         server_id: ServerId,
+        title: Option<String>,
     ) -> RepoResult<Conversation> {
         let active = conversation::ActiveModel {
             id: Set(ConversationId::new().into()),
             conversation_type: Set(conversation_type.into()),
             server_id: Set(server_id.into()),
+            title: Set(title),
             ..Default::default()
         };
 
@@ -59,6 +61,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
         &self,
         conversation_type: ConversationType,
         server_id: ServerId,
+        title: Option<String>,
         member_ids: &[UserId],
     ) -> RepoResult<Conversation> {
         let server_id_uuid: Uuid = server_id.into();
@@ -76,6 +79,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                         id: Set(ConversationId::new().into()),
                         conversation_type: Set(conversation_type.into()),
                         server_id: Set(server_id_uuid),
+                        title: Set(title.clone()),
                         ..Default::default()
                     };
 
