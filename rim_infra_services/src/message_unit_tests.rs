@@ -17,8 +17,8 @@ mod tests {
 
     use crate::message::DefaultMessageService;
     use crate::test_support::message::{
-        MessageReposPorts, MockConversationMemberRepo, MockConversationRepo, MockMessageRepo,
-        MockServerMemberRepo, MockThreadRepo,
+        MessageReposPorts, MockConversationMemberRepo, MockConversationRepo,
+        MockMessageAttachmentRepo, MockMessageRepo, MockServerMemberRepo, MockThreadRepo,
     };
 
     fn conversation(server_id: ServerId) -> Conversation {
@@ -26,6 +26,7 @@ mod tests {
             id: ConversationId::new(),
             server_id,
             conversation_type: rim_core::conversation::model::ConversationType::Channel,
+            title: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -69,12 +70,14 @@ mod tests {
             .returning(|_cid, _uid| Ok(true));
 
         let message_repo = MockMessageRepo::new();
+        let message_attachment_repo = MockMessageAttachmentRepo::new();
         let thread_repo = MockThreadRepo::new();
 
         let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -130,6 +133,10 @@ mod tests {
                 assert!(new.text.as_ref().unwrap().contains('h'));
                 Ok(msg_for_repo.clone())
             });
+        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .return_once(move |_| Ok(vec![]));
 
         let mut thread_repo = MockThreadRepo::new();
         thread_repo
@@ -140,6 +147,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -196,6 +204,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
             message_thread_repo: Arc::new(MockThreadRepo::new()),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -237,6 +246,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(MockMessageRepo::new()),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
             message_thread_repo: Arc::new(MockThreadRepo::new()),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -288,6 +298,10 @@ mod tests {
                 Ok(Page::new(vec![msg_for_repo.clone()], None, None))
             },
         );
+        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        message_attachment_repo
+            .expect_get_attachments_for_messages()
+            .return_once(move |_ids| Ok(std::collections::HashMap::new()));
 
         let mut thread_repo = MockThreadRepo::new();
         thread_repo
@@ -302,6 +316,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -383,6 +398,10 @@ mod tests {
                 assert_eq!(new.thread_id, Some(thread_id));
                 Ok(created_for_repo.clone())
             });
+        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .return_once(move |_| Ok(vec![]));
 
         let mut thread_repo = MockThreadRepo::new();
         thread_repo.expect_get_by_id().return_once(move |_| {
@@ -403,6 +422,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -479,11 +499,16 @@ mod tests {
                 assert_eq!(tid, Some(thread_id));
                 Ok(Page::new(vec![msg_for_repo], None, None))
             });
+        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        message_attachment_repo
+            .expect_get_attachments_for_messages()
+            .return_once(move |_ids| Ok(std::collections::HashMap::new()));
 
         let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -537,6 +562,10 @@ mod tests {
         message_repo
             .expect_get_by_id()
             .return_once(move |_| Ok(Some(msg_for_repo.clone())));
+        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .return_once(move |_| Ok(vec![]));
 
         let mut thread_repo = MockThreadRepo::new();
         thread_repo
@@ -555,6 +584,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(message_attachment_repo),
             message_thread_repo: Arc::new(thread_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -607,6 +637,7 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
             message_thread_repo: Arc::new(MockThreadRepo::new()),
             server_member_repo: Arc::new(server_member_repo),
         });

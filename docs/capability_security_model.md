@@ -1,0 +1,283 @@
+# Capability And Security Model
+
+This document defines the Phase 0 capability and security model for RIM.
+
+RIM is a chat app on steroids, but plugins, commands, integrations, and local behaviors must not
+turn into a hidden privilege surface. Capabilities are the core language for controlling what
+extensions and extension-provided commands are allowed to do.
+
+## Purpose
+
+A capability is an explicit permission that allows a plugin, integration, command provider, or
+future app principal to access a sensitive product surface or perform a sensitive action.
+
+Capabilities are intended to make extension behavior:
+
+- explicit
+- reviewable
+- grantable
+- revocable
+- auditable later
+
+## Core Rule
+
+Capabilities are explicit, not implicit.
+
+Nothing should gain sensitive power just because it exists in the system. Sensitive access must be:
+
+- declared
+- granted
+- visible
+
+## Who Uses Capabilities
+
+Capabilities should primarily apply to extension-like actors and providers, including:
+
+- plugins
+- integrations
+- app principals
+- bot principals
+- webhook principals
+
+Users still have product permissions and membership rules, but extension capabilities are a separate
+security layer.
+
+## Capability Grant Model
+
+Recommended model:
+
+- the provider declares requested capabilities
+- the user or admin grants them explicitly
+- the granted state is persisted
+- the granted state can be revoked later
+
+Example:
+
+- a plugin declares:
+  - `ui.panel`
+  - `chat.read`
+  - `local.process`
+- the user sees an install/enable prompt
+- the user grants or denies capabilities
+- the final granted state becomes the effective permission set
+
+## Capability Categories
+
+The initial model should use a small set of broad, understandable capabilities.
+
+### Communication
+
+- `chat.read`
+- `chat.write`
+
+### Workflow
+
+- `action.invoke`
+- `event.emit`
+
+### UI
+
+- `ui.panel`
+
+Later candidates may include:
+
+- `ui.context_action`
+- `ui.composer_extension`
+
+### Local System
+
+- `local.process`
+- `local.filesystem`
+
+Later candidates may include:
+
+- `local.notifications`
+- `local.window_control`
+
+### Network / External Access
+
+- `http.outbound`
+
+### Settings
+
+Potential later split:
+
+- `settings.read`
+- `settings.write`
+
+These can be added once the settings model becomes more active.
+
+## Phase 0 Decisions
+
+- `http.outbound` starts as one broad capability.
+- `chat.read` and `chat.write` stay broad for now.
+- later tightening is expected once the platform hardens.
+
+## Dangerous Capabilities
+
+Some capabilities should be considered dangerous from the beginning.
+
+Initial dangerous capabilities:
+
+- `local.process`
+- `local.filesystem`
+- broad `http.outbound`
+
+Dangerous capability rules:
+
+- they must be visibly marked
+- they should get stronger install/enable prompts
+- dangerous actions may still require per-action confirmation later
+- they should be easy to revoke
+
+## Command Capability Inheritance
+
+Commands should not invent permissions for themselves.
+
+Recommended rule:
+
+- commands inherit capabilities from their provider/source
+
+This means:
+
+- built-in commands use built-in trusted behavior
+- plugin commands use plugin-granted capabilities only
+- integration commands use integration-granted capabilities only
+- user-defined commands/macros cannot exceed the capabilities of the commands they compose plus any
+  explicit local permissions granted by the user
+
+This rule is required to avoid privilege escalation.
+
+## User-Defined Commands And Macros
+
+User-defined commands should remain powerful, but they must not bypass capability checks.
+
+Rules:
+
+- user-defined commands may compose other commands
+- user-defined commands may run local processes on desktop only if the dangerous local capability
+  model allows it
+- user-defined commands cannot gain more power than the capabilities of the commands or dangerous
+  local permissions they use
+
+## Dangerous Local Execution
+
+User-defined and plugin-provided local process execution is allowed in the product direction already
+agreed earlier.
+
+Rules:
+
+- local process execution requires explicit dangerous capability
+- execution should show confirmation by default
+- the user may later disable confirmation explicitly
+- the UI should show the origin of the action:
+  - built-in
+  - plugin
+  - integration
+  - user-defined command
+
+## Partial Capability Grant
+
+Recommended direction:
+
+- partial grants are desirable if the implementation can support them cleanly
+- first version may fall back to full-set approval if needed
+
+This keeps the early implementation realistic without giving up a better long-term direction.
+
+## Admin Restriction Direction
+
+Recommended direction:
+
+- workspace admins should eventually be able to restrict dangerous capabilities regardless of user
+  preference
+
+This is especially important for:
+
+- `local.process`
+- `local.filesystem`
+- broad external network access
+
+Full admin policy enforcement does not need to be implemented in the first version of this spec, but
+the roadmap should assume it will exist.
+
+## Trust Boundaries
+
+RIM should make trust boundaries visible.
+
+Recommended trust groups:
+
+- `built_in`
+- `user_defined`
+- `plugin`
+- `integration`
+
+Later, bot/app/webhook principals should also become explicit trust-bearing identities.
+
+Trust boundaries should be visible in:
+
+- installation prompts
+- dangerous action confirmations
+- debugging and logging surfaces
+- future audit/event records
+
+## Visibility Rules
+
+Capability-sensitive behavior should never be hidden.
+
+The UI should make it clear:
+
+- which provider owns the action
+- which dangerous capabilities are involved
+- whether the action is local or remote
+- whether the action may modify external state
+
+## Revocation Rules
+
+Granted capabilities should be revocable later.
+
+Revocation should disable or limit:
+
+- plugin commands that require those capabilities
+- panels or automations that depend on those capabilities
+- integration behaviors that require those capabilities
+
+The system should fail clearly, not silently, when revoked capabilities make an extension partially
+unusable.
+
+## Persistence Model
+
+Recommended persistence split:
+
+- capability declarations -> code/plugin/integration manifest source of truth
+- granted capabilities -> persisted
+- dangerous confirmation preferences -> persisted where appropriate
+- policy restrictions -> later persisted once policy/admin controls exist
+
+## Non-Goals For Phase 0
+
+The first capability/security spec should not try to fully solve:
+
+- a complete policy engine
+- per-host outbound network allowlists
+- fully general sandbox DSLs
+- E2EE-specific extension access rules
+- final audit schema
+- delegated impersonation flows
+
+Those belong in later hardening phases.
+
+## Summary Of Decisions
+
+- capabilities are explicit permissions for sensitive product surfaces and actions
+- extensions and future non-user principals are the main capability holders
+- `http.outbound` is broad in the first version
+- `chat.read` and `chat.write` stay broad in the first version
+- dangerous capabilities include at least `local.process`, `local.filesystem`, and broad
+  `http.outbound`
+- commands inherit capabilities from their provider
+- user-defined commands/macros cannot exceed what they compose plus explicitly granted dangerous
+  local behavior
+- partial grant is desirable, but full-set approval is acceptable for the first version
+- admin restriction of dangerous capabilities is expected later
+- trust boundaries must be visible to users

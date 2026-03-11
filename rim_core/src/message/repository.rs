@@ -41,5 +41,11 @@ pub trait MessageRepository: Send + Sync {
         new_text: String,
     ) -> RepoResult<Message>;
 
+    async fn set_has_attachments(
+        &self,
+        message_id: MessageId,
+        has_attachments: bool,
+    ) -> RepoResult<Message>;
+
     async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
 }

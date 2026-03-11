@@ -9,6 +9,7 @@ use rim_services::message::command::{
 };
 use rim_services::message::dto::{MessageDto, MessagePageCursor};
 use rim_services::message::service::MessageService;
+use rim_services::message_attachment::dto::AttachmentDto;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::MessageRepos;
@@ -16,8 +17,9 @@ use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
 #[cfg(test)]
 use crate::test_support::message::{
-    ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter, MessageRepoPortAdapter,
-    MessageReposPorts, ServerMemberRepoPortAdapter, ThreadRepoPortAdapter,
+    ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter,
+    MessageAttachmentRepoPortAdapter, MessageRepoPortAdapter, MessageReposPorts,
+    ServerMemberRepoPortAdapter, ThreadRepoPortAdapter,
 };
 
 #[derive(Clone)]
@@ -40,6 +42,9 @@ impl DefaultMessageService {
                 repos.conversation_member_repo,
             )),
             message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
+            message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
+                repos.message_attachment_repo,
+            )),
             message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
                 repos.message_thread_repo,
             )),
@@ -82,6 +87,24 @@ impl DefaultMessageService {
             None
         };
 
+        let attachments = self
+            .repos
+            .message_attachment_repo
+            .get_attachments_for_message(message.id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .into_iter()
+            .map(|att| AttachmentDto {
+                id: att.id,
+                status: crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
+                    att.metadata.as_ref(),
+                ),
+                filename: att.file_name,
+                content_type: att.mime_type,
+                size_bytes: att.file_size.max(0) as u64,
+            })
+            .collect();
+
         Ok(MessageDto {
             id: message.id,
             server_id,
@@ -91,6 +114,7 @@ impl DefaultMessageService {
             author_id: message.sent_by,
             text: message.text,
             has_attachments: message.has_attachments,
+            attachments,
             parent_message_id: message.parent_message_id,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
@@ -102,6 +126,7 @@ impl DefaultMessageService {
         message: rim_core::message::model::Message,
         server_id: rim_core::server::model::ServerId,
         root_thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
+        attachments: Vec<AttachmentDto>,
     ) -> MessageDto {
         MessageDto {
             id: message.id,
@@ -112,6 +137,7 @@ impl DefaultMessageService {
             author_id: message.sent_by,
             text: message.text,
             has_attachments: message.has_attachments,
+            attachments,
             parent_message_id: message.parent_message_id,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
@@ -410,6 +436,12 @@ impl MessageService for DefaultMessageService {
             .get_thread_ids_by_root_messages(&root_message_ids)
             .await
             .map_err(rim_services::map_repo_error)?;
+        let attachments_by_message = self
+            .repos
+            .message_attachment_repo
+            .get_attachments_for_messages(&page.items.iter().map(|m| m.id).collect::<Vec<_>>())
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
         let mut items = Vec::with_capacity(page.items.len());
         for m in page.items {
@@ -418,7 +450,28 @@ impl MessageService for DefaultMessageService {
             } else {
                 None
             };
-            items.push(self.to_dto_with_root_thread_id(m, query.server_id, root_thread_id));
+            let attachments = attachments_by_message
+                .get(&m.id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|att| AttachmentDto {
+                    id: att.id,
+                    status:
+                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
+                            att.metadata.as_ref(),
+                        ),
+                    filename: att.file_name,
+                    content_type: att.mime_type,
+                    size_bytes: att.file_size.max(0) as u64,
+                })
+                .collect();
+            items.push(self.to_dto_with_root_thread_id(
+                m,
+                query.server_id,
+                root_thread_id,
+                attachments,
+            ));
         }
 
         Ok(rim_core::repository::pagination::Page::new(
@@ -465,10 +518,32 @@ impl MessageService for DefaultMessageService {
             )
             .await
             .map_err(rim_services::map_repo_error)?;
+        let attachments_by_message = self
+            .repos
+            .message_attachment_repo
+            .get_attachments_for_messages(&page.items.iter().map(|m| m.id).collect::<Vec<_>>())
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
         let mut items = Vec::with_capacity(page.items.len());
         for m in page.items {
-            items.push(self.to_dto_with_root_thread_id(m, query.server_id, None));
+            let attachments = attachments_by_message
+                .get(&m.id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|att| AttachmentDto {
+                    id: att.id,
+                    status:
+                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
+                            att.metadata.as_ref(),
+                        ),
+                    filename: att.file_name,
+                    content_type: att.mime_type,
+                    size_bytes: att.file_size.max(0) as u64,
+                })
+                .collect();
+            items.push(self.to_dto_with_root_thread_id(m, query.server_id, None, attachments));
         }
 
         Ok(rim_core::repository::pagination::Page::new(

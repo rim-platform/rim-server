@@ -1,49 +1,38 @@
 use async_graphql::*;
 
+use crate::auth_context::require_actor;
 use crate::pagination::PageDir;
 use crate::types::{
-    ChannelCursorInput, ChannelPage, Conversation, ConversationPage, InboxCursorInput, Message,
-    MessageCursorInput, MessagePage, Thread, ThreadCursorInput, ThreadPage,
+    Action, Attachment, Capability, ChannelCursorInput, ChannelPage, Command, CommandContextInput,
+    CommandSurface, Conversation, ConversationPage, Event, InboxCursorInput, Integration, Keybind,
+    KeybindScope, Message, MessageCursorInput, MessagePage, Setting, Thread, ThreadCursorInput,
+    ThreadPage,
 };
 use rim_services::Actor;
+use rim_services::action::service::ActionService;
+use rim_services::capability::service::CapabilityService;
+use rim_services::command::request::ListCommandsQuery;
+use rim_services::command::service::CommandService;
 use rim_services::conversation::command::{
     GetConversationQuery, ListChannelsQuery, ListInboxConversationsQuery,
 };
 use rim_services::conversation::service::ConversationService;
+use rim_services::event::service::EventService;
+use rim_services::integration::service::IntegrationService;
+use rim_services::keybind::request::ListKeybindsQuery;
+use rim_services::keybind::service::KeybindService;
 use rim_services::message::command::ListThreadMessagesQuery;
 use rim_services::message::command::{GetMessageQuery, ListMessagesQuery};
 use rim_services::message::service::MessageService;
+use rim_services::message_attachment::command::GetAttachmentQuery;
+use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_thread::command::{
     GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::service::ThreadService;
+use rim_services::setting::service::SettingService;
 
 use crate::ids::parse_uuid_id;
-
-#[derive(Default, Clone)]
-pub struct AuthActorCtx {
-    actor: Option<rim_core::user::model::UserId>,
-    session_id: Option<rim_core::auth::model::SessionId>,
-}
-
-impl AuthActorCtx {
-    pub fn new(
-        actor: Option<rim_core::user::model::UserId>,
-        session_id: Option<rim_core::auth::model::SessionId>,
-    ) -> Self {
-        Self { actor, session_id }
-    }
-
-    pub fn actor(&self) -> Option<rim_core::user::model::UserId> {
-        self.actor
-    }
-
-    pub fn session_id(&self) -> Option<rim_core::auth::model::SessionId> {
-        self.session_id
-    }
-
-    // Cookie/CSRF signaling is handled via GraphQL response extensions.
-}
 
 pub struct Query;
 
@@ -53,16 +42,118 @@ impl Query {
         "Hello world!".to_string()
     }
 
+    async fn commands(
+        &self,
+        ctx: &Context<'_>,
+        surface: Option<CommandSurface>,
+        command_context: Option<CommandContextInput>,
+    ) -> Result<Vec<Command>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        let commands = svc
+            .list_commands(ListCommandsQuery {
+                actor: Actor::new(actor),
+                context: command_context.map(TryInto::try_into).transpose()?,
+                surface: surface.unwrap_or(CommandSurface::Palette).into(),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(commands.into_iter().map(Into::into).collect())
+    }
+
+    async fn actions(&self, ctx: &Context<'_>) -> Result<Vec<Action>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ActionService>>()?;
+
+        let actions = svc
+            .list_actions(Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(actions.into_iter().map(Into::into).collect())
+    }
+
+    async fn events(&self, ctx: &Context<'_>) -> Result<Vec<Event>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn EventService>>()?;
+
+        let events = svc
+            .list_events(Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(events.into_iter().map(Into::into).collect())
+    }
+
+    async fn capabilities(&self, ctx: &Context<'_>) -> Result<Vec<Capability>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CapabilityService>>()?;
+
+        let capabilities = svc
+            .list_capabilities(Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(capabilities.into_iter().map(Into::into).collect())
+    }
+
+    async fn integrations(&self, ctx: &Context<'_>) -> Result<Vec<Integration>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn IntegrationService>>()?;
+
+        let integrations = svc
+            .list_integrations(Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(integrations.into_iter().map(Into::into).collect())
+    }
+
+    async fn settings(&self, ctx: &Context<'_>) -> Result<Vec<Setting>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn SettingService>>()?;
+
+        let settings = svc
+            .list_settings(Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(settings.into_iter().map(Into::into).collect())
+    }
+
+    async fn keybinds(
+        &self,
+        ctx: &Context<'_>,
+        scope: KeybindScope,
+        workspace_id: Option<ID>,
+    ) -> Result<Vec<Keybind>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+
+        let keybinds = svc
+            .list_keybinds(ListKeybindsQuery {
+                actor: Actor::new(actor),
+                scope: scope.into(),
+                workspace_id: workspace_id
+                    .as_ref()
+                    .map(parse_uuid_id::<rim_core::server::model::WorkspaceId>)
+                    .transpose()?,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(keybinds.into_iter().map(Into::into).collect())
+    }
+
     async fn conversation(
         &self,
         ctx: &Context<'_>,
         server_id: ID,
         conversation_id: ID,
     ) -> Result<Conversation> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
@@ -76,7 +167,7 @@ impl Query {
                 conversation_id,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(conv.into())
     }
@@ -89,10 +180,7 @@ impl Query {
         cursor: Option<InboxCursorInput>,
         limit: i32,
     ) -> Result<ConversationPage> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
@@ -105,7 +193,7 @@ impl Query {
                 limit: limit.max(1) as u32,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(ConversationPage::from_inbox_page(page))
     }
@@ -118,10 +206,7 @@ impl Query {
         cursor: Option<ChannelCursorInput>,
         limit: i32,
     ) -> Result<ChannelPage> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
@@ -134,7 +219,7 @@ impl Query {
                 limit: limit.max(1) as u32,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(ChannelPage::from_channel_page(page))
     }
@@ -150,10 +235,7 @@ impl Query {
         limit: i32,
         include_deleted: bool,
     ) -> Result<MessagePage> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -170,7 +252,7 @@ impl Query {
                 include_deleted,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(MessagePage::from_page(page))
     }
@@ -182,10 +264,7 @@ impl Query {
         conversation_id: ID,
         message_id: ID,
     ) -> Result<Message> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -200,7 +279,7 @@ impl Query {
                 message_id,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(msg.into())
     }
@@ -212,10 +291,7 @@ impl Query {
         conversation_id: ID,
         thread_id: ID,
     ) -> Result<Thread> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -231,7 +307,7 @@ impl Query {
                 thread_id,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(t.into())
     }
@@ -243,10 +319,7 @@ impl Query {
         conversation_id: ID,
         root_message_id: ID,
     ) -> Result<Option<Thread>> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -262,7 +335,7 @@ impl Query {
                 root_message_id,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(t.map(Into::into))
     }
@@ -276,10 +349,7 @@ impl Query {
         cursor: Option<ThreadCursorInput>,
         limit: i32,
     ) -> Result<ThreadPage> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -295,7 +365,7 @@ impl Query {
                 limit: limit.max(1) as u32,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(ThreadPage::from_page(page))
     }
@@ -312,10 +382,7 @@ impl Query {
         limit: i32,
         include_deleted: bool,
     ) -> Result<MessagePage> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
@@ -335,8 +402,33 @@ impl Query {
                 include_deleted,
             })
             .await
-            .map_err(crate::mutation::map_service_error)?;
+            .map_err(crate::errors::map_service_error)?;
 
         Ok(MessagePage::from_page(page))
+    }
+
+    async fn attachment(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        attachment_id: ID,
+    ) -> Result<Attachment> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let attachment_id = parse_uuid_id::<
+            rim_core::message_attachment::model::MessageAttachmentId,
+        >(&attachment_id)?;
+
+        let attachment = svc
+            .get_attachment(GetAttachmentQuery {
+                actor: Actor::new(actor),
+                server_id,
+                attachment_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(attachment.into())
     }
 }

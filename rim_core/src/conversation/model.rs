@@ -51,6 +51,7 @@ impl std::str::FromStr for ConversationType {
 pub struct Conversation {
     pub id: ConversationId,
     pub conversation_type: ConversationType,
+    pub title: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
     pub server_id: ServerId,
@@ -60,4 +61,5 @@ pub struct Conversation {
 pub struct NewConversation {
     pub server_id: ServerId,
     pub conversation_type: ConversationType,
+    pub title: Option<String>,
 }

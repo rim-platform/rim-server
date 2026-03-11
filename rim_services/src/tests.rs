@@ -52,3 +52,33 @@ mod map_repo_error {
         ));
     }
 }
+
+#[cfg(test)]
+mod actor {
+    use crate::Actor;
+    use rim_core::principal::model::{Principal, PrincipalId, PrincipalKind};
+    use rim_core::user::model::UserId;
+
+    #[test]
+    fn actor_new_creates_user_principal() {
+        let user_id = UserId::new();
+        let actor = Actor::new(user_id);
+
+        assert_eq!(actor.user_id, user_id);
+        assert_eq!(actor.principal.kind, PrincipalKind::User);
+        assert_eq!(actor.principal.user_id, Some(user_id));
+    }
+
+    #[test]
+    fn actor_from_principal_only_allows_user_principals() {
+        let user_id = UserId::new();
+        let user_principal = Principal::user(user_id);
+        let bot_principal = Principal::bot(PrincipalId::new());
+
+        assert_eq!(
+            Actor::from_principal(user_principal).map(|actor| actor.user_id),
+            Some(user_id)
+        );
+        assert!(Actor::from_principal(bot_principal).is_none());
+    }
+}

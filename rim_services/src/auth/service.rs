@@ -5,6 +5,7 @@ use mockall::automock;
 
 use crate::auth::dto::{
     AcceptInviteResultDto, BootstrapResultDto, CreateInviteResultDto, LoginResultDto,
+    RequestAuthResultDto,
 };
 use crate::{Actor, ServiceResult};
 use rim_core::server::model::ServerId;
@@ -42,4 +43,13 @@ pub trait AuthService: Send + Sync {
         username: &str,
         password: &str,
     ) -> ServiceResult<AcceptInviteResultDto>;
+}
+
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait RequestAuthenticator: Send + Sync {
+    async fn authenticate_session_token(
+        &self,
+        session_token: Option<&str>,
+    ) -> ServiceResult<RequestAuthResultDto>;
 }

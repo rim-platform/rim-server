@@ -28,7 +28,7 @@ async fn create_get_and_list_threads_for_conversation() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
 
@@ -101,7 +101,7 @@ async fn set_first_message_conflict_and_not_found() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -167,7 +167,7 @@ async fn create_thread_for_root_is_atomic_and_conflicts_on_duplicate_root() {
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id)
+        .create_conversation(ConversationType::Group, server.id, None)
         .await
         .unwrap();
     let msg = msg_repo

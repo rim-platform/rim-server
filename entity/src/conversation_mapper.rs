@@ -8,6 +8,7 @@ impl From<conversation::Model> for Conversation {
     fn from(m: conversation::Model) -> Self {
         Self {
             id: m.id.into(),
+            title: m.title,
             created_at: m.created_at.into(),
             last_activity_at: m.last_activity_at.into(),
             conversation_type: ConversationType::from_str(

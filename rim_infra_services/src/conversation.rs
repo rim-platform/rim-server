@@ -63,7 +63,7 @@ impl DefaultConversationService {
             id: conversation.id,
             server_id: conversation.server_id,
             conversation_type: conversation.conversation_type,
-            title: None,
+            title: conversation.title,
             member_ids,
         })
     }
@@ -77,9 +77,16 @@ impl DefaultConversationService {
             id: conversation.id,
             server_id: conversation.server_id,
             conversation_type: conversation.conversation_type,
-            title: None,
+            title: conversation.title,
             member_ids,
         }
+    }
+
+    fn normalize_title(title: Option<String>) -> Option<String> {
+        title.and_then(|title| {
+            let trimmed = title.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
     }
 }
 
@@ -94,15 +101,7 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: CreateConversationCmd,
     ) -> ServiceResult<ConversationDto> {
-        if cmd
-            .title
-            .as_deref()
-            .is_some_and(|title| !title.trim().is_empty())
-        {
-            return Err(ServiceError::Validation(
-                "conversation titles are not supported in v0".to_string(),
-            ));
-        }
+        let title = Self::normalize_title(cmd.title);
 
         ensure_server_member(
             self.repos.server_member_repo.as_ref(),
@@ -114,6 +113,12 @@ impl ConversationService for DefaultConversationService {
         let (conv_type, member_ids): (CoreConversationType, Vec<rim_core::user::model::UserId>) =
             match cmd.participants {
                 ConversationParticipants::DirectMessage { other_user_id } => {
+                    if title.is_some() {
+                        return Err(ServiceError::Validation(
+                            "direct conversations cannot have titles".to_string(),
+                        ));
+                    }
+
                     if other_user_id == cmd.actor.user_id {
                         return Err(ServiceError::Validation(
                             "cannot create DM with yourself".to_string(),
@@ -158,7 +163,7 @@ impl ConversationService for DefaultConversationService {
         let conversation = self
             .repos
             .conversation_repo
-            .create_conversation_with_members(conv_type, cmd.server_id, &member_ids)
+            .create_conversation_with_members(conv_type, cmd.server_id, title, &member_ids)
             .await
             .map_err(rim_services::map_repo_error)?;
 

@@ -1,19 +1,33 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
+use rim_services::Actor;
 use rim_services::auth::service::AuthService;
+use rim_services::command::dto::UserCommandStepDto;
+use rim_services::command::request::{CreateUserCommandCmd, ExecuteCommandCmd};
+use rim_services::command::request::{DeleteUserCommandCmd, UpdateUserCommandCmd};
+use rim_services::command::service::CommandService;
 use rim_services::conversation::command::CreateConversationCmd;
 use rim_services::conversation::service::ConversationService;
+use rim_services::keybind::request::{CreateKeybindCmd, DeleteKeybindCmd, UpdateKeybindCmd};
+use rim_services::keybind::service::KeybindService;
 use rim_services::message::command::SendMessageCmd;
 use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd, SendThreadMessageCmd};
 use rim_services::message::service::MessageService;
+use rim_services::message_attachment::command::{
+    CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
+};
+use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_thread::command::CreateThreadCmd;
 use rim_services::message_thread::service::ThreadService;
-use rim_services::{Actor, ServiceError};
 
+use crate::auth_context::{require_actor, require_session_id};
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
+use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::query::AuthActorCtx;
-use crate::types::{Conversation, Message, Thread};
+use crate::types::{
+    Attachment, Command, CommandContextInput, CommandResult, Conversation, Keybind, KeybindContext,
+    KeybindScope, Message, Thread, UploadTicket,
+};
 
 pub struct Mutation;
 
@@ -123,6 +137,89 @@ pub struct CreateThreadInput {
     pub root_message_id: ID,
 }
 
+#[derive(InputObject)]
+pub struct CreateAttachmentInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub message_id: Option<ID>,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: u64,
+}
+
+#[derive(InputObject)]
+pub struct FinalizeAttachmentInput {
+    pub server_id: ID,
+    pub attachment_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct DeleteAttachmentInput {
+    pub server_id: ID,
+    pub attachment_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct ExecuteCommandInput {
+    pub command_id: String,
+    pub args: Option<async_graphql::Json<serde_json::Value>>,
+    pub command_context: Option<CommandContextInput>,
+    pub confirmed_dangerous: Option<bool>,
+}
+
+#[derive(InputObject)]
+pub struct UserCommandStepInput {
+    pub command_id: String,
+    pub args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+#[derive(InputObject)]
+pub struct CreateUserCommandInput {
+    pub command_id: String,
+    pub title: String,
+    pub description: String,
+    pub steps: Vec<UserCommandStepInput>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateUserCommandInput {
+    pub command_id: String,
+    pub title: String,
+    pub description: String,
+    pub steps: Vec<UserCommandStepInput>,
+    pub is_enabled: bool,
+}
+
+#[derive(InputObject)]
+pub struct DeleteUserCommandInput {
+    pub command_id: String,
+}
+
+#[derive(InputObject)]
+pub struct CreateKeybindInput {
+    pub scope: KeybindScope,
+    pub workspace_id: Option<ID>,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: KeybindContext,
+    pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+#[derive(InputObject)]
+pub struct UpdateKeybindInput {
+    pub keybind_id: ID,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: KeybindContext,
+    pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
+    pub is_enabled: bool,
+}
+
+#[derive(InputObject)]
+pub struct DeleteKeybindInput {
+    pub keybind_id: ID,
+}
+
 #[Object]
 impl Mutation {
     async fn bootstrap(
@@ -174,14 +271,8 @@ impl Mutation {
     }
 
     async fn logout(&self, ctx: &Context<'_>) -> Result<bool> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
-        let session_id = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .session_id()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
+        let session_id = require_session_id(ctx)?;
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         auth.logout(Actor::new(actor), session_id)
@@ -199,10 +290,7 @@ impl Mutation {
         ctx: &Context<'_>,
         input: CreateInviteInput,
     ) -> Result<CreateInvitePayload> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
@@ -247,10 +335,7 @@ impl Mutation {
     }
 
     async fn send_message(&self, ctx: &Context<'_>, input: SendMessageInput) -> Result<Message> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -281,10 +366,7 @@ impl Mutation {
         ctx: &Context<'_>,
         input: CreateConversationInput,
     ) -> Result<Conversation> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -322,10 +404,7 @@ impl Mutation {
         ctx: &Context<'_>,
         input: SendThreadMessageInput,
     ) -> Result<Message> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -356,10 +435,7 @@ impl Mutation {
     }
 
     async fn edit_message(&self, ctx: &Context<'_>, input: EditMessageInput) -> Result<Message> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -382,10 +458,7 @@ impl Mutation {
     }
 
     async fn delete_message(&self, ctx: &Context<'_>, input: DeleteMessageInput) -> Result<bool> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -407,10 +480,7 @@ impl Mutation {
     }
 
     async fn create_thread(&self, ctx: &Context<'_>, input: CreateThreadInput) -> Result<Thread> {
-        let actor = ctx
-            .data_unchecked::<AuthActorCtx>()
-            .actor()
-            .ok_or_else(|| Error::new("unauthenticated"))?;
+        let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
@@ -431,28 +501,250 @@ impl Mutation {
 
         Ok(thread.into())
     }
-}
 
-pub(crate) fn map_service_error(err: ServiceError) -> Error {
-    match err {
-        ServiceError::PermissionDenied => {
-            Error::new("permission denied").extend_with(|_err, e| e.set("code", "FORBIDDEN"))
-        }
-        ServiceError::Validation(m) => {
-            Error::new(m).extend_with(|_err, e| e.set("code", "VALIDATION"))
-        }
-        ServiceError::Conflict(m) => Error::new(m).extend_with(|_err, e| e.set("code", "CONFLICT")),
-        ServiceError::NotFound => {
-            Error::new("not found").extend_with(|_err, e| e.set("code", "NOT_FOUND"))
-        }
-        ServiceError::Unavailable => {
-            Error::new("unavailable").extend_with(|_err, e| e.set("code", "UNAVAILABLE"))
-        }
-        ServiceError::Timeout => {
-            Error::new("timeout").extend_with(|_err, e| e.set("code", "TIMEOUT"))
-        }
-        ServiceError::Internal(_) => {
-            Error::new("internal error").extend_with(|_err, e| e.set("code", "INTERNAL"))
-        }
+    async fn create_attachment(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateAttachmentInput,
+    ) -> Result<UploadTicket> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let message_id = input
+            .message_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::message::model::MessageId>)
+            .transpose()?;
+
+        let ticket = svc
+            .create_attachment(CreateAttachmentCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                message_id,
+                filename: input.filename,
+                content_type: input.content_type,
+                size_bytes: input.size_bytes,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(ticket.into())
+    }
+
+    async fn finalize_attachment(
+        &self,
+        ctx: &Context<'_>,
+        input: FinalizeAttachmentInput,
+    ) -> Result<Attachment> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let attachment_id = parse_uuid_id::<
+            rim_core::message_attachment::model::MessageAttachmentId,
+        >(&input.attachment_id)?;
+
+        let attachment = svc
+            .finalize_attachment(FinalizeAttachmentCmd {
+                actor: Actor::new(actor),
+                server_id,
+                attachment_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(attachment.into())
+    }
+
+    async fn delete_attachment(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteAttachmentInput,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let attachment_id = parse_uuid_id::<
+            rim_core::message_attachment::model::MessageAttachmentId,
+        >(&input.attachment_id)?;
+
+        svc.delete_attachment(DeleteAttachmentCmd {
+            actor: Actor::new(actor),
+            server_id,
+            attachment_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn execute_command(
+        &self,
+        ctx: &Context<'_>,
+        input: ExecuteCommandInput,
+    ) -> Result<CommandResult> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        let result = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(actor),
+                command_id: input.command_id,
+                args: input.args.map(|json| json.0),
+                context: input.command_context.map(TryInto::try_into).transpose()?,
+                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+
+    async fn create_user_command(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateUserCommandInput,
+    ) -> Result<Command> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        let command = svc
+            .create_user_command(CreateUserCommandCmd {
+                actor: Actor::new(actor),
+                command_key: input.command_id,
+                title: input.title,
+                description: input.description,
+                steps: input
+                    .steps
+                    .into_iter()
+                    .map(|step| UserCommandStepDto {
+                        command_id: step.command_id,
+                        args: step.args.map(|json| json.0),
+                    })
+                    .collect(),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(command.as_command_definition().into())
+    }
+
+    async fn update_user_command(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateUserCommandInput,
+    ) -> Result<Command> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        let command = svc
+            .update_user_command(UpdateUserCommandCmd {
+                actor: Actor::new(actor),
+                command_id: input.command_id,
+                title: input.title,
+                description: input.description,
+                steps: input
+                    .steps
+                    .into_iter()
+                    .map(|step| UserCommandStepDto {
+                        command_id: step.command_id,
+                        args: step.args.map(|json| json.0),
+                    })
+                    .collect(),
+                is_enabled: input.is_enabled,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(command.as_command_definition().into())
+    }
+
+    async fn delete_user_command(
+        &self,
+        ctx: &Context<'_>,
+        input: DeleteUserCommandInput,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        svc.delete_user_command(DeleteUserCommandCmd {
+            actor: Actor::new(actor),
+            command_id: input.command_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn create_keybind(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateKeybindInput,
+    ) -> Result<Keybind> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+        let keybind = svc
+            .create_keybind(CreateKeybindCmd {
+                actor: Actor::new(actor),
+                scope: input.scope.into(),
+                workspace_id: input
+                    .workspace_id
+                    .as_ref()
+                    .map(parse_uuid_id::<rim_core::server::model::WorkspaceId>)
+                    .transpose()?,
+                keystroke: input.keystroke,
+                command_id: input.command_id,
+                context: input.context.into(),
+                preset_args: input.preset_args.map(|json| json.0),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(keybind.into())
+    }
+
+    async fn update_keybind(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateKeybindInput,
+    ) -> Result<Keybind> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+        let keybind = svc
+            .update_keybind(UpdateKeybindCmd {
+                actor: Actor::new(actor),
+                keybind_id: parse_uuid_id::<rim_core::keybind::model::KeybindId>(
+                    &input.keybind_id,
+                )?,
+                keystroke: input.keystroke,
+                command_id: input.command_id,
+                context: input.context.into(),
+                preset_args: input.preset_args.map(|json| json.0),
+                is_enabled: input.is_enabled,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(keybind.into())
+    }
+
+    async fn delete_keybind(&self, ctx: &Context<'_>, input: DeleteKeybindInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+        svc.delete_keybind(DeleteKeybindCmd {
+            actor: Actor::new(actor),
+            keybind_id: parse_uuid_id::<rim_core::keybind::model::KeybindId>(&input.keybind_id)?,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
     }
 }

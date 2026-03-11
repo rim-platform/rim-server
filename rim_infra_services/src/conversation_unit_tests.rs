@@ -39,6 +39,7 @@ mod tests {
             id: ConversationId::new(),
             server_id,
             conversation_type: ConversationType::Direct,
+            title: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -75,7 +76,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_conversation_rejects_title_in_v0() {
+    async fn create_dm_rejects_title() {
         let actor_id = UserId::new();
         let server_id = ServerId::new();
 
@@ -94,12 +95,61 @@ mod tests {
             .create_conversation(CreateConversationCmd {
                 actor: Actor::new(actor_id),
                 server_id,
-                participants: ConversationParticipants::Channel,
-                title: Some("not yet".to_string()),
+                participants: ConversationParticipants::DirectMessage {
+                    other_user_id: UserId::new(),
+                },
+                title: Some("name".to_string()),
             })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn create_channel_persists_trimmed_title() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let mut created = conv(server_id);
+        created.conversation_type = ConversationType::Channel;
+        created.title = Some("Launches".to_string());
+
+        let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
+            base_repos();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let created_for_repo = created.clone();
+        conversation_repo
+            .expect_create_conversation_with_members()
+            .return_once(move |kind, sid, title, members| {
+                assert_eq!(kind, ConversationType::Channel);
+                assert_eq!(sid, server_id);
+                assert_eq!(title.as_deref(), Some("Launches"));
+                assert_eq!(members, &[actor_id]);
+                Ok(created_for_repo)
+            });
+
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(move |_conversation_id| Ok(vec![actor_id]));
+
+        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let dto = svc
+            .create_conversation(CreateConversationCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                participants: ConversationParticipants::Channel,
+                title: Some("  Launches  ".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(dto.title.as_deref(), Some("Launches"));
     }
 
     #[tokio::test]

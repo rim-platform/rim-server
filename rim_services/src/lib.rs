@@ -1,12 +1,21 @@
+pub mod action;
 pub mod auth;
+pub mod capability;
+pub mod command;
 pub mod conversation;
+pub mod event;
+pub mod integration;
+pub mod keybind;
 pub mod message;
 pub mod message_attachment;
 pub mod message_thread;
+pub mod provider;
 pub mod server;
 pub mod server_member;
+pub mod setting;
 pub mod user;
 
+use rim_core::principal::model::Principal;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::user::model::UserId;
 use thiserror::Error;
@@ -14,12 +23,20 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Actor {
+    pub principal: Principal,
     pub user_id: UserId,
 }
 
 impl Actor {
     pub fn new(user_id: UserId) -> Self {
-        Self { user_id }
+        Self {
+            principal: Principal::user(user_id),
+            user_id,
+        }
+    }
+
+    pub fn from_principal(principal: Principal) -> Option<Self> {
+        principal.user_id.map(|user_id| Self { principal, user_id })
     }
 }
 

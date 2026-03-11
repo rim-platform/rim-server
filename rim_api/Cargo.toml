@@ -11,6 +11,7 @@ rim_services = { path = "../rim_services", features = ["mocks"] }
 rim_infra_services = { path = "../rim_infra_services" }
 uuid = { version = "1.19.0", features = ["v4","v7"] }
 rim_core = { path = "../rim_core" }
+serde_json = "1.0.145"
 
 [features]
 e2e-tests = []

@@ -1,7 +1,9 @@
 use crate::server::start_server;
 use rim_logging::init_tracing_json;
 
+mod app;
 pub(crate) mod config;
+mod graphql_support;
 mod server;
 
 fn initialize() {

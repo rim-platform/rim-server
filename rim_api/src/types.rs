@@ -1,10 +1,299 @@
-use async_graphql::{InputObject, SimpleObject};
+use async_graphql::{Enum, InputObject, SimpleObject};
 
 use rim_core::repository::pagination::Page;
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct User {
     pub id: async_graphql::ID,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Command {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub source_kind: String,
+    pub execution_target: String,
+    pub required_context: Vec<String>,
+    pub required_capabilities: Vec<String>,
+    pub visible_in_palette: bool,
+    pub visible_in_context_menus: bool,
+    pub keybind_capable: bool,
+    pub dangerous: bool,
+}
+
+impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
+    fn from(value: rim_services::command::dto::CommandDefinitionDto) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+            category: value.category,
+            source_kind: format!("{:?}", value.source_kind),
+            execution_target: format!("{:?}", value.execution_target),
+            required_context: value.required_context,
+            required_capabilities: value.required_capabilities,
+            visible_in_palette: value.visible_in_palette,
+            visible_in_context_menus: value.visible_in_context_menus,
+            keybind_capable: value.keybind_capable,
+            dangerous: value.dangerous,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandSurface {
+    Palette,
+    ContextMenu,
+    KeybindPicker,
+}
+
+impl From<CommandSurface> for rim_services::command::dto::CommandSurfaceDto {
+    fn from(value: CommandSurface) -> Self {
+        match value {
+            CommandSurface::Palette => Self::Palette,
+            CommandSurface::ContextMenu => Self::ContextMenu,
+            CommandSurface::KeybindPicker => Self::KeybindPicker,
+        }
+    }
+}
+
+#[derive(InputObject, Clone, Debug)]
+pub struct CommandContextInput {
+    pub workspace_id: Option<async_graphql::ID>,
+    pub conversation_id: Option<async_graphql::ID>,
+    pub thread_id: Option<async_graphql::ID>,
+    pub selected_text: Option<String>,
+    pub selected_message_id: Option<async_graphql::ID>,
+    pub selected_message_ids: Option<Vec<async_graphql::ID>>,
+    pub focused_surface: Option<String>,
+    pub active_panel: Option<String>,
+}
+
+impl TryFrom<CommandContextInput> for rim_services::command::dto::CommandContextDto {
+    type Error = async_graphql::Error;
+
+    fn try_from(value: CommandContextInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            workspace_id: value
+                .workspace_id
+                .as_ref()
+                .map(crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>)
+                .transpose()?,
+            conversation_id: value
+                .conversation_id
+                .as_ref()
+                .map(crate::ids::parse_uuid_id::<rim_core::conversation::model::ConversationId>)
+                .transpose()?,
+            thread_id: value
+                .thread_id
+                .as_ref()
+                .map(crate::ids::parse_uuid_id::<rim_core::message_thread::model::MessageThreadId>)
+                .transpose()?,
+            selected_text: value.selected_text,
+            selected_message_id: value
+                .selected_message_id
+                .as_ref()
+                .map(crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>)
+                .transpose()?,
+            selected_message_ids: value
+                .selected_message_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(|id| crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&id))
+                .collect::<Result<Vec<_>, _>>()?,
+            focused_surface: value.focused_surface,
+            active_panel: value.active_panel,
+        })
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CommandResult {
+    pub status: String,
+    pub message: String,
+    pub payload: Option<async_graphql::Json<serde_json::Value>>,
+    pub follow_up_commands: Vec<String>,
+}
+
+impl From<rim_services::command::dto::CommandResultDto> for CommandResult {
+    fn from(value: rim_services::command::dto::CommandResultDto) -> Self {
+        Self {
+            status: format!("{:?}", value.status),
+            message: value.message,
+            payload: value.payload.map(async_graphql::Json),
+            follow_up_commands: value.follow_up_commands,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Action {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub capability_ids: Vec<String>,
+}
+
+impl From<rim_services::action::dto::ActionDto> for Action {
+    fn from(value: rim_services::action::dto::ActionDto) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+            capability_ids: value.capability_ids,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Event {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+impl From<rim_services::event::dto::EventDto> for Event {
+    fn from(value: rim_services::event::dto::EventDto) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Capability {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+impl From<rim_services::capability::dto::CapabilityDto> for Capability {
+    fn from(value: rim_services::capability::dto::CapabilityDto) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Integration {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub enabled: bool,
+    pub principal_id: Option<async_graphql::ID>,
+}
+
+impl From<rim_services::integration::dto::IntegrationDto> for Integration {
+    fn from(value: rim_services::integration::dto::IntegrationDto) -> Self {
+        Self {
+            id: value.id,
+            kind: format!("{:?}", value.kind),
+            title: value.title,
+            enabled: value.enabled,
+            principal_id: value
+                .principal_id
+                .map(|id| async_graphql::ID(id.to_string())),
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Setting {
+    pub id: String,
+    pub scope: String,
+    pub title: String,
+    pub description: String,
+    pub value_type: String,
+    pub is_secret: bool,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Keybind {
+    pub id: async_graphql::ID,
+    pub scope: String,
+    pub workspace_id: Option<async_graphql::ID>,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: String,
+    pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
+    pub is_enabled: bool,
+}
+
+impl From<rim_services::keybind::dto::KeybindDto> for Keybind {
+    fn from(value: rim_services::keybind::dto::KeybindDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            scope: format!("{:?}", value.scope),
+            workspace_id: value
+                .workspace_id
+                .map(|id| async_graphql::ID(id.to_string())),
+            keystroke: value.keystroke,
+            command_id: value.command_id,
+            context: format!("{:?}", value.context),
+            preset_args: value.preset_args.map(async_graphql::Json),
+            is_enabled: value.is_enabled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum KeybindScope {
+    User,
+    Workspace,
+}
+
+impl From<KeybindScope> for rim_services::keybind::dto::KeybindScopeDto {
+    fn from(value: KeybindScope) -> Self {
+        match value {
+            KeybindScope::User => Self::User,
+            KeybindScope::Workspace => Self::Workspace,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum KeybindContext {
+    Global,
+    Composer,
+    MessageList,
+    ThreadView,
+    ConversationView,
+    Panel,
+    CommandPalette,
+}
+
+impl From<KeybindContext> for rim_services::keybind::dto::KeybindContextDto {
+    fn from(value: KeybindContext) -> Self {
+        match value {
+            KeybindContext::Global => Self::Global,
+            KeybindContext::Composer => Self::Composer,
+            KeybindContext::MessageList => Self::MessageList,
+            KeybindContext::ThreadView => Self::ThreadView,
+            KeybindContext::ConversationView => Self::ConversationView,
+            KeybindContext::Panel => Self::Panel,
+            KeybindContext::CommandPalette => Self::CommandPalette,
+        }
+    }
+}
+
+impl From<rim_services::setting::dto::SettingDto> for Setting {
+    fn from(value: rim_services::setting::dto::SettingDto) -> Self {
+        Self {
+            id: value.id,
+            scope: format!("{:?}", value.scope),
+            title: value.title,
+            description: value.description,
+            value_type: value.value_type,
+            is_secret: value.is_secret,
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -42,6 +331,7 @@ pub struct Message {
     pub author_id: async_graphql::ID,
     pub text: Option<String>,
     pub has_attachments: bool,
+    pub attachments: Vec<Attachment>,
     pub parent_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
@@ -60,6 +350,7 @@ impl From<rim_services::message::dto::MessageDto> for Message {
             author_id: async_graphql::ID(value.author_id.to_string()),
             text: value.text,
             has_attachments: value.has_attachments,
+            attachments: value.attachments.into_iter().map(Into::into).collect(),
             parent_message_id: value
                 .parent_message_id
                 .map(|id| async_graphql::ID(id.to_string())),
@@ -96,6 +387,46 @@ impl From<rim_services::message_thread::dto::ThreadDto> for Thread {
             root_text: value.root_text,
             created_at: value.created_at,
             last_message_at: value.last_message_at,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Attachment {
+    pub id: async_graphql::ID,
+    pub status: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: u64,
+}
+
+impl From<rim_services::message_attachment::dto::AttachmentDto> for Attachment {
+    fn from(value: rim_services::message_attachment::dto::AttachmentDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            status: format!("{:?}", value.status),
+            filename: value.filename,
+            content_type: value.content_type,
+            size_bytes: value.size_bytes,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct UploadTicket {
+    pub attachment_id: async_graphql::ID,
+    pub upload_token: String,
+    pub max_size_bytes: Option<u64>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<rim_services::message_attachment::dto::UploadTicketDto> for UploadTicket {
+    fn from(value: rim_services::message_attachment::dto::UploadTicketDto) -> Self {
+        Self {
+            attachment_id: async_graphql::ID(value.attachment_id.to_string()),
+            upload_token: value.upload_token,
+            max_size_bytes: value.max_size_bytes,
+            expires_at: value.expires_at,
         }
     }
 }

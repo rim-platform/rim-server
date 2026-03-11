@@ -9,6 +9,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub conversation_type: ConversationType,
+    pub title: Option<String>,
     pub created_at: DateTimeWithTimeZone,
     pub last_activity_at: DateTimeWithTimeZone,
     pub server_id: Uuid,

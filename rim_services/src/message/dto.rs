@@ -4,6 +4,8 @@ use rim_core::message::repository::MessageCursor;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
+use crate::message_attachment::dto::AttachmentDto;
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageDto {
@@ -18,6 +20,7 @@ pub struct MessageDto {
 
     pub text: Option<String>,
     pub has_attachments: bool,
+    pub attachments: Vec<AttachmentDto>,
 
     /// Threading / replies:
     pub parent_message_id: Option<MessageId>,

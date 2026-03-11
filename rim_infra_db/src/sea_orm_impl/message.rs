@@ -201,6 +201,23 @@ impl MessageRepository for SeaOrmMessageRepository {
         Ok(updated.into())
     }
 
+    async fn set_has_attachments(
+        &self,
+        message_id: MessageId,
+        has_attachments: bool,
+    ) -> RepoResult<Message> {
+        let msg = message::Entity::find_by_id(message_id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: message::ActiveModel = msg.into();
+        active.has_attachments = Set(has_attachments);
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
+
     async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()> {
         let msg = message::Entity::find_by_id(message_id)
             .one(&self.db)

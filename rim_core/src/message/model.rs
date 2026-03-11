@@ -20,6 +20,16 @@ pub struct Message {
     pub has_attachments: bool,
 }
 
+impl Message {
+    pub fn is_timeline_message(&self) -> bool {
+        self.thread_id.is_none()
+    }
+
+    pub fn is_thread_reply(&self) -> bool {
+        self.thread_id.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMessage {
     pub conversation_id: ConversationId,
@@ -28,4 +38,14 @@ pub struct NewMessage {
     pub thread_id: Option<MessageThreadId>,
     pub parent_message_id: Option<MessageId>,
     pub attachments: Vec<NewMessageAttachment>,
+}
+
+impl NewMessage {
+    pub fn is_timeline_message(&self) -> bool {
+        self.thread_id.is_none()
+    }
+
+    pub fn is_thread_reply(&self) -> bool {
+        self.thread_id.is_some()
+    }
 }
