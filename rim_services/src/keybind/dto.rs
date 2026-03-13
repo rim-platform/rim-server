@@ -2,6 +2,14 @@ use rim_core::keybind::model::{KeybindContext, KeybindId, KeybindScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum KeybindSourceDto {
+    Default,
+    User,
+    Workspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeybindScopeDto {
     User,
     Workspace,
@@ -70,10 +78,68 @@ impl From<KeybindContextDto> for KeybindContext {
 pub struct KeybindDto {
     pub id: KeybindId,
     pub scope: KeybindScopeDto,
+    pub source: KeybindSourceDto,
     pub workspace_id: Option<rim_core::server::model::WorkspaceId>,
     pub keystroke: String,
     pub command_id: String,
     pub context: KeybindContextDto,
     pub preset_args: Option<serde_json::Value>,
     pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DefaultKeybindDto {
+    pub source: KeybindSourceDto,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: KeybindContextDto,
+    pub preset_args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct KeybindLayersDto {
+    pub default_keybind: Option<DefaultKeybindDto>,
+    pub user_keybind: Option<KeybindDto>,
+    pub workspace_keybind: Option<KeybindDto>,
+    pub resolved_persisted_keybind: Option<KeybindDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum KeybindRuntimeSourceDto {
+    DeviceLocal,
+    Workspace,
+    User,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DeviceLocalKeybindDto {
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: KeybindContextDto,
+    pub preset_args: Option<serde_json::Value>,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct EffectiveKeybindDto {
+    pub source: KeybindRuntimeSourceDto,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: KeybindContextDto,
+    pub preset_args: Option<serde_json::Value>,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RuntimeKeybindLayersDto {
+    pub device_local_keybind: Option<DeviceLocalKeybindDto>,
+    pub backend_layers: KeybindLayersDto,
+    pub resolved_effective_keybind: Option<EffectiveKeybindDto>,
 }

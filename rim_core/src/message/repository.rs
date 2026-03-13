@@ -35,6 +35,14 @@ pub trait MessageRepository: Send + Sync {
         order: SortOrder,
     ) -> RepoResult<Page<Message, MessageCursor>>;
 
+    async fn search_messages(
+        &self,
+        conversation_id: ConversationId,
+        query: &str,
+        limit: u32,
+        include_deleted: bool,
+    ) -> RepoResult<Vec<Message>>;
+
     async fn update_message_text(
         &self,
         message_id: MessageId,

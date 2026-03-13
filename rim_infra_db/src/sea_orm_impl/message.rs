@@ -184,6 +184,35 @@ impl MessageRepository for SeaOrmMessageRepository {
         Ok(Page::new(items, next, prev))
     }
 
+    async fn search_messages(
+        &self,
+        conversation_id: ConversationId,
+        query: &str,
+        limit: u32,
+        include_deleted: bool,
+    ) -> RepoResult<Vec<Message>> {
+        let mut q = message::Entity::find()
+            .filter(message::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(message::Column::Text.contains(query));
+
+        if !include_deleted {
+            q = q.filter(message::Column::IsDeleted.eq(false));
+        }
+
+        let items = q
+            .order_by_desc(message::Column::SentAt)
+            .order_by_desc(message::Column::Id)
+            .limit(limit as u64)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+
+        Ok(items)
+    }
+
     async fn update_message_text(
         &self,
         message_id: MessageId,

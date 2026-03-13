@@ -215,6 +215,28 @@ Recommended persistence strategy:
 - workspace keybinds -> persisted
 - device-local keybinds -> local storage only
 
+In the current backend shape:
+
+- the backend stores `user` and `workspace` keybinds
+- the backend exposes `default` keybind suggestions as a separate layer, not as persisted keybind
+  records
+- the client/runtime is expected to own `device_local` keybinds and final runtime keypress handling
+
+The backend may expose:
+
+- `default` keybind suggestions
+- stored persisted keybinds by scope
+- resolved persisted keybinds
+- single-key persisted resolution for a given `(context, keystroke)`
+- keybind layer inspection for a given `(context, keystroke)`, so the client can understand which
+  backend layers contributed before applying any device-local override
+
+The client/runtime should then own the final effective merge:
+
+- `device_local > workspace > user > default`
+
+That final runtime overlay is intentionally a client concern, not a persisted backend concern.
+
 This matches the wider customization model:
 
 - runtime-composed registry
@@ -271,3 +293,5 @@ If behavior is complex:
 - plugins can suggest defaults, but suggestions require approval
 - workspace keybinds are optional shared/team-managed bindings
 - one command may have multiple keybindings in the same context
+- resolved persisted precedence is currently `workspace > user`, while `device_local` remains a
+  future client-side layer on top of backend-resolved data

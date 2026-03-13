@@ -9,9 +9,11 @@ mod tests {
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::message::command::{
-        DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery,
-        ListThreadMessagesQuery, SendMessageCmd, SendThreadMessageCmd,
+        DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
+        ListMessagesQuery, ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd,
+        SendThreadMessageCmd,
     };
+    use rim_services::message::dto::MessageReferenceDto;
     use rim_services::message::service::MessageService;
     use rim_services::{Actor, ServiceError};
 
@@ -601,6 +603,111 @@ mod tests {
 
         assert_eq!(dto.root_thread_id, Some(thread_id));
         assert_eq!(dto.thread_id, None);
+    }
+
+    #[tokio::test]
+    async fn get_message_reference_returns_timeline_permalink() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv_id = ConversationId::new();
+        let conv = conversation(server_id);
+        let msg = message(actor_id, conv_id);
+
+        let mut server_member_repo = MockServerMemberRepo::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut conversation_repo = MockConversationRepo::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conv_for_repo.clone())));
+
+        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut message_repo = MockMessageRepo::new();
+        let msg_for_repo = msg.clone();
+        message_repo
+            .expect_get_by_id()
+            .return_once(move |_| Ok(Some(msg_for_repo.clone())));
+
+        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
+            message_thread_repo: Arc::new(MockThreadRepo::new()),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let reference: MessageReferenceDto = svc
+            .get_message_reference(GetMessageReferenceQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                message_id: msg.id,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(reference.message_id, msg.id);
+        assert!(reference.thread_id.is_none());
+        assert_eq!(
+            reference.permalink_path,
+            format!(
+                "/workspaces/{}/conversations/{}/messages/{}",
+                server_id, conv_id, msg.id
+            )
+        );
+        assert_eq!(reference.anchor, format!("message-{}", msg.id));
+    }
+
+    #[tokio::test]
+    async fn search_messages_requires_non_empty_query() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv_id = ConversationId::new();
+
+        let mut server_member_repo = MockServerMemberRepo::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut conversation_repo = MockConversationRepo::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id))));
+
+        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(MockMessageRepo::new()),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
+            message_thread_repo: Arc::new(MockThreadRepo::new()),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let err = svc
+            .search_messages(SearchMessagesQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                query: "   ".to_string(),
+                limit: 10,
+                include_deleted: false,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 
     #[tokio::test]

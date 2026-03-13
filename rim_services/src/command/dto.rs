@@ -120,20 +120,37 @@ pub struct UserCommandDto {
 
 impl UserCommandDto {
     pub fn as_command_definition(&self) -> CommandDefinitionDto {
+        self.as_command_definition_with_metadata(
+            CommandExecutionTargetDto::Backend,
+            vec![],
+            vec![],
+            true,
+            false,
+        )
+    }
+
+    pub fn as_command_definition_with_metadata(
+        &self,
+        execution_target: CommandExecutionTargetDto,
+        required_context: Vec<String>,
+        required_capabilities: Vec<String>,
+        keybind_capable: bool,
+        dangerous: bool,
+    ) -> CommandDefinitionDto {
         CommandDefinitionDto {
             id: self.command_key.clone(),
             title: self.title.clone(),
             description: self.description.clone(),
             category: "User".to_string(),
             source_kind: CommandSourceKindDto::User,
-            execution_target: CommandExecutionTargetDto::Backend,
+            execution_target,
             arguments: vec![],
-            required_context: vec![],
-            required_capabilities: vec![],
+            required_context,
+            required_capabilities,
             visible_in_palette: true,
             visible_in_context_menus: false,
-            keybind_capable: true,
-            dangerous: false,
+            keybind_capable,
+            dangerous,
             user_command_id: Some(self.id),
         }
     }

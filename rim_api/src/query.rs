@@ -4,9 +4,9 @@ use crate::auth_context::require_actor;
 use crate::pagination::PageDir;
 use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelPage, Command, CommandContextInput,
-    CommandSurface, Conversation, ConversationPage, Event, InboxCursorInput, Integration, Keybind,
-    KeybindScope, Message, MessageCursorInput, MessagePage, Setting, Thread, ThreadCursorInput,
-    ThreadPage,
+    CommandSurface, Conversation, ConversationPage, DefaultKeybind, Event, InboxCursorInput,
+    Integration, Keybind, KeybindContext, KeybindLayers, KeybindScope, Message, MessageCursorInput,
+    MessagePage, MessageReference, Setting, Thread, ThreadCursorInput, ThreadPage,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -19,10 +19,15 @@ use rim_services::conversation::command::{
 use rim_services::conversation::service::ConversationService;
 use rim_services::event::service::EventService;
 use rim_services::integration::service::IntegrationService;
-use rim_services::keybind::request::ListKeybindsQuery;
+use rim_services::keybind::request::{
+    InspectKeybindLayersQuery, ListDefaultKeybindsQuery, ListKeybindsQuery, ResolveKeybindQuery,
+    ResolveKeybindsQuery,
+};
 use rim_services::keybind::service::KeybindService;
 use rim_services::message::command::ListThreadMessagesQuery;
-use rim_services::message::command::{GetMessageQuery, ListMessagesQuery};
+use rim_services::message::command::{
+    GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery, SearchMessagesQuery,
+};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::command::GetAttachmentQuery;
 use rim_services::message_attachment::service::MessageAttachmentService;
@@ -61,6 +66,21 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(commands.into_iter().map(Into::into).collect())
+    }
+
+    async fn command(&self, ctx: &Context<'_>, command_id: String) -> Result<Option<Command>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        let command = svc
+            .get_command(rim_services::command::request::GetCommandQuery {
+                actor: Actor::new(actor),
+                command_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(command.map(Into::into))
     }
 
     async fn actions(&self, ctx: &Context<'_>) -> Result<Vec<Action>> {
@@ -145,6 +165,94 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(keybinds.into_iter().map(Into::into).collect())
+    }
+
+    async fn default_keybinds(&self, ctx: &Context<'_>) -> Result<Vec<DefaultKeybind>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+
+        let keybinds = svc
+            .list_default_keybinds(ListDefaultKeybindsQuery {
+                actor: Actor::new(actor),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(keybinds.into_iter().map(Into::into).collect())
+    }
+
+    async fn resolved_keybinds(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: Option<ID>,
+    ) -> Result<Vec<Keybind>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+
+        let keybinds = svc
+            .resolve_keybinds(ResolveKeybindsQuery {
+                actor: Actor::new(actor),
+                workspace_id: workspace_id
+                    .as_ref()
+                    .map(parse_uuid_id::<rim_core::server::model::WorkspaceId>)
+                    .transpose()?,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(keybinds.into_iter().map(Into::into).collect())
+    }
+
+    async fn resolve_keybind(
+        &self,
+        ctx: &Context<'_>,
+        keystroke: String,
+        context: KeybindContext,
+        workspace_id: Option<ID>,
+    ) -> Result<Option<Keybind>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+
+        let keybind = svc
+            .resolve_keybind(ResolveKeybindQuery {
+                actor: Actor::new(actor),
+                workspace_id: workspace_id
+                    .as_ref()
+                    .map(parse_uuid_id::<rim_core::server::model::WorkspaceId>)
+                    .transpose()?,
+                keystroke,
+                context: context.into(),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(keybind.map(Into::into))
+    }
+
+    async fn keybind_layers(
+        &self,
+        ctx: &Context<'_>,
+        keystroke: String,
+        context: KeybindContext,
+        workspace_id: Option<ID>,
+    ) -> Result<KeybindLayers> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn KeybindService>>()?;
+
+        let layers = svc
+            .inspect_keybind_layers(InspectKeybindLayersQuery {
+                actor: Actor::new(actor),
+                workspace_id: workspace_id
+                    .as_ref()
+                    .map(parse_uuid_id::<rim_core::server::model::WorkspaceId>)
+                    .transpose()?,
+                keystroke,
+                context: context.into(),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(layers.into())
     }
 
     async fn conversation(
@@ -257,6 +365,36 @@ impl Query {
         Ok(MessagePage::from_page(page))
     }
 
+    async fn search_messages(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        query: String,
+        limit: i32,
+        include_deleted: bool,
+    ) -> Result<Vec<Message>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        let messages = svc
+            .search_messages(SearchMessagesQuery {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                query,
+                limit: limit.max(1) as u32,
+                include_deleted,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(messages.into_iter().map(Into::into).collect())
+    }
+
     async fn message(
         &self,
         ctx: &Context<'_>,
@@ -282,6 +420,33 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(msg.into())
+    }
+
+    async fn message_reference(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        message_id: ID,
+    ) -> Result<MessageReference> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&message_id)?;
+
+        let reference = svc
+            .get_message_reference(GetMessageReferenceQuery {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                message_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(reference.into())
     }
 
     async fn thread(

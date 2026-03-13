@@ -367,6 +367,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_query_returns_single_command_definition() {
+        let actor = UserId::new();
+        let mut command = MockCommandService::new();
+        command.expect_get_command().returning(|_query| {
+            Box::pin(async {
+                Ok(Some(rim_services::command::dto::CommandDefinitionDto {
+                    id: "chat.post_message".to_string(),
+                    title: "Post Message".to_string(),
+                    description: "desc".to_string(),
+                    category: "Chat".to_string(),
+                    source_kind: rim_services::command::dto::CommandSourceKindDto::BuiltIn,
+                    execution_target:
+                        rim_services::command::dto::CommandExecutionTargetDto::Backend,
+                    arguments: vec![],
+                    required_context: vec![],
+                    required_capabilities: vec!["chat.write".to_string()],
+                    visible_in_palette: true,
+                    visible_in_context_menus: false,
+                    keybind_capable: false,
+                    dangerous: false,
+                    user_command_id: None,
+                }))
+            })
+        });
+
+        let schema = schema_with_command_mock(command);
+        let req =
+            Request::new(r#"query { command(commandId: "chat.post_message") { id category } }"#)
+                .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
     async fn commands_query_accepts_surface_and_context() {
         let actor = UserId::new();
         let mut command = MockCommandService::new();
@@ -407,6 +442,7 @@ mod tests {
                 Ok(vec![rim_services::keybind::dto::KeybindDto {
                     id: rim_core::keybind::model::KeybindId::new(),
                     scope: rim_services::keybind::dto::KeybindScopeDto::User,
+                    source: rim_services::keybind::dto::KeybindSourceDto::User,
                     workspace_id: None,
                     keystroke: "Ctrl+R".to_string(),
                     command_id: "workspace.cycle_recent_activity".to_string(),
@@ -443,6 +479,207 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolved_keybinds_query_returns_keybinds() {
+        let actor = UserId::new();
+        let mut keybind = MockKeybindService::new();
+        keybind.expect_resolve_keybinds().returning(|_query| {
+            Box::pin(async {
+                Ok(vec![rim_services::keybind::dto::KeybindDto {
+                    id: rim_core::keybind::model::KeybindId::new(),
+                    scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
+                    source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
+                    workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
+                    keystroke: "Ctrl+R".to_string(),
+                    command_id: "workspace.open_command_palette".to_string(),
+                    context: rim_services::keybind::dto::KeybindContextDto::Global,
+                    preset_args: None,
+                    is_enabled: true,
+                }])
+            })
+        });
+
+        let schema = build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(keybind),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }));
+
+        let req = Request::new(r#"query { resolvedKeybinds { keystroke commandId scope } }"#)
+            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
+    async fn resolve_keybind_query_returns_single_binding() {
+        let actor = UserId::new();
+        let mut keybind = MockKeybindService::new();
+        keybind.expect_resolve_keybind().returning(|_query| {
+            Box::pin(async {
+                Ok(Some(rim_services::keybind::dto::KeybindDto {
+                    id: rim_core::keybind::model::KeybindId::new(),
+                    scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
+                    source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
+                    workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
+                    keystroke: "Ctrl+R".to_string(),
+                    command_id: "workspace.open_command_palette".to_string(),
+                    context: rim_services::keybind::dto::KeybindContextDto::Global,
+                    preset_args: None,
+                    is_enabled: true,
+                }))
+            })
+        });
+
+        let schema = build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(keybind),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }));
+
+        let req = Request::new(
+            r#"query { resolveKeybind(keystroke: "Ctrl+R", context: GLOBAL) { commandId source } }"#,
+        )
+        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
+    async fn keybind_layers_query_returns_layered_view() {
+        let actor = UserId::new();
+        let mut keybind = MockKeybindService::new();
+        keybind.expect_inspect_keybind_layers().returning(|_query| {
+            Box::pin(async {
+                Ok(rim_services::keybind::dto::KeybindLayersDto {
+                    default_keybind: Some(rim_services::keybind::dto::DefaultKeybindDto {
+                        source: rim_services::keybind::dto::KeybindSourceDto::Default,
+                        keystroke: "Ctrl+R".to_string(),
+                        command_id: "workspace.cycle_recent_activity".to_string(),
+                        context: rim_services::keybind::dto::KeybindContextDto::Global,
+                        preset_args: None,
+                    }),
+                    user_keybind: None,
+                    workspace_keybind: Some(rim_services::keybind::dto::KeybindDto {
+                        id: rim_core::keybind::model::KeybindId::new(),
+                        scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
+                        source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
+                        workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
+                        keystroke: "Ctrl+R".to_string(),
+                        command_id: "workspace.open_command_palette".to_string(),
+                        context: rim_services::keybind::dto::KeybindContextDto::Global,
+                        preset_args: None,
+                        is_enabled: true,
+                    }),
+                    resolved_persisted_keybind: Some(rim_services::keybind::dto::KeybindDto {
+                        id: rim_core::keybind::model::KeybindId::new(),
+                        scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
+                        source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
+                        workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
+                        keystroke: "Ctrl+R".to_string(),
+                        command_id: "workspace.open_command_palette".to_string(),
+                        context: rim_services::keybind::dto::KeybindContextDto::Global,
+                        preset_args: None,
+                        is_enabled: true,
+                    }),
+                })
+            })
+        });
+
+        let schema = build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(keybind),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }));
+
+        let req = Request::new(
+            r#"query { keybindLayers(keystroke: "Ctrl+R", context: GLOBAL) { defaultKeybind { commandId } workspaceKeybind { commandId } resolvedPersistedKeybind { commandId } } }"#,
+        )
+        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
+    async fn default_keybinds_query_returns_defaults() {
+        let actor = UserId::new();
+        let mut keybind = MockKeybindService::new();
+        keybind.expect_list_default_keybinds().returning(|_query| {
+            Box::pin(async {
+                Ok(vec![rim_services::keybind::dto::DefaultKeybindDto {
+                    source: rim_services::keybind::dto::KeybindSourceDto::Default,
+                    keystroke: "Ctrl+K".to_string(),
+                    command_id: "workspace.open_command_palette".to_string(),
+                    context: rim_services::keybind::dto::KeybindContextDto::Global,
+                    preset_args: None,
+                }])
+            })
+        });
+
+        let schema = build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(keybind),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }));
+
+        let req = Request::new(r#"query { defaultKeybinds { keystroke source commandId } }"#)
+            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
     async fn create_keybind_mutation_returns_keybind() {
         let actor = UserId::new();
         let mut keybind = MockKeybindService::new();
@@ -451,6 +688,7 @@ mod tests {
                 Ok(rim_services::keybind::dto::KeybindDto {
                     id: rim_core::keybind::model::KeybindId::new(),
                     scope: rim_services::keybind::dto::KeybindScopeDto::User,
+                    source: rim_services::keybind::dto::KeybindSourceDto::User,
                     workspace_id: None,
                     keystroke: "Ctrl+R".to_string(),
                     command_id: "workspace.cycle_recent_activity".to_string(),
@@ -860,6 +1098,100 @@ mod tests {
             json["message"]["attachments"][0]["id"],
             serde_json::json!(attachment_id.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn message_reference_query_returns_permalink_data() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut msg = MockMessageService::new();
+        msg.expect_get_message_reference().returning(move |_q| {
+            Box::pin(async move {
+                Ok(rim_services::message::dto::MessageReferenceDto {
+                    server_id,
+                    conversation_id,
+                    message_id,
+                    thread_id: None,
+                    permalink_path: format!(
+                        "/workspaces/{}/conversations/{}/messages/{}",
+                        server_id, conversation_id, message_id
+                    ),
+                    anchor: format!("message-{message_id}"),
+                })
+            })
+        });
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = Request::new(
+            r#"query($sid: ID!, $cid: ID!, $mid: ID!) { messageReference(serverId: $sid, conversationId: $cid, messageId: $mid) { messageId permalinkPath anchor } }"#,
+        )
+        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+            "mid": message_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    }
+
+    #[tokio::test]
+    async fn search_messages_query_returns_matches() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut msg = MockMessageService::new();
+        msg.expect_search_messages().returning(move |_q| {
+            Box::pin(async move {
+                Ok(vec![rim_services::message::dto::MessageDto {
+                    id: message_id,
+                    server_id,
+                    conversation_id,
+                    thread_id: None,
+                    root_thread_id: None,
+                    author_id: actor,
+                    text: Some("deploy failed".to_string()),
+                    has_attachments: false,
+                    attachments: vec![],
+                    parent_message_id: None,
+                    is_deleted: false,
+                    sent_at: chrono::Utc::now(),
+                }])
+            })
+        });
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = Request::new(
+            r#"query($sid: ID!, $cid: ID!) { searchMessages(serverId: $sid, conversationId: $cid, query: "deploy", limit: 10, includeDeleted: false) { id text } }"#,
+        )
+        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
     }
 
     #[tokio::test]

@@ -50,6 +50,15 @@ pub struct GetMessageQuery {
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GetMessageReferenceQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -70,6 +79,17 @@ pub struct ListThreadMessagesQuery {
     pub thread_id: MessageThreadId,
     pub dir: PageDir,
     pub cursor: Option<MessagePageCursor>,
+    pub limit: u32,
+    pub include_deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SearchMessagesQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub query: String,
     pub limit: u32,
     pub include_deleted: bool,
 }

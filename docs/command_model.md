@@ -33,6 +33,22 @@ This means:
 - automations may invoke commands
 - user-defined workflows are commands too
 
+## Current Backend State
+
+The current backend/contracts implementation already provides:
+
+- built-in command definitions
+- command listing and single-command lookup
+- backend command execution
+- persisted user-defined commands/macros
+- user-defined command create/update/delete flows
+- command context-aware filtering for palette/context-menu/keybind use cases
+
+Current v1 constraint:
+
+- persisted user-defined commands may only compose backend-executable commands
+- desktop-local command composition belongs to a later client/runtime slice
+
 ## Product Requirements
 
 The command system must be:
@@ -89,6 +105,11 @@ RIM should support the following command sources.
 - Created by the user.
 - May wrap built-in, plugin, or integration commands.
 - May compose multiple commands into a single workflow.
+
+Current v1 backend constraint:
+
+- persisted user-defined commands may only compose backend-executable commands
+- desktop-local command composition belongs to a later client/runtime slice
 
 ## Macros
 

@@ -4,10 +4,10 @@ use tracing::{info, instrument};
 use rim_core::message::model::NewMessage;
 use rim_core::repository::pagination::SortOrder;
 use rim_services::message::command::{
-    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, ListThreadMessagesQuery,
-    SendMessageCmd, SendThreadMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery,
+    ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd, SendThreadMessageCmd,
 };
-use rim_services::message::dto::{MessageDto, MessagePageCursor};
+use rim_services::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::dto::AttachmentDto;
 use rim_services::{ServiceError, ServiceResult};
@@ -162,6 +162,105 @@ impl DefaultMessageService {
         }
 
         Ok(thread)
+    }
+
+    async fn get_message_model(
+        &self,
+        actor: rim_services::Actor,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        message_id: rim_core::message::model::MessageId,
+    ) -> ServiceResult<rim_core::message::model::Message> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            server_id,
+            actor.user_id,
+        )
+        .await?;
+
+        let _conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            conversation_id,
+            server_id,
+        )
+        .await?;
+
+        self.ensure_conversation_member(conversation_id, actor.user_id)
+            .await?;
+
+        let msg = self
+            .repos
+            .message_repo
+            .get_by_id(message_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        if msg.conversation_id != conversation_id {
+            return Err(ServiceError::NotFound);
+        }
+
+        Ok(msg)
+    }
+
+    async fn map_messages_to_dtos(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+        messages: Vec<rim_core::message::model::Message>,
+        include_root_thread_ids: bool,
+    ) -> ServiceResult<Vec<MessageDto>> {
+        let message_ids = messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        let attachments_by_message = self
+            .repos
+            .message_attachment_repo
+            .get_attachments_for_messages(&message_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        let root_thread_ids = if include_root_thread_ids {
+            self.repos
+                .message_thread_repo
+                .get_thread_ids_by_root_messages(&message_ids)
+                .await
+                .map_err(rim_services::map_repo_error)?
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        let mut items = Vec::with_capacity(messages.len());
+        for message in messages {
+            let root_thread_id = if include_root_thread_ids && message.thread_id.is_none() {
+                root_thread_ids.get(&message.id).copied()
+            } else {
+                None
+            };
+            let attachments = attachments_by_message
+                .get(&message.id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|att| AttachmentDto {
+                    id: att.id,
+                    status:
+                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
+                            att.metadata.as_ref(),
+                        ),
+                    filename: att.file_name,
+                    content_type: att.mime_type,
+                    size_bytes: att.file_size.max(0) as u64,
+                })
+                .collect();
+            items.push(self.to_dto_with_root_thread_id(
+                message,
+                server_id,
+                root_thread_id,
+                attachments,
+            ));
+        }
+
+        Ok(items)
     }
 }
 
@@ -356,36 +455,54 @@ impl MessageService for DefaultMessageService {
     }
 
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
-            query.actor.user_id,
-        )
-        .await?;
-
-        let _conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
+        let msg = self
+            .get_message_model(
+                query.actor,
+                query.server_id,
+                query.conversation_id,
+                query.message_id,
+            )
             .await?;
 
-        let msg = self
-            .repos
-            .message_repo
-            .get_by_id(query.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .ok_or(ServiceError::NotFound)?;
-
-        if msg.conversation_id != query.conversation_id || msg.thread_id.is_some() {
+        if msg.thread_id.is_some() {
             return Err(ServiceError::NotFound);
         }
 
         self.to_dto(msg, query.server_id).await
+    }
+
+    async fn get_message_reference(
+        &self,
+        query: GetMessageReferenceQuery,
+    ) -> ServiceResult<MessageReferenceDto> {
+        let msg = self
+            .get_message_model(
+                query.actor,
+                query.server_id,
+                query.conversation_id,
+                query.message_id,
+            )
+            .await?;
+
+        let permalink_path = match msg.thread_id {
+            Some(thread_id) => format!(
+                "/workspaces/{}/conversations/{}/threads/{}/messages/{}",
+                query.server_id, query.conversation_id, thread_id, msg.id
+            ),
+            None => format!(
+                "/workspaces/{}/conversations/{}/messages/{}",
+                query.server_id, query.conversation_id, msg.id
+            ),
+        };
+
+        Ok(MessageReferenceDto {
+            server_id: query.server_id,
+            conversation_id: query.conversation_id,
+            message_id: msg.id,
+            thread_id: msg.thread_id,
+            permalink_path,
+            anchor: format!("message-{}", msg.id),
+        })
     }
 
     async fn list_messages(
@@ -424,55 +541,9 @@ impl MessageService for DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let root_message_ids = page
-            .items
-            .iter()
-            .filter(|m| m.thread_id.is_none())
-            .map(|m| m.id)
-            .collect::<Vec<_>>();
-        let root_thread_ids = self
-            .repos
-            .message_thread_repo
-            .get_thread_ids_by_root_messages(&root_message_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-        let attachments_by_message = self
-            .repos
-            .message_attachment_repo
-            .get_attachments_for_messages(&page.items.iter().map(|m| m.id).collect::<Vec<_>>())
-            .await
-            .map_err(rim_services::map_repo_error)?;
-
-        let mut items = Vec::with_capacity(page.items.len());
-        for m in page.items {
-            let root_thread_id = if m.thread_id.is_none() {
-                root_thread_ids.get(&m.id).copied()
-            } else {
-                None
-            };
-            let attachments = attachments_by_message
-                .get(&m.id)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|att| AttachmentDto {
-                    id: att.id,
-                    status:
-                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
-                            att.metadata.as_ref(),
-                        ),
-                    filename: att.file_name,
-                    content_type: att.mime_type,
-                    size_bytes: att.file_size.max(0) as u64,
-                })
-                .collect();
-            items.push(self.to_dto_with_root_thread_id(
-                m,
-                query.server_id,
-                root_thread_id,
-                attachments,
-            ));
-        }
+        let items = self
+            .map_messages_to_dtos(query.server_id, page.items, true)
+            .await?;
 
         Ok(rim_core::repository::pagination::Page::new(
             items,
@@ -518,39 +589,51 @@ impl MessageService for DefaultMessageService {
             )
             .await
             .map_err(rim_services::map_repo_error)?;
-        let attachments_by_message = self
-            .repos
-            .message_attachment_repo
-            .get_attachments_for_messages(&page.items.iter().map(|m| m.id).collect::<Vec<_>>())
-            .await
-            .map_err(rim_services::map_repo_error)?;
-
-        let mut items = Vec::with_capacity(page.items.len());
-        for m in page.items {
-            let attachments = attachments_by_message
-                .get(&m.id)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|att| AttachmentDto {
-                    id: att.id,
-                    status:
-                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
-                            att.metadata.as_ref(),
-                        ),
-                    filename: att.file_name,
-                    content_type: att.mime_type,
-                    size_bytes: att.file_size.max(0) as u64,
-                })
-                .collect();
-            items.push(self.to_dto_with_root_thread_id(m, query.server_id, None, attachments));
-        }
+        let items = self
+            .map_messages_to_dtos(query.server_id, page.items, false)
+            .await?;
 
         Ok(rim_core::repository::pagination::Page::new(
             items,
             page.next.map(Into::into),
             page.prev.map(Into::into),
         ))
+    }
+
+    async fn search_messages(&self, query: SearchMessagesQuery) -> ServiceResult<Vec<MessageDto>> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        let _conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            query.conversation_id,
+            query.server_id,
+        )
+        .await?;
+
+        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
+            .await?;
+
+        let q = query.query.trim();
+        if q.is_empty() {
+            return Err(ServiceError::Validation(
+                "search query must be non-empty".to_string(),
+            ));
+        }
+
+        let messages = self
+            .repos
+            .message_repo
+            .search_messages(query.conversation_id, q, query.limit, query.include_deleted)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        self.map_messages_to_dtos(query.server_id, messages, true)
+            .await
     }
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto> {

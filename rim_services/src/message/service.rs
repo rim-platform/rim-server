@@ -4,10 +4,10 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message::command::{
-    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessagesQuery, ListThreadMessagesQuery,
-    SendMessageCmd, SendThreadMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery,
+    ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd, SendThreadMessageCmd,
 };
-use crate::message::dto::{MessageDto, MessagePageCursor};
+use crate::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_core::repository::pagination::Page;
 
 #[async_trait]
@@ -19,6 +19,11 @@ pub trait MessageService: Send + Sync {
 
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto>;
 
+    async fn get_message_reference(
+        &self,
+        query: GetMessageReferenceQuery,
+    ) -> ServiceResult<MessageReferenceDto>;
+
     async fn list_messages(
         &self,
         query: ListMessagesQuery,
@@ -28,6 +33,8 @@ pub trait MessageService: Send + Sync {
         &self,
         query: ListThreadMessagesQuery,
     ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
+
+    async fn search_messages(&self, query: SearchMessagesQuery) -> ServiceResult<Vec<MessageDto>>;
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto>;
 

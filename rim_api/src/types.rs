@@ -217,6 +217,7 @@ pub struct Setting {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Keybind {
     pub id: async_graphql::ID,
+    pub source: String,
     pub scope: String,
     pub workspace_id: Option<async_graphql::ID>,
     pub keystroke: String,
@@ -226,10 +227,51 @@ pub struct Keybind {
     pub is_enabled: bool,
 }
 
+#[derive(SimpleObject, Clone, Debug)]
+pub struct DefaultKeybind {
+    pub source: String,
+    pub keystroke: String,
+    pub command_id: String,
+    pub context: String,
+    pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+impl From<rim_services::keybind::dto::DefaultKeybindDto> for DefaultKeybind {
+    fn from(value: rim_services::keybind::dto::DefaultKeybindDto) -> Self {
+        Self {
+            source: format!("{:?}", value.source),
+            keystroke: value.keystroke,
+            command_id: value.command_id,
+            context: format!("{:?}", value.context),
+            preset_args: value.preset_args.map(async_graphql::Json),
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct KeybindLayers {
+    pub default_keybind: Option<DefaultKeybind>,
+    pub user_keybind: Option<Keybind>,
+    pub workspace_keybind: Option<Keybind>,
+    pub resolved_persisted_keybind: Option<Keybind>,
+}
+
+impl From<rim_services::keybind::dto::KeybindLayersDto> for KeybindLayers {
+    fn from(value: rim_services::keybind::dto::KeybindLayersDto) -> Self {
+        Self {
+            default_keybind: value.default_keybind.map(Into::into),
+            user_keybind: value.user_keybind.map(Into::into),
+            workspace_keybind: value.workspace_keybind.map(Into::into),
+            resolved_persisted_keybind: value.resolved_persisted_keybind.map(Into::into),
+        }
+    }
+}
+
 impl From<rim_services::keybind::dto::KeybindDto> for Keybind {
     fn from(value: rim_services::keybind::dto::KeybindDto) -> Self {
         Self {
             id: async_graphql::ID(value.id.to_string()),
+            source: format!("{:?}", value.source),
             scope: format!("{:?}", value.scope),
             workspace_id: value
                 .workspace_id
@@ -335,6 +377,29 @@ pub struct Message {
     pub parent_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MessageReference {
+    pub server_id: async_graphql::ID,
+    pub conversation_id: async_graphql::ID,
+    pub message_id: async_graphql::ID,
+    pub thread_id: Option<async_graphql::ID>,
+    pub permalink_path: String,
+    pub anchor: String,
+}
+
+impl From<rim_services::message::dto::MessageReferenceDto> for MessageReference {
+    fn from(value: rim_services::message::dto::MessageReferenceDto) -> Self {
+        Self {
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            message_id: async_graphql::ID(value.message_id.to_string()),
+            thread_id: value.thread_id.map(|id| async_graphql::ID(id.to_string())),
+            permalink_path: value.permalink_path,
+            anchor: value.anchor,
+        }
+    }
 }
 
 impl From<rim_services::message::dto::MessageDto> for Message {
