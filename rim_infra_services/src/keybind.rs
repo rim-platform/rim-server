@@ -496,18 +496,13 @@ mod tests {
     use async_trait::async_trait;
     use rim_core::keybind::model::{KeybindContext, KeybindScope};
     use rim_core::keybind::repository::KeybindRepository;
-    use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
+    use rim_core::repository::error::RepoResult;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
     use rim_services::command::dto::{
         CommandDefinitionDto, CommandExecutionTargetDto, CommandSourceKindDto,
     };
-    use rim_services::command::dto::{CommandResultDto, UserCommandDto};
-    use rim_services::command::request::{
-        CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-        ListCommandsQuery, UpdateUserCommandCmd,
-    };
-    use rim_services::command::service::CommandService;
+    use rim_services::command::service::MockCommandService;
     use rim_services::keybind::dto::{KeybindContextDto, KeybindScopeDto};
     use rim_services::keybind::request::InspectKeybindLayersQuery;
 
@@ -580,117 +575,42 @@ mod tests {
         }
     }
 
-    struct FakeCommandService {
-        commands: Vec<CommandDefinitionDto>,
-    }
-
-    #[async_trait]
-    impl CommandService for FakeCommandService {
-        async fn list_commands(
-            &self,
-            _query: ListCommandsQuery,
-        ) -> ServiceResult<Vec<CommandDefinitionDto>> {
-            Ok(self.commands.clone())
-        }
-
-        async fn get_command(
-            &self,
-            query: GetCommandQuery,
-        ) -> ServiceResult<Option<CommandDefinitionDto>> {
-            Ok(self
-                .commands
-                .iter()
-                .find(|command| command.id == query.command_id)
-                .cloned())
-        }
-
-        async fn execute_command(
-            &self,
-            _cmd: ExecuteCommandCmd,
-        ) -> ServiceResult<CommandResultDto> {
-            Err(ServiceError::Validation("unsupported".to_string()))
-        }
-
-        async fn create_user_command(
-            &self,
-            _cmd: CreateUserCommandCmd,
-        ) -> ServiceResult<UserCommandDto> {
-            Err(ServiceError::Validation("unsupported".to_string()))
-        }
-
-        async fn update_user_command(
-            &self,
-            _cmd: UpdateUserCommandCmd,
-        ) -> ServiceResult<UserCommandDto> {
-            Err(ServiceError::Validation("unsupported".to_string()))
-        }
-
-        async fn delete_user_command(&self, _cmd: DeleteUserCommandCmd) -> ServiceResult<()> {
-            Err(ServiceError::Validation("unsupported".to_string()))
-        }
-    }
-
-    struct FakeServerMemberRepository;
-
-    #[async_trait]
-    impl ServerMemberRepository for FakeServerMemberRepository {
-        async fn get_by_id(&self, _id: ServerMemberId) -> RepoResult<Option<ServerMember>> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn add_member(
-            &self,
-            _server_id: rim_core::server::model::ServerId,
-            _user_id: rim_core::user::model::UserId,
-            _role: ServerMemberRole,
-        ) -> RepoResult<ServerMember> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn remove_member(
-            &self,
-            _server_id: rim_core::server::model::ServerId,
-            _user_id: rim_core::user::model::UserId,
-        ) -> RepoResult<()> {
-            Ok(())
-        }
-
-        async fn get_members_for_server(
-            &self,
-            _server_id: rim_core::server::model::ServerId,
-        ) -> RepoResult<Vec<ServerMember>> {
-            Ok(vec![])
-        }
-
-        async fn get_member(
-            &self,
-            server_id: rim_core::server::model::ServerId,
-            user_id: rim_core::user::model::UserId,
-        ) -> RepoResult<Option<ServerMember>> {
-            Ok(Some(ServerMember {
-                id: ServerMemberId::new(),
-                server_id,
-                user_id,
-                member_role: ServerMemberRole::Owner,
-                joined_at: chrono::Utc::now(),
-            }))
-        }
-
-        async fn change_member_role(
-            &self,
-            _server_id: rim_core::server::model::ServerId,
-            _user_id: rim_core::user::model::UserId,
-            _role: ServerMemberRole,
-        ) -> RepoResult<()> {
-            Ok(())
-        }
-
-        async fn is_member(
-            &self,
-            _server_id: rim_core::server::model::ServerId,
-            _user_id: rim_core::user::model::UserId,
-        ) -> RepoResult<bool> {
-            Ok(true)
+    mockall::mock! {
+        ServerMemberRepository {}
+        #[async_trait]
+        impl ServerMemberRepository for ServerMemberRepository {
+            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
+            async fn add_member(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_id: rim_core::user::model::UserId,
+                role: ServerMemberRole,
+            ) -> RepoResult<ServerMember>;
+            async fn remove_member(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_id: rim_core::user::model::UserId,
+            ) -> RepoResult<()>;
+            async fn get_members_for_server(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+            ) -> RepoResult<Vec<ServerMember>>;
+            async fn get_member(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_id: rim_core::user::model::UserId,
+            ) -> RepoResult<Option<ServerMember>>;
+            async fn change_member_role(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_id: rim_core::user::model::UserId,
+                role: ServerMemberRole,
+            ) -> RepoResult<()>;
+            async fn is_member(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_id: rim_core::user::model::UserId,
+            ) -> RepoResult<bool>;
         }
     }
 
@@ -700,12 +620,28 @@ mod tests {
 
     fn service(
         keybind_repo: FakeKeybindRepository,
-        command_service: FakeCommandService,
+        command_service: MockCommandService,
     ) -> DefaultKeybindService {
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(|server_id, user_id| {
+                Ok(Some(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role: ServerMemberRole::Owner,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
         DefaultKeybindService::new(
             KeybindRepos {
                 keybind_repo: std::sync::Arc::new(keybind_repo),
-                server_member_repo: std::sync::Arc::new(FakeServerMemberRepository),
+                server_member_repo: std::sync::Arc::new(server_member_repo),
             },
             KeybindServices {
                 command_service: std::sync::Arc::new(command_service),
@@ -738,7 +674,11 @@ mod tests {
             entries: std::sync::Mutex::new(vec![]),
             created: std::sync::Mutex::new(None),
         };
-        let command_service = FakeCommandService { commands: vec![] };
+        let mut command_service = MockCommandService::new();
+        command_service.expect_get_command().return_once(|query| {
+            assert_eq!(query.command_id, "workspace.open_command_palette");
+            Box::pin(async { Ok(None) })
+        });
 
         let svc = service(keybind_repo, command_service);
         let err = svc
@@ -775,9 +715,11 @@ mod tests {
                 updated_at: chrono::Utc::now(),
             })),
         };
-        let command_service = FakeCommandService {
-            commands: vec![bindable_command("workspace.cycle_recent_activity")],
-        };
+        let mut command_service = MockCommandService::new();
+        command_service.expect_get_command().return_once(|query| {
+            assert_eq!(query.command_id, "workspace.cycle_recent_activity");
+            Box::pin(async { Ok(Some(bindable_command("workspace.cycle_recent_activity"))) })
+        });
 
         let svc = service(keybind_repo, command_service);
         let dto = svc
@@ -830,7 +772,7 @@ mod tests {
             ]),
             created: std::sync::Mutex::new(None),
         };
-        let command_service = FakeCommandService { commands: vec![] };
+        let command_service = MockCommandService::new();
         let svc = service(keybind_repo, command_service);
 
         let resolved = svc
@@ -868,7 +810,7 @@ mod tests {
             }]),
             created: std::sync::Mutex::new(None),
         };
-        let svc = service(keybind_repo, FakeCommandService { commands: vec![] });
+        let svc = service(keybind_repo, MockCommandService::new());
 
         let resolved = svc
             .resolve_keybind(ResolveKeybindQuery {
@@ -918,7 +860,7 @@ mod tests {
             ]),
             created: std::sync::Mutex::new(None),
         };
-        let svc = service(keybind_repo, FakeCommandService { commands: vec![] });
+        let svc = service(keybind_repo, MockCommandService::new());
 
         let layers = svc
             .inspect_keybind_layers(InspectKeybindLayersQuery {
@@ -946,7 +888,7 @@ mod tests {
                 entries: std::sync::Mutex::new(vec![]),
                 created: std::sync::Mutex::new(None),
             },
-            FakeCommandService { commands: vec![] },
+            MockCommandService::new(),
         );
 
         let defaults = svc

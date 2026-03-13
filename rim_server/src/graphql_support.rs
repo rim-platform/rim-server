@@ -177,38 +177,10 @@ fn append_set_cookie(
 mod tests {
     use super::*;
     use actix_web::test::TestRequest;
-    use async_trait::async_trait;
     use rim_core::auth::model::SessionId;
     use rim_core::user::model::UserId;
     use rim_services::auth::dto::RequestAuthResultDto;
-    use rim_services::auth::service::RequestAuthenticator;
-    use std::sync::Mutex;
-
-    struct FakeRequestAuthenticator {
-        auth_result: Mutex<Option<rim_services::ServiceResult<RequestAuthResultDto>>>,
-    }
-
-    impl FakeRequestAuthenticator {
-        fn new(auth_result: rim_services::ServiceResult<RequestAuthResultDto>) -> Self {
-            Self {
-                auth_result: Mutex::new(Some(auth_result)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl RequestAuthenticator for FakeRequestAuthenticator {
-        async fn authenticate_session_token(
-            &self,
-            _session_token: Option<&str>,
-        ) -> rim_services::ServiceResult<RequestAuthResultDto> {
-            self.auth_result
-                .lock()
-                .unwrap()
-                .take()
-                .expect("fake auth response not configured")
-        }
-    }
+    use rim_services::auth::service::MockRequestAuthenticator;
 
     fn session_cookie_request(token: &str) -> HttpRequest {
         TestRequest::default()
@@ -222,7 +194,10 @@ mod tests {
     #[actix_web::test]
     async fn extract_actor_and_session_id_returns_error_on_repo_failure() {
         let req = session_cookie_request("session-token");
-        let auth = FakeRequestAuthenticator::new(Err(rim_services::ServiceError::Unavailable));
+        let mut auth = MockRequestAuthenticator::new();
+        auth.expect_authenticate_session_token()
+            .withf(|token| *token == Some("session-token"))
+            .return_once(|_| Box::pin(async { Err(rim_services::ServiceError::Unavailable) }));
 
         let result = extract_actor_and_session_id(&req, &auth).await;
 
@@ -235,7 +210,10 @@ mod tests {
     #[actix_web::test]
     async fn extract_actor_and_session_id_returns_anonymous_for_expired_session() {
         let req = session_cookie_request("session-token");
-        let auth = FakeRequestAuthenticator::new(Ok(RequestAuthResultDto::default()));
+        let mut auth = MockRequestAuthenticator::new();
+        auth.expect_authenticate_session_token()
+            .withf(|token| *token == Some("session-token"))
+            .return_once(|_| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
 
         let result = extract_actor_and_session_id(&req, &auth).await.unwrap();
 
@@ -247,10 +225,17 @@ mod tests {
         let req = session_cookie_request("session-token");
         let user_id = UserId::new();
         let session_id = SessionId::new();
-        let auth = FakeRequestAuthenticator::new(Ok(RequestAuthResultDto {
-            user_id: Some(user_id),
-            session_id: Some(session_id),
-        }));
+        let mut auth = MockRequestAuthenticator::new();
+        auth.expect_authenticate_session_token()
+            .withf(|token| *token == Some("session-token"))
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(RequestAuthResultDto {
+                        user_id: Some(user_id),
+                        session_id: Some(session_id),
+                    })
+                })
+            });
 
         let result = extract_actor_and_session_id(&req, &auth).await.unwrap();
 
