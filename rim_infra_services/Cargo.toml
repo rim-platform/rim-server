@@ -9,7 +9,9 @@ infra-db-tests = []
 [dependencies]
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
+anyhow = "1.0.99"
 chrono = "0.4.42"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "process", "io-util"] }
 tracing = "0.1.41"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
@@ -20,7 +22,6 @@ rim_services = { path = "../rim_services" }
 rim_auth = { path = "../rim_auth" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 serde_json = "1"
 mockall = "0.13"
 rim_core = { path = "../rim_core" }

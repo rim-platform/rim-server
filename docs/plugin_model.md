@@ -1,75 +1,95 @@
 # Plugin Model
 
-This document defines the Phase 0 plugin model for RIM.
+This document defines the current plugin architecture direction for RIM.
 
-Plugins are one of the core differentiators of the product. They should be powerful enough to add
-new workflow and communication surfaces, but safe enough to preserve user trust.
-
-## Purpose
-
-A plugin is an installable extension package that can register one or more extension points in RIM.
-
-Plugins are the main way to make RIM customizable beyond the built-in product surface.
-
-Examples:
-
-- a Kubernetes panel
-- a YouTrack helper
-- custom commands
-- context actions
-- local automation behaviors
+Plugins are intended to be local, user-facing extensions similar in spirit to VS Code or JetBrains
+extensions, with stronger security and brokering assumptions.
 
 ## Core Rule
 
-A plugin is a package or container for extension points, not one specific feature type.
+Plugins are not backend-managed by default.
 
-This means a plugin may provide one or more of:
+The first real plugin system should be:
+
+- desktop-local
+- user-local
+- UI/runtime owned
+- brokered through a local plugin host
+
+The backend should expose stable APIs and command contracts that plugins can call through the local
+host, but it should not own plugin installation or lifecycle in the first version.
+
+## What A Plugin Is
+
+A plugin is an installable local extension package that may contribute one or more extension points,
+such as:
 
 - commands
 - keybind suggestions
 - context actions
 - panels
-- automations
 - settings
-- integrations
-- local behaviors
+- local workflow helpers
 
-## Runtime Kinds
+## Ownership Model
 
-RIM should distinguish plugin runtime kinds explicitly.
+### Local Plugin Host Owns
 
-Potential runtime kinds:
+- plugin folder discovery
+- manifest loading
+- local install/enable/disable state
+- capability approval prompts
+- plugin runtime lifecycle
+- command registration into the local command catalog
+- local keybind suggestions
+- local context actions
+- local panels
+- plugin settings
 
-- `desktop_local`
-- `backend`
-- `web_safe`
-- `mobile_safe`
+### Backend Owns
 
-## Phase 0 Decision
+- shared application state
+- auth/session validation
+- messaging data
+- command execution for backend commands
+- search/reference APIs
+- shared integrations, bots, and webhooks later
+
+## Plugin Runtime
+
+The current direction assumes a local plugin host with a brokered runtime.
+
+The local plugin process should not directly own backend installation state or private backend
+credentials. It should instead talk to a local host that can:
+
+- expose host UI/runtime features
+- broker local dangerous operations
+- call backend APIs on behalf of the current user/session where allowed
+
+## Runtime Kind
 
 The first real plugin system should support only:
 
 - `desktop_local`
 
-Reasoning:
+This means plugins are local extensions, not backend-hosted services.
 
-- it matches the strongest product differentiation
-- it enables local tools and workflows early
-- it avoids overdesigning distributed plugin execution too soon
+## Manifest
 
-## Plugin Identity
+Plugins should use a local manifest file, for example:
 
-Each plugin should have:
+- `rim-plugin.json`
 
-- stable plugin id
+The manifest should define:
+
+- plugin id
 - display name
 - version
-- publisher or author
+- description
 - runtime kind
-- declared capabilities
+- entrypoint
+- requested capabilities
 - declared extension points
-- optional settings schema
-- optional minimum host version
 
 ## Plugin Id Format
 
@@ -82,134 +102,66 @@ Examples:
 - `dev.example.k8s-tools`
 - `com.company.youtrack-helper`
 
-The UI should show a separate human-readable display name.
+Commands contributed by the plugin should be namespaced under:
+
+- `plugin.<plugin_id>.<command_name>`
 
 ## Installation Model
 
-The first plugin installation flow should support:
+First version should support:
 
-- install from local file
-- install from local folder
-- enable
-- disable
-- uninstall
-- compatibility checks
-- capability prompts before enabling
+- local folder installation
+- local manifest validation
+- local enable/disable
+- local uninstall
+- local capability approval
 
-## Phase 0 Decision
+The plugin host should keep local state for these flows.
 
-The first plugin version should install from local file or folder only.
-
-Later additions may include:
-
-- install from URL
-- plugin registry/marketplace
-- signed packages
-
-## Extension Points
-
-The first serious plugin model should support these extension points.
-
-### Commands
-
-- Plugin may register commands.
-- Plugin commands live in the shared command system.
-- Recommended namespace pattern:
-  - `plugin.<plugin_id>.<command_name>`
-
-### Keybind Suggestions
-
-- Plugin may suggest default keybinds for its commands.
-- Suggested keybinds must require approval.
-- Plugins must not silently override user-defined keybinds.
-
-### Context Actions
-
-- Plugin may contribute actions for selected text, messages, threads, channels, or other supported
-  contexts.
-
-## Phase 0 Decision
-
-Plugin context actions should map to commands, not use a separate execution model.
-
-This keeps the architecture unified:
-
-- palette invokes commands
-- keybinds invoke commands
-- context actions invoke commands
-- plugins register commands
-
-### Panels
-
-- Plugin may provide one or more UI panels.
-- Panels are intended for rich tool surfaces such as Kubernetes tooling or dashboards.
-
-## Phase 0 Decision
-
-Panels should be supported in the first real plugin version.
-
-### Automations
-
-- Plugin may react to events later.
-- Plugin may trigger commands or plugin-owned workflows.
-
-For the first serious version, automations may exist as a declared extension point without the full
-event engine being complete yet.
-
-### Settings
-
-- Plugin may expose its own settings schema.
-- Settings should fit the broader product settings model.
-
-### Integrations
-
-- Plugin may wrap or surface integrations.
-- Integrations are still a separate product concept, but plugins may provide local UX or command
-  surfaces for them.
+Backend-managed plugin installation is not the target architecture for the first version.
 
 ## Capabilities
 
-Plugins must declare capabilities explicitly.
+Capabilities are the plugin’s requested permissions over host-managed or backend-brokered features.
 
 Examples:
 
 - `chat.read`
 - `chat.write`
-- `action.invoke`
-- `event.emit`
 - `ui.panel`
 - `local.process`
 - `local.filesystem`
 - `http.outbound`
 
-## Capability Rules
+Capabilities should be:
 
-- capabilities are explicit
-- capabilities are visible to the user
-- capabilities are granted or denied intentionally
-- capabilities should be revocable later
-- no implicit privilege escalation
+- explicit
+- visible
+- grantable
+- revocable
 
-## Dangerous Capabilities
+## Security Model
 
-Plugins may be allowed to run local processes in the first version.
+The first real plugin system should not ship as an unrestricted local process model.
 
-## Phase 0 Decision
+Manifest capabilities alone are not enough to secure a normal process. The intended direction is:
 
-- local process execution is allowed
-- only with explicit dangerous capability
-- dangerous actions should follow the same confirmation model as dangerous commands
+- local plugin host
+- brokered access to sensitive operations
+- capability checks at the host boundary
+- later stronger sandboxing if needed
 
-This is important for workflows like:
+So the plugin host should mediate:
 
-- git helpers
-- Kubernetes tooling
-- local script execution
-- device-level automation
+- backend API calls
+- local process spawning
+- local filesystem access
+- outbound HTTP
+- UI registration
 
-## Plugin Relationship To Commands And Keybinds
+## Relationship To Commands And Keybinds
 
-Plugins should integrate into the shared product systems.
+Plugins should integrate into the shared systems rather than invent new parallel ones.
 
 Plugins may:
 
@@ -217,84 +169,52 @@ Plugins may:
 - mark commands as keybind-capable
 - suggest keybinds
 - expose context actions that invoke commands
-- expose panel UI that invokes commands
+- expose panels that invoke commands or backend APIs via the host
 
 Plugins should not:
 
 - create parallel command systems
 - create parallel keybind systems
-- bypass command/capability checks
-
-## Enable/Disable Behavior
-
-Disabling a plugin should disable all of its registered extension points.
-
-That includes:
-
-- commands
-- keybind suggestions/defaults
-- context actions
-- panels
-- local behaviors
-
-The system should not leave stale active behavior behind once a plugin is disabled.
-
-## Persistence Model
-
-Recommended persistence split:
-
-- plugin package and runtime definition -> file/folder source of truth
-- installation record -> persisted
-- enabled/disabled state -> persisted
-- granted capabilities -> persisted
-- plugin settings -> persisted
-- plugin command definitions -> runtime-derived from the plugin, not stored as the primary source
-
-This matches the broader approach already chosen for commands:
-
-- runtime-composed registry
-- persistence for install/config/customization state
+- bypass host capability checks
+- directly own backend installation state
 
 ## First Plugin Version Scope
 
-The first real plugin system should support:
+The first real plugin system should prioritize:
 
-- desktop-local plugins only
-- local file/folder installation
-- plugin manifest
-- commands
-- keybind suggestions
-- context actions
-- panels
-- settings
-- explicit capabilities
-- enable/disable/uninstall lifecycle
+- desktop-local plugin host
+- local manifest loading
+- local command registration
+- local capability approval
+- brokered backend API access through the host
 
-This is already strong enough for:
+Commands should come first.
 
-- Kubernetes panel plugin
-- YouTrack helper plugin
-- git helper commands
-- local desktop automation helper
+Panels, context actions, and keybind suggestions can follow on top of the same host/runtime model.
 
-## Non-Goals For First Plugin Version
+## Backend Relationship
 
-The initial plugin system should not try to solve:
+Plugins may still need backend data and backend-side actions, but that should happen through the
+host using normal authenticated app APIs.
 
-- backend plugin hosting
-- distributed plugin execution
+The backend should be thought of as a stable API surface for plugins, not as the owner of plugin
+installation in the first version.
+
+## Future Expansion
+
+Possible later additions:
+
+- backend-managed/shared plugin policy
+- plugin sync across devices
+- enterprise/admin controls
 - plugin marketplace/registry
-- advanced cross-plugin dependency management
-- unrestricted scripting
-- full hot-reload complexity beyond basic developer iteration
+- stronger sandboxing/runtime isolation
+- backend-hosted extension runtimes if a clear use case appears
 
-## Summary Of Decisions
+## Summary
 
-- a plugin is an extension package that may expose multiple extension points
-- first real plugin system supports `desktop_local` plugins only
-- plugins may run local processes with explicit dangerous capability
-- panels are supported in the first real plugin version
-- plugins install from local file/folder first
-- plugin context actions should map to commands
-- plugin commands/keybinds/actions/panels should integrate with shared product systems, not create
-  parallel ones
+- plugins are local extensions first
+- the first plugin architecture is client/runtime owned, not backend-managed
+- the backend should provide stable APIs and command contracts for the plugin host to use
+- commands are the first extension point to prioritize
+- security should be enforced through a brokered host model, not trust in arbitrary local processes

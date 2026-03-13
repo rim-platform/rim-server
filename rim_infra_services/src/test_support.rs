@@ -940,6 +940,13 @@ pub mod attachment {
     #[async_trait]
     pub trait MessageRepo: Send + Sync {
         async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
+        async fn search_messages(
+            &self,
+            conversation_id: ConversationId,
+            query: &str,
+            limit: u32,
+            include_deleted: bool,
+        ) -> RepoResult<Vec<Message>>;
         async fn set_has_attachments(
             &self,
             message_id: MessageId,
@@ -1003,6 +1010,7 @@ pub mod attachment {
         #[async_trait]
         impl MessageRepo for MessageRepo {
             async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
+            async fn search_messages(&self, conversation_id: ConversationId, query: &str, limit: u32, include_deleted: bool) -> RepoResult<Vec<Message>>;
             async fn set_has_attachments(&self, message_id: MessageId, has_attachments: bool) -> RepoResult<Message>;
         }
     }
@@ -1223,6 +1231,18 @@ pub mod attachment {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
+        async fn search_messages(
+            &self,
+            conversation_id: ConversationId,
+            query: &str,
+            limit: u32,
+            include_deleted: bool,
+        ) -> RepoResult<Vec<Message>> {
+            self.0
+                .search_messages(conversation_id, query, limit, include_deleted)
+                .await
+        }
+
         async fn update_message_text(
             &self,
             _message_id: MessageId,
@@ -1396,6 +1416,13 @@ pub mod message {
             include_deleted: bool,
             order: SortOrder,
         ) -> RepoResult<Page<Message, MessageCursor>>;
+        async fn search_messages(
+            &self,
+            conversation_id: ConversationId,
+            query: &str,
+            limit: u32,
+            include_deleted: bool,
+        ) -> RepoResult<Vec<Message>>;
         async fn update_message_text(
             &self,
             message_id: MessageId,
@@ -1478,6 +1505,7 @@ pub mod message {
             async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
             async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message>;
             async fn list_messages(&self, conversation_id: ConversationId, thread_id: Option<MessageThreadId>, limit: u32, dir: PageDir, cursor: Option<MessageCursor>, include_deleted: bool, order: SortOrder) -> RepoResult<Page<Message, MessageCursor>>;
+            async fn search_messages(&self, conversation_id: ConversationId, query: &str, limit: u32, include_deleted: bool) -> RepoResult<Vec<Message>>;
             async fn update_message_text(&self, message_id: MessageId, new_text: String) -> RepoResult<Message>;
             async fn set_has_attachments(&self, message_id: MessageId, has_attachments: bool) -> RepoResult<Message>;
             async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
@@ -1692,6 +1720,18 @@ pub mod message {
                     include_deleted,
                     order,
                 )
+                .await
+        }
+
+        async fn search_messages(
+            &self,
+            conversation_id: ConversationId,
+            query: &str,
+            limit: u32,
+            include_deleted: bool,
+        ) -> RepoResult<Vec<Message>> {
+            self.0
+                .search_messages(conversation_id, query, limit, include_deleted)
                 .await
         }
 
@@ -2187,6 +2227,16 @@ pub mod thread {
             _include_deleted: bool,
             _order: rim_core::repository::pagination::SortOrder,
         ) -> RepoResult<Page<Message, rim_core::message::repository::MessageCursor>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn search_messages(
+            &self,
+            _conversation_id: ConversationId,
+            _query: &str,
+            _limit: u32,
+            _include_deleted: bool,
+        ) -> RepoResult<Vec<Message>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 

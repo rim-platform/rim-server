@@ -8,12 +8,12 @@ use serde_json::Value;
 
 use rim_core::command::model::{NewUserCommand, UpdateUserCommand, UserCommand};
 use rim_services::command::dto::{
-    CommandContextDto, CommandDefinitionDto, CommandResultDto, CommandResultStatusDto,
-    CommandSurfaceDto, UserCommandDto, UserCommandStepDto,
+    CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto,
+    CommandResultStatusDto, CommandSurfaceDto, UserCommandDto, UserCommandStepDto,
 };
 use rim_services::command::request::{
-    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, ListCommandsQuery,
-    UpdateUserCommandCmd,
+    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
+    ListCommandsQuery, UpdateUserCommandCmd,
 };
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
@@ -63,6 +63,154 @@ impl DefaultCommandService {
 
     fn parse_user_command(user_command: UserCommand) -> ServiceResult<UserCommandDto> {
         user_commands::parse_user_command(user_command)
+    }
+
+    #[async_recursion]
+    async fn derive_user_command_definition(
+        &self,
+        actor: Actor,
+        user_command: UserCommandDto,
+        seen: &mut std::collections::BTreeSet<String>,
+    ) -> ServiceResult<CommandDefinitionDto> {
+        if !seen.insert(user_command.command_key.clone()) {
+            return Err(ServiceError::Validation(
+                "user command recursion cycle detected".to_string(),
+            ));
+        }
+
+        let mut required_context = std::collections::BTreeSet::new();
+        let mut required_capabilities = std::collections::BTreeSet::new();
+        let mut keybind_capable = true;
+        let mut dangerous = false;
+
+        for step in &user_command.steps {
+            let definition = self
+                .resolve_command_definition(actor, &step.command_id)
+                .await?
+                .ok_or_else(|| {
+                    ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
+                })?;
+
+            if definition.execution_target != CommandExecutionTargetDto::Backend {
+                return Err(ServiceError::Validation(
+                    "user commands may only compose backend commands in v1".to_string(),
+                ));
+            }
+
+            required_context.extend(definition.required_context);
+            required_capabilities.extend(definition.required_capabilities);
+            keybind_capable &= definition.keybind_capable;
+            dangerous |= definition.dangerous;
+        }
+
+        seen.remove(&user_command.command_key);
+
+        Ok(user_command.as_command_definition_with_metadata(
+            CommandExecutionTargetDto::Backend,
+            required_context.into_iter().collect(),
+            required_capabilities.into_iter().collect(),
+            keybind_capable,
+            dangerous,
+        ))
+    }
+
+    #[async_recursion]
+    async fn get_user_command_definition(
+        &self,
+        actor: Actor,
+        command_id: &str,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        let user_command = self
+            .repos
+            .user_command_repo
+            .get_by_key_for_user(actor.user_id, command_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let Some(user_command) = user_command else {
+            return Ok(None);
+        };
+        let dto = Self::parse_user_command(user_command)?;
+        if !dto.is_enabled {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            self.derive_user_command_definition(actor, dto, &mut std::collections::BTreeSet::new())
+                .await?,
+        ))
+    }
+
+    #[async_recursion]
+    async fn resolve_command_definition(
+        &self,
+        actor: Actor,
+        command_id: &str,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        if let Some(definition) = Self::builtin_definition(command_id) {
+            return Ok(Some(definition));
+        }
+
+        self.get_user_command_definition(actor, command_id).await
+    }
+
+    #[async_recursion]
+    async fn validate_user_command_steps_for_actor(
+        &self,
+        actor: Actor,
+        command_key: &str,
+        steps: &[UserCommandStepDto],
+        seen: &mut std::collections::BTreeSet<String>,
+    ) -> ServiceResult<()> {
+        user_commands::validate_user_command_step_shape(command_key, steps)?;
+
+        if !seen.insert(command_key.to_string()) {
+            return Err(ServiceError::Validation(
+                "user command recursion cycle detected".to_string(),
+            ));
+        }
+
+        for step in steps {
+            let definition = self
+                .resolve_command_definition(actor, &step.command_id)
+                .await?
+                .ok_or_else(|| {
+                    ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
+                })?;
+
+            if definition.execution_target != CommandExecutionTargetDto::Backend {
+                return Err(ServiceError::Validation(
+                    "user commands may only compose backend commands in v1".to_string(),
+                ));
+            }
+
+            if step.command_id.starts_with("user.") {
+                let referenced = self
+                    .repos
+                    .user_command_repo
+                    .get_by_key_for_user(actor.user_id, &step.command_id)
+                    .await
+                    .map_err(rim_services::map_repo_error)?
+                    .ok_or_else(|| {
+                        ServiceError::Validation(format!(
+                            "unknown command step `{}`",
+                            step.command_id
+                        ))
+                    })?;
+                let referenced = Self::parse_user_command(referenced)?;
+
+                self.validate_user_command_steps_for_actor(
+                    actor,
+                    &referenced.command_key,
+                    &referenced.steps,
+                    seen,
+                )
+                .await?;
+            }
+        }
+
+        seen.remove(command_key);
+        Ok(())
     }
 
     async fn execute_builtin(
@@ -146,13 +294,9 @@ impl DefaultCommandService {
             .get_by_key_for_user(actor.user_id, command_id)
             .await
             .map_err(rim_services::map_repo_error)?
+            .map(Self::parse_user_command)
+            .transpose()?
             .ok_or(ServiceError::NotFound)?;
-        let user_command = Self::parse_user_command(user_command)?;
-        if !user_command.is_enabled {
-            return Err(ServiceError::Validation(
-                "user command is disabled".to_string(),
-            ));
-        }
 
         self.execute_user_command_recursive(actor, user_command, context, depth)
             .await
@@ -177,7 +321,14 @@ impl CommandService for DefaultCommandService {
         for user_command in user_commands {
             let dto = Self::parse_user_command(user_command)?;
             if dto.is_enabled {
-                commands.push(dto.as_command_definition());
+                commands.push(
+                    self.derive_user_command_definition(
+                        query.actor,
+                        dto,
+                        &mut std::collections::BTreeSet::new(),
+                    )
+                    .await?,
+                );
             }
         }
 
@@ -185,6 +336,14 @@ impl CommandService for DefaultCommandService {
             .retain(|definition| Self::command_matches_surface(definition, query.surface, context));
         commands.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(commands)
+    }
+
+    async fn get_command(
+        &self,
+        query: GetCommandQuery,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        self.resolve_command_definition(query.actor, &query.command_id)
+            .await
     }
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
@@ -232,6 +391,13 @@ impl CommandService for DefaultCommandService {
             ));
         }
         Self::validate_user_command_steps(key, &cmd.steps)?;
+        self.validate_user_command_steps_for_actor(
+            cmd.actor,
+            key,
+            &cmd.steps,
+            &mut std::collections::BTreeSet::new(),
+        )
+        .await?;
 
         let created = self
             .repos
@@ -278,6 +444,13 @@ impl CommandService for DefaultCommandService {
             ));
         }
         Self::validate_user_command_steps(key, &cmd.steps)?;
+        self.validate_user_command_steps_for_actor(
+            cmd.actor,
+            key,
+            &cmd.steps,
+            &mut std::collections::BTreeSet::new(),
+        )
+        .await?;
 
         let updated = self
             .repos
@@ -473,6 +646,12 @@ mod tests {
         ) -> ServiceResult<MessageDto> {
             unreachable!()
         }
+        async fn get_message_reference(
+            &self,
+            _query: rim_services::message::command::GetMessageReferenceQuery,
+        ) -> ServiceResult<rim_services::message::dto::MessageReferenceDto> {
+            unreachable!()
+        }
         async fn list_messages(
             &self,
             _query: rim_services::message::command::ListMessagesQuery,
@@ -493,6 +672,12 @@ mod tests {
                 rim_services::message::dto::MessagePageCursor,
             >,
         > {
+            unreachable!()
+        }
+        async fn search_messages(
+            &self,
+            _query: rim_services::message::command::SearchMessagesQuery,
+        ) -> ServiceResult<Vec<MessageDto>> {
             unreachable!()
         }
         async fn edit_message(

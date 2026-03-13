@@ -5,8 +5,8 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::command::dto::{CommandDefinitionDto, CommandResultDto, UserCommandDto};
 use crate::command::request::{
-    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, ListCommandsQuery,
-    UpdateUserCommandCmd,
+    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
+    ListCommandsQuery, UpdateUserCommandCmd,
 };
 
 #[async_trait]
@@ -16,6 +16,10 @@ pub trait CommandService: Send + Sync {
         &self,
         query: ListCommandsQuery,
     ) -> ServiceResult<Vec<CommandDefinitionDto>>;
+    async fn get_command(
+        &self,
+        query: GetCommandQuery,
+    ) -> ServiceResult<Option<CommandDefinitionDto>>;
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto>;
     async fn create_user_command(&self, cmd: CreateUserCommandCmd)
     -> ServiceResult<UserCommandDto>;

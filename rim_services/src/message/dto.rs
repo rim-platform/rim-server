@@ -30,6 +30,17 @@ pub struct MessageDto {
     pub sent_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MessageReferenceDto {
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    pub thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
+    pub permalink_path: String,
+    pub anchor: String,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessagePageCursor {

@@ -73,3 +73,16 @@ This lets clients render the timeline normally while also knowing whether a time
 - Channels: `ORDER BY created_at ASC, id ASC`
 
 Cursor pagination uses overfetch (`limit + 1`) so `next` and `prev` reflect actual additional data, not page-size guesses.
+
+## Message References
+
+- The backend exposes message references/permalinks for both timeline messages and thread replies.
+- A message reference contains:
+  - workspace/server id
+  - conversation id
+  - message id
+  - optional thread id
+  - permalink path
+  - stable UI anchor
+- Timeline message references use a conversation message path.
+- Thread reply references use a thread message path.

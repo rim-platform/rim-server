@@ -14,10 +14,9 @@ pub(super) fn user_command_exists_locally(command_id: &str) -> bool {
     command_id.starts_with("user.")
 }
 
-pub(super) fn validate_user_command_steps(
+pub(super) fn validate_user_command_step_shape(
     command_key: &str,
     steps: &[UserCommandStepDto],
-    builtin_lookup: impl Fn(&str) -> Option<CommandDefinitionDto>,
 ) -> ServiceResult<()> {
     if steps.is_empty() {
         return Err(ServiceError::Validation(
@@ -36,6 +35,19 @@ pub(super) fn validate_user_command_steps(
                 "user command cannot reference itself".to_string(),
             ));
         }
+    }
+
+    Ok(())
+}
+
+pub(super) fn validate_user_command_steps(
+    command_key: &str,
+    steps: &[UserCommandStepDto],
+    builtin_lookup: impl Fn(&str) -> Option<CommandDefinitionDto>,
+) -> ServiceResult<()> {
+    validate_user_command_step_shape(command_key, steps)?;
+
+    for step in steps {
         if builtin_lookup(&step.command_id).is_none()
             && !user_command_exists_locally(&step.command_id)
         {

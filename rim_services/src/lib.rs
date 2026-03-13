@@ -9,6 +9,7 @@ pub mod keybind;
 pub mod message;
 pub mod message_attachment;
 pub mod message_thread;
+pub mod plugin_host;
 pub mod provider;
 pub mod server;
 pub mod server_member;

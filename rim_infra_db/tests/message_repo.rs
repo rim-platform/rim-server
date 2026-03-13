@@ -10,10 +10,13 @@ use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{PageDir, SortOrder};
 use rim_core::server::repository::ServerRepository;
+use rim_core::user::model::NewUser;
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_get_update_text_and_soft_delete() {
@@ -25,11 +28,19 @@ async fn create_get_update_text_and_soft_delete() {
     let server_repo = SeaOrmServerRepository::new(conn.clone());
     let conv_repo = SeaOrmConversationRepository::new(conn.clone());
     let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
     let repo = SeaOrmMessageRepository::new(conn.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
         .create_conversation(ConversationType::Group, server.id, None)
+        .await
+        .unwrap();
+    let user = user_repo
+        .create_user(NewUser {
+            username: "msg-user-1".to_string(),
+            password: "password".to_string(),
+        })
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -39,7 +50,7 @@ async fn create_get_update_text_and_soft_delete() {
             conversation_id: conv.id,
             thread_id: Some(thread.id),
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("hello".to_string()),
             attachments: vec![],
         })
@@ -83,11 +94,19 @@ async fn list_messages_respects_include_deleted_and_ordering() {
     let server_repo = SeaOrmServerRepository::new(conn.clone());
     let conv_repo = SeaOrmConversationRepository::new(conn.clone());
     let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
     let repo = SeaOrmMessageRepository::new(conn.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
         .create_conversation(ConversationType::Group, server.id, None)
+        .await
+        .unwrap();
+    let user = user_repo
+        .create_user(NewUser {
+            username: "msg-user-2".to_string(),
+            password: "password".to_string(),
+        })
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -97,7 +116,7 @@ async fn list_messages_respects_include_deleted_and_ordering() {
             conversation_id: conv.id,
             thread_id: Some(thread.id),
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("m1".to_string()),
             attachments: vec![],
         })
@@ -108,7 +127,7 @@ async fn list_messages_respects_include_deleted_and_ordering() {
             conversation_id: conv.id,
             thread_id: Some(thread.id),
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("m2".to_string()),
             attachments: vec![],
         })
@@ -158,11 +177,19 @@ async fn timeline_listing_excludes_thread_messages() {
     let server_repo = SeaOrmServerRepository::new(conn.clone());
     let conv_repo = SeaOrmConversationRepository::new(conn.clone());
     let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
     let repo = SeaOrmMessageRepository::new(conn.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
         .create_conversation(ConversationType::Group, server.id, None)
+        .await
+        .unwrap();
+    let user = user_repo
+        .create_user(NewUser {
+            username: "msg-user-3".to_string(),
+            password: "password".to_string(),
+        })
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -172,7 +199,7 @@ async fn timeline_listing_excludes_thread_messages() {
             conversation_id: conv.id,
             thread_id: None,
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("root".to_string()),
             attachments: vec![],
         })
@@ -188,7 +215,7 @@ async fn timeline_listing_excludes_thread_messages() {
             conversation_id: conv.id,
             thread_id: Some(thread.id),
             parent_message_id: Some(root.id),
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("reply".to_string()),
             attachments: vec![],
         })
@@ -235,11 +262,19 @@ async fn desc_pagination_advances_to_older_messages() {
 
     let server_repo = SeaOrmServerRepository::new(conn.clone());
     let conv_repo = SeaOrmConversationRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
     let repo = SeaOrmMessageRepository::new(conn.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
         .create_conversation(ConversationType::Group, server.id, None)
+        .await
+        .unwrap();
+    let user = user_repo
+        .create_user(NewUser {
+            username: "msg-user-4".to_string(),
+            password: "password".to_string(),
+        })
         .await
         .unwrap();
 
@@ -248,7 +283,7 @@ async fn desc_pagination_advances_to_older_messages() {
             conversation_id: conv.id,
             thread_id: None,
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("m1".to_string()),
             attachments: vec![],
         })
@@ -260,7 +295,7 @@ async fn desc_pagination_advances_to_older_messages() {
             conversation_id: conv.id,
             thread_id: None,
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("m2".to_string()),
             attachments: vec![],
         })
@@ -272,7 +307,7 @@ async fn desc_pagination_advances_to_older_messages() {
             conversation_id: conv.id,
             thread_id: None,
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("m3".to_string()),
             attachments: vec![],
         })
@@ -331,4 +366,63 @@ async fn desc_pagination_advances_to_older_messages() {
         before.items.iter().map(|m| m.id).collect::<Vec<_>>(),
         vec![m3.id]
     );
+}
+
+#[tokio::test]
+async fn search_messages_returns_recent_matches() {
+    let Some(conn) = support::db_conn_or_skip().await else {
+        return;
+    };
+    support::reset_db(&conn).await;
+
+    let server_repo = SeaOrmServerRepository::new(conn.clone());
+    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let repo = SeaOrmMessageRepository::new(conn.clone());
+
+    let server = server_repo.create_server("s").await.unwrap();
+    let conv = conv_repo
+        .create_conversation(ConversationType::Group, server.id, None)
+        .await
+        .unwrap();
+    let user = user_repo
+        .create_user(NewUser {
+            username: "msg-user-5".to_string(),
+            password: "password".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let older = repo
+        .create_message(&NewMessage {
+            conversation_id: conv.id,
+            thread_id: None,
+            parent_message_id: None,
+            sent_by: user.id,
+            text: Some("deploy failed earlier".to_string()),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let newer = repo
+        .create_message(&NewMessage {
+            conversation_id: conv.id,
+            thread_id: None,
+            parent_message_id: None,
+            sent_by: user.id,
+            text: Some("deploy failed now".to_string()),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    let results = repo
+        .search_messages(conv.id, "deploy failed", 10, false)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].id, newer.id);
+    assert_eq!(results[1].id, older.id);
 }

@@ -1,0 +1,159 @@
+# Agent Guide (rim-server)
+
+This repo is a multi-crate Rust workspace (edition 2024). Most work happens in `rim_server`,
+`rim_api`, `rim_core`, `rim_services`, `rim_infra_db`, `entity`, and `migration`.
+
+Workspace note: the root package (`rim-server`) has no lib/bin targets; it mainly exists for
+workspace coordination and integration tests. Prefer `--workspace/--all` or `-p <crate>`.
+
+## Build / Run / Lint / Test
+
+```sh
+# Build
+cargo build --workspace
+cargo build -p rim_server
+
+# Run
+cargo run -p rim_server
+cargo run -p migration -- up
+
+# Format + lint (CI style)
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Tests
+cargo test --workspace
+cargo test --all -- --test-threads=1
+```
+
+## Running A Single Test
+
+Rust test selection is pattern-based; scope to a package first.
+
+```sh
+# Unit test by substring match
+cargo test -p rim_services send_message
+
+# Specific test path (when you know it)
+cargo test -p rim_services conversation::tests::creates_conversation
+
+# One integration test target (tests/<name>.rs)
+cargo test -p rim-server --test common
+
+# Show stdout/logs
+cargo test -p rim_core -- --nocapture
+```
+
+Common flags: `-- --nocapture`, `-- --test-threads=1`, `-p <crate>`.
+
+## Workspace Tips
+
+- From the workspace root, plain `cargo test` only runs the root package targets (currently the
+  integration tests under `tests/`). Use `cargo test --workspace` or `cargo test --all` to run
+  everything.
+- Prefer `-p <crate>` when iterating to avoid rebuilding the entire workspace.
+- When debugging clippy/rustfmt failures, run the same commands as CI:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+
+## Local Environment / Config
+
+Local dev typically uses `.env` (loaded via `dotenvy` in `rim_server` and `rim_logging`).
+
+- `DATABASE_URL`: Postgres connection string (migrations/tests)
+- `RIM_SERVER_HOST`: bind host (see `rim_server/src/config.rs`)
+- `RIM_SERVER_PORT`: bind port
+- `RIM_LOG_LEVEL`: `error|warn|info|debug|trace` (default `info`)
+
+CI uses Postgres 17. For local dev:
+
+```sh
+docker run --rm --name rim-postgres -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=testdb -p 5432:5432 postgres:17-alpine
+export DATABASE_URL='postgres://postgres:postgres@localhost:5432/testdb'
+cargo run -p migration -- up
+```
+
+## Migration CLI (SeaORM)
+
+Run via the `migration` crate (expects `DATABASE_URL`):
+
+```sh
+# Generate a new migration
+cargo run -p migration -- generate MIGRATION_NAME
+
+# Apply/rollback
+cargo run -p migration -- up
+cargo run -p migration -- up -n 10
+cargo run -p migration -- down
+cargo run -p migration -- down -n 10
+
+# Reset flows
+cargo run -p migration -- fresh
+cargo run -p migration -- refresh
+cargo run -p migration -- reset
+
+# Inspect
+cargo run -p migration -- status
+```
+
+## Crates / Responsibilities
+
+- `rim_server`: Actix Web server wiring + GraphQL endpoint
+- `rim_api`: async-graphql schema + HTTP handlers
+- `rim_core`: domain models + repository traits + shared macros (IDs)
+- `rim_services`: service traits + DTO/command/query types; typed `ServiceError`
+- `rim_infra_db`: SeaORM-backed repository implementations
+- `entity`: SeaORM entities (generated)
+- `migration`: SeaORM migrations + CLI
+
+## Rust Style Guide (Local Conventions)
+
+Formatting:
+- Run `cargo fmt --all`; CI enforces `cargo fmt --all -- --check`.
+- Do not hand-format around rustfmt.
+
+Imports:
+- Order: `std` then external crates then local modules; groups separated by a blank line.
+- Prefer explicit imports; allow globs only where idiomatic:
+  - generated SeaORM entity files: `use sea_orm::entity::prelude::*;`
+  - graphql modules: `use async_graphql::*;`
+
+Naming:
+- Modules/files `snake_case`; types/traits `PascalCase`; fns/vars `snake_case`; consts `SCREAMING_SNAKE_CASE`.
+- Service-layer conventions: `*Cmd` (write), `*Query` (read), `*Dto` (transport).
+
+Types / modeling:
+- Prefer strongly-typed IDs via `model_id!(TypeName);` in `rim_core/src/macros.rs`.
+- Standard timestamp type: `chrono::DateTime<chrono::Utc>`.
+- Keep `rim_core` free of transport/Actix/GraphQL concerns unless explicitly intended.
+
+Error handling:
+- Avoid `unwrap/expect` in library code; OK at process boundaries (`main`, bootstrap) with actionable messages.
+- Prefer `?` propagation.
+- Use `rim_services::ServiceResult<T>` / `rim_services::ServiceError` at service boundaries.
+- Use `anyhow::Result` in infra/repo layers and map to `ServiceError` higher up.
+
+Async:
+- Traits use `async_trait` and are `Send + Sync`.
+- Avoid holding locks/DB transactions across `.await` unless required.
+
+Generated code:
+- `entity/` is generated (see header in `entity/src/lib.rs`); avoid manual edits.
+
+## CI Notes
+
+- CI runs tests single-threaded: `cargo test --all -- --test-threads=1` (helps with shared DB).
+- CI also runs `cargo audit` (non-blocking) to report vulnerable dependencies.
+- If you want to reproduce locally:
+  - `cargo install --locked cargo-audit`
+  - `cargo audit`
+
+## Repo-Specific Rules Files
+
+- No Cursor rules found (`.cursor/rules/` or `.cursorrules`).
+- No Copilot instructions found (`.github/copilot-instructions.md`).
+
+## Pagination Contract
+
+Cursor pagination semantics are standardized in `docs/pagination.md`.

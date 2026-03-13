@@ -11,6 +11,13 @@ pub struct ListCommandsQuery {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GetCommandQuery {
+    pub actor: Actor,
+    pub command_id: String,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExecuteCommandCmd {
     pub actor: Actor,
     pub command_id: String,
