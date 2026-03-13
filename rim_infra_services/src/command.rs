@@ -499,217 +499,54 @@ impl CommandService for DefaultCommandService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use rim_core::command::model::{NewUserCommand, UserCommandId};
     use rim_core::command::repository::UserCommandRepository;
-    use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
-    use rim_services::conversation::command::CreateConversationCmd;
-    use rim_services::conversation::dto::ConversationDto;
-    use rim_services::message::command::SendMessageCmd;
+    use rim_core::repository::error::RepoResult;
+    use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
+    use rim_services::message::service::MockMessageService;
     use std::sync::Arc;
 
-    struct FakeUserCommandRepository {
-        list_result: std::sync::Mutex<Option<RepoResult<Vec<UserCommand>>>>,
-        get_result: std::sync::Mutex<Option<RepoResult<Option<UserCommand>>>>,
-        create_result: std::sync::Mutex<Option<RepoResult<UserCommand>>>,
-        update_result: std::sync::Mutex<Option<RepoResult<UserCommand>>>,
-        delete_result: std::sync::Mutex<Option<RepoResult<()>>>,
-    }
-
-    #[async_trait]
-    impl UserCommandRepository for FakeUserCommandRepository {
-        async fn get_by_id(&self, _id: UserCommandId) -> RepoResult<Option<UserCommand>> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn get_by_key_for_user(
-            &self,
-            _owner_user_id: rim_core::user::model::UserId,
-            _command_key: &str,
-        ) -> RepoResult<Option<UserCommand>> {
-            self.get_result.lock().unwrap().take().unwrap_or(Ok(None))
-        }
-
-        async fn list_for_user(
-            &self,
-            _owner_user_id: rim_core::user::model::UserId,
-        ) -> RepoResult<Vec<UserCommand>> {
-            self.list_result
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or(Ok(vec![]))
-        }
-
-        async fn create_user_command(
-            &self,
-            _new_command: NewUserCommand,
-        ) -> RepoResult<UserCommand> {
-            self.create_result
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or_else(|| Err(RepoError::new(RepoErrorKind::Unsupported)))
-        }
-
-        async fn update_user_command(
-            &self,
-            _id: UserCommandId,
-            _update: UpdateUserCommand,
-        ) -> RepoResult<UserCommand> {
-            self.update_result
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or_else(|| Err(RepoError::new(RepoErrorKind::Unsupported)))
-        }
-
-        async fn delete_user_command(&self, _id: UserCommandId) -> RepoResult<()> {
-            self.delete_result.lock().unwrap().take().unwrap_or(Ok(()))
-        }
-    }
-
-    struct FakeConversationService {
-        create_result: std::sync::Mutex<Option<ServiceResult<ConversationDto>>>,
-    }
-
-    #[async_trait]
-    impl ConversationService for FakeConversationService {
-        async fn create_conversation(
-            &self,
-            _cmd: CreateConversationCmd,
-        ) -> ServiceResult<ConversationDto> {
-            self.create_result.lock().unwrap().take().unwrap()
-        }
-
-        async fn get_conversation(
-            &self,
-            _query: rim_services::conversation::command::GetConversationQuery,
-        ) -> ServiceResult<ConversationDto> {
-            unreachable!()
-        }
-        async fn list_inbox_conversations(
-            &self,
-            _query: rim_services::conversation::command::ListInboxConversationsQuery,
-        ) -> ServiceResult<
-            rim_core::repository::pagination::Page<
-                ConversationDto,
-                rim_services::conversation::dto::InboxPageCursor,
-            >,
-        > {
-            unreachable!()
-        }
-        async fn list_channels(
-            &self,
-            _query: rim_services::conversation::command::ListChannelsQuery,
-        ) -> ServiceResult<
-            rim_core::repository::pagination::Page<
-                ConversationDto,
-                rim_services::conversation::dto::ChannelPageCursor,
-            >,
-        > {
-            unreachable!()
-        }
-        async fn add_member(
-            &self,
-            _cmd: rim_services::conversation::command::AddConversationMemberCmd,
-        ) -> ServiceResult<ConversationDto> {
-            unreachable!()
-        }
-        async fn remove_member(
-            &self,
-            _cmd: rim_services::conversation::command::RemoveConversationMemberCmd,
-        ) -> ServiceResult<ConversationDto> {
-            unreachable!()
-        }
-    }
-
-    struct FakeMessageService {
-        send_result: std::sync::Mutex<Option<ServiceResult<MessageDto>>>,
-    }
-
-    #[async_trait]
-    impl MessageService for FakeMessageService {
-        async fn send_message(&self, _cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
-            self.send_result.lock().unwrap().take().unwrap()
-        }
-
-        async fn send_thread_message(
-            &self,
-            _cmd: rim_services::message::command::SendThreadMessageCmd,
-        ) -> ServiceResult<MessageDto> {
-            unreachable!()
-        }
-        async fn get_message(
-            &self,
-            _query: rim_services::message::command::GetMessageQuery,
-        ) -> ServiceResult<MessageDto> {
-            unreachable!()
-        }
-        async fn get_message_reference(
-            &self,
-            _query: rim_services::message::command::GetMessageReferenceQuery,
-        ) -> ServiceResult<rim_services::message::dto::MessageReferenceDto> {
-            unreachable!()
-        }
-        async fn list_messages(
-            &self,
-            _query: rim_services::message::command::ListMessagesQuery,
-        ) -> ServiceResult<
-            rim_core::repository::pagination::Page<
-                MessageDto,
-                rim_services::message::dto::MessagePageCursor,
-            >,
-        > {
-            unreachable!()
-        }
-        async fn list_thread_messages(
-            &self,
-            _query: rim_services::message::command::ListThreadMessagesQuery,
-        ) -> ServiceResult<
-            rim_core::repository::pagination::Page<
-                MessageDto,
-                rim_services::message::dto::MessagePageCursor,
-            >,
-        > {
-            unreachable!()
-        }
-        async fn search_messages(
-            &self,
-            _query: rim_services::message::command::SearchMessagesQuery,
-        ) -> ServiceResult<Vec<MessageDto>> {
-            unreachable!()
-        }
-        async fn edit_message(
-            &self,
-            _cmd: rim_services::message::command::EditMessageCmd,
-        ) -> ServiceResult<MessageDto> {
-            unreachable!()
-        }
-        async fn delete_message(
-            &self,
-            _cmd: rim_services::message::command::DeleteMessageCmd,
-        ) -> ServiceResult<()> {
-            unreachable!()
+    mockall::mock! {
+        UserCommandRepository {}
+        #[async_trait]
+        impl UserCommandRepository for UserCommandRepository {
+            async fn get_by_id(&self, id: UserCommandId) -> RepoResult<Option<UserCommand>>;
+            async fn get_by_key_for_user(
+                &self,
+                owner_user_id: rim_core::user::model::UserId,
+                command_key: &str,
+            ) -> RepoResult<Option<UserCommand>>;
+            async fn list_for_user(
+                &self,
+                owner_user_id: rim_core::user::model::UserId,
+            ) -> RepoResult<Vec<UserCommand>>;
+            async fn create_user_command(
+                &self,
+                new_command: NewUserCommand,
+            ) -> RepoResult<UserCommand>;
+            async fn update_user_command(
+                &self,
+                id: UserCommandId,
+                update: UpdateUserCommand,
+            ) -> RepoResult<UserCommand>;
+            async fn delete_user_command(&self, id: UserCommandId) -> RepoResult<()>;
         }
     }
 
     fn service(
-        repo: FakeUserCommandRepository,
-        conversation_result: ServiceResult<ConversationDto>,
-        message_result: ServiceResult<MessageDto>,
+        repo: MockUserCommandRepository,
+        conversation_service: MockConversationService,
+        message_service: MockMessageService,
     ) -> DefaultCommandService {
         DefaultCommandService::new(
             CommandRepos {
                 user_command_repo: Arc::new(repo),
             },
             CommandServices {
-                conversation_service: Arc::new(FakeConversationService {
-                    create_result: std::sync::Mutex::new(Some(conversation_result)),
-                }),
-                message_service: Arc::new(FakeMessageService {
-                    send_result: std::sync::Mutex::new(Some(message_result)),
-                }),
+                conversation_service: Arc::new(conversation_service),
+                message_service: Arc::new(message_service),
             },
         )
     }
@@ -717,10 +554,13 @@ mod tests {
     #[tokio::test]
     async fn list_commands_includes_builtins_and_user_commands() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(Some(Ok(vec![UserCommand {
+        let actor_user_id = actor.user_id;
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_list_for_user().return_once(move |owner_user_id| {
+            assert_eq!(owner_user_id, actor_user_id);
+            Ok(vec![UserCommand {
                 id: rim_core::command::model::UserCommandId::new(),
-                owner_user_id: actor.user_id,
+                owner_user_id,
                 command_key: "user.test".to_string(),
                 title: "Test".to_string(),
                 description: "desc".to_string(),
@@ -728,16 +568,12 @@ mod tests {
                 is_enabled: true,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
-            }]))),
-            get_result: std::sync::Mutex::new(None),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(None),
-        };
+            }])
+        });
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
 
         let commands = svc
@@ -760,17 +596,11 @@ mod tests {
     #[tokio::test]
     async fn create_user_command_validates_prefix() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(None),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(None),
-        };
+        let repo = MockUserCommandRepository::new();
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
 
         let err = svc
@@ -793,31 +623,32 @@ mod tests {
     #[tokio::test]
     async fn execute_builtin_backend_command_posts_message() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(None),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(None),
-        };
-        let svc = service(
-            repo,
-            Err(ServiceError::NotFound),
-            Ok(MessageDto {
-                id: rim_core::message::model::MessageId::new(),
-                server_id: rim_core::server::model::ServerId::new(),
-                conversation_id: rim_core::conversation::model::ConversationId::new(),
-                thread_id: None,
-                root_thread_id: None,
-                author_id: actor.user_id,
-                text: Some("hello".to_string()),
-                has_attachments: false,
-                attachments: vec![],
-                parent_message_id: None,
-                is_deleted: false,
-                sent_at: chrono::Utc::now(),
-            }),
-        );
+        let actor_user_id = actor.user_id;
+        let repo = MockUserCommandRepository::new();
+        let mut message_service = MockMessageService::new();
+        message_service
+            .expect_send_message()
+            .return_once(move |cmd| {
+                assert_eq!(cmd.actor.user_id, actor_user_id);
+                assert_eq!(cmd.text.as_deref(), Some("hello"));
+                Box::pin(async move {
+                    Ok(MessageDto {
+                        id: rim_core::message::model::MessageId::new(),
+                        server_id: cmd.server_id,
+                        conversation_id: cmd.conversation_id,
+                        thread_id: None,
+                        root_thread_id: None,
+                        author_id: cmd.actor.user_id,
+                        text: cmd.text,
+                        has_attachments: false,
+                        attachments: vec![],
+                        parent_message_id: None,
+                        is_deleted: false,
+                        sent_at: chrono::Utc::now(),
+                    })
+                })
+            });
+        let svc = service(repo, MockConversationService::new(), message_service);
 
         let result = svc
             .execute_command(ExecuteCommandCmd {
@@ -840,17 +671,12 @@ mod tests {
     #[tokio::test]
     async fn list_commands_filters_context_menu_by_required_context() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(None),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(None),
-        };
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_list_for_user().returning(|_| Ok(vec![]));
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
 
         let without_context = svc
@@ -890,17 +716,12 @@ mod tests {
     #[tokio::test]
     async fn create_user_command_rejects_self_reference() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(None),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(None),
-        };
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user().returning(|_, _| Ok(None));
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
 
         let err = svc
@@ -923,6 +744,7 @@ mod tests {
     #[tokio::test]
     async fn update_and_delete_user_command_work() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor_user_id = actor.user_id;
         let existing = UserCommand {
             id: rim_core::command::model::UserCommandId::new(),
             owner_user_id: actor.user_id,
@@ -939,17 +761,27 @@ mod tests {
             is_enabled: false,
             ..existing.clone()
         };
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(Some(Ok(Some(existing.clone())))),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(Some(Ok(updated.clone()))),
-            delete_result: std::sync::Mutex::new(Some(Ok(()))),
-        };
+        let mut repo = MockUserCommandRepository::new();
+        let existing_for_lookup = existing.clone();
+        let updated_for_return = updated.clone();
+        repo.expect_get_by_key_for_user()
+            .return_once(move |owner_user_id, command_key| {
+                assert_eq!(owner_user_id, actor_user_id);
+                assert_eq!(command_key, existing_for_lookup.command_key.as_str());
+                Ok(Some(existing_for_lookup))
+            });
+        repo.expect_update_user_command()
+            .return_once(move |id, update_cmd| {
+                assert_eq!(id, updated_for_return.id);
+                assert_eq!(update_cmd.title, "Quick Group Updated");
+                assert_eq!(update_cmd.description, "desc");
+                assert!(!update_cmd.is_enabled);
+                Ok(updated_for_return)
+            });
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
 
         let result = svc
@@ -969,17 +801,24 @@ mod tests {
         assert_eq!(result.title, "Quick Group Updated");
         assert!(!result.is_enabled);
 
-        let repo = FakeUserCommandRepository {
-            list_result: std::sync::Mutex::new(None),
-            get_result: std::sync::Mutex::new(Some(Ok(Some(existing)))),
-            create_result: std::sync::Mutex::new(None),
-            update_result: std::sync::Mutex::new(None),
-            delete_result: std::sync::Mutex::new(Some(Ok(()))),
-        };
+        let mut repo = MockUserCommandRepository::new();
+        let delete_actor_user_id = actor.user_id;
+        let expected_command_key = existing.command_key.clone();
+        let expected_command_id = existing.id;
+        repo.expect_get_by_key_for_user()
+            .return_once(move |owner_user_id, command_key| {
+                assert_eq!(owner_user_id, delete_actor_user_id);
+                assert_eq!(command_key, expected_command_key.as_str());
+                Ok(Some(existing))
+            });
+        repo.expect_delete_user_command().return_once(move |id| {
+            assert_eq!(id, expected_command_id);
+            Ok(())
+        });
         let svc = service(
             repo,
-            Err(ServiceError::NotFound),
-            Err(ServiceError::NotFound),
+            MockConversationService::new(),
+            MockMessageService::new(),
         );
         svc.delete_user_command(DeleteUserCommandCmd {
             actor,

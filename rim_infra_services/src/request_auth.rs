@@ -61,49 +61,24 @@ mod tests {
     use rim_core::user::model::UserId;
     use rim_services::ServiceError;
     use std::sync::Arc;
-    use std::sync::Mutex;
 
-    struct FakeSessionRepository {
-        result: Mutex<Option<RepoResult<Option<Session>>>>,
-    }
-
-    impl FakeSessionRepository {
-        fn new(result: RepoResult<Option<Session>>) -> Self {
-            Self {
-                result: Mutex::new(Some(result)),
-            }
+    mockall::mock! {
+        SessionRepository {}
+        #[async_trait]
+        impl SessionRepository for SessionRepository {
+            async fn get_by_id(&self, id: SessionId) -> RepoResult<Option<Session>>;
+            async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Session>>;
+            async fn create_session(&self, session: NewSession) -> RepoResult<Session>;
+            async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
+            async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;
+            async fn revoke_all_for_user(&self, user_id: UserId) -> RepoResult<u64>;
         }
     }
 
-    #[async_trait]
-    impl SessionRepository for FakeSessionRepository {
-        async fn get_by_id(&self, _id: SessionId) -> RepoResult<Option<Session>> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn get_by_token_hash(&self, _token_hash: &str) -> RepoResult<Option<Session>> {
-            self.result
-                .lock()
-                .unwrap()
-                .take()
-                .expect("fake session result not configured")
-        }
-
-        async fn create_session(&self, _session: NewSession) -> RepoResult<Session> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn touch_last_seen_at(&self, _id: SessionId) -> RepoResult<()> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn revoke_session(&self, _id: SessionId) -> RepoResult<()> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn revoke_all_for_user(&self, _user_id: UserId) -> RepoResult<u64> {
-            Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
+    fn service(session_repo: MockSessionRepository) -> DefaultRequestAuthenticator {
+        DefaultRequestAuthenticator::new(RequestAuthRepos {
+            session_repo: Arc::new(session_repo),
+        })
     }
 
     fn active_session() -> Session {
@@ -122,9 +97,9 @@ mod tests {
 
     #[tokio::test]
     async fn authenticate_session_token_returns_anonymous_for_missing_token() {
-        let svc = DefaultRequestAuthenticator::new(RequestAuthRepos {
-            session_repo: Arc::new(FakeSessionRepository::new(Ok(None))),
-        });
+        let mut repo = MockSessionRepository::new();
+        repo.expect_get_by_token_hash().never();
+        let svc = service(repo);
 
         let result = svc.authenticate_session_token(None).await.unwrap();
 
@@ -134,13 +109,15 @@ mod tests {
 
     #[tokio::test]
     async fn authenticate_session_token_maps_repo_error() {
-        let repo = FakeSessionRepository::new(Err(RepoError::with_message(
-            RepoErrorKind::Unavailable,
-            "db unavailable",
-        )));
-        let svc = DefaultRequestAuthenticator::new(RequestAuthRepos {
-            session_repo: Arc::new(repo),
+        let mut repo = MockSessionRepository::new();
+        repo.expect_get_by_token_hash().return_once(|token_hash| {
+            assert_eq!(token_hash, hash_token("session-token"));
+            Err(RepoError::with_message(
+                RepoErrorKind::Unavailable,
+                "db unavailable",
+            ))
         });
+        let svc = service(repo);
 
         let err = svc
             .authenticate_session_token(Some("session-token"))
@@ -156,10 +133,12 @@ mod tests {
         let expected_user_id = session.user_id;
         let expected_session_id = session.id;
 
-        let repo = FakeSessionRepository::new(Ok(Some(session)));
-        let svc = DefaultRequestAuthenticator::new(RequestAuthRepos {
-            session_repo: Arc::new(repo),
+        let mut repo = MockSessionRepository::new();
+        repo.expect_get_by_token_hash().return_once(|token_hash| {
+            assert_eq!(token_hash, hash_token("session-token"));
+            Ok(Some(session))
         });
+        let svc = service(repo);
 
         let result = svc
             .authenticate_session_token(Some("session-token"))
@@ -175,10 +154,12 @@ mod tests {
         let mut session = active_session();
         session.expires_at = chrono::Utc::now() - chrono::Duration::minutes(1);
 
-        let repo = FakeSessionRepository::new(Ok(Some(session)));
-        let svc = DefaultRequestAuthenticator::new(RequestAuthRepos {
-            session_repo: Arc::new(repo),
+        let mut repo = MockSessionRepository::new();
+        repo.expect_get_by_token_hash().return_once(|token_hash| {
+            assert_eq!(token_hash, hash_token("session-token"));
+            Ok(Some(session))
         });
+        let svc = service(repo);
 
         let result = svc
             .authenticate_session_token(Some("session-token"))
