@@ -9,25 +9,17 @@ use rim_core::conversation::repository::{
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::PageDir;
-use rim_core::server::repository::ServerRepository;
-use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
-use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
-use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_conversation_and_get_by_id() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let repo = SeaOrmConversationRepository::new(db.clone());
-    let server = server_repo.create_server("s").await.unwrap();
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
     let conv = repo
         .create_conversation(NewConversation {
             server_id: server.id,
@@ -44,34 +36,16 @@ async fn create_conversation_and_get_by_id() {
 
 #[tokio::test]
 async fn create_conversation_with_members_is_atomic() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let repo = SeaOrmConversationRepository::new(db.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let u1 = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "atomic-c1".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
-    let u2 = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "atomic-c2".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
+    let server = ctx.create_server("s").await;
+    let u1 = ctx.create_user("atomic-c1").await.id;
+    let u2 = ctx.create_user("atomic-c2").await.id;
 
     let conv = repo
         .create_conversation_with_members(
@@ -92,34 +66,16 @@ async fn create_conversation_with_members_is_atomic() {
 
 #[tokio::test]
 async fn find_direct_between_users() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let u1 = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "u1".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
-    let u2 = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "u2".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
+    let server = ctx.create_server("s").await;
+    let u1 = ctx.create_user("u1").await.id;
+    let u2 = ctx.create_user("u2").await.id;
 
     assert!(
         conv_repo
@@ -150,16 +106,12 @@ async fn find_direct_between_users() {
 
 #[tokio::test]
 async fn touch_last_activity_at_updates_and_not_found() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let repo = SeaOrmConversationRepository::new(db.clone());
-    let _user_repo = SeaOrmUserRepository::new(db.clone());
-    let server = server_repo.create_server("s").await.unwrap();
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
     let conv = repo
         .create_conversation(NewConversation {
             server_id: server.id,
@@ -183,26 +135,15 @@ async fn touch_last_activity_at_updates_and_not_found() {
 
 #[tokio::test]
 async fn list_inbox_conversations_paginates_and_orders() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let u = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "u".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
+    let server = ctx.create_server("s").await;
+    let u = ctx.create_user("u").await.id;
 
     // Create 3 inbox conversations for user.
     let c1 = conv_repo
@@ -274,26 +215,15 @@ async fn list_inbox_conversations_paginates_and_orders() {
 
 #[tokio::test]
 async fn list_channels_for_user_paginates_and_orders_oldest_first() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let u = user_repo
-        .create_user(rim_core::user::model::NewUser {
-            username: "u".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap()
-        .id;
+    let server = ctx.create_server("s").await;
+    let u = ctx.create_user("u").await.id;
 
     let c1 = conv_repo
         .create_conversation(NewConversation {

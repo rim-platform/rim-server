@@ -51,7 +51,7 @@ impl DefaultAppServiceProvider {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         let auth_service: Arc<dyn AuthService> = Arc::new(crate::auth::DefaultAuthService::new(
             repos.for_auth(),
-            db.clone(),
+            Some(db.clone()),
             bootstrap_secret,
             session_ttl,
         ));
@@ -64,13 +64,13 @@ impl DefaultAppServiceProvider {
         let integration_service: Arc<dyn IntegrationService> =
             Arc::new(crate::integration::DefaultIntegrationService);
         let message_service: Arc<dyn MessageService> = Arc::new(
-            crate::message::DefaultMessageService::new(repos.for_message(), db.clone()),
+            crate::message::DefaultMessageService::new(repos.for_message(), Some(db.clone())),
         );
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(repos.for_attachment()),
         );
         let server_service: Arc<dyn ServerService> = Arc::new(
-            crate::server::DefaultServerService::new(repos.for_server(), db.clone()),
+            crate::server::DefaultServerService::new(repos.for_server(), Some(db.clone())),
         );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),

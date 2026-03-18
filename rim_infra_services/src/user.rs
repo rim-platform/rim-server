@@ -7,9 +7,6 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::UserRepos;
 
-#[cfg(test)]
-use crate::test_support::user::{UserRepoPortAdapter, UserReposPorts};
-
 #[derive(Clone)]
 pub struct DefaultUserService {
     repos: UserRepos,
@@ -18,13 +15,6 @@ pub struct DefaultUserService {
 impl DefaultUserService {
     pub fn new(repos: UserRepos) -> Self {
         Self { repos }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: UserReposPorts) -> Self {
-        Self::new(UserRepos {
-            user_repo: std::sync::Arc::new(UserRepoPortAdapter(repos.user_repo)),
-        })
     }
 
     fn convert_to_dto(user: rim_core::user::model::User) -> UserDto {

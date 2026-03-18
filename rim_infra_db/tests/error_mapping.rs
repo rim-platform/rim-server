@@ -5,39 +5,23 @@ mod support;
 use rim_core::auth::model::{NewInvite, NewSession};
 use rim_core::auth::repository::{InviteRepository, SessionRepository};
 use rim_core::repository::error::RepoErrorKind;
-use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::user::model::NewUser;
-use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
-use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
-use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn map_db_err_unique_violation_is_conflict_with_message() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let member_repo = SeaOrmServerMemberRepository::new(db.clone());
-    let invite_repo = SeaOrmInviteRepository::new(db.clone());
+    let member_repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
+    let invite_repo = SeaOrmInviteRepository::new(ctx.db.clone());
 
-    let user = user_repo
-        .create_user(NewUser {
-            username: "u".to_string(),
-            password: "pw".to_string(),
-        })
-        .await
-        .unwrap();
-    let server = server_repo.create_server("s").await.unwrap();
+    let user = ctx.create_user("u").await;
+    let server = ctx.create_server("s").await;
     let _ = member_repo
         .add_member(server.id, user.id, ServerMemberRole::Owner)
         .await
@@ -70,10 +54,9 @@ async fn map_db_err_unique_violation_is_conflict_with_message() {
 
 #[tokio::test]
 async fn map_db_err_row_not_found_is_not_found() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(_ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
 
     let err = sea_orm::DbErr::RecordNotFound("missing".to_string());
     let mapped = rim_infra_db::map_db_err(err);
@@ -82,13 +65,11 @@ async fn map_db_err_row_not_found_is_not_found() {
 
 #[tokio::test]
 async fn map_db_err_fk_violation_is_conflict() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let session_repo = SeaOrmSessionRepository::new(db.clone());
+    let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
 
     let err = session_repo
         .create_session(NewSession {

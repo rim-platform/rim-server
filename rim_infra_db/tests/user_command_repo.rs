@@ -4,30 +4,16 @@ mod support;
 
 use rim_core::command::model::NewUserCommand;
 use rim_core::command::repository::UserCommandRepository;
-use rim_core::user::model::NewUser;
-use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_db::sea_orm_impl::user_command::SeaOrmUserCommandRepository;
 
 #[tokio::test]
 async fn create_and_list_user_commands() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmUserCommandRepository::new(db.clone());
-
-    let user = user_repo
-        .create_user(NewUser {
-            username: "tester".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
+    let repo = SeaOrmUserCommandRepository::new(ctx.db.clone());
+    let user = ctx.create_user("tester").await;
 
     let created = repo
         .create_user_command(NewUserCommand {

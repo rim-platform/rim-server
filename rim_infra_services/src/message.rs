@@ -18,13 +18,6 @@ use crate::MessageRepos;
 use crate::repos::AppRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
-#[cfg(test)]
-use crate::test_support::message::{
-    ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter,
-    MessageAttachmentRepoPortAdapter, MessageRepoPortAdapter, MessageReposPorts,
-    ServerMemberRepoPortAdapter, ThreadRepoPortAdapter,
-};
-
 #[derive(Clone)]
 pub struct DefaultMessageService {
     repos: MessageRepos,
@@ -32,36 +25,8 @@ pub struct DefaultMessageService {
 }
 
 impl DefaultMessageService {
-    pub fn new(repos: MessageRepos, db: DatabaseConnection) -> Self {
-        Self {
-            repos,
-            db: Some(db),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: MessageReposPorts) -> Self {
-        Self {
-            repos: MessageRepos {
-                conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
-                    repos.conversation_repo,
-                )),
-                conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
-                    repos.conversation_member_repo,
-                )),
-                message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
-                message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
-                    repos.message_attachment_repo,
-                )),
-                message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
-                    repos.message_thread_repo,
-                )),
-                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                    repos.server_member_repo,
-                )),
-            },
-            db: None,
-        }
+    pub fn new(repos: MessageRepos, db: Option<DatabaseConnection>) -> Self {
+        Self { repos, db }
     }
 
     async fn ensure_conversation_member(

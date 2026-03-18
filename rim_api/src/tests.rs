@@ -35,6 +35,176 @@ mod tests {
     use crate::auth_context::AuthActorCtx;
     use crate::build_schema;
 
+    // ── Test helpers ──────────────────────────────────────────────────────
+
+    fn authed_request(query: &str, actor: UserId) -> Request {
+        Request::new(query).data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
+    }
+
+    fn assert_no_errors(res: &async_graphql::Response) {
+        assert!(res.errors.is_empty(), "unexpected errors: {:?}", res.errors);
+    }
+
+    fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
+        build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(MockKeybindService::new()),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(user),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }))
+    }
+
+    fn schema_with_server_mocks(
+        server: MockServerService,
+        server_member: MockServerMemberService,
+    ) -> crate::AppSchema {
+        build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(MockKeybindService::new()),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(server),
+            server_member: Arc::new(server_member),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }))
+    }
+
+    fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
+        build_schema(Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(keybind),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+        }))
+    }
+
+    // ── DTO factory helpers ───────────────────────────────────────────────
+
+    fn test_conversation_dto() -> rim_services::conversation::dto::ConversationDto {
+        rim_services::conversation::dto::ConversationDto {
+            id: ConversationId::new(),
+            server_id: ServerId::new(),
+            conversation_type: ConversationType::Group,
+            title: None,
+            member_ids: vec![],
+        }
+    }
+
+    fn test_message_dto() -> rim_services::message::dto::MessageDto {
+        rim_services::message::dto::MessageDto {
+            id: MessageId::new(),
+            server_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            thread_id: None,
+            root_thread_id: None,
+            author_id: UserId::new(),
+            text: Some("test message".to_string()),
+            has_attachments: false,
+            attachments: vec![],
+            parent_message_id: None,
+            is_deleted: false,
+            sent_at: chrono::Utc::now(),
+        }
+    }
+
+    fn test_thread_dto() -> rim_services::message_thread::dto::ThreadDto {
+        rim_services::message_thread::dto::ThreadDto {
+            id: MessageThreadId::new(),
+            server_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            root_message_id: None,
+            root_author_id: None,
+            root_text: None,
+            created_at: chrono::Utc::now(),
+            last_message_at: chrono::Utc::now(),
+        }
+    }
+
+    fn test_keybind_dto() -> rim_services::keybind::dto::KeybindDto {
+        rim_services::keybind::dto::KeybindDto {
+            id: rim_core::keybind::model::KeybindId::new(),
+            scope: rim_services::keybind::dto::KeybindScopeDto::User,
+            source: rim_services::keybind::dto::KeybindSourceDto::User,
+            workspace_id: None,
+            keystroke: "Ctrl+R".to_string(),
+            command_id: "workspace.cycle_recent_activity".to_string(),
+            context: rim_services::keybind::dto::KeybindContextDto::Global,
+            preset_args: None,
+            is_enabled: true,
+        }
+    }
+
+    fn test_user_dto() -> rim_services::user::dto::UserDto {
+        rim_services::user::dto::UserDto {
+            id: UserId::new(),
+            username: "testuser".to_string(),
+            display_name: Some("Test User".to_string()),
+            avatar_url: None,
+            status_text: None,
+        }
+    }
+
+    fn test_server_dto() -> rim_services::server::dto::ServerDto {
+        rim_services::server::dto::ServerDto {
+            id: ServerId::new(),
+            name: "Test Server".to_string(),
+        }
+    }
+
+    fn test_server_member_dto() -> rim_services::server_member::dto::ServerMemberDto {
+        rim_services::server_member::dto::ServerMemberDto {
+            server_id: ServerId::new(),
+            user_id: UserId::new(),
+            member_role: "member".to_string(),
+            joined_at: chrono::Utc::now(),
+        }
+    }
+
+    fn test_attachment_dto() -> rim_services::message_attachment::dto::AttachmentDto {
+        rim_services::message_attachment::dto::AttachmentDto {
+            id: rim_core::message_attachment::model::MessageAttachmentId::new(),
+            status: rim_services::message_attachment::dto::AttachmentStatus::Ready,
+            filename: "file.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            size_bytes: 42,
+        }
+    }
+
+    // ── Provider / schema builders ────────────────────────────────────────
+
     struct TestAppServiceProvider {
         action: Arc<dyn rim_services::action::service::ActionService>,
         auth: Arc<dyn rim_services::auth::service::AuthService>,
@@ -207,6 +377,8 @@ mod tests {
         }))
     }
 
+    // ── Tests ─────────────────────────────────────────────────────────────
+
     #[tokio::test]
     async fn query_requires_auth() {
         let schema = schema_with_mocks(
@@ -298,13 +470,13 @@ mod tests {
 
         let schema = schema_with_platform_mocks(action, capability, event, integration, setting);
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query { actions { id } capabilities { id } events { id } integrations { id kind } settings { id scope } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(json["actions"][0]["id"], serde_json::json!("post_message"));
@@ -353,11 +525,13 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(r#"query { commands { id category executionTarget } }"#)
-            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let req = authed_request(
+            r#"query { commands { id category executionTarget } }"#,
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
         let json = res.data.into_json().unwrap();
         assert_eq!(
             json["commands"][0]["id"],
@@ -393,12 +567,13 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req =
-            Request::new(r#"query { command(commandId: "chat.post_message") { id category } }"#)
-                .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let req = authed_request(
+            r#"query { command(commandId: "chat.post_message") { id category } }"#,
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -421,61 +596,34 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(
+        let req = authed_request(
             r#"query($mid: ID!) { commands(surface: CONTEXT_MENU, commandContext: { selectedMessageId: $mid }) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "mid": MessageId::new().to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
     async fn keybinds_query_returns_keybinds() {
         let actor = UserId::new();
         let mut keybind = MockKeybindService::new();
-        keybind.expect_list_keybinds().returning(|_query| {
-            Box::pin(async {
-                Ok(vec![rim_services::keybind::dto::KeybindDto {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: rim_services::keybind::dto::KeybindScopeDto::User,
-                    source: rim_services::keybind::dto::KeybindSourceDto::User,
-                    workspace_id: None,
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.cycle_recent_activity".to_string(),
-                    context: rim_services::keybind::dto::KeybindContextDto::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                }])
-            })
-        });
+        keybind
+            .expect_list_keybinds()
+            .returning(|_query| Box::pin(async { Ok(vec![test_keybind_dto()]) }));
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(r#"query { keybinds(scope: USER) { keystroke commandId } }"#)
-            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let req = authed_request(
+            r#"query { keybinds(scope: USER) { keystroke commandId } }"#,
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -484,43 +632,23 @@ mod tests {
         let mut keybind = MockKeybindService::new();
         keybind.expect_resolve_keybinds().returning(|_query| {
             Box::pin(async {
-                Ok(vec![rim_services::keybind::dto::KeybindDto {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
-                    source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
-                    workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.open_command_palette".to_string(),
-                    context: rim_services::keybind::dto::KeybindContextDto::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                }])
+                let mut dto = test_keybind_dto();
+                dto.scope = rim_services::keybind::dto::KeybindScopeDto::Workspace;
+                dto.source = rim_services::keybind::dto::KeybindSourceDto::Workspace;
+                dto.workspace_id = Some(rim_core::server::model::WorkspaceId::new());
+                dto.command_id = "workspace.open_command_palette".to_string();
+                Ok(vec![dto])
             })
         });
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(r#"query { resolvedKeybinds { keystroke commandId scope } }"#)
-            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let req = authed_request(
+            r#"query { resolvedKeybinds { keystroke commandId scope } }"#,
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -529,45 +657,23 @@ mod tests {
         let mut keybind = MockKeybindService::new();
         keybind.expect_resolve_keybind().returning(|_query| {
             Box::pin(async {
-                Ok(Some(rim_services::keybind::dto::KeybindDto {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
-                    source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
-                    workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.open_command_palette".to_string(),
-                    context: rim_services::keybind::dto::KeybindContextDto::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                }))
+                let mut dto = test_keybind_dto();
+                dto.scope = rim_services::keybind::dto::KeybindScopeDto::Workspace;
+                dto.source = rim_services::keybind::dto::KeybindSourceDto::Workspace;
+                dto.workspace_id = Some(rim_core::server::model::WorkspaceId::new());
+                dto.command_id = "workspace.open_command_palette".to_string();
+                Ok(Some(dto))
             })
         });
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query { resolveKeybind(keystroke: "Ctrl+R", context: GLOBAL) { commandId source } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -576,6 +682,12 @@ mod tests {
         let mut keybind = MockKeybindService::new();
         keybind.expect_inspect_keybind_layers().returning(|_query| {
             Box::pin(async {
+                let mut ws_dto = test_keybind_dto();
+                ws_dto.scope = rim_services::keybind::dto::KeybindScopeDto::Workspace;
+                ws_dto.source = rim_services::keybind::dto::KeybindSourceDto::Workspace;
+                ws_dto.workspace_id = Some(rim_core::server::model::WorkspaceId::new());
+                ws_dto.command_id = "workspace.open_command_palette".to_string();
+
                 Ok(rim_services::keybind::dto::KeybindLayersDto {
                     default_keybind: Some(rim_services::keybind::dto::DefaultKeybindDto {
                         source: rim_services::keybind::dto::KeybindSourceDto::Default,
@@ -585,57 +697,20 @@ mod tests {
                         preset_args: None,
                     }),
                     user_keybind: None,
-                    workspace_keybind: Some(rim_services::keybind::dto::KeybindDto {
-                        id: rim_core::keybind::model::KeybindId::new(),
-                        scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
-                        source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
-                        workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
-                        keystroke: "Ctrl+R".to_string(),
-                        command_id: "workspace.open_command_palette".to_string(),
-                        context: rim_services::keybind::dto::KeybindContextDto::Global,
-                        preset_args: None,
-                        is_enabled: true,
-                    }),
-                    resolved_persisted_keybind: Some(rim_services::keybind::dto::KeybindDto {
-                        id: rim_core::keybind::model::KeybindId::new(),
-                        scope: rim_services::keybind::dto::KeybindScopeDto::Workspace,
-                        source: rim_services::keybind::dto::KeybindSourceDto::Workspace,
-                        workspace_id: Some(rim_core::server::model::WorkspaceId::new()),
-                        keystroke: "Ctrl+R".to_string(),
-                        command_id: "workspace.open_command_palette".to_string(),
-                        context: rim_services::keybind::dto::KeybindContextDto::Global,
-                        preset_args: None,
-                        is_enabled: true,
-                    }),
+                    workspace_keybind: Some(ws_dto.clone()),
+                    resolved_persisted_keybind: Some(ws_dto),
                 })
             })
         });
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query { keybindLayers(keystroke: "Ctrl+R", context: GLOBAL) { defaultKeybind { commandId } workspaceKeybind { commandId } resolvedPersistedKeybind { commandId } } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -654,76 +729,32 @@ mod tests {
             })
         });
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(r#"query { defaultKeybinds { keystroke source commandId } }"#)
-            .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+        let req = authed_request(
+            r#"query { defaultKeybinds { keystroke source commandId } }"#,
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
     async fn create_keybind_mutation_returns_keybind() {
         let actor = UserId::new();
         let mut keybind = MockKeybindService::new();
-        keybind.expect_create_keybind().returning(|_cmd| {
-            Box::pin(async {
-                Ok(rim_services::keybind::dto::KeybindDto {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: rim_services::keybind::dto::KeybindScopeDto::User,
-                    source: rim_services::keybind::dto::KeybindSourceDto::User,
-                    workspace_id: None,
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.cycle_recent_activity".to_string(),
-                    context: rim_services::keybind::dto::KeybindContextDto::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                })
-            })
-        });
+        keybind
+            .expect_create_keybind()
+            .returning(|_cmd| Box::pin(async { Ok(test_keybind_dto()) }));
 
-        let schema = build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }));
+        let schema = schema_with_keybind_mock(keybind);
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation { createKeybind(input: { scope: USER, keystroke: "Ctrl+R", commandId: "workspace.cycle_recent_activity", context: GLOBAL }) { keystroke commandId } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -742,16 +773,16 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($args: JSON) { executeCommand(input: { commandId: "chat.post_message", args: $args, commandContext: { focusedSurface: "palette" } }) { status message } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "args": { "server_id": "00000000-0000-0000-0000-000000000001" }
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -773,13 +804,13 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation { createUserCommand(input: { commandId: "user.quick_group", title: "Quick Group", description: "desc", steps: [{ commandId: "chat.create_group" }] }) { id sourceKind } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -801,13 +832,13 @@ mod tests {
         });
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation { updateUserCommand(input: { commandId: "user.quick_group", title: "Quick Group Updated", description: "desc", isEnabled: false, steps: [{ commandId: "chat.create_group" }] }) { id } }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -819,13 +850,13 @@ mod tests {
             .returning(|_cmd| Box::pin(async { Ok(()) }));
 
         let schema = schema_with_command_mock(command);
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation { deleteUserCommand(input: { commandId: "user.quick_group" }) }"#,
-        )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())));
+            actor,
+        );
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -846,10 +877,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!) { conversation(serverId: $sid, conversationId: $cid) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -885,10 +916,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!) { conversation(serverId: $sid, conversationId: $cid) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -959,7 +990,7 @@ mod tests {
         .data(Arc::clone(&intent_ctx));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let intent = intent_ctx.take();
         assert!(matches!(
@@ -1016,10 +1047,10 @@ mod tests {
 
         let res = schema
             .execute(
-                Request::new(
+                authed_request(
                     r#"query { message(serverId: "bad", conversationId: "bad", messageId: "bad") { id } }"#,
-                )
-                .data(AuthActorCtx::new(Some(actor), Some(SessionId::new()))),
+                    actor,
+                ),
             )
             .await;
 
@@ -1038,20 +1069,14 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_get_message().returning(move |_q| {
             Box::pin(async move {
-                Ok(rim_services::message::dto::MessageDto {
-                    id: message_id,
-                    server_id,
-                    conversation_id,
-                    thread_id: None,
-                    root_thread_id: Some(root_thread_id),
-                    author_id: actor,
-                    text: Some("root".to_string()),
-                    has_attachments: false,
-                    attachments: vec![],
-                    parent_message_id: None,
-                    is_deleted: false,
-                    sent_at: chrono::Utc::now(),
-                })
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.root_thread_id = Some(root_thread_id);
+                dto.author_id = actor;
+                dto.text = Some("root".to_string());
+                Ok(dto)
             })
         });
 
@@ -1063,10 +1088,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $mid: ID!) { message(serverId: $sid, conversationId: $cid, messageId: $mid) { id rootThreadId } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1074,7 +1099,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1088,26 +1113,18 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_get_message().returning(move |_q| {
             Box::pin(async move {
-                Ok(rim_services::message::dto::MessageDto {
-                    id: message_id,
-                    server_id,
-                    conversation_id,
-                    thread_id: None,
-                    root_thread_id: None,
-                    author_id: actor,
-                    text: Some("root".to_string()),
-                    has_attachments: true,
-                    attachments: vec![rim_services::message_attachment::dto::AttachmentDto {
-                        id: attachment_id,
-                        status: rim_services::message_attachment::dto::AttachmentStatus::Ready,
-                        filename: "file.txt".to_string(),
-                        content_type: "text/plain".to_string(),
-                        size_bytes: 12,
-                    }],
-                    parent_message_id: None,
-                    is_deleted: false,
-                    sent_at: chrono::Utc::now(),
-                })
+                let mut att = test_attachment_dto();
+                att.id = attachment_id;
+
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                dto.text = Some("root".to_string());
+                dto.has_attachments = true;
+                dto.attachments = vec![att];
+                Ok(dto)
             })
         });
 
@@ -1119,10 +1136,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $mid: ID!) { message(serverId: $sid, conversationId: $cid, messageId: $mid) { id hasAttachments attachments { id filename sizeBytes } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1130,7 +1147,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
         let json = res.data.into_json().unwrap();
         assert_eq!(json["message"]["hasAttachments"], serde_json::json!(true));
         assert_eq!(
@@ -1171,10 +1188,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $mid: ID!) { messageReference(serverId: $sid, conversationId: $cid, messageId: $mid) { messageId permalinkPath anchor } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1182,7 +1199,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1195,20 +1212,13 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_search_messages().returning(move |_q| {
             Box::pin(async move {
-                Ok(vec![rim_services::message::dto::MessageDto {
-                    id: message_id,
-                    server_id,
-                    conversation_id,
-                    thread_id: None,
-                    root_thread_id: None,
-                    author_id: actor,
-                    text: Some("deploy failed".to_string()),
-                    has_attachments: false,
-                    attachments: vec![],
-                    parent_message_id: None,
-                    is_deleted: false,
-                    sent_at: chrono::Utc::now(),
-                }])
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                dto.text = Some("deploy failed".to_string());
+                Ok(vec![dto])
             })
         });
 
@@ -1220,17 +1230,17 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!) { searchMessages(serverId: $sid, conversationId: $cid, query: "deploy", limit: 10, includeDeleted: false) { id text } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1243,16 +1253,11 @@ mod tests {
         let mut thread = MockThreadService::new();
         thread.expect_get_thread().returning(move |_q| {
             Box::pin(async move {
-                Ok(rim_services::message_thread::dto::ThreadDto {
-                    id: thread_id,
-                    server_id,
-                    conversation_id,
-                    root_message_id: None,
-                    root_author_id: None,
-                    root_text: None,
-                    created_at: chrono::Utc::now(),
-                    last_message_at: chrono::Utc::now(),
-                })
+                let mut dto = test_thread_dto();
+                dto.id = thread_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                Ok(dto)
             })
         });
 
@@ -1264,10 +1269,10 @@ mod tests {
             thread,
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $tid: ID!) { thread(serverId: $sid, conversationId: $cid, threadId: $tid) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1292,16 +1297,14 @@ mod tests {
             .expect_get_thread_by_root_message()
             .returning(move |_q| {
                 Box::pin(async move {
-                    Ok(Some(rim_services::message_thread::dto::ThreadDto {
-                        id: thread_id,
-                        server_id,
-                        conversation_id,
-                        root_message_id: Some(root_message_id),
-                        root_author_id: Some(actor),
-                        root_text: Some("root".to_string()),
-                        created_at: chrono::Utc::now(),
-                        last_message_at: chrono::Utc::now(),
-                    }))
+                    let mut dto = test_thread_dto();
+                    dto.id = thread_id;
+                    dto.server_id = server_id;
+                    dto.conversation_id = conversation_id;
+                    dto.root_message_id = Some(root_message_id);
+                    dto.root_author_id = Some(actor);
+                    dto.root_text = Some("root".to_string());
+                    Ok(Some(dto))
                 })
             });
 
@@ -1313,10 +1316,10 @@ mod tests {
             thread,
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $mid: ID!) { threadByRootMessage(serverId: $sid, conversationId: $cid, rootMessageId: $mid) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1339,16 +1342,14 @@ mod tests {
         let mut thread = MockThreadService::new();
         thread.expect_create_thread().returning(move |_cmd| {
             Box::pin(async move {
-                Ok(rim_services::message_thread::dto::ThreadDto {
-                    id: thread_id,
-                    server_id,
-                    conversation_id,
-                    root_message_id: Some(message_id),
-                    root_author_id: Some(actor),
-                    root_text: Some("root".to_string()),
-                    created_at: chrono::Utc::now(),
-                    last_message_at: chrono::Utc::now(),
-                })
+                let mut dto = test_thread_dto();
+                dto.id = thread_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.root_message_id = Some(message_id);
+                dto.root_author_id = Some(actor);
+                dto.root_text = Some("root".to_string());
+                Ok(dto)
             })
         });
 
@@ -1360,10 +1361,10 @@ mod tests {
             thread,
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!, $cid: ID!, $mid: ID!) { createThread(input: { serverId: $sid, conversationId: $cid, rootMessageId: $mid }) { id rootMessageId } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1371,7 +1372,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1385,20 +1386,14 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_send_thread_message().returning(move |_cmd| {
             Box::pin(async move {
-                Ok(rim_services::message::dto::MessageDto {
-                    id: message_id,
-                    server_id,
-                    conversation_id,
-                    thread_id: Some(thread_id),
-                    root_thread_id: None,
-                    author_id: actor,
-                    text: Some("reply".to_string()),
-                    has_attachments: false,
-                    attachments: vec![],
-                    parent_message_id: None,
-                    is_deleted: false,
-                    sent_at: chrono::Utc::now(),
-                })
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.thread_id = Some(thread_id);
+                dto.author_id = actor;
+                dto.text = Some("reply".to_string());
+                Ok(dto)
             })
         });
 
@@ -1410,10 +1405,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!, $cid: ID!, $tid: ID!) { sendThreadMessage(input: { serverId: $sid, conversationId: $cid, threadId: $tid, text: "reply" }) { id threadId } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1421,7 +1416,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1434,13 +1429,13 @@ mod tests {
         conv.expect_create_conversation().returning(move |cmd| {
             assert_eq!(cmd.title.as_deref(), Some("Launches"));
             Box::pin(async move {
-                Ok(rim_services::conversation::dto::ConversationDto {
-                    id: conversation_id,
-                    server_id,
-                    conversation_type: ConversationType::Channel,
-                    title: Some("Launches".to_string()),
-                    member_ids: vec![actor],
-                })
+                let mut dto = test_conversation_dto();
+                dto.id = conversation_id;
+                dto.server_id = server_id;
+                dto.conversation_type = ConversationType::Channel;
+                dto.title = Some("Launches".to_string());
+                dto.member_ids = vec![actor];
+                Ok(dto)
             })
         });
 
@@ -1452,16 +1447,16 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!) { createConversation(input: { serverId: $sid, isChannel: true, title: "Launches" }) { id title conversationType } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
         let json = res.data.into_json().unwrap();
         assert_eq!(
             json["createConversation"]["title"],
@@ -1481,21 +1476,15 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_list_messages().returning(move |_q| {
             Box::pin(async move {
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                dto.text = Some("hello".to_string());
+                dto.sent_at = sent_at;
                 Ok(Page::new(
-                    vec![rim_services::message::dto::MessageDto {
-                        id: message_id,
-                        server_id,
-                        conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: actor,
-                        text: Some("hello".to_string()),
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        is_deleted: false,
-                        sent_at,
-                    }],
+                    vec![dto],
                     Some(rim_services::message::dto::MessagePageCursor {
                         sent_at,
                         message_id: next_message_id,
@@ -1513,17 +1502,17 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!) { messages(serverId: $sid, conversationId: $cid, dir: AFTER, limit: 20, includeDeleted: false) { pageInfo { hasNext hasPrev } next { messageId } prev { messageId } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(
@@ -1552,14 +1541,13 @@ mod tests {
         let mut conv = MockConversationService::new();
         conv.expect_list_inbox_conversations().returning(move |_q| {
             Box::pin(async move {
+                let mut dto = test_conversation_dto();
+                dto.id = conversation_id;
+                dto.server_id = server_id;
+                dto.conversation_type = ConversationType::Direct;
+                dto.member_ids = vec![actor];
                 Ok(Page::new(
-                    vec![rim_services::conversation::dto::ConversationDto {
-                        id: conversation_id,
-                        server_id,
-                        conversation_type: ConversationType::Direct,
-                        title: None,
-                        member_ids: vec![actor],
-                    }],
+                    vec![dto],
                     None,
                     Some(rim_services::conversation::dto::InboxPageCursor {
                         last_activity_at,
@@ -1577,16 +1565,16 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!) { inboxConversations(serverId: $sid, dir: BEFORE, limit: 20) { pageInfo { hasNext hasPrev } next { conversationId } prev { conversationId } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(
@@ -1613,17 +1601,12 @@ mod tests {
         let mut conv = MockConversationService::new();
         conv.expect_list_channels().returning(move |_q| {
             Box::pin(async move {
-                Ok(Page::new(
-                    vec![rim_services::conversation::dto::ConversationDto {
-                        id: conversation_id,
-                        server_id,
-                        conversation_type: ConversationType::Channel,
-                        title: None,
-                        member_ids: vec![actor],
-                    }],
-                    None,
-                    None,
-                ))
+                let mut dto = test_conversation_dto();
+                dto.id = conversation_id;
+                dto.server_id = server_id;
+                dto.conversation_type = ConversationType::Channel;
+                dto.member_ids = vec![actor];
+                Ok(Page::new(vec![dto], None, None))
             })
         });
 
@@ -1635,16 +1618,16 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!) { channels(serverId: $sid, dir: AFTER, limit: 1) { pageInfo { hasNext hasPrev } next { conversationId } prev { conversationId } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(
@@ -1670,20 +1653,13 @@ mod tests {
         let mut thread = MockThreadService::new();
         thread.expect_list_threads().returning(move |_q| {
             Box::pin(async move {
-                Ok(Page::new(
-                    vec![rim_services::message_thread::dto::ThreadDto {
-                        id: thread_id,
-                        server_id,
-                        conversation_id,
-                        root_message_id: None,
-                        root_author_id: None,
-                        root_text: None,
-                        created_at: now,
-                        last_message_at: now,
-                    }],
-                    None,
-                    None,
-                ))
+                let mut dto = test_thread_dto();
+                dto.id = thread_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.created_at = now;
+                dto.last_message_at = now;
+                Ok(Page::new(vec![dto], None, None))
             })
         });
 
@@ -1695,17 +1671,17 @@ mod tests {
             thread,
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!) { threads(serverId: $sid, conversationId: $cid, dir: AFTER, limit: 1) { pageInfo { hasNext hasPrev } next { threadId } prev { threadId } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(
@@ -1729,13 +1705,10 @@ mod tests {
         let mut attachment = MockMessageAttachmentService::new();
         attachment.expect_get_attachment().returning(move |_q| {
             Box::pin(async move {
-                Ok(rim_services::message_attachment::dto::AttachmentDto {
-                    id: attachment_id,
-                    status: rim_services::message_attachment::dto::AttachmentStatus::Ready,
-                    filename: "f.txt".to_string(),
-                    content_type: "text/plain".to_string(),
-                    size_bytes: 42,
-                })
+                let mut dto = test_attachment_dto();
+                dto.id = attachment_id;
+                dto.filename = "f.txt".to_string();
+                Ok(dto)
             })
         });
 
@@ -1747,17 +1720,17 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $aid: ID!) { attachment(serverId: $sid, attachmentId: $aid) { id status filename sizeBytes } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "aid": attachment_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1790,10 +1763,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!, $cid: ID!, $mid: ID!) { createAttachment(input: { serverId: $sid, conversationId: $cid, messageId: $mid, filename: "f.txt", contentType: "text/plain", sizeBytes: 42 }) { attachmentId uploadToken maxSizeBytes } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1801,7 +1774,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
         let json = res.data.into_json().unwrap();
         assert_eq!(
             json["createAttachment"]["attachmentId"],
@@ -1821,13 +1794,10 @@ mod tests {
             .returning(move |_cmd| {
                 let attachment_id = attachment_id;
                 Box::pin(async move {
-                    Ok(rim_services::message_attachment::dto::AttachmentDto {
-                        id: attachment_id,
-                        status: rim_services::message_attachment::dto::AttachmentStatus::Ready,
-                        filename: "f.txt".to_string(),
-                        content_type: "text/plain".to_string(),
-                        size_bytes: 42,
-                    })
+                    let mut dto = test_attachment_dto();
+                    dto.id = attachment_id;
+                    dto.filename = "f.txt".to_string();
+                    Ok(dto)
                 })
             });
 
@@ -1839,17 +1809,17 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!, $aid: ID!) { finalizeAttachment(input: { serverId: $sid, attachmentId: $aid }) { id } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "aid": attachment_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1871,17 +1841,17 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"mutation($sid: ID!, $aid: ID!) { deleteAttachment(input: { serverId: $sid, attachmentId: $aid }) }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "aid": attachment_id.to_string(),
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
     }
 
     #[tokio::test]
@@ -1898,21 +1868,16 @@ mod tests {
         let mut msg = MockMessageService::new();
         msg.expect_list_thread_messages().returning(move |_q| {
             Box::pin(async move {
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.thread_id = Some(thread_id);
+                dto.author_id = actor;
+                dto.text = Some("reply".to_string());
+                dto.sent_at = sent_at;
                 Ok(Page::new(
-                    vec![rim_services::message::dto::MessageDto {
-                        id: message_id,
-                        server_id,
-                        conversation_id,
-                        thread_id: Some(thread_id),
-                        root_thread_id: None,
-                        author_id: actor,
-                        text: Some("reply".to_string()),
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        is_deleted: false,
-                        sent_at,
-                    }],
+                    vec![dto],
                     Some(rim_services::message::dto::MessagePageCursor {
                         sent_at,
                         message_id: next_message_id,
@@ -1933,10 +1898,10 @@ mod tests {
             MockThreadService::new(),
         );
 
-        let req = Request::new(
+        let req = authed_request(
             r#"query($sid: ID!, $cid: ID!, $tid: ID!) { threadMessages(serverId: $sid, conversationId: $cid, threadId: $tid, dir: AFTER, limit: 20, includeDeleted: false) { pageInfo { hasNext hasPrev } next { messageId } prev { messageId } } }"#,
+            actor,
         )
-        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
         .variables(Variables::from_json(serde_json::json!({
             "sid": server_id.to_string(),
             "cid": conversation_id.to_string(),
@@ -1944,7 +1909,7 @@ mod tests {
         })));
 
         let res = schema.execute(req).await;
-        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        assert_no_errors(&res);
 
         let json = res.data.into_json().unwrap();
         assert_eq!(
@@ -1963,6 +1928,279 @@ mod tests {
             json["threadMessages"]["prev"]["messageId"],
             serde_json::json!(prev_message_id.to_string())
         );
+    }
+
+    // ── me query ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn me_query_returns_current_user() {
+        let actor = UserId::new();
+
+        let mut user = MockUserService::new();
+        user.expect_get_me().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_user_dto();
+                dto.id = actor;
+                dto.username = "alice".to_string();
+                dto.display_name = Some("Alice".to_string());
+                Ok(dto)
+            })
+        });
+
+        let schema = schema_with_user_mock(user);
+
+        let req = authed_request(r#"query { me { id username displayName } }"#, actor);
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["me"]["id"], serde_json::json!(actor.to_string()));
+        assert_eq!(json["me"]["username"], serde_json::json!("alice"));
+        assert_eq!(json["me"]["displayName"], serde_json::json!("Alice"));
+    }
+
+    #[tokio::test]
+    async fn me_query_requires_auth() {
+        let schema = schema_with_user_mock(MockUserService::new());
+
+        let res = schema.execute(Request::new(r#"query { me { id } }"#)).await;
+
+        assert!(!res.errors.is_empty());
+        assert!(
+            res.errors[0].message.contains("unauthenticated"),
+            "got: {:?}",
+            res.errors[0].message
+        );
+    }
+
+    // ── server query ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn server_query_returns_server() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut server = MockServerService::new();
+        server.expect_get_server().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_server_dto();
+                dto.id = server_id;
+                dto.name = "My Server".to_string();
+                Ok(dto)
+            })
+        });
+
+        let schema = schema_with_server_mocks(server, MockServerMemberService::new());
+
+        let req = authed_request(
+            r#"query($sid: ID!) { server(serverId: $sid) { id name } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["server"]["id"],
+            serde_json::json!(server_id.to_string())
+        );
+        assert_eq!(json["server"]["name"], serde_json::json!("My Server"));
+    }
+
+    // ── serverMembers query ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn server_members_query_returns_members() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let member_user_id = UserId::new();
+        let joined_at = chrono::Utc::now();
+
+        let mut server_member = MockServerMemberService::new();
+        server_member.expect_list_members().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_server_member_dto();
+                dto.server_id = server_id;
+                dto.user_id = member_user_id;
+                dto.member_role = "admin".to_string();
+                dto.joined_at = joined_at;
+                Ok(vec![dto])
+            })
+        });
+
+        let schema = schema_with_server_mocks(MockServerService::new(), server_member);
+
+        let req = authed_request(
+            r#"query($sid: ID!) { serverMembers(serverId: $sid) { userId memberRole joinedAt } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["serverMembers"][0]["userId"],
+            serde_json::json!(member_user_id.to_string())
+        );
+        assert_eq!(
+            json["serverMembers"][0]["memberRole"],
+            serde_json::json!("admin")
+        );
+        assert!(json["serverMembers"][0]["joinedAt"].is_string());
+    }
+
+    // ── sendMessage mutation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn send_message_mutation_creates_message() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut msg = MockMessageService::new();
+        msg.expect_send_message().returning(move |_cmd| {
+            Box::pin(async move {
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                dto.text = Some("hello world".to_string());
+                Ok(dto)
+            })
+        });
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!) { sendMessage(input: { serverId: $sid, conversationId: $cid, text: "hello world" }) { id text authorId } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["sendMessage"]["id"],
+            serde_json::json!(message_id.to_string())
+        );
+        assert_eq!(
+            json["sendMessage"]["text"],
+            serde_json::json!("hello world")
+        );
+        assert_eq!(
+            json["sendMessage"]["authorId"],
+            serde_json::json!(actor.to_string())
+        );
+    }
+
+    // ── editMessage mutation ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_message_mutation_updates_text() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut msg = MockMessageService::new();
+        msg.expect_edit_message().returning(move |_cmd| {
+            Box::pin(async move {
+                let mut dto = test_message_dto();
+                dto.id = message_id;
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                dto.text = Some("updated text".to_string());
+                Ok(dto)
+            })
+        });
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!, $mid: ID!) { editMessage(input: { serverId: $sid, conversationId: $cid, messageId: $mid, text: "updated text" }) { id text } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+            "mid": message_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["editMessage"]["id"],
+            serde_json::json!(message_id.to_string())
+        );
+        assert_eq!(
+            json["editMessage"]["text"],
+            serde_json::json!("updated text")
+        );
+    }
+
+    // ── deleteMessage mutation ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_message_mutation_soft_deletes() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut msg = MockMessageService::new();
+        msg.expect_delete_message()
+            .returning(|_cmd| Box::pin(async { Ok(()) }));
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!, $mid: ID!) { deleteMessage(input: { serverId: $sid, conversationId: $cid, messageId: $mid }) }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+            "mid": message_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
     }
 
     // Keep these IDs referenced so dead-code elimination doesn't hide imports in coverage builds.

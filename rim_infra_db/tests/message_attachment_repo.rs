@@ -2,56 +2,29 @@
 
 mod support;
 
-use rim_core::conversation::model::{ConversationType, NewConversation};
-use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation::model::ConversationType;
 use rim_core::message::model::NewMessage;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_attachment::model::{MessageAttachmentId, NewMessageAttachment};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
-use rim_core::message_thread::repository::MessageThreadRepository;
-use rim_core::server::repository::ServerRepository;
-use rim_core::user::model::NewUser;
-use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
-use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
-use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
-use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn add_get_and_list_attachments_for_message() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
-    let msg_repo = SeaOrmMessageRepository::new(db.clone());
-    let repo = SeaOrmMessageAttachmentRepository::new(db.clone());
+    let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
 
-    let user = user_repo
-        .create_user(NewUser {
-            username: "testuser".to_string(),
-            password: "hash".to_string(),
-        })
-        .await
-        .unwrap();
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let thread = thread_repo.create_thread(conv.id).await.unwrap();
+    let user = ctx.create_user("testuser").await;
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let thread = ctx.create_thread(conv.id).await;
     let msg = msg_repo
         .create_message(&NewMessage {
             conversation_id: conv.id,
@@ -116,4 +89,101 @@ async fn add_get_and_list_attachments_for_message() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn get_attachments_for_messages_batch() {
+    let Some(ctx) = support::TestCtx::new().await else {
+        return;
+    };
+
+    let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+
+    let user = ctx.create_user("batch-att-user").await;
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let thread = ctx.create_thread(conv.id).await;
+
+    let msg1 = msg_repo
+        .create_message(&NewMessage {
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
+            parent_message_id: None,
+            sent_by: user.id,
+            text: Some("msg1".to_string()),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    let msg2 = msg_repo
+        .create_message(&NewMessage {
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
+            parent_message_id: None,
+            sent_by: user.id,
+            text: Some("msg2".to_string()),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Add 2 attachments to msg1
+    repo.add_attachment(NewMessageAttachment {
+        message_id: msg1.id,
+        storage_url: "url1".to_owned(),
+        file_name: "a.txt".to_owned(),
+        file_size: 10,
+        mime_type: "text/plain".to_owned(),
+        metadata: None,
+    })
+    .await
+    .unwrap();
+
+    repo.add_attachment(NewMessageAttachment {
+        message_id: msg1.id,
+        storage_url: "url2".to_owned(),
+        file_name: "b.txt".to_owned(),
+        file_size: 20,
+        mime_type: "text/plain".to_owned(),
+        metadata: None,
+    })
+    .await
+    .unwrap();
+
+    // Add 1 attachment to msg2
+    repo.add_attachment(NewMessageAttachment {
+        message_id: msg2.id,
+        storage_url: "url3".to_owned(),
+        file_name: "c.txt".to_owned(),
+        file_size: 30,
+        mime_type: "text/plain".to_owned(),
+        metadata: None,
+    })
+    .await
+    .unwrap();
+
+    let map = repo
+        .get_attachments_for_messages(&[msg1.id, msg2.id])
+        .await
+        .unwrap();
+    assert_eq!(map.get(&msg1.id).map(|v| v.len()).unwrap_or(0), 2);
+    assert_eq!(map.get(&msg2.id).map(|v| v.len()).unwrap_or(0), 1);
+    let total: usize = map.values().map(|v| v.len()).sum();
+    assert_eq!(total, 3);
+}
+
+#[tokio::test]
+async fn get_attachments_for_messages_empty_slice() {
+    let Some(ctx) = support::TestCtx::new().await else {
+        return;
+    };
+
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+
+    let map = repo.get_attachments_for_messages(&[]).await.unwrap();
+    assert!(map.is_empty());
 }

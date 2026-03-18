@@ -4,10 +4,12 @@ mod tests {
 
     use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
     use rim_core::conversation::repository::{
-        ConversationActivityCursor, ConversationCreatedCursor,
+        ConversationActivityCursor, ConversationCreatedCursor, MockConversationRepository,
     };
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
+    use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::conversation::command::{
         AddConversationMemberCmd, CreateConversationCmd, GetConversationQuery,
@@ -16,21 +18,18 @@ mod tests {
     use rim_services::conversation::types::ConversationParticipants;
     use rim_services::{Actor, ServiceError};
 
+    use crate::ConversationRepos;
     use crate::conversation::DefaultConversationService;
-    use crate::test_support::conversation::{
-        ConversationReposPorts, MockConversationMemberRepo, MockConversationRepo,
-        MockServerMemberRepo,
-    };
 
     fn base_repos() -> (
-        MockConversationRepo,
-        MockConversationMemberRepo,
-        MockServerMemberRepo,
+        MockConversationRepository,
+        MockConversationMemberRepository,
+        MockServerMemberRepository,
     ) {
         (
-            MockConversationRepo::new(),
-            MockConversationMemberRepo::new(),
-            MockServerMemberRepo::new(),
+            MockConversationRepository::new(),
+            MockConversationMemberRepository::new(),
+            MockServerMemberRepository::new(),
         )
     }
 
@@ -55,7 +54,7 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -85,7 +84,7 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -127,14 +126,14 @@ mod tests {
                 assert_eq!(sid, server_id);
                 assert_eq!(title.as_deref(), Some("Launches"));
                 assert_eq!(members, &[actor_id]);
-                Ok(created_for_repo)
+                Box::pin(async move { Ok(created_for_repo) })
             });
 
         conversation_member_repo
             .expect_list_member_ids()
-            .returning(move |_conversation_id| Ok(vec![actor_id]));
+            .returning(move |_conversation_id| Box::pin(async move { Ok(vec![actor_id]) }));
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -168,16 +167,19 @@ mod tests {
 
         conversation_repo
             .expect_find_direct_between_users()
-            .returning(move |_sid, _a, _b| Ok(Some(existing.clone())));
+            .returning(move |_sid, _a, _b| {
+                let e = existing.clone();
+                Box::pin(async move { Ok(Some(e)) })
+            });
         conversation_repo.expect_create_conversation().never();
         conversation_repo
             .expect_create_conversation_with_members()
             .never();
         conversation_member_repo
             .expect_list_member_ids()
-            .returning(|_conversation_id| Ok(vec![]));
+            .returning(|_conversation_id| Box::pin(async { Ok(vec![]) }));
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -211,15 +213,16 @@ mod tests {
             .returning(|_sid, _uid| Ok(true));
 
         let c_for_repo = c.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(c_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = c_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(false));
+            .returning(|_cid, _uid| Box::pin(async { Ok(false) }));
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -253,7 +256,9 @@ mod tests {
         let c2_inbox = c2.clone();
         conversation_repo
             .expect_list_inbox_conversations_for_user()
-            .return_once(move |_, _, _, _, _| Ok(Page::new(vec![c1_inbox, c2_inbox], None, None)));
+            .return_once(move |_, _, _, _, _| {
+                Box::pin(async move { Ok(Page::new(vec![c1_inbox, c2_inbox], None, None)) })
+            });
 
         let c1_id = c1.id;
         let c2_id = c2.id;
@@ -265,7 +270,7 @@ mod tests {
                 for id in ids {
                     out.insert(*id, vec![actor_id]);
                 }
-                Ok(out)
+                Box::pin(async move { Ok(out) })
             });
 
         let c1_channels = c1.clone();
@@ -273,10 +278,10 @@ mod tests {
         conversation_repo
             .expect_list_channels_for_user()
             .return_once(move |_, _, _, _, _| {
-                Ok(Page::new(vec![c1_channels, c2_channels], None, None))
+                Box::pin(async move { Ok(Page::new(vec![c1_channels, c2_channels], None, None)) })
             });
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -328,11 +333,12 @@ mod tests {
             .returning(|_sid, _uid| Ok(true));
 
         let c_for_repo = c.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(c_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = c_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),
@@ -366,7 +372,9 @@ mod tests {
         conversation_repo
             .expect_list_inbox_conversations_for_user()
             .returning(move |_uid, _sid, _limit, _dir, _cursor| {
-                Ok(Page::new(vec![c1.clone(), c2.clone()], None, None))
+                let c1 = c1.clone();
+                let c2 = c2.clone();
+                Box::pin(async move { Ok(Page::new(vec![c1, c2], None, None)) })
             });
 
         conversation_member_repo
@@ -376,15 +384,17 @@ mod tests {
                 for id in ids {
                     out.insert(*id, vec![]);
                 }
-                Ok(out)
+                Box::pin(async move { Ok(out) })
             });
 
         // Also satisfy channels path even if not called.
-        conversation_repo
-            .expect_list_channels_for_user()
-            .returning(|_uid, _sid, _limit, _dir, _cursor| Ok(Page::new(vec![], None, None)));
+        conversation_repo.expect_list_channels_for_user().returning(
+            |_uid, _sid, _limit, _dir, _cursor| {
+                Box::pin(async { Ok(Page::new(vec![], None, None)) })
+            },
+        );
 
-        let svc = DefaultConversationService::new_for_tests(ConversationReposPorts {
+        let svc = DefaultConversationService::new(ConversationRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             server_member_repo: Arc::new(server_member_repo),

@@ -3,11 +3,12 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::user::model::{User, UserId};
+    use rim_core::user::repository::MockUserRepository;
     use rim_services::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
     use rim_services::user::service::UserService;
     use rim_services::{Actor, ServiceError};
 
-    use crate::test_support::user::{MockUserRepo, UserReposPorts};
+    use crate::UserRepos;
     use crate::user::DefaultUserService;
 
     fn user(id: UserId) -> User {
@@ -25,10 +26,10 @@ mod tests {
     #[tokio::test]
     async fn get_me_returns_not_found_when_missing() {
         let actor_id = UserId::new();
-        let mut user_repo = MockUserRepo::new();
+        let mut user_repo = MockUserRepository::new();
         user_repo.expect_get_by_id().returning(|_id| Ok(None));
 
-        let svc = DefaultUserService::new_for_tests(UserReposPorts {
+        let svc = DefaultUserService::new(UserRepos {
             user_repo: Arc::new(user_repo),
         });
 
@@ -45,12 +46,12 @@ mod tests {
     async fn get_user_returns_user() {
         let id = UserId::new();
         let u = user(id);
-        let mut user_repo = MockUserRepo::new();
+        let mut user_repo = MockUserRepository::new();
         user_repo
             .expect_get_by_id()
             .returning(move |_id| Ok(Some(u.clone())));
 
-        let svc = DefaultUserService::new_for_tests(UserReposPorts {
+        let svc = DefaultUserService::new(UserRepos {
             user_repo: Arc::new(user_repo),
         });
 
@@ -66,8 +67,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_profile_is_validation_error_in_v0() {
-        let user_repo = MockUserRepo::new();
-        let svc = DefaultUserService::new_for_tests(UserReposPorts {
+        let user_repo = MockUserRepository::new();
+        let svc = DefaultUserService::new(UserRepos {
             user_repo: Arc::new(user_repo),
         });
 

@@ -13,12 +13,6 @@ use rim_core::repository::pagination::Page;
 use crate::ThreadRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
-#[cfg(test)]
-use crate::test_support::thread::{
-    ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter, MessageRepoPortAdapter,
-    ServerMemberRepoPortAdapter, ThreadRepoPortAdapter, ThreadReposPorts,
-};
-
 #[derive(Clone)]
 pub struct DefaultThreadService {
     repos: ThreadRepos,
@@ -27,25 +21,6 @@ pub struct DefaultThreadService {
 impl DefaultThreadService {
     pub fn new(repos: ThreadRepos) -> Self {
         Self { repos }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: ThreadReposPorts) -> Self {
-        Self::new(ThreadRepos {
-            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
-                repos.conversation_repo,
-            )),
-            conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
-                repos.conversation_member_repo,
-            )),
-            message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
-            message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
-                repos.message_thread_repo,
-            )),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                repos.server_member_repo,
-            )),
-        })
     }
 
     async fn ensure_conversation_member(
