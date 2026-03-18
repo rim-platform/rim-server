@@ -10,6 +10,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
@@ -22,11 +23,12 @@ async fn map_db_err_unique_violation_is_conflict_with_message() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let member_repo = SeaOrmServerMemberRepository::new(conn.clone());
-    let invite_repo = SeaOrmInviteRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let member_repo = SeaOrmServerMemberRepository::new(db.clone());
+    let invite_repo = SeaOrmInviteRepository::new(db.clone());
 
     let user = user_repo
         .create_user(NewUser {
@@ -84,8 +86,9 @@ async fn map_db_err_fk_violation_is_conflict() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let session_repo = SeaOrmSessionRepository::new(conn.clone());
+    let session_repo = SeaOrmSessionRepository::new(db.clone());
 
     let err = session_repo
         .create_session(NewSession {

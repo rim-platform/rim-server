@@ -61,6 +61,9 @@ pub enum ServiceError {
     #[error("permission denied")]
     PermissionDenied,
 
+    #[error("unauthenticated")]
+    Unauthenticated,
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }

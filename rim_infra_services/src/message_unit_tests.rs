@@ -292,14 +292,14 @@ mod tests {
         let msg = message(actor_id, conv_id);
         let mut message_repo = MockMessageRepo::new();
         let msg_for_repo = msg.clone();
-        message_repo.expect_list_messages().returning(
-            move |cid, thread_id, _limit, _dir, _cursor, _inc_del, order| {
-                assert_eq!(cid, conv_id);
-                assert_eq!(thread_id, None);
-                assert_eq!(order, SortOrder::Desc);
+        message_repo
+            .expect_list_messages()
+            .returning(move |params| {
+                assert_eq!(params.conversation_id, conv_id);
+                assert_eq!(params.thread_id, None);
+                assert_eq!(params.order, SortOrder::Desc);
                 Ok(Page::new(vec![msg_for_repo.clone()], None, None))
-            },
-        );
+            });
         let mut message_attachment_repo = MockMessageAttachmentRepo::new();
         message_attachment_repo
             .expect_get_attachments_for_messages()
@@ -496,9 +496,9 @@ mod tests {
         let msg_for_repo = msg.clone();
         message_repo
             .expect_list_messages()
-            .return_once(move |cid, tid, _, _, _, _, _| {
-                assert_eq!(cid, conv_id);
-                assert_eq!(tid, Some(thread_id));
+            .return_once(move |params| {
+                assert_eq!(params.conversation_id, conv_id);
+                assert_eq!(params.thread_id, Some(thread_id));
                 Ok(Page::new(vec![msg_for_repo], None, None))
             });
         let mut message_attachment_repo = MockMessageAttachmentRepo::new();

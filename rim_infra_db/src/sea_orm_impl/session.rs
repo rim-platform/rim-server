@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::session;
 use sea_orm::prelude::Expr;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+
+use crate::DbHandle;
 
 use crate::error::map_db_err;
 use rim_core::auth::model::{NewSession, Session, SessionId};
@@ -11,11 +13,11 @@ use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 
 pub struct SeaOrmSessionRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmSessionRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -63,33 +65,23 @@ impl SessionRepository for SeaOrmSessionRepository {
 
     async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()> {
         let now: DateTime<Utc> = Utc::now();
-        let Some(model) = session::Entity::find_by_id(id)
-            .one(&self.db)
+        session::Entity::update_many()
+            .col_expr(session::Column::LastSeenAt, Expr::value(Some(now)))
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .exec(&self.db)
             .await
-            .map_err(map_db_err)?
-        else {
-            return Ok(());
-        };
-
-        let mut active_model: session::ActiveModel = model.into();
-        active_model.last_seen_at = Set(Some(now.into()));
-        active_model.update(&self.db).await.map_err(map_db_err)?;
+            .map_err(map_db_err)?;
         Ok(())
     }
 
     async fn revoke_session(&self, id: SessionId) -> RepoResult<()> {
         let now: DateTime<Utc> = Utc::now();
-        let Some(model) = session::Entity::find_by_id(id)
-            .one(&self.db)
+        session::Entity::update_many()
+            .col_expr(session::Column::RevokedAt, Expr::value(Some(now)))
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .exec(&self.db)
             .await
-            .map_err(map_db_err)?
-        else {
-            return Ok(());
-        };
-
-        let mut active_model: session::ActiveModel = model.into();
-        active_model.revoked_at = Set(Some(now.into()));
-        active_model.update(&self.db).await.map_err(map_db_err)?;
+            .map_err(map_db_err)?;
         Ok(())
     }
 

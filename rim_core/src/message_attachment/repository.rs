@@ -1,5 +1,7 @@
 use crate::message::model::MessageId;
-use crate::message_attachment::model::{MessageAttachment, MessageAttachmentId};
+use crate::message_attachment::model::{
+    MessageAttachment, MessageAttachmentId, NewMessageAttachment,
+};
 use crate::repository::error::RepoResult;
 use async_trait::async_trait;
 #[cfg(test)]
@@ -13,12 +15,7 @@ pub trait MessageAttachmentRepository: Send + Sync {
 
     async fn add_attachment(
         &self,
-        message_id: MessageId,
-        storage_url: &str,
-        file_name: &str,
-        file_size: i64,
-        mime_type: &str,
-        metadata: Option<serde_json::Value>,
+        attachment: NewMessageAttachment,
     ) -> RepoResult<MessageAttachment>;
 
     async fn get_attachments_for_message(

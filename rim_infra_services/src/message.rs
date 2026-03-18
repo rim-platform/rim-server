@@ -1,8 +1,10 @@
 use async_trait::async_trait;
+use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
 use rim_core::message::model::NewMessage;
 use rim_core::repository::pagination::SortOrder;
+use rim_infra_db::begin_transaction;
 use rim_services::message::command::{
     DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery,
     ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd, SendThreadMessageCmd,
@@ -13,6 +15,7 @@ use rim_services::message_attachment::dto::AttachmentDto;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::MessageRepos;
+use crate::repos::AppRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
 #[cfg(test)]
@@ -25,33 +28,40 @@ use crate::test_support::message::{
 #[derive(Clone)]
 pub struct DefaultMessageService {
     repos: MessageRepos,
+    db: Option<DatabaseConnection>,
 }
 
 impl DefaultMessageService {
-    pub fn new(repos: MessageRepos) -> Self {
-        Self { repos }
+    pub fn new(repos: MessageRepos, db: DatabaseConnection) -> Self {
+        Self {
+            repos,
+            db: Some(db),
+        }
     }
 
     #[cfg(test)]
     pub fn new_for_tests(repos: MessageReposPorts) -> Self {
-        Self::new(MessageRepos {
-            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
-                repos.conversation_repo,
-            )),
-            conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
-                repos.conversation_member_repo,
-            )),
-            message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
-            message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
-                repos.message_attachment_repo,
-            )),
-            message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
-                repos.message_thread_repo,
-            )),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                repos.server_member_repo,
-            )),
-        })
+        Self {
+            repos: MessageRepos {
+                conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
+                    repos.conversation_repo,
+                )),
+                conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
+                    repos.conversation_member_repo,
+                )),
+                message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
+                message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
+                    repos.message_attachment_repo,
+                )),
+                message_thread_repo: std::sync::Arc::new(ThreadRepoPortAdapter(
+                    repos.message_thread_repo,
+                )),
+                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                    repos.server_member_repo,
+                )),
+            },
+            db: None,
+        }
     }
 
     async fn ensure_conversation_member(
@@ -339,21 +349,45 @@ impl MessageService for DefaultMessageService {
             attachments: vec![],
         };
 
-        let message = self
-            .repos
-            .message_repo
-            .create_message(&new_message)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        // Run create + activity touch inside a transaction when DB is available.
+        let message = if let Some(db) = &self.db {
+            let scope = begin_transaction(db)
+                .await
+                .map_err(ServiceError::internal)?;
+            let txn_repos = AppRepos::with_handle(scope.handle());
+
+            let message = txn_repos
+                .message_repo
+                .create_message(&new_message)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            txn_repos
+                .conversation_repo
+                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            scope.commit().await.map_err(ServiceError::internal)?;
+            message
+        } else {
+            let message = self
+                .repos
+                .message_repo
+                .create_message(&new_message)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            self.repos
+                .conversation_repo
+                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            message
+        };
 
         info!(message_id = %message.id, is_reply = parent_message_id.is_some(), "created timeline message");
-
-        self.repos
-            .conversation_repo
-            .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-
         info!(
             conversation_id = %cmd.conversation_id,
             "updated conversation activity"
@@ -423,31 +457,64 @@ impl MessageService for DefaultMessageService {
             }
         };
 
-        let message = self
-            .repos
-            .message_repo
-            .create_message(&NewMessage {
-                conversation_id: cmd.conversation_id,
-                text,
-                sent_by: cmd.actor.user_id,
-                thread_id: Some(cmd.thread_id),
-                parent_message_id,
-                attachments: vec![],
-            })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let new_msg = NewMessage {
+            conversation_id: cmd.conversation_id,
+            text,
+            sent_by: cmd.actor.user_id,
+            thread_id: Some(cmd.thread_id),
+            parent_message_id,
+            attachments: vec![],
+        };
 
-        self.repos
-            .message_thread_repo
-            .touch_last_message_at(cmd.thread_id, message.sent_at)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        // Run create + touch inside a transaction when DB is available.
+        let message = if let Some(db) = &self.db {
+            let scope = begin_transaction(db)
+                .await
+                .map_err(ServiceError::internal)?;
+            let txn_repos = AppRepos::with_handle(scope.handle());
 
-        self.repos
-            .conversation_repo
-            .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            let message = txn_repos
+                .message_repo
+                .create_message(&new_msg)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            txn_repos
+                .message_thread_repo
+                .touch_last_message_at(cmd.thread_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            txn_repos
+                .conversation_repo
+                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            scope.commit().await.map_err(ServiceError::internal)?;
+            message
+        } else {
+            let message = self
+                .repos
+                .message_repo
+                .create_message(&new_msg)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            self.repos
+                .message_thread_repo
+                .touch_last_message_at(cmd.thread_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            self.repos
+                .conversation_repo
+                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            message
+        };
 
         info!(message_id = %message.id, thread_id = %cmd.thread_id, "created thread message");
 
@@ -529,15 +596,15 @@ impl MessageService for DefaultMessageService {
         let page = self
             .repos
             .message_repo
-            .list_messages(
-                query.conversation_id,
-                None,
-                query.limit,
-                query.dir,
-                query.cursor.map(Into::into),
-                query.include_deleted,
-                SortOrder::Desc,
-            )
+            .list_messages(rim_core::message::repository::ListMessagesParams {
+                conversation_id: query.conversation_id,
+                thread_id: None,
+                limit: query.limit,
+                dir: query.dir,
+                cursor: query.cursor.map(Into::into),
+                include_deleted: query.include_deleted,
+                order: SortOrder::Desc,
+            })
             .await
             .map_err(rim_services::map_repo_error)?;
 
@@ -578,15 +645,15 @@ impl MessageService for DefaultMessageService {
         let page = self
             .repos
             .message_repo
-            .list_messages(
-                query.conversation_id,
-                Some(query.thread_id),
-                query.limit,
-                query.dir,
-                query.cursor.map(Into::into),
-                query.include_deleted,
-                SortOrder::Desc,
-            )
+            .list_messages(rim_core::message::repository::ListMessagesParams {
+                conversation_id: query.conversation_id,
+                thread_id: Some(query.thread_id),
+                limit: query.limit,
+                dir: query.dir,
+                cursor: query.cursor.map(Into::into),
+                include_deleted: query.include_deleted,
+                order: SortOrder::Desc,
+            })
             .await
             .map_err(rim_services::map_repo_error)?;
         let items = self

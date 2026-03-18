@@ -8,6 +8,7 @@ mod tests {
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::user::model::{NewUser, User, UserId};
+    use rim_services::auth::command::{AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LogoutCmd};
     use rim_services::auth::service::AuthService;
     use rim_services::{Actor, ServiceError};
 
@@ -49,7 +50,15 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
+        let err = svc
+            .bootstrap(BootstrapCmd {
+                secret: "secret".to_string(),
+                username: "u".to_string(),
+                password: "p".to_string(),
+                server_name: "s".to_string(),
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
@@ -70,7 +79,15 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
+        let err = svc
+            .bootstrap(BootstrapCmd {
+                secret: "secret".to_string(),
+                username: "u".to_string(),
+                password: "p".to_string(),
+                server_name: "s".to_string(),
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
@@ -111,7 +128,10 @@ mod tests {
         );
 
         let err = svc
-            .logout(Actor::new(actor_user_id), session_id)
+            .logout(LogoutCmd {
+                actor: Actor::new(actor_user_id),
+                session_id,
+            })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
@@ -136,7 +156,12 @@ mod tests {
         );
 
         let err = svc
-            .create_invite(Actor::new(actor_user_id), server_id, None, 0)
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor_user_id),
+                server_id,
+                expires_at: None,
+                max_uses: 0,
+            })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
@@ -158,7 +183,7 @@ mod tests {
                 password_hash: "hash".to_string(),
                 created_at: now,
                 updated_at: now,
-                last_login_at: now,
+                last_login_at: Some(now),
             }))
         });
         user_repo.expect_create_user().never();
@@ -190,7 +215,14 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc.accept_invite("token", "taken", "pw").await.unwrap_err();
+        let err = svc
+            .accept_invite(AcceptInviteCmd {
+                invite_token: "token".to_string(),
+                username: "taken".to_string(),
+                password: "password123".to_string(),
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(m) if m.contains("username")));
     }
 
@@ -228,7 +260,15 @@ mod tests {
             Duration::hours(1),
         );
 
-        let err = svc.bootstrap("secret", "u", "p", "s").await.unwrap_err();
+        let err = svc
+            .bootstrap(BootstrapCmd {
+                secret: "secret".to_string(),
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+                server_name: "s".to_string(),
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(m) if m == "duplicate"));
 
         let _ = now;
@@ -248,14 +288,14 @@ mod tests {
         user_repo
             .expect_create_user()
             .returning(move |new: NewUser| {
-                assert_eq!(new.username, "u");
+                assert_eq!(new.username, "testuser");
                 Ok(User {
                     id: user_id,
                     username: new.username,
                     password_hash: new.password,
                     created_at: now,
                     updated_at: now,
-                    last_login_at: now,
+                    last_login_at: Some(now),
                 })
             });
 
@@ -311,7 +351,15 @@ mod tests {
             Duration::hours(1),
         );
 
-        let res = svc.bootstrap("secret", "u", "p", "s").await.unwrap();
+        let res = svc
+            .bootstrap(BootstrapCmd {
+                secret: "secret".to_string(),
+                username: "testuser".to_string(),
+                password: "password123".to_string(),
+                server_name: "s".to_string(),
+            })
+            .await
+            .unwrap();
         assert_eq!(res.user_id, user_id);
         assert_eq!(res.server_id, server_id);
         assert_eq!(res.session.user_id, user_id);

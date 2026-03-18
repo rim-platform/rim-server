@@ -18,7 +18,7 @@ mod tests {
             password_hash: "h".to_string(),
             created_at: now,
             updated_at: now,
-            last_login_at: now,
+            last_login_at: Some(now),
         }
     }
 

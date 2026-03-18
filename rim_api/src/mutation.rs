@@ -1,6 +1,9 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
+use rim_services::auth::command::{
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
+};
 use rim_services::auth::service::AuthService;
 use rim_services::command::dto::UserCommandStepDto;
 use rim_services::command::request::{CreateUserCommandCmd, ExecuteCommandCmd};
@@ -229,12 +232,12 @@ impl Mutation {
     ) -> Result<BootstrapPayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let res = auth
-            .bootstrap(
-                &input.secret,
-                &input.username,
-                &input.password,
-                &input.server_name,
-            )
+            .bootstrap(BootstrapCmd {
+                secret: input.secret,
+                username: input.username,
+                password: input.password,
+                server_name: input.server_name,
+            })
             .await
             .map_err(map_service_error)?;
 
@@ -254,7 +257,10 @@ impl Mutation {
     async fn login(&self, ctx: &Context<'_>, input: LoginInput) -> Result<LoginPayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let res = auth
-            .login(&input.username, &input.password)
+            .login(LoginCmd {
+                username: input.username,
+                password: input.password,
+            })
             .await
             .map_err(map_service_error)?;
 
@@ -275,9 +281,12 @@ impl Mutation {
         let session_id = require_session_id(ctx)?;
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        auth.logout(Actor::new(actor), session_id)
-            .await
-            .map_err(map_service_error)?;
+        auth.logout(LogoutCmd {
+            actor: Actor::new(actor),
+            session_id,
+        })
+        .await
+        .map_err(map_service_error)?;
 
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::ClearSession);
@@ -295,12 +304,12 @@ impl Mutation {
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let res = auth
-            .create_invite(
-                Actor::new(actor),
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor),
                 server_id,
-                input.expires_at,
-                input.max_uses.unwrap_or(1),
-            )
+                expires_at: input.expires_at,
+                max_uses: input.max_uses.unwrap_or(1),
+            })
             .await
             .map_err(map_service_error)?;
 
@@ -317,7 +326,11 @@ impl Mutation {
     ) -> Result<AcceptInvitePayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let res = auth
-            .accept_invite(&input.invite_token, &input.username, &input.password)
+            .accept_invite(AcceptInviteCmd {
+                invite_token: input.invite_token,
+                username: input.username,
+                password: input.password,
+            })
             .await
             .map_err(map_service_error)?;
 

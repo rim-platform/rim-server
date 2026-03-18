@@ -2,7 +2,7 @@
 
 mod support;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::message::model::{MessageId, NewMessage};
 use rim_core::message::repository::MessageRepository;
@@ -10,10 +10,14 @@ use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::PageDir;
 use rim_core::server::repository::ServerRepository;
+use rim_core::user::model::NewUser;
+use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_get_and_list_threads_for_conversation() {
@@ -21,14 +25,19 @@ async fn create_get_and_list_threads_for_conversation() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let repo = SeaOrmMessageThreadRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let repo = SeaOrmMessageThreadRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
 
@@ -93,15 +102,28 @@ async fn set_first_message_conflict_and_not_found() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
-    let msg_repo = SeaOrmMessageRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
+    let msg_repo = SeaOrmMessageRepository::new(db.clone());
 
+    let user = user_repo
+        .create_user(NewUser {
+            username: "testuser".to_string(),
+            password: "hash".to_string(),
+        })
+        .await
+        .unwrap();
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let thread = thread_repo.create_thread(conv.id).await.unwrap();
@@ -111,7 +133,7 @@ async fn set_first_message_conflict_and_not_found() {
             conversation_id: conv.id,
             thread_id: Some(thread.id),
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("t".to_string()),
             attachments: vec![],
         })
@@ -159,15 +181,28 @@ async fn create_thread_for_root_is_atomic_and_conflicts_on_duplicate_root() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
-    let msg_repo = SeaOrmMessageRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
+    let msg_repo = SeaOrmMessageRepository::new(db.clone());
 
+    let user = user_repo
+        .create_user(NewUser {
+            username: "testuser".to_string(),
+            password: "hash".to_string(),
+        })
+        .await
+        .unwrap();
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let msg = msg_repo
@@ -175,7 +210,7 @@ async fn create_thread_for_root_is_atomic_and_conflicts_on_duplicate_root() {
             conversation_id: conv.id,
             thread_id: None,
             parent_message_id: None,
-            sent_by: rim_core::user::model::UserId::new(),
+            sent_by: user.id,
             text: Some("root".to_string()),
             attachments: vec![],
         })
@@ -201,8 +236,9 @@ async fn touch_last_message_at_not_found() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmMessageThreadRepository::new(conn.clone());
+    let repo = SeaOrmMessageThreadRepository::new(db.clone());
     let err = repo
         .touch_last_message_at(
             rim_core::message_thread::model::MessageThreadId::new(),

@@ -1,14 +1,18 @@
 use crate::{sea_orm_active_enums, server_member};
 use rim_core::server_member::model::{ServerMember, ServerMemberRole};
-use sea_orm::ActiveEnum;
-use std::str::FromStr;
 
 impl From<server_member::Model> for ServerMember {
     fn from(m: server_member::Model) -> Self {
+        let member_role = match m.member_role {
+            sea_orm_active_enums::ServerMemberRole::Owner => ServerMemberRole::Owner,
+            sea_orm_active_enums::ServerMemberRole::Moderator => ServerMemberRole::Moderator,
+            sea_orm_active_enums::ServerMemberRole::Guest => ServerMemberRole::Guest,
+        };
+
         Self {
             id: m.id.into(),
             user_id: m.user_id.into(),
-            member_role: ServerMemberRole::from_str(m.member_role.into_value().as_str()).unwrap(),
+            member_role,
             joined_at: m.joined_at.into(),
             server_id: m.server_id.into(),
         }

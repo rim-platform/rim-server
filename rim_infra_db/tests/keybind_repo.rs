@@ -8,6 +8,7 @@ use rim_core::keybind::model::{
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::keybind::SeaOrmKeybindRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
@@ -17,9 +18,10 @@ async fn create_update_and_delete_keybind() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmKeybindRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmKeybindRepository::new(db.clone());
 
     let user = user_repo
         .create_user(NewUser {

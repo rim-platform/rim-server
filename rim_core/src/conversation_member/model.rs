@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use crate::conversation::model::ConversationId;
 use crate::model_id;
 use crate::user::model::UserId;
@@ -9,4 +11,5 @@ pub struct ConversationMember {
     pub id: ConversationMemberId,
     pub user_id: UserId,
     pub conversation_id: ConversationId,
+    pub joined_at: DateTime<Utc>,
 }

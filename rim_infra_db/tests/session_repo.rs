@@ -5,6 +5,7 @@ mod support;
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
@@ -14,9 +15,10 @@ async fn create_get_by_id_and_token_hash() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let session_repo = SeaOrmSessionRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let session_repo = SeaOrmSessionRepository::new(db.clone());
 
     let user = user_repo
         .create_user(rim_core::user::model::NewUser {
@@ -55,9 +57,10 @@ async fn touch_and_revoke_are_idempotent_and_revoke_all_counts() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let session_repo = SeaOrmSessionRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let session_repo = SeaOrmSessionRepository::new(db.clone());
 
     // Missing id is Ok.
     session_repo

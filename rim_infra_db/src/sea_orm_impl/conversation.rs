@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use entity::{conversation, conversation_member};
-use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+use rim_core::conversation::model::{
+    Conversation, ConversationId, ConversationType, NewConversation,
+};
 use rim_core::conversation::repository::{
     ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
 };
@@ -10,20 +12,22 @@ use rim_core::repository::pagination::{Page, PageDir};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::DateTimeWithTimeZone;
+use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, JoinType, QueryFilter,
-    QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, JoinType, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait, RelationTrait, Set,
 };
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 
 pub struct SeaOrmConversationRepository {
-    pub db: DbConn,
+    pub db: DbHandle,
 }
 
 impl SeaOrmConversationRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -39,17 +43,12 @@ impl ConversationRepository for SeaOrmConversationRepository {
         Ok(model.map(Into::into))
     }
 
-    async fn create_conversation(
-        &self,
-        conversation_type: ConversationType,
-        server_id: ServerId,
-        title: Option<String>,
-    ) -> RepoResult<Conversation> {
+    async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation> {
         let active = conversation::ActiveModel {
             id: Set(ConversationId::new().into()),
-            conversation_type: Set(conversation_type.into()),
-            server_id: Set(server_id.into()),
-            title: Set(title),
+            conversation_type: Set(conv.conversation_type.into()),
+            server_id: Set(conv.server_id.into()),
+            title: Set(conv.title),
             ..Default::default()
         };
 
@@ -93,6 +92,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                             ),
                             conversation_id: Set(inserted.id),
                             user_id: Set(user_id),
+                            ..Default::default()
                         };
                         member.insert(txn).await.map_err(map_db_err)?;
                     }
@@ -325,19 +325,18 @@ impl ConversationRepository for SeaOrmConversationRepository {
         conversation_id: ConversationId,
         at: chrono::DateTime<chrono::Utc>,
     ) -> RepoResult<()> {
-        let model = conversation::Entity::find_by_id(conversation_id)
-            .one(&self.db)
+        let at: DateTimeWithTimeZone = at.into();
+        let result = conversation::Entity::update_many()
+            .col_expr(conversation::Column::LastActivityAt, Expr::value(at))
+            .filter(conversation::Column::Id.eq(Uuid::from(conversation_id)))
+            .exec(&self.db)
             .await
             .map_err(map_db_err)?;
 
-        let Some(model) = model else {
+        if result.rows_affected == 0 {
             return Err(RepoError::new(RepoErrorKind::NotFound));
-        };
+        }
 
-        let mut active: conversation::ActiveModel = model.into();
-        let at: DateTimeWithTimeZone = at.into();
-        active.last_activity_at = Set(at);
-        active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
     }
 }

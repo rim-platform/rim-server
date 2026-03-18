@@ -5,18 +5,19 @@ use rim_core::command::repository::UserCommandRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 
 pub struct SeaOrmUserCommandRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmUserCommandRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

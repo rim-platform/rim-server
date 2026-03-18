@@ -6,6 +6,7 @@ use rim_core::command::model::NewUserCommand;
 use rim_core::command::repository::UserCommandRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_db::sea_orm_impl::user_command::SeaOrmUserCommandRepository;
 
@@ -15,9 +16,10 @@ async fn create_and_list_user_commands() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmUserCommandRepository::new(conn.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmUserCommandRepository::new(db.clone());
 
     let user = user_repo
         .create_user(NewUser {

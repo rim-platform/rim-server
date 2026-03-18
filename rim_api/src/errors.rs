@@ -23,6 +23,9 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::PermissionDenied => Error::new("permission denied").extend_with(|_, e| {
             e.set("code", Value::from("FORBIDDEN"));
         }),
+        ServiceError::Unauthenticated => Error::new("unauthenticated").extend_with(|_, e| {
+            e.set("code", Value::from("UNAUTHENTICATED"));
+        }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),

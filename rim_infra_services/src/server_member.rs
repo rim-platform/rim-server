@@ -41,6 +41,8 @@ impl DefaultServerMemberService {
         ServerMemberDto {
             server_id: member.server_id,
             user_id: member.user_id,
+            member_role: member.member_role.as_str().to_string(),
+            joined_at: member.joined_at,
         }
     }
 }

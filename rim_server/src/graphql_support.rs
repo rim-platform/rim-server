@@ -92,6 +92,7 @@ pub fn apply_auth_cookies(
     gql_resp: GraphQLResponse,
     intent_ctx: &AuthIntentCtx,
     req: &HttpRequest,
+    session_ttl_days: u32,
 ) -> GraphQLResponse {
     let secure = req
         .headers()
@@ -115,6 +116,9 @@ pub fn apply_auth_cookies(
                 .http_only(true)
                 .same_site(actix_web::cookie::SameSite::Lax)
                 .secure(secure)
+                .max_age(actix_web::cookie::time::Duration::days(
+                    session_ttl_days as i64,
+                ))
                 .finish();
 
             let c2 = actix_web::cookie::Cookie::build(COOKIE_CSRF, csrf_token)
@@ -122,6 +126,9 @@ pub fn apply_auth_cookies(
                 .http_only(false)
                 .same_site(actix_web::cookie::SameSite::Lax)
                 .secure(secure)
+                .max_age(actix_web::cookie::time::Duration::days(
+                    session_ttl_days as i64,
+                ))
                 .finish();
 
             resp.0 = append_set_cookie(resp.0, c1.to_string());
@@ -157,7 +164,13 @@ fn append_set_cookie(
     cookie: String,
 ) -> async_graphql::BatchResponse {
     let name = http::header::HeaderName::from_static("set-cookie");
-    let value = http::header::HeaderValue::from_str(&cookie).unwrap();
+    let value = match http::header::HeaderValue::from_str(&cookie) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::error!(error = %err, "failed to encode cookie as header value");
+            return br;
+        }
+    };
 
     match br {
         async_graphql::BatchResponse::Single(mut r) => {

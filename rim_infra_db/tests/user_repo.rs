@@ -3,6 +3,7 @@
 mod support;
 
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
@@ -11,8 +12,9 @@ async fn create_and_get_user_roundtrip() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(conn);
+    let repo = SeaOrmUserRepository::new(db.clone());
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_roundtrip".to_string(),
@@ -32,12 +34,12 @@ async fn create_user_duplicate_username_is_conflict() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(conn);
+    let repo = SeaOrmUserRepository::new(db.clone());
 
-    // Current schema does NOT enforce username uniqueness.
-    // We still verify duplicate insertion is allowed (and returns a new user id).
-    let u1 = repo
+    // Schema enforces username uniqueness via a unique index.
+    let _u1 = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
             password: "pw".to_string(),
@@ -45,16 +47,18 @@ async fn create_user_duplicate_username_is_conflict() {
         .await
         .unwrap();
 
-    let u2 = repo
+    let err = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
             password: "pw2".to_string(),
         })
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert_ne!(u1.id, u2.id);
-    assert_eq!(u1.username, u2.username);
+    assert!(matches!(
+        err.kind(),
+        rim_core::repository::error::RepoErrorKind::Conflict
+    ));
 }
 
 #[tokio::test]
@@ -63,8 +67,9 @@ async fn find_by_username_and_delete_by_username_and_any_users_exist() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(conn);
+    let repo = SeaOrmUserRepository::new(db.clone());
 
     assert_eq!(repo.any_users_exist().await.unwrap(), false);
     assert!(repo.find_by_username("missing").await.unwrap().is_none());

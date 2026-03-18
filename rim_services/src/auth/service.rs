@@ -1,48 +1,26 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
+use crate::ServiceResult;
+use crate::auth::command::{AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LoginCmd, LogoutCmd};
 use crate::auth::dto::{
     AcceptInviteResultDto, BootstrapResultDto, CreateInviteResultDto, LoginResultDto,
     RequestAuthResultDto,
 };
-use crate::{Actor, ServiceResult};
-use rim_core::server::model::ServerId;
 
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait AuthService: Send + Sync {
-    async fn bootstrap(
-        &self,
-        secret: &str,
-        username: &str,
-        password: &str,
-        server_name: &str,
-    ) -> ServiceResult<BootstrapResultDto>;
+    async fn bootstrap(&self, cmd: BootstrapCmd) -> ServiceResult<BootstrapResultDto>;
 
-    async fn login(&self, username: &str, password: &str) -> ServiceResult<LoginResultDto>;
+    async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto>;
 
-    async fn logout(
-        &self,
-        actor: Actor,
-        session_id: rim_core::auth::model::SessionId,
-    ) -> ServiceResult<()>;
+    async fn logout(&self, cmd: LogoutCmd) -> ServiceResult<()>;
 
-    async fn create_invite(
-        &self,
-        actor: Actor,
-        server_id: ServerId,
-        expires_at: Option<DateTime<Utc>>,
-        max_uses: i32,
-    ) -> ServiceResult<CreateInviteResultDto>;
+    async fn create_invite(&self, cmd: CreateInviteCmd) -> ServiceResult<CreateInviteResultDto>;
 
-    async fn accept_invite(
-        &self,
-        invite_token: &str,
-        username: &str,
-        password: &str,
-    ) -> ServiceResult<AcceptInviteResultDto>;
+    async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto>;
 }
 
 #[async_trait]

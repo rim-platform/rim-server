@@ -1,22 +1,25 @@
 use async_trait::async_trait;
 use entity::message_attachment;
 use rim_core::message::model::MessageId;
-use rim_core::message_attachment::model::{MessageAttachment, MessageAttachmentId};
+use rim_core::message_attachment::model::{
+    MessageAttachment, MessageAttachmentId, NewMessageAttachment,
+};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 use std::collections::HashMap;
 
 pub struct SeaOrmMessageAttachmentRepository {
-    pub db: DbConn,
+    pub db: DbHandle,
 }
 
 impl SeaOrmMessageAttachmentRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -34,20 +37,24 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
 
     async fn add_attachment(
         &self,
-        message_id: MessageId,
-        storage_url: &str,
-        file_name: &str,
-        file_size: i64,
-        mime_type: &str,
-        metadata: Option<sea_orm::prelude::Json>,
+        attachment: NewMessageAttachment,
     ) -> RepoResult<MessageAttachment> {
+        let NewMessageAttachment {
+            message_id,
+            storage_url,
+            file_name,
+            file_size,
+            mime_type,
+            metadata,
+        } = attachment;
+
         let active = message_attachment::ActiveModel {
             id: Set(MessageAttachmentId::new().into()),
             message_id: Set(message_id.into()),
-            storage_url: Set(storage_url.to_owned()),
-            file_name: Set(file_name.to_owned()),
+            storage_url: Set(storage_url),
+            file_name: Set(file_name),
             file_size: Set(file_size),
-            mime_type: Set(mime_type.to_owned()),
+            mime_type: Set(mime_type),
             metadata: Set(metadata),
         };
 

@@ -2,13 +2,14 @@
 
 mod support;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
@@ -20,15 +21,20 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
 
@@ -71,15 +77,20 @@ async fn remove_member_success_and_not_found() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
 
@@ -105,15 +116,20 @@ async fn add_member_conflicts_on_duplicate_conversation_membership() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user_id = user_repo

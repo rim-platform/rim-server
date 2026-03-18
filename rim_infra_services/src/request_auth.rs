@@ -44,6 +44,9 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             return Ok(RequestAuthResultDto::default());
         }
 
+        // Best-effort: update last_seen_at for activity tracking.
+        let _ = self.repos.session_repo.touch_last_seen_at(session.id).await;
+
         Ok(RequestAuthResultDto {
             user_id: Some(session.user_id),
             session_id: Some(session.id),
@@ -138,6 +141,7 @@ mod tests {
             assert_eq!(token_hash, hash_token("session-token"));
             Ok(Some(session))
         });
+        repo.expect_touch_last_seen_at().return_once(|_| Ok(()));
         let svc = service(repo);
 
         let result = svc

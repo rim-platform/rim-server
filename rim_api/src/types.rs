@@ -2,9 +2,205 @@ use async_graphql::{Enum, InputObject, SimpleObject};
 
 use rim_core::repository::pagination::Page;
 
+// ── GraphQL output enums (stable wire contract) ──────────────────────────
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandSourceKind {
+    BuiltIn,
+    Plugin,
+    Integration,
+    User,
+}
+
+impl From<rim_services::command::dto::CommandSourceKindDto> for CommandSourceKind {
+    fn from(value: rim_services::command::dto::CommandSourceKindDto) -> Self {
+        use rim_services::command::dto::CommandSourceKindDto as D;
+        match value {
+            D::BuiltIn => Self::BuiltIn,
+            D::Plugin => Self::Plugin,
+            D::Integration => Self::Integration,
+            D::User => Self::User,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandExecutionTarget {
+    Backend,
+    DesktopLocal,
+}
+
+impl From<rim_services::command::dto::CommandExecutionTargetDto> for CommandExecutionTarget {
+    fn from(value: rim_services::command::dto::CommandExecutionTargetDto) -> Self {
+        use rim_services::command::dto::CommandExecutionTargetDto as D;
+        match value {
+            D::Backend => Self::Backend,
+            D::DesktopLocal => Self::DesktopLocal,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandResultStatus {
+    Success,
+    Error,
+}
+
+impl From<rim_services::command::dto::CommandResultStatusDto> for CommandResultStatus {
+    fn from(value: rim_services::command::dto::CommandResultStatusDto) -> Self {
+        use rim_services::command::dto::CommandResultStatusDto as D;
+        match value {
+            D::Success => Self::Success,
+            D::Error => Self::Error,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum IntegrationKind {
+    BuiltIn,
+    LocalPlugin,
+    Bot,
+    Webhook,
+}
+
+impl From<rim_services::integration::dto::IntegrationKindDto> for IntegrationKind {
+    fn from(value: rim_services::integration::dto::IntegrationKindDto) -> Self {
+        use rim_services::integration::dto::IntegrationKindDto as D;
+        match value {
+            D::BuiltIn => Self::BuiltIn,
+            D::LocalPlugin => Self::LocalPlugin,
+            D::Bot => Self::Bot,
+            D::Webhook => Self::Webhook,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum SettingScope {
+    User,
+    Workspace,
+    Integration,
+    DeviceLocal,
+}
+
+impl From<rim_services::setting::dto::SettingScopeDto> for SettingScope {
+    fn from(value: rim_services::setting::dto::SettingScopeDto) -> Self {
+        use rim_services::setting::dto::SettingScopeDto as D;
+        match value {
+            D::User => Self::User,
+            D::Workspace => Self::Workspace,
+            D::Integration => Self::Integration,
+            D::DeviceLocal => Self::DeviceLocal,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum ConversationTypeEnum {
+    Direct,
+    Group,
+    Channel,
+}
+
+impl From<rim_core::conversation::model::ConversationType> for ConversationTypeEnum {
+    fn from(value: rim_core::conversation::model::ConversationType) -> Self {
+        use rim_core::conversation::model::ConversationType as D;
+        match value {
+            D::Direct => Self::Direct,
+            D::Group => Self::Group,
+            D::Channel => Self::Channel,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum AttachmentStatusEnum {
+    PendingUpload,
+    Ready,
+}
+
+impl From<rim_services::message_attachment::dto::AttachmentStatus> for AttachmentStatusEnum {
+    fn from(value: rim_services::message_attachment::dto::AttachmentStatus) -> Self {
+        use rim_services::message_attachment::dto::AttachmentStatus as D;
+        match value {
+            D::PendingUpload => Self::PendingUpload,
+            D::Ready => Self::Ready,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum KeybindSource {
+    Default,
+    User,
+    Workspace,
+}
+
+impl From<rim_services::keybind::dto::KeybindSourceDto> for KeybindSource {
+    fn from(value: rim_services::keybind::dto::KeybindSourceDto) -> Self {
+        use rim_services::keybind::dto::KeybindSourceDto as D;
+        match value {
+            D::Default => Self::Default,
+            D::User => Self::User,
+            D::Workspace => Self::Workspace,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 pub struct User {
     pub id: async_graphql::ID,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub status_text: Option<String>,
+}
+
+impl From<rim_services::user::dto::UserDto> for User {
+    fn from(value: rim_services::user::dto::UserDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            username: value.username,
+            display_name: value.display_name,
+            avatar_url: value.avatar_url,
+            status_text: value.status_text,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Server {
+    pub id: async_graphql::ID,
+    pub name: String,
+}
+
+impl From<rim_services::server::dto::ServerDto> for Server {
+    fn from(value: rim_services::server::dto::ServerDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            name: value.name,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ServerMember {
+    pub server_id: async_graphql::ID,
+    pub user_id: async_graphql::ID,
+    pub member_role: String,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
+    fn from(value: rim_services::server_member::dto::ServerMemberDto) -> Self {
+        Self {
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            user_id: async_graphql::ID(value.user_id.to_string()),
+            member_role: value.member_role,
+            joined_at: value.joined_at,
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -13,8 +209,8 @@ pub struct Command {
     pub title: String,
     pub description: String,
     pub category: String,
-    pub source_kind: String,
-    pub execution_target: String,
+    pub source_kind: CommandSourceKind,
+    pub execution_target: CommandExecutionTarget,
     pub required_context: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub visible_in_palette: bool,
@@ -30,8 +226,8 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
             title: value.title,
             description: value.description,
             category: value.category,
-            source_kind: format!("{:?}", value.source_kind),
-            execution_target: format!("{:?}", value.execution_target),
+            source_kind: value.source_kind.into(),
+            execution_target: value.execution_target.into(),
             required_context: value.required_context,
             required_capabilities: value.required_capabilities,
             visible_in_palette: value.visible_in_palette,
@@ -111,7 +307,7 @@ impl TryFrom<CommandContextInput> for rim_services::command::dto::CommandContext
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct CommandResult {
-    pub status: String,
+    pub status: CommandResultStatus,
     pub message: String,
     pub payload: Option<async_graphql::Json<serde_json::Value>>,
     pub follow_up_commands: Vec<String>,
@@ -120,7 +316,7 @@ pub struct CommandResult {
 impl From<rim_services::command::dto::CommandResultDto> for CommandResult {
     fn from(value: rim_services::command::dto::CommandResultDto) -> Self {
         Self {
-            status: format!("{:?}", value.status),
+            status: value.status.into(),
             message: value.message,
             payload: value.payload.map(async_graphql::Json),
             follow_up_commands: value.follow_up_commands,
@@ -184,7 +380,7 @@ impl From<rim_services::capability::dto::CapabilityDto> for Capability {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Integration {
     pub id: String,
-    pub kind: String,
+    pub kind: IntegrationKind,
     pub title: String,
     pub enabled: bool,
     pub principal_id: Option<async_graphql::ID>,
@@ -194,7 +390,7 @@ impl From<rim_services::integration::dto::IntegrationDto> for Integration {
     fn from(value: rim_services::integration::dto::IntegrationDto) -> Self {
         Self {
             id: value.id,
-            kind: format!("{:?}", value.kind),
+            kind: value.kind.into(),
             title: value.title,
             enabled: value.enabled,
             principal_id: value
@@ -207,7 +403,7 @@ impl From<rim_services::integration::dto::IntegrationDto> for Integration {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Setting {
     pub id: String,
-    pub scope: String,
+    pub scope: SettingScope,
     pub title: String,
     pub description: String,
     pub value_type: String,
@@ -217,32 +413,32 @@ pub struct Setting {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Keybind {
     pub id: async_graphql::ID,
-    pub source: String,
-    pub scope: String,
+    pub source: KeybindSource,
+    pub scope: KeybindScope,
     pub workspace_id: Option<async_graphql::ID>,
     pub keystroke: String,
     pub command_id: String,
-    pub context: String,
+    pub context: KeybindContext,
     pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
     pub is_enabled: bool,
 }
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct DefaultKeybind {
-    pub source: String,
+    pub source: KeybindSource,
     pub keystroke: String,
     pub command_id: String,
-    pub context: String,
+    pub context: KeybindContext,
     pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
 }
 
 impl From<rim_services::keybind::dto::DefaultKeybindDto> for DefaultKeybind {
     fn from(value: rim_services::keybind::dto::DefaultKeybindDto) -> Self {
         Self {
-            source: format!("{:?}", value.source),
+            source: value.source.into(),
             keystroke: value.keystroke,
             command_id: value.command_id,
-            context: format!("{:?}", value.context),
+            context: value.context.into(),
             preset_args: value.preset_args.map(async_graphql::Json),
         }
     }
@@ -271,14 +467,14 @@ impl From<rim_services::keybind::dto::KeybindDto> for Keybind {
     fn from(value: rim_services::keybind::dto::KeybindDto) -> Self {
         Self {
             id: async_graphql::ID(value.id.to_string()),
-            source: format!("{:?}", value.source),
-            scope: format!("{:?}", value.scope),
+            source: value.source.into(),
+            scope: value.scope.into(),
             workspace_id: value
                 .workspace_id
                 .map(|id| async_graphql::ID(id.to_string())),
             keystroke: value.keystroke,
             command_id: value.command_id,
-            context: format!("{:?}", value.context),
+            context: value.context.into(),
             preset_args: value.preset_args.map(async_graphql::Json),
             is_enabled: value.is_enabled,
         }
@@ -296,6 +492,16 @@ impl From<KeybindScope> for rim_services::keybind::dto::KeybindScopeDto {
         match value {
             KeybindScope::User => Self::User,
             KeybindScope::Workspace => Self::Workspace,
+        }
+    }
+}
+
+impl From<rim_services::keybind::dto::KeybindScopeDto> for KeybindScope {
+    fn from(value: rim_services::keybind::dto::KeybindScopeDto) -> Self {
+        use rim_services::keybind::dto::KeybindScopeDto as D;
+        match value {
+            D::User => Self::User,
+            D::Workspace => Self::Workspace,
         }
     }
 }
@@ -325,11 +531,26 @@ impl From<KeybindContext> for rim_services::keybind::dto::KeybindContextDto {
     }
 }
 
+impl From<rim_services::keybind::dto::KeybindContextDto> for KeybindContext {
+    fn from(value: rim_services::keybind::dto::KeybindContextDto) -> Self {
+        use rim_services::keybind::dto::KeybindContextDto as D;
+        match value {
+            D::Global => Self::Global,
+            D::Composer => Self::Composer,
+            D::MessageList => Self::MessageList,
+            D::ThreadView => Self::ThreadView,
+            D::ConversationView => Self::ConversationView,
+            D::Panel => Self::Panel,
+            D::CommandPalette => Self::CommandPalette,
+        }
+    }
+}
+
 impl From<rim_services::setting::dto::SettingDto> for Setting {
     fn from(value: rim_services::setting::dto::SettingDto) -> Self {
         Self {
             id: value.id,
-            scope: format!("{:?}", value.scope),
+            scope: value.scope.into(),
             title: value.title,
             description: value.description,
             value_type: value.value_type,
@@ -342,7 +563,7 @@ impl From<rim_services::setting::dto::SettingDto> for Setting {
 pub struct Conversation {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
-    pub conversation_type: String,
+    pub conversation_type: ConversationTypeEnum,
     pub title: Option<String>,
     pub member_ids: Vec<async_graphql::ID>,
 }
@@ -352,7 +573,7 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
         Self {
             id: async_graphql::ID(value.id.to_string()),
             server_id: async_graphql::ID(value.server_id.to_string()),
-            conversation_type: format!("{:?}", value.conversation_type),
+            conversation_type: value.conversation_type.into(),
             title: value.title,
             member_ids: value
                 .member_ids
@@ -459,7 +680,7 @@ impl From<rim_services::message_thread::dto::ThreadDto> for Thread {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Attachment {
     pub id: async_graphql::ID,
-    pub status: String,
+    pub status: AttachmentStatusEnum,
     pub filename: String,
     pub content_type: String,
     pub size_bytes: u64,
@@ -469,7 +690,7 @@ impl From<rim_services::message_attachment::dto::AttachmentDto> for Attachment {
     fn from(value: rim_services::message_attachment::dto::AttachmentDto) -> Self {
         Self {
             id: async_graphql::ID(value.id.to_string()),
-            status: format!("{:?}", value.status),
+            status: value.status.into(),
             filename: value.filename,
             content_type: value.content_type,
             size_bytes: value.size_bytes,

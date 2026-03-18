@@ -19,3 +19,45 @@ pub fn verify_password(password: &str, password_hash: &str) -> AuthResult<bool> 
     let argon2 = Argon2::default();
     Ok(argon2.verify_password(password.as_bytes(), &parsed).is_ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_password_returns_valid_phc_string() {
+        let hash = hash_password("my_secret").unwrap();
+        assert!(
+            hash.starts_with("$argon2"),
+            "expected PHC string starting with $argon2, got: {hash}"
+        );
+    }
+
+    #[test]
+    fn verify_password_returns_true_for_correct_password() {
+        let hash = hash_password("test123").unwrap();
+        assert!(verify_password("test123", &hash).unwrap());
+    }
+
+    #[test]
+    fn verify_password_returns_false_for_wrong_password() {
+        let hash = hash_password("test123").unwrap();
+        assert!(!verify_password("wrong", &hash).unwrap());
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_differ() {
+        let h1 = hash_password("same_password").unwrap();
+        let h2 = hash_password("same_password").unwrap();
+        assert_ne!(
+            h1, h2,
+            "two hashes of the same password should differ due to random salt"
+        );
+    }
+
+    #[test]
+    fn empty_password_can_be_hashed_and_verified() {
+        let hash = hash_password("").unwrap();
+        assert!(verify_password("", &hash).unwrap());
+    }
+}

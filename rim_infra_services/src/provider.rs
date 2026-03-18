@@ -17,6 +17,7 @@ use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
 use rim_services::setting::service::SettingService;
 use rim_services::user::service::UserService;
+use sea_orm::DatabaseConnection;
 
 use crate::repos::AppRepos;
 
@@ -41,10 +42,16 @@ pub struct DefaultAppServiceProvider {
 }
 
 impl DefaultAppServiceProvider {
-    pub fn new(repos: &AppRepos, bootstrap_secret: Option<String>, session_ttl: Duration) -> Self {
+    pub fn new(
+        repos: &AppRepos,
+        db: DatabaseConnection,
+        bootstrap_secret: Option<String>,
+        session_ttl: Duration,
+    ) -> Self {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         let auth_service: Arc<dyn AuthService> = Arc::new(crate::auth::DefaultAuthService::new(
             repos.for_auth(),
+            db.clone(),
             bootstrap_secret,
             session_ttl,
         ));
@@ -57,13 +64,14 @@ impl DefaultAppServiceProvider {
         let integration_service: Arc<dyn IntegrationService> =
             Arc::new(crate::integration::DefaultIntegrationService);
         let message_service: Arc<dyn MessageService> = Arc::new(
-            crate::message::DefaultMessageService::new(repos.for_message()),
+            crate::message::DefaultMessageService::new(repos.for_message(), db.clone()),
         );
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(repos.for_attachment()),
         );
-        let server_service: Arc<dyn ServerService> =
-            Arc::new(crate::server::DefaultServerService::new(repos.for_server()));
+        let server_service: Arc<dyn ServerService> = Arc::new(
+            crate::server::DefaultServerService::new(repos.for_server(), db.clone()),
+        );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
         );

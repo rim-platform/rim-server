@@ -2,8 +2,7 @@ use async_trait::async_trait;
 use entity::message;
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::{Message, MessageId, NewMessage};
-use rim_core::message::repository::{MessageCursor, MessageRepository};
-use rim_core::message_thread::model::MessageThreadId;
+use rim_core::message::repository::{ListMessagesParams, MessageCursor, MessageRepository};
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
@@ -11,18 +10,19 @@ use sea_orm::QuerySelect;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashMap;
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 
 pub struct SeaOrmMessageRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmMessageRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -75,14 +75,18 @@ impl MessageRepository for SeaOrmMessageRepository {
 
     async fn list_messages(
         &self,
-        conversation_id: ConversationId,
-        thread_id: Option<MessageThreadId>,
-        limit: u32,
-        dir: PageDir,
-        cursor: Option<MessageCursor>,
-        include_deleted: bool,
-        order: SortOrder,
+        params: ListMessagesParams,
     ) -> RepoResult<Page<Message, MessageCursor>> {
+        let ListMessagesParams {
+            conversation_id,
+            thread_id,
+            limit,
+            dir,
+            cursor,
+            include_deleted,
+            order,
+        } = params;
+
         let mut q = message::Entity::find()
             .filter(message::Column::ConversationId.eq::<Uuid>(conversation_id.into()));
 

@@ -43,5 +43,10 @@ pub fn build_schema(service_provider: Arc<dyn AppServiceProvider>) -> AppSchema 
         .data(service_provider.message_attachment_service())
         .data(service_provider.setting_service())
         .data(service_provider.thread_service())
+        .data(service_provider.user_service())
+        .data(service_provider.server_service())
+        .data(service_provider.server_member_service())
+        .limit_depth(10)
+        .limit_complexity(200)
         .finish()
 }

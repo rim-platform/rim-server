@@ -7,6 +7,7 @@ use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
@@ -17,10 +18,11 @@ async fn add_get_is_member_get_by_id_and_list_members() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmServerMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmServerMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u1 = user_repo
@@ -69,10 +71,11 @@ async fn change_member_role_and_remove_member_errors() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmServerMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmServerMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u = user_repo
@@ -115,10 +118,11 @@ async fn add_member_conflicts_on_duplicate_server_membership() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmServerMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmServerMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let user_id = user_repo

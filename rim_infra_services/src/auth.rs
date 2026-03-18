@@ -1,19 +1,25 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
 use rim_auth::password::{hash_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInvite, NewSession};
 use rim_core::server_member::model::ServerMemberRole;
+use rim_infra_db::begin_transaction;
+use rim_services::auth::command::{
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
+};
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, BootstrapResultDto, CreateInviteResultDto, InviteDto,
     LoginResultDto,
 };
 use rim_services::auth::service::AuthService;
-use rim_services::{Actor, ServiceError, ServiceResult};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::AuthRepos;
+use crate::repos::AppRepos;
 use crate::util::ensure_server_owner;
 
 #[cfg(test)]
@@ -25,14 +31,21 @@ use crate::test_support::auth::{
 #[derive(Clone)]
 pub struct DefaultAuthService {
     repos: AuthRepos,
+    db: Option<DatabaseConnection>,
     bootstrap_secret: Option<String>,
     session_ttl: Duration,
 }
 
 impl DefaultAuthService {
-    pub fn new(repos: AuthRepos, bootstrap_secret: Option<String>, session_ttl: Duration) -> Self {
+    pub fn new(
+        repos: AuthRepos,
+        db: DatabaseConnection,
+        bootstrap_secret: Option<String>,
+        session_ttl: Duration,
+    ) -> Self {
         Self {
             repos,
+            db: Some(db),
             bootstrap_secret,
             session_ttl,
         }
@@ -44,8 +57,8 @@ impl DefaultAuthService {
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
     ) -> Self {
-        Self::new(
-            AuthRepos {
+        Self {
+            repos: AuthRepos {
                 user_repo: std::sync::Arc::new(UserRepoPortAdapter(repos.user_repo)),
                 server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
                 server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
@@ -54,9 +67,39 @@ impl DefaultAuthService {
                 session_repo: std::sync::Arc::new(SessionRepoPortAdapter(repos.session_repo)),
                 invite_repo: std::sync::Arc::new(InviteRepoPortAdapter(repos.invite_repo)),
             },
+            db: None,
             bootstrap_secret,
             session_ttl,
-        )
+        }
+    }
+
+    fn validate_password(password: &str) -> ServiceResult<()> {
+        if password.len() < 8 {
+            return Err(ServiceError::Validation(
+                "password must be at least 8 characters".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_username(username: &str) -> ServiceResult<()> {
+        let trimmed = username.trim();
+        let len = trimmed.len();
+        if !(3..=32).contains(&len) {
+            return Err(ServiceError::Validation(
+                "username must be between 3 and 32 characters".to_string(),
+            ));
+        }
+        if !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(ServiceError::Validation(
+                "username may only contain alphanumeric characters, underscores, or hyphens"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn new_csrf_token() -> String {
@@ -129,14 +172,20 @@ impl DefaultAuthService {
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
-    #[instrument(name = "auth.bootstrap", skip_all, fields(username = %username))]
-    async fn bootstrap(
-        &self,
-        secret: &str,
-        username: &str,
-        password: &str,
-        server_name: &str,
-    ) -> ServiceResult<BootstrapResultDto> {
+    #[instrument(name = "auth.bootstrap", skip_all, fields(username = %cmd.username))]
+    async fn bootstrap(&self, cmd: BootstrapCmd) -> ServiceResult<BootstrapResultDto> {
+        let BootstrapCmd {
+            secret,
+            username,
+            password,
+            server_name,
+        } = cmd;
+        let (secret, username, password, server_name) = (
+            secret.as_str(),
+            username.as_str(),
+            password.as_str(),
+            server_name.as_str(),
+        );
         info!(username = %username, "check bootstrap secret");
         let expected = self
             .bootstrap_secret
@@ -148,12 +197,29 @@ impl AuthService for DefaultAuthService {
 
         self.ensure_no_users_exist().await?;
 
+        Self::validate_username(username)?;
+        Self::validate_password(password)?;
+
         info!(username = %username, "hash the password");
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
+        // Run all writes inside a single transaction when DB is available.
+        let scope = if let Some(db) = &self.db {
+            Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            )
+        } else {
+            None
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(s.handle()).for_auth(),
+            None => self.repos.clone(),
+        };
+
         info!(username = %username, "add user");
-        let user = self
-            .repos
+        let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
@@ -166,8 +232,7 @@ impl AuthService for DefaultAuthService {
             })?;
 
         info!(username = %username, "add server");
-        let server = self
-            .repos
+        let server = repos
             .server_repo
             .create_server(server_name)
             .await
@@ -177,15 +242,33 @@ impl AuthService for DefaultAuthService {
             })?;
 
         info!(username = %username, "add member");
-        let _member = self
-            .repos
+        let _member = repos
             .server_member_repo
             .add_member(server.id, user.id, ServerMemberRole::Owner)
             .await
             .map_err(rim_services::map_repo_error)?;
 
         info!(username = %username, "create session");
-        let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
+        let raw_token = generate_session_token();
+        let token_hash = hash_token(&raw_token);
+        let expires_at: DateTime<Utc> = Utc::now() + self.session_ttl;
+        let sess = repos
+            .session_repo
+            .create_session(NewSession {
+                user_id: user.id,
+                token_hash,
+                expires_at,
+                user_agent: None,
+                ip: None,
+            })
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        let csrf = Self::new_csrf_token();
 
         info!(user_id = %user.id, server_id = %server.id, "bootstrapped instance");
 
@@ -198,19 +281,21 @@ impl AuthService for DefaultAuthService {
         })
     }
 
-    #[instrument(name = "auth.login", skip_all, fields(username = %username))]
-    async fn login(&self, username: &str, password: &str) -> ServiceResult<LoginResultDto> {
+    #[instrument(name = "auth.login", skip_all, fields(username = %cmd.username))]
+    async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto> {
+        let LoginCmd { username, password } = cmd;
+        let (username, password) = (username.as_str(), password.as_str());
         let user = self
             .repos
             .user_repo
             .find_by_username(username)
             .await
             .map_err(rim_services::map_repo_error)?
-            .ok_or(ServiceError::PermissionDenied)?;
+            .ok_or(ServiceError::Unauthenticated)?;
 
         let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
         if !ok {
-            return Err(ServiceError::PermissionDenied);
+            return Err(ServiceError::Unauthenticated);
         }
 
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
@@ -223,12 +308,9 @@ impl AuthService for DefaultAuthService {
         })
     }
 
-    #[instrument(name = "auth.logout", skip_all, fields(actor_id = %actor.user_id, session_id = %session_id))]
-    async fn logout(
-        &self,
-        actor: Actor,
-        session_id: rim_core::auth::model::SessionId,
-    ) -> ServiceResult<()> {
+    #[instrument(name = "auth.logout", skip_all, fields(actor_id = %cmd.actor.user_id, session_id = %cmd.session_id))]
+    async fn logout(&self, cmd: LogoutCmd) -> ServiceResult<()> {
+        let LogoutCmd { actor, session_id } = cmd;
         let sess = self
             .repos
             .session_repo
@@ -250,14 +332,14 @@ impl AuthService for DefaultAuthService {
         Ok(())
     }
 
-    #[instrument(name = "auth.create_invite", skip_all, fields(actor_id = %actor.user_id, server_id = %server_id, max_uses))]
-    async fn create_invite(
-        &self,
-        actor: Actor,
-        server_id: rim_core::server::model::ServerId,
-        expires_at: Option<DateTime<Utc>>,
-        max_uses: i32,
-    ) -> ServiceResult<CreateInviteResultDto> {
+    #[instrument(name = "auth.create_invite", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, max_uses))]
+    async fn create_invite(&self, cmd: CreateInviteCmd) -> ServiceResult<CreateInviteResultDto> {
+        let CreateInviteCmd {
+            actor,
+            server_id,
+            expires_at,
+            max_uses,
+        } = cmd;
         if max_uses <= 0 {
             return Err(ServiceError::Validation("max_uses must be > 0".to_string()));
         }
@@ -296,19 +378,17 @@ impl AuthService for DefaultAuthService {
         })
     }
 
-    #[instrument(name = "auth.accept_invite", skip_all, fields(username = %username))]
-    async fn accept_invite(
-        &self,
-        invite_token: &str,
-        username: &str,
-        password: &str,
-    ) -> ServiceResult<AcceptInviteResultDto> {
-        if username.trim().is_empty() {
-            return Err(ServiceError::Validation("username required".to_string()));
-        }
-        if password.is_empty() {
-            return Err(ServiceError::Validation("password required".to_string()));
-        }
+    #[instrument(name = "auth.accept_invite", skip_all, fields(username = %cmd.username))]
+    async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto> {
+        let AcceptInviteCmd {
+            invite_token,
+            username,
+            password,
+        } = cmd;
+        let (invite_token, username, password) =
+            (invite_token.as_str(), username.as_str(), password.as_str());
+        Self::validate_username(username)?;
+        Self::validate_password(password)?;
 
         let token_hash = hash_token(invite_token);
         let inv = self
@@ -343,8 +423,23 @@ impl AuthService for DefaultAuthService {
         }
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
-        let user = self
-            .repos
+
+        // Run all writes inside a single transaction when DB is available.
+        let scope = if let Some(db) = &self.db {
+            Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            )
+        } else {
+            None
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(s.handle()).for_auth(),
+            None => self.repos.clone(),
+        };
+
+        let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
@@ -353,25 +448,43 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let _member = self
-            .repos
+        let _member = repos
             .server_member_repo
             .add_member(inv.server_id, user.id, ServerMemberRole::Guest)
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let consumed = self
-            .repos
+        let consumed = repos
             .invite_repo
             .try_consume(inv.id)
             .await
             .map_err(rim_services::map_repo_error)?;
         if !consumed {
             // Don't leak whether it's exhausted vs missing.
+            // Transaction is dropped → rolled back automatically.
             return Err(ServiceError::PermissionDenied);
         }
 
-        let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
+        let raw_token = generate_session_token();
+        let token_hash = hash_token(&raw_token);
+        let expires_at: DateTime<Utc> = Utc::now() + self.session_ttl;
+        let sess = repos
+            .session_repo
+            .create_session(NewSession {
+                user_id: user.id,
+                token_hash,
+                expires_at,
+                user_agent: None,
+                ip: None,
+            })
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        let csrf = Self::new_csrf_token();
 
         Ok(AcceptInviteResultDto {
             user_id: user.id,
