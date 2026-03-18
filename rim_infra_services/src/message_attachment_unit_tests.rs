@@ -348,14 +348,14 @@ mod tests {
 
         let mut message_attachment_repo = MockMessageAttachmentRepo::new();
         message_attachment_repo.expect_add_attachment().return_once(
-            move |mid, storage_url, file_name, file_size, mime_type, metadata| {
-                assert_eq!(mid, message_id);
-                assert!(storage_url.starts_with("pending://upload-"));
-                assert_eq!(file_name, "f.txt");
-                assert_eq!(file_size, 10);
-                assert_eq!(mime_type, "text/plain");
+            move |att: rim_core::message_attachment::model::NewMessageAttachment| {
+                assert_eq!(att.message_id, message_id);
+                assert!(att.storage_url.starts_with("pending://upload-"));
+                assert_eq!(att.file_name, "f.txt");
+                assert_eq!(att.file_size, 10);
+                assert_eq!(att.mime_type, "text/plain");
                 assert_eq!(
-                    metadata.and_then(|v| v.get("status").cloned()),
+                    att.metadata.and_then(|v| v.get("status").cloned()),
                     Some(serde_json::json!("pending_upload"))
                 );
                 Ok(add_result)

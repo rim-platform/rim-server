@@ -1,13 +1,16 @@
 use async_trait::async_trait;
+use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
 use rim_core::server_member::model::ServerMemberRole;
+use rim_infra_db::begin_transaction;
 use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
 use rim_services::server::dto::ServerDto;
 use rim_services::server::service::ServerService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
+use crate::repos::AppRepos;
 use crate::util::{ensure_server_exists, ensure_server_member};
 
 #[cfg(test)]
@@ -18,21 +21,28 @@ use crate::test_support::server::{
 #[derive(Clone)]
 pub struct DefaultServerService {
     repos: ServerRepos,
+    db: Option<DatabaseConnection>,
 }
 
 impl DefaultServerService {
-    pub fn new(repos: ServerRepos) -> Self {
-        Self { repos }
+    pub fn new(repos: ServerRepos, db: DatabaseConnection) -> Self {
+        Self {
+            repos,
+            db: Some(db),
+        }
     }
 
     #[cfg(test)]
     pub fn new_for_tests(repos: ServerReposPorts) -> Self {
-        Self::new(ServerRepos {
-            server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                repos.server_member_repo,
-            )),
-        })
+        Self {
+            repos: ServerRepos {
+                server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
+                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
+                    repos.server_member_repo,
+                )),
+            },
+            db: None,
+        }
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {
@@ -59,20 +69,37 @@ impl ServerService for DefaultServerService {
             ));
         }
 
-        let server = self
-            .repos
+        // Run create + add_member inside a transaction when DB is available.
+        let scope = if let Some(db) = &self.db {
+            Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            )
+        } else {
+            None
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(s.handle()).for_server(),
+            None => self.repos.clone(),
+        };
+
+        let server = repos
             .server_repo
             .create_server(name)
             .await
             .map_err(rim_services::map_repo_error)?;
 
         // Creator becomes owner.
-        let _ = self
-            .repos
+        let _ = repos
             .server_member_repo
             .add_member(server.id, cmd.actor.user_id, ServerMemberRole::Owner)
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
 
         info!(server_id = %server.id, "created server");
 

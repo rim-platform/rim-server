@@ -3,6 +3,7 @@
 mod support;
 
 use rim_core::server::repository::ServerRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 
 use rim_core::server_member::repository::ServerMemberRepository;
@@ -18,8 +19,9 @@ async fn create_get_and_find_by_name() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmServerRepository::new(conn.clone());
+    let repo = SeaOrmServerRepository::new(db.clone());
     assert!(repo.find_by_name("missing").await.unwrap().is_none());
 
     let created = repo.create_server("s_test").await.unwrap();
@@ -37,10 +39,11 @@ async fn get_servers_for_user_returns_joined_servers() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let member_repo = SeaOrmServerMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let member_repo = SeaOrmServerMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let user_id = user_repo
         .create_user(rim_core::user::model::NewUser {

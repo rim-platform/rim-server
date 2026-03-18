@@ -9,6 +9,7 @@ pub struct Model {
     pub id: Uuid,
     pub user_id: Uuid,
     pub conversation_id: Uuid,
+    pub joined_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -24,6 +24,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260310_220344_create_user_command::Migration),
             Box::new(m20260310_230745_add_safe_schema_hardening::Migration),
             Box::new(m20260310_235420_create_keybind::Migration),
+            Box::new(m20260318_173750_add_missing_indexes::Migration),
+            Box::new(m20260318_200000_make_user_last_login_at_nullable::Migration),
+            Box::new(m20260318_210000_add_conversation_member_joined_at::Migration),
         ]
     }
 }
@@ -45,3 +48,6 @@ mod m20260309_222347_add_conversation_title;
 mod m20260310_220344_create_user_command;
 mod m20260310_230745_add_safe_schema_hardening;
 mod m20260310_235420_create_keybind;
+mod m20260318_173750_add_missing_indexes;
+mod m20260318_200000_make_user_last_login_at_nullable;
+mod m20260318_210000_add_conversation_member_joined_at;

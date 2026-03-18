@@ -8,22 +8,23 @@ use rim_core::repository::error::RepoResult;
 use rim_core::repository::pagination::{Page, PageDir};
 use sea_orm::QuerySelect;
 use sea_orm::prelude::DateTimeWithTimeZone;
+use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbConn, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashMap;
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 pub struct SeaOrmMessageThreadRepository {
-    pub db: DbConn,
+    pub db: DbHandle,
 }
 
 impl SeaOrmMessageThreadRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -159,18 +160,16 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         at: chrono::DateTime<chrono::Utc>,
     ) -> RepoResult<()> {
         let at: DateTimeWithTimeZone = at.into();
-        let thread = message_thread::Entity::find_by_id(thread_id)
-            .one(&self.db)
+        let result = message_thread::Entity::update_many()
+            .col_expr(message_thread::Column::LastMessageAt, Expr::value(at))
+            .filter(message_thread::Column::Id.eq(Uuid::from(thread_id)))
+            .exec(&self.db)
             .await
             .map_err(map_db_err)?;
 
-        let Some(thread) = thread else {
+        if result.rows_affected == 0 {
             return Err(RepoError::new(RepoErrorKind::NotFound));
-        };
-
-        let mut active: message_thread::ActiveModel = thread.into();
-        active.last_message_at = Set(at);
-        active.update(&self.db).await.map_err(map_db_err)?;
+        }
 
         Ok(())
     }

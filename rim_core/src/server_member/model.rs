@@ -3,6 +3,7 @@ use crate::server::model::ServerId;
 use crate::user::model::UserId;
 use chrono::{DateTime, Utc};
 use std::fmt;
+use std::str::FromStr;
 
 model_id!(ServerMemberId);
 
@@ -23,7 +24,13 @@ impl ServerMemberRole {
     }
 }
 
-impl std::str::FromStr for ServerMemberRole {
+impl fmt::Display for ServerMemberRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ServerMemberRole {
     type Err = ParseServerMemberRoleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

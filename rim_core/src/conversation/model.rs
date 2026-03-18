@@ -2,15 +2,32 @@ use crate::model_id;
 use crate::server::model::ServerId;
 use chrono::{DateTime, Utc};
 use std::fmt;
+use std::str::FromStr;
 
 model_id!(ConversationId);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConversationType {
     Direct,
     Group,
     Channel,
+}
+
+impl ConversationType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Direct => "Direct",
+            Self::Group => "Group",
+            Self::Channel => "Channel",
+        }
+    }
+}
+
+impl fmt::Display for ConversationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,14 +51,14 @@ impl fmt::Display for ParseConversationTypeError {
 
 impl std::error::Error for ParseConversationTypeError {}
 
-impl std::str::FromStr for ConversationType {
+impl FromStr for ConversationType {
     type Err = ParseConversationTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "direct" => Ok(ConversationType::Direct),
-            "group" => Ok(ConversationType::Group),
-            "channel" => Ok(ConversationType::Channel),
+        match s {
+            "Direct" => Ok(ConversationType::Direct),
+            "Group" => Ok(ConversationType::Group),
+            "Channel" => Ok(ConversationType::Channel),
             other => Err(ParseConversationTypeError::new(other)),
         }
     }

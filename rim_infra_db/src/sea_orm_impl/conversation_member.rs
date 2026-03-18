@@ -7,18 +7,20 @@ use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::ColumnTrait;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, QueryFilter, Set};
+
+use crate::DbHandle;
 use std::collections::HashMap;
 
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 pub struct SeaOrmConversationMemberRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmConversationMemberRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }
@@ -43,6 +45,7 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
             id: Set(ConversationMemberId::new().into()),
             conversation_id: Set(conversation_id.into()),
             user_id: Set(user_id.into()),
+            ..Default::default()
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;

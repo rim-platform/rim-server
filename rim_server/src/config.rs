@@ -12,6 +12,10 @@ pub struct RIMConfig {
     pub bootstrap_secret: Option<String>,
 
     pub session_ttl_days: u32,
+
+    pub enable_graphiql: bool,
+
+    pub cors_allowed_origin: Option<String>,
 }
 
 impl Default for RIMConfig {
@@ -22,6 +26,8 @@ impl Default for RIMConfig {
             database_url: "".to_string(),
             bootstrap_secret: None,
             session_ttl_days: 30,
+            enable_graphiql: false,
+            cors_allowed_origin: None,
         }
     }
 }
@@ -32,6 +38,7 @@ impl RIMConfig {
             .set_default("server_host", "0.0.0.0")?
             .set_default("server_port", 8080)?
             .set_default("session_ttl_days", 30)?
+            .set_default("enable_graphiql", false)?
             .add_source(Environment::with_prefix("RIM"))
             .add_source(Environment::default());
         c.build()?.try_deserialize()

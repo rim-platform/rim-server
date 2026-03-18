@@ -15,6 +15,7 @@ rim_auth = { path = "../rim_auth" }
 http = "1.4.0"
 log = "0.4.28"
 actix-web = "4.11.0"
+actix-cors = "0.7"
 rim_logging = {path = "../rim_logging" }
 dotenvy = "0.15.7"
 config = "0.15.18"

@@ -3,6 +3,7 @@ use rim_api::{AppSchema, build_schema};
 use sea_orm::Database;
 use std::sync::Arc;
 
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl;
 use rim_infra_db::sea_orm_impl::{
     invite::SeaOrmInviteRepository, keybind::SeaOrmKeybindRepository,
@@ -23,6 +24,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let db = Database::connect(&config.database_url)
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let raw_db = db.clone(); // Keep raw DatabaseConnection for UoW
+    let db: DbHandle = db.into();
 
     let user_repo: Arc<dyn rim_core::user::repository::UserRepository> =
         Arc::new(SeaOrmUserRepository::new(db.clone()));
@@ -62,6 +65,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
+        raw_db,
         config.bootstrap_secret.clone(),
         chrono::Duration::days(i64::from(config.session_ttl_days)),
     ));

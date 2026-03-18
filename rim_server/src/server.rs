@@ -5,7 +5,7 @@ use crate::graphql_support::{
 };
 use actix_web::{App, HttpRequest, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse};
-use log::{debug, info};
+use log::info;
 use rim_api::AppSchema;
 use rim_api::auth_intent::insert_auth_intent_ctx;
 use rim_api::graphql::index_graphiql;
@@ -18,11 +18,28 @@ use rim_services::auth::service::RequestAuthenticator;
 use rim_api::auth_context::AuthActorCtx;
 use uuid::Uuid;
 
+/// Subset of config values needed at request time.
+#[derive(Clone)]
+struct HandlerConfig {
+    session_ttl_days: u32,
+}
+
 pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     info!("Starting RIM server...");
 
-    debug!("Configuration: {:?}", config);
+    tracing::debug!(
+        host = %config.server_host,
+        port = %config.server_port,
+        session_ttl_days = %config.session_ttl_days,
+        graphiql = %config.enable_graphiql,
+        "Configuration loaded"
+    );
     let bind_host = format!("{}:{}", config.server_host, config.server_port);
+    let enable_graphiql = config.enable_graphiql;
+    let cors_allowed_origin = config.cors_allowed_origin.clone();
+    let handler_config = HandlerConfig {
+        session_ttl_days: config.session_ttl_days,
+    };
 
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
@@ -30,11 +47,43 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
 
     HttpServer::new(move || {
         let schema = schema.clone();
-        App::new()
-            .service(web::resource("/").guard(guard::Post()).to(graphql_handler))
-            .service(index_graphiql)
-            .app_data(web::Data::new(schema))
+        let handler_cfg = handler_config.clone();
+
+        let cors = match cors_allowed_origin {
+            Some(ref origin) => actix_cors::Cors::default()
+                .allowed_origin(origin)
+                .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+                .allowed_headers(vec![
+                    "Content-Type",
+                    "Authorization",
+                    "x-csrf-token",
+                    "x-request-id",
+                ])
+                .supports_credentials()
+                .max_age(3600),
+            None => {
+                // No CORS origin configured: block all cross-origin requests.
+                // The browser will deny requests from any non-same-origin page
+                // because no Access-Control-Allow-Origin header is emitted.
+                actix_cors::Cors::default()
+                    .allowed_origin("https://0.0.0.0")
+                    .block_on_origin_mismatch(true)
+            }
+        };
+
+        let mut app = App::new().wrap(cors).service(
+            web::resource("/api")
+                .guard(guard::Post())
+                .to(graphql_handler),
+        );
+
+        if enable_graphiql {
+            app = app.service(index_graphiql);
+        }
+
+        app.app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
+            .app_data(web::Data::new(handler_cfg))
     })
     .bind(bind_host)?
     .run()
@@ -43,6 +92,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
 
 async fn graphql_handler(
     schema: web::Data<AppSchema>,
+    handler_cfg: web::Data<HandlerConfig>,
     req: HttpRequest,
     gql: GraphQLRequest,
 ) -> GraphQLResponse {
@@ -150,7 +200,7 @@ async fn graphql_handler(
         }
 
         let gql_resp = GraphQLResponse::from(resp);
-        apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req)
+        apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req, handler_cfg.session_ttl_days)
     }
     .instrument(span)
     .await

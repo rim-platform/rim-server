@@ -1,4 +1,4 @@
-use async_graphql::{Context, Error};
+use async_graphql::{Context, Error, ErrorExtensions, Value};
 
 #[derive(Default, Clone)]
 pub struct AuthActorCtx {
@@ -23,14 +23,30 @@ impl AuthActorCtx {
     }
 }
 
+fn unauthenticated_error() -> Error {
+    Error::new("unauthenticated").extend_with(|_, e| {
+        e.set("code", Value::from("UNAUTHENTICATED"));
+    })
+}
+
 pub fn require_actor(ctx: &Context<'_>) -> Result<rim_core::user::model::UserId, Error> {
-    ctx.data_unchecked::<AuthActorCtx>()
+    ctx.data::<AuthActorCtx>()
+        .map_err(|_| {
+            Error::new("internal error: missing auth context").extend_with(|_, e| {
+                e.set("code", Value::from("INTERNAL"));
+            })
+        })?
         .actor()
-        .ok_or_else(|| Error::new("unauthenticated"))
+        .ok_or_else(unauthenticated_error)
 }
 
 pub fn require_session_id(ctx: &Context<'_>) -> Result<rim_core::auth::model::SessionId, Error> {
-    ctx.data_unchecked::<AuthActorCtx>()
+    ctx.data::<AuthActorCtx>()
+        .map_err(|_| {
+            Error::new("internal error: missing auth context").extend_with(|_, e| {
+                e.set("code", Value::from("INTERNAL"));
+            })
+        })?
         .session_id()
-        .ok_or_else(|| Error::new("unauthenticated"))
+        .ok_or_else(unauthenticated_error)
 }

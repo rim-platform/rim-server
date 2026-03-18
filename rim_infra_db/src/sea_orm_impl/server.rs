@@ -5,18 +5,17 @@ use rim_core::server::model::{Server, ServerId};
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ColumnTrait, DbConn, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait, Set,
-};
+use sea_orm::{ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 
 pub struct SeaOrmServerRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmServerRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

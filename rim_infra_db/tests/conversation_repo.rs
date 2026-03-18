@@ -2,7 +2,7 @@
 
 mod support;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::{
     ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
 };
@@ -11,6 +11,7 @@ use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::PageDir;
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
@@ -22,12 +23,17 @@ async fn create_conversation_and_get_by_id() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmConversationRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmConversationRepository::new(db.clone());
     let server = server_repo.create_server("s").await.unwrap();
     let conv = repo
-        .create_conversation(ConversationType::Group, server.id, Some("Team".to_string()))
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: Some("Team".to_string()),
+        })
         .await
         .unwrap();
 
@@ -42,11 +48,12 @@ async fn create_conversation_with_members_is_atomic() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmConversationRepository::new(conn.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmConversationRepository::new(db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u1 = user_repo
@@ -89,11 +96,12 @@ async fn find_direct_between_users() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u1 = user_repo
@@ -122,7 +130,11 @@ async fn find_direct_between_users() {
     );
 
     let conv = conv_repo
-        .create_conversation(ConversationType::Direct, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Direct,
+            title: None,
+        })
         .await
         .unwrap();
     let _ = member_repo.add_member(conv.id, u1).await.unwrap();
@@ -142,13 +154,18 @@ async fn touch_last_activity_at_updates_and_not_found() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let repo = SeaOrmConversationRepository::new(conn.clone());
-    let _user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let repo = SeaOrmConversationRepository::new(db.clone());
+    let _user_repo = SeaOrmUserRepository::new(db.clone());
     let server = server_repo.create_server("s").await.unwrap();
     let conv = repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
 
@@ -170,11 +187,12 @@ async fn list_inbox_conversations_paginates_and_orders() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u = user_repo
@@ -188,15 +206,27 @@ async fn list_inbox_conversations_paginates_and_orders() {
 
     // Create 3 inbox conversations for user.
     let c1 = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let c2 = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let c3 = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let _ = member_repo.add_member(c1.id, u).await.unwrap();
@@ -248,11 +278,12 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let member_repo = SeaOrmConversationMemberRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let u = user_repo
@@ -265,19 +296,19 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
         .id;
 
     let c1 = conv_repo
-        .create_conversation(
-            ConversationType::Channel,
-            server.id,
-            Some("alpha".to_string()),
-        )
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Channel,
+            title: Some("alpha".to_string()),
+        })
         .await
         .unwrap();
     let c2 = conv_repo
-        .create_conversation(
-            ConversationType::Channel,
-            server.id,
-            Some("beta".to_string()),
-        )
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Channel,
+            title: Some("beta".to_string()),
+        })
         .await
         .unwrap();
     let _ = member_repo.add_member(c1.id, u).await.unwrap();

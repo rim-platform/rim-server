@@ -135,7 +135,11 @@ mod tests {
         assert!(matches!(
             rim_services::map_repo_error(
                 conv_repo
-                    .create_conversation(ConversationType::Channel, server_id, None)
+                    .create_conversation(rim_core::conversation::model::NewConversation {
+                        server_id,
+                        conversation_type: ConversationType::Channel,
+                        title: None,
+                    })
                     .await
                     .unwrap_err()
             ),
@@ -234,9 +238,7 @@ mod tests {
 
         async fn create_conversation(
             &self,
-            _conversation_type: ConversationType,
-            _server_id: ServerId,
-            _title: Option<String>,
+            _conv: rim_core::conversation::model::NewConversation,
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }

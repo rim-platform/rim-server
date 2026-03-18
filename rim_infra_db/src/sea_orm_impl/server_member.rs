@@ -6,17 +6,18 @@ use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberR
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 pub struct SeaOrmServerMemberRepository {
-    pub db: DbConn,
+    pub db: DbHandle,
 }
 
 impl SeaOrmServerMemberRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

@@ -3,17 +3,18 @@ use entity::user;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::{NewUser, User, UserId};
 use rim_core::user::repository::UserRepository;
-use sea_orm::{ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 pub struct SeaOrmUserRepository {
-    pub db: DbConn,
+    pub db: DbHandle,
 }
 
 impl SeaOrmUserRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

@@ -2,16 +2,17 @@
 
 mod support;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::message::model::{MessageId, NewMessage};
-use rim_core::message::repository::MessageRepository;
+use rim_core::message::repository::{ListMessagesParams, MessageRepository};
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{PageDir, SortOrder};
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
@@ -24,16 +25,21 @@ async fn create_get_update_text_and_soft_delete() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmMessageRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user = user_repo
@@ -90,16 +96,21 @@ async fn list_messages_respects_include_deleted_and_ordering() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmMessageRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user = user_repo
@@ -137,30 +148,30 @@ async fn list_messages_respects_include_deleted_and_ordering() {
     repo.soft_delete_message(m1.id).await.unwrap();
 
     let page = repo
-        .list_messages(
-            conv.id,
-            Some(thread.id),
-            10,
-            PageDir::After,
-            None,
-            false,
-            SortOrder::Asc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+            include_deleted: false,
+            order: SortOrder::Asc,
+        })
         .await
         .unwrap();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, m2.id);
 
     let page = repo
-        .list_messages(
-            conv.id,
-            Some(thread.id),
-            10,
-            PageDir::After,
-            None,
-            true,
-            SortOrder::Desc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+            include_deleted: true,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(page.items.len(), 2);
@@ -173,16 +184,21 @@ async fn timeline_listing_excludes_thread_messages() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmMessageRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user = user_repo
@@ -223,30 +239,30 @@ async fn timeline_listing_excludes_thread_messages() {
         .unwrap();
 
     let timeline = repo
-        .list_messages(
-            conv.id,
-            None,
-            10,
-            PageDir::After,
-            None,
-            false,
-            SortOrder::Desc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: None,
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+            include_deleted: false,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(timeline.items.len(), 1);
     assert_eq!(timeline.items[0].id, root.id);
 
     let thread_page = repo
-        .list_messages(
-            conv.id,
-            Some(thread.id),
-            10,
-            PageDir::After,
-            None,
-            false,
-            SortOrder::Desc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: Some(thread.id),
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+            include_deleted: false,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(thread_page.items.len(), 1);
@@ -259,15 +275,20 @@ async fn desc_pagination_advances_to_older_messages() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmMessageRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user = user_repo
@@ -315,15 +336,15 @@ async fn desc_pagination_advances_to_older_messages() {
         .unwrap();
 
     let page1 = repo
-        .list_messages(
-            conv.id,
-            None,
-            2,
-            PageDir::After,
-            None,
-            false,
-            SortOrder::Desc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: None,
+            limit: 2,
+            dir: PageDir::After,
+            cursor: None,
+            include_deleted: false,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(
@@ -331,15 +352,15 @@ async fn desc_pagination_advances_to_older_messages() {
         vec![m3.id, m2.id]
     );
     let page2 = repo
-        .list_messages(
-            conv.id,
-            None,
-            2,
-            PageDir::After,
-            page1.next,
-            false,
-            SortOrder::Desc,
-        )
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: None,
+            limit: 2,
+            dir: PageDir::After,
+            cursor: page1.next,
+            include_deleted: false,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(
@@ -348,18 +369,18 @@ async fn desc_pagination_advances_to_older_messages() {
     );
 
     let before = repo
-        .list_messages(
-            conv.id,
-            None,
-            10,
-            PageDir::Before,
-            Some(rim_core::message::repository::MessageCursor {
+        .list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: None,
+            limit: 10,
+            dir: PageDir::Before,
+            cursor: Some(rim_core::message::repository::MessageCursor {
                 sent_at: m2.sent_at,
                 message_id: m2.id,
             }),
-            false,
-            SortOrder::Desc,
-        )
+            include_deleted: false,
+            order: SortOrder::Desc,
+        })
         .await
         .unwrap();
     assert_eq!(
@@ -374,15 +395,20 @@ async fn search_messages_returns_recent_matches() {
         return;
     };
     support::reset_db(&conn).await;
+    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(conn.clone());
-    let conv_repo = SeaOrmConversationRepository::new(conn.clone());
-    let user_repo = SeaOrmUserRepository::new(conn.clone());
-    let repo = SeaOrmMessageRepository::new(conn.clone());
+    let server_repo = SeaOrmServerRepository::new(db.clone());
+    let conv_repo = SeaOrmConversationRepository::new(db.clone());
+    let user_repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(db.clone());
 
     let server = server_repo.create_server("s").await.unwrap();
     let conv = conv_repo
-        .create_conversation(ConversationType::Group, server.id, None)
+        .create_conversation(NewConversation {
+            server_id: server.id,
+            conversation_type: ConversationType::Group,
+            title: None,
+        })
         .await
         .unwrap();
     let user = user_repo

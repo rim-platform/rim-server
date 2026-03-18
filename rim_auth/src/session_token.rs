@@ -26,3 +26,71 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     res
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_session_token_has_prefix() {
+        let token = generate_session_token();
+        assert!(
+            token.starts_with("rim_sess_"),
+            "expected prefix rim_sess_, got: {token}"
+        );
+    }
+
+    #[test]
+    fn generate_session_token_has_sufficient_length() {
+        let token = generate_session_token();
+        let after_prefix = token.strip_prefix("rim_sess_").unwrap();
+        assert!(
+            after_prefix.len() >= 43,
+            "expected at least 43 chars after prefix (256-bit base64url), got {}",
+            after_prefix.len()
+        );
+    }
+
+    #[test]
+    fn two_tokens_are_unique() {
+        let t1 = generate_session_token();
+        let t2 = generate_session_token();
+        assert_ne!(t1, t2, "two generated tokens should be unique");
+    }
+
+    #[test]
+    fn hash_token_is_consistent() {
+        let token = generate_session_token();
+        let h1 = hash_token(&token);
+        let h2 = hash_token(&token);
+        assert_eq!(
+            h1, h2,
+            "hashing the same token twice should produce identical results"
+        );
+    }
+
+    #[test]
+    fn hash_token_differs_for_different_inputs() {
+        let t1 = generate_session_token();
+        let t2 = generate_session_token();
+        let h1 = hash_token(&t1);
+        let h2 = hash_token(&t2);
+        assert_ne!(h1, h2, "hashes of different tokens should differ");
+    }
+
+    #[test]
+    fn hash_token_is_hex_sha256() {
+        let token = generate_session_token();
+        let hash = hash_token(&token);
+        assert_eq!(
+            hash.len(),
+            64,
+            "SHA-256 hex digest should be 64 chars, got {}",
+            hash.len()
+        );
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash should contain only hex characters, got: {hash}"
+        );
+    }
+}

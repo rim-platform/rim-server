@@ -14,6 +14,17 @@ pub struct MessageCursor {
     pub message_id: MessageId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListMessagesParams {
+    pub conversation_id: ConversationId,
+    pub thread_id: Option<MessageThreadId>,
+    pub limit: u32,
+    pub dir: PageDir,
+    pub cursor: Option<MessageCursor>,
+    pub include_deleted: bool,
+    pub order: SortOrder,
+}
+
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait MessageRepository: Send + Sync {
@@ -23,16 +34,9 @@ pub trait MessageRepository: Send + Sync {
 
     async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message>;
 
-    #[allow(clippy::too_many_arguments)]
     async fn list_messages(
         &self,
-        conversation_id: ConversationId,
-        thread_id: Option<MessageThreadId>,
-        limit: u32,
-        dir: PageDir,
-        cursor: Option<MessageCursor>,
-        include_deleted: bool,
-        order: SortOrder,
+        params: ListMessagesParams,
     ) -> RepoResult<Page<Message, MessageCursor>>;
 
     async fn search_messages(

@@ -14,26 +14,53 @@ pub enum KeybindScope {
     Workspace,
 }
 
-impl fmt::Display for KeybindScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl KeybindScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
             Self::User => "user",
             Self::Workspace => "workspace",
-        })
+        }
+    }
+}
+
+impl fmt::Display for KeybindScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 impl FromStr for KeybindScope {
-    type Err = String;
+    type Err = ParseKeybindScopeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "user" => Ok(Self::User),
             "workspace" => Ok(Self::Workspace),
-            _ => Err(format!("invalid keybind scope `{s}`")),
+            _ => Err(ParseKeybindScopeError::new(s)),
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseKeybindScopeError {
+    input: String,
+}
+
+impl ParseKeybindScopeError {
+    pub fn new(input: impl Into<String>) -> Self {
+        Self {
+            input: input.into(),
+        }
+    }
+}
+
+impl fmt::Display for ParseKeybindScopeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown keybind scope: {}", self.input)
+    }
+}
+
+impl std::error::Error for ParseKeybindScopeError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeybindContext {
@@ -46,9 +73,9 @@ pub enum KeybindContext {
     CommandPalette,
 }
 
-impl fmt::Display for KeybindContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl KeybindContext {
+    pub fn as_str(&self) -> &'static str {
+        match self {
             Self::Global => "global",
             Self::Composer => "composer",
             Self::MessageList => "message_list",
@@ -56,12 +83,18 @@ impl fmt::Display for KeybindContext {
             Self::ConversationView => "conversation_view",
             Self::Panel => "panel",
             Self::CommandPalette => "command_palette",
-        })
+        }
+    }
+}
+
+impl fmt::Display for KeybindContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 impl FromStr for KeybindContext {
-    type Err = String;
+    type Err = ParseKeybindContextError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -72,10 +105,31 @@ impl FromStr for KeybindContext {
             "conversation_view" => Ok(Self::ConversationView),
             "panel" => Ok(Self::Panel),
             "command_palette" => Ok(Self::CommandPalette),
-            _ => Err(format!("invalid keybind context `{s}`")),
+            _ => Err(ParseKeybindContextError::new(s)),
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseKeybindContextError {
+    input: String,
+}
+
+impl ParseKeybindContextError {
+    pub fn new(input: impl Into<String>) -> Self {
+        Self {
+            input: input.into(),
+        }
+    }
+}
+
+impl fmt::Display for ParseKeybindContextError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown keybind context: {}", self.input)
+    }
+}
+
+impl std::error::Error for ParseKeybindContextError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeybindSubject {
@@ -83,7 +137,7 @@ pub enum KeybindSubject {
     Workspace(WorkspaceId),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keybind {
     pub id: KeybindId,
     pub scope: KeybindScope,
@@ -97,7 +151,7 @@ pub struct Keybind {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewKeybind {
     pub scope: KeybindScope,
     pub subject: KeybindSubject,
@@ -108,7 +162,7 @@ pub struct NewKeybind {
     pub is_enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateKeybind {
     pub keystroke: String,
     pub command_id: String,

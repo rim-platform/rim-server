@@ -191,17 +191,18 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         let metadata = Some(json!({
             "status": Self::PENDING_STATUS,
         }));
+        let new_attachment = rim_core::message_attachment::model::NewMessageAttachment {
+            message_id,
+            storage_url: format!("pending://{upload_token}"),
+            file_name: cmd.filename.trim().to_owned(),
+            file_size: cmd.size_bytes as i64,
+            mime_type: cmd.content_type.trim().to_owned(),
+            metadata,
+        };
         let attachment = self
             .repos
             .message_attachment_repo
-            .add_attachment(
-                message_id,
-                &format!("pending://{upload_token}"),
-                cmd.filename.trim(),
-                cmd.size_bytes as i64,
-                cmd.content_type.trim(),
-                metadata,
-            )
+            .add_attachment(new_attachment)
             .await
             .map_err(rim_services::map_repo_error)?;
 

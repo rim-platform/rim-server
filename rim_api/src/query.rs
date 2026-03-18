@@ -6,7 +6,8 @@ use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelPage, Command, CommandContextInput,
     CommandSurface, Conversation, ConversationPage, DefaultKeybind, Event, InboxCursorInput,
     Integration, Keybind, KeybindContext, KeybindLayers, KeybindScope, Message, MessageCursorInput,
-    MessagePage, MessageReference, Setting, Thread, ThreadCursorInput, ThreadPage,
+    MessagePage, MessageReference, Server, ServerMember, Setting, Thread, ThreadCursorInput,
+    ThreadPage, User,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -35,7 +36,13 @@ use rim_services::message_thread::command::{
     GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::service::ThreadService;
+use rim_services::server::command::GetServerQuery;
+use rim_services::server::service::ServerService;
+use rim_services::server_member::command::ListServerMembersQuery;
+use rim_services::server_member::service::ServerMemberService;
 use rim_services::setting::service::SettingService;
+use rim_services::user::command::GetMeQuery;
+use rim_services::user::service::UserService;
 
 use crate::ids::parse_uuid_id;
 
@@ -43,10 +50,6 @@ pub struct Query;
 
 #[Object]
 impl Query {
-    async fn hello_world(&self, _ctx: &Context<'_>) -> String {
-        "Hello world!".to_string()
-    }
-
     async fn commands(
         &self,
         ctx: &Context<'_>,
@@ -298,7 +301,7 @@ impl Query {
                 server_id,
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
             })
             .await
             .map_err(crate::errors::map_service_error)?;
@@ -324,7 +327,7 @@ impl Query {
                 server_id,
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
             })
             .await
             .map_err(crate::errors::map_service_error)?;
@@ -356,7 +359,7 @@ impl Query {
                 conversation_id,
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
                 include_deleted,
             })
             .await
@@ -386,7 +389,7 @@ impl Query {
                 server_id,
                 conversation_id,
                 query,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
                 include_deleted,
             })
             .await
@@ -527,7 +530,7 @@ impl Query {
                 conversation_id,
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
             })
             .await
             .map_err(crate::errors::map_service_error)?;
@@ -563,7 +566,7 @@ impl Query {
                 thread_id,
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: limit.max(1) as u32,
+                limit: (limit.max(1) as u32).min(100),
                 include_deleted,
             })
             .await
@@ -595,5 +598,51 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(attachment.into())
+    }
+
+    async fn me(&self, ctx: &Context<'_>) -> Result<User> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn UserService>>()?;
+
+        let dto = svc
+            .get_me(GetMeQuery {
+                actor: Actor::new(actor),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    async fn server(&self, ctx: &Context<'_>, server_id: ID) -> Result<Server> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ServerService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let dto = svc
+            .get_server(GetServerQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    async fn server_members(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<ServerMember>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ServerMemberService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let members = svc
+            .list_members(ListServerMembersQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(members.into_iter().map(Into::into).collect())
     }
 }

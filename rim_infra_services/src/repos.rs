@@ -11,6 +11,7 @@ use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::DbHandle;
 
 #[derive(Clone)]
 pub struct AppRepos {
@@ -191,6 +192,57 @@ impl AppRepos {
     pub fn for_request_auth(&self) -> RequestAuthRepos {
         RequestAuthRepos {
             session_repo: Arc::clone(&self.session_repo),
+        }
+    }
+
+    /// Build a complete set of repos from a [`DbHandle`].
+    ///
+    /// This is used to create repos that share a database transaction, so that
+    /// multiple repository calls participate in the same atomic commit.
+    pub fn with_handle(handle: &DbHandle) -> Self {
+        use rim_infra_db::sea_orm_impl;
+
+        AppRepos {
+            conversation_repo: Arc::new(
+                sea_orm_impl::conversation::SeaOrmConversationRepository::new(handle.clone()),
+            ),
+            conversation_member_repo: Arc::new(
+                sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            keybind_repo: Arc::new(sea_orm_impl::keybind::SeaOrmKeybindRepository::new(
+                handle.clone(),
+            )),
+            message_repo: Arc::new(sea_orm_impl::message::SeaOrmMessageRepository::new(
+                handle.clone(),
+            )),
+            message_attachment_repo: Arc::new(
+                sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            message_thread_repo: Arc::new(
+                sea_orm_impl::message_thread::SeaOrmMessageThreadRepository::new(handle.clone()),
+            ),
+            user_command_repo: Arc::new(
+                sea_orm_impl::user_command::SeaOrmUserCommandRepository::new(handle.clone()),
+            ),
+            server_repo: Arc::new(sea_orm_impl::server::SeaOrmServerRepository::new(
+                handle.clone(),
+            )),
+            server_member_repo: Arc::new(
+                sea_orm_impl::server_member::SeaOrmServerMemberRepository::new(handle.clone()),
+            ),
+            user_repo: Arc::new(sea_orm_impl::user::SeaOrmUserRepository::new(
+                handle.clone(),
+            )),
+            session_repo: Arc::new(sea_orm_impl::session::SeaOrmSessionRepository::new(
+                handle.clone(),
+            )),
+            invite_repo: Arc::new(sea_orm_impl::invite::SeaOrmInviteRepository::new(
+                handle.clone(),
+            )),
         }
     }
 }

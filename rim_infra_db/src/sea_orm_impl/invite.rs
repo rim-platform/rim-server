@@ -3,19 +3,20 @@ use chrono::{DateTime, Utc};
 use entity::invite;
 use sea_orm::ExprTrait;
 use sea_orm::prelude::{Expr, Uuid};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::auth::model::{Invite, InviteId, NewInvite};
 use rim_core::auth::repository::InviteRepository;
 use rim_core::repository::error::RepoResult;
 
 pub struct SeaOrmInviteRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmInviteRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

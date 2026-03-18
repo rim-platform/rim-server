@@ -6,16 +6,17 @@ use rim_core::keybind::model::{
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbConn, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+use crate::DbHandle;
 use crate::error::map_db_err;
 
 pub struct SeaOrmKeybindRepository {
-    db: DbConn,
+    db: DbHandle,
 }
 
 impl SeaOrmKeybindRepository {
-    pub fn new(db: DbConn) -> Self {
+    pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
 }

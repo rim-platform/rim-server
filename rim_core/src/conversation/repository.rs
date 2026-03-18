@@ -1,4 +1,4 @@
-use crate::conversation::model::{Conversation, ConversationId, ConversationType};
+use crate::conversation::model::{Conversation, ConversationId, ConversationType, NewConversation};
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
 use crate::server::model::ServerId;
@@ -25,12 +25,7 @@ pub struct ConversationCreatedCursor {
 pub trait ConversationRepository: Send + Sync {
     async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
 
-    async fn create_conversation(
-        &self,
-        conversation_type: ConversationType,
-        server_id: ServerId,
-        title: Option<String>,
-    ) -> RepoResult<Conversation>;
+    async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
 
     async fn create_conversation_with_members(
         &self,

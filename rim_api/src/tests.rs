@@ -868,6 +868,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn service_error_unauthenticated_maps_to_graphql_code() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+
+        let mut conv = MockConversationService::new();
+        conv.expect_get_conversation()
+            .returning(|_q| Box::pin(async { Err(ServiceError::Unauthenticated) }));
+
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            conv,
+            MockMessageService::new(),
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+
+        let req = Request::new(
+            r#"query($sid: ID!, $cid: ID!) { conversation(serverId: $sid, conversationId: $cid) { id } }"#,
+        )
+        .data(AuthActorCtx::new(Some(actor), Some(SessionId::new())))
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+
+        assert!(!res.errors.is_empty());
+        assert_eq!(
+            res.errors[0]
+                .extensions
+                .as_ref()
+                .and_then(|e| e.get("code")),
+            Some(&Value::from("UNAUTHENTICATED"))
+        );
+    }
+
+    #[tokio::test]
     async fn mutation_logout_requires_actor_and_session() {
         let schema = schema_with_mocks(
             MockAuthService::new(),
@@ -890,7 +929,7 @@ mod tests {
         let now = chrono::Utc::now();
 
         let mut auth = MockAuthService::new();
-        auth.expect_login().returning(move |_u, _p| {
+        auth.expect_login().returning(move |_cmd| {
             Box::pin(async move {
                 Ok(rim_services::auth::dto::LoginResultDto {
                     user_id,
@@ -935,8 +974,8 @@ mod tests {
         let session_id = SessionId::new();
 
         let mut auth = MockAuthService::new();
-        auth.expect_logout().returning(move |_actor, sid| {
-            assert_eq!(sid, session_id);
+        auth.expect_logout().returning(move |cmd| {
+            assert_eq!(cmd.session_id, session_id);
             Box::pin(async { Ok(()) })
         });
 
