@@ -5,7 +5,7 @@ use crate::server::model::ServerId;
 use crate::user::model::UserId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub struct ConversationCreatedCursor {
 }
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationRepository: Send + Sync {
     async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
 

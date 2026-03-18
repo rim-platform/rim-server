@@ -3,18 +3,15 @@
 mod support;
 
 use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_and_get_user_roundtrip() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_roundtrip".to_string(),
@@ -30,13 +27,11 @@ async fn create_and_get_user_roundtrip() {
 
 #[tokio::test]
 async fn create_user_duplicate_username_is_conflict() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
 
     // Schema enforces username uniqueness via a unique index.
     let _u1 = repo
@@ -63,13 +58,11 @@ async fn create_user_duplicate_username_is_conflict() {
 
 #[tokio::test]
 async fn find_by_username_and_delete_by_username_and_any_users_exist() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let repo = SeaOrmUserRepository::new(db.clone());
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
 
     assert_eq!(repo.any_users_exist().await.unwrap(), false);
     assert!(repo.find_by_username("missing").await.unwrap().is_none());

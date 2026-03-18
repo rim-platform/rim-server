@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
 use crate::keybind::model::{
@@ -8,7 +8,7 @@ use crate::keybind::model::{
 use crate::repository::error::RepoResult;
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait KeybindRepository: Send + Sync {
     async fn get_by_id(&self, id: KeybindId) -> RepoResult<Option<Keybind>>;
     async fn list_for_subject(&self, subject: KeybindSubject) -> RepoResult<Vec<Keybind>>;

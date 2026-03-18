@@ -13,11 +13,6 @@ use crate::ServerRepos;
 use crate::repos::AppRepos;
 use crate::util::{ensure_server_exists, ensure_server_member};
 
-#[cfg(test)]
-use crate::test_support::server::{
-    ServerMemberRepoPortAdapter, ServerRepoPortAdapter, ServerReposPorts,
-};
-
 #[derive(Clone)]
 pub struct DefaultServerService {
     repos: ServerRepos,
@@ -25,24 +20,8 @@ pub struct DefaultServerService {
 }
 
 impl DefaultServerService {
-    pub fn new(repos: ServerRepos, db: DatabaseConnection) -> Self {
-        Self {
-            repos,
-            db: Some(db),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: ServerReposPorts) -> Self {
-        Self {
-            repos: ServerRepos {
-                server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
-                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                    repos.server_member_repo,
-                )),
-            },
-            db: None,
-        }
+    pub fn new(repos: ServerRepos, db: Option<DatabaseConnection>) -> Self {
+        Self { repos, db }
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {

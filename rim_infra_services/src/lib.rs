@@ -20,7 +20,10 @@ pub mod user;
 pub(crate) mod util;
 
 #[cfg(test)]
-mod test_support;
+mod thread_unit_tests;
+
+#[cfg(test)]
+mod message_attachment_unit_tests;
 
 #[cfg(test)]
 mod auth_unit_tests;
@@ -32,9 +35,6 @@ mod conversation_unit_tests;
 mod message_unit_tests;
 
 #[cfg(test)]
-mod thread_unit_tests;
-
-#[cfg(test)]
 mod server_unit_tests;
 
 #[cfg(test)]
@@ -42,9 +42,6 @@ mod server_member_unit_tests;
 
 #[cfg(test)]
 mod user_unit_tests;
-
-#[cfg(test)]
-mod message_attachment_unit_tests;
 
 pub use provider::DefaultAppServiceProvider;
 pub use repos::{

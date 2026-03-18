@@ -3,11 +3,11 @@ use crate::server::model::ServerId;
 use crate::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use crate::user::model::UserId;
 use async_trait::async_trait;
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
-#[cfg_attr(test, automock)]
 pub trait ServerMemberRepository: Send + Sync {
     async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
 

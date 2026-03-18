@@ -3,10 +3,16 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::conversation::model::{Conversation, ConversationId};
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId, NewMessage};
+    use rim_core::message::repository::MockMessageRepository;
+    use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
     use rim_core::message_thread::model::{MessageThread, MessageThreadId};
+    use rim_core::message_thread::repository::MockMessageThreadRepository;
     use rim_core::repository::pagination::{Page, PageDir, SortOrder};
     use rim_core::server::model::ServerId;
+    use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::message::command::{
         DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
@@ -17,11 +23,8 @@ mod tests {
     use rim_services::message::service::MessageService;
     use rim_services::{Actor, ServiceError};
 
+    use crate::MessageRepos;
     use crate::message::DefaultMessageService;
-    use crate::test_support::message::{
-        MessageReposPorts, MockConversationMemberRepo, MockConversationRepo,
-        MockMessageAttachmentRepo, MockMessageRepo, MockServerMemberRepo, MockThreadRepo,
-    };
 
     fn conversation(server_id: ServerId) -> Conversation {
         Conversation {
@@ -55,34 +58,38 @@ mod tests {
         let conv_id = ConversationId::new();
         let conv = conversation(server_id);
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
-        let message_repo = MockMessageRepo::new();
-        let message_attachment_repo = MockMessageAttachmentRepo::new();
-        let thread_repo = MockThreadRepo::new();
+        let message_repo = MockMessageRepository::new();
+        let message_attachment_repo = MockMessageAttachmentRepository::new();
+        let thread_repo = MockMessageThreadRepository::new();
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .send_message(SendMessageCmd {
@@ -108,51 +115,56 @@ mod tests {
         let msg_id = msg.id;
         let sent_at = msg.sent_at;
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
         conversation_repo
             .expect_touch_last_activity_at()
-            .returning(move |_cid, _at| Ok(()));
+            .returning(move |_cid, _at| Box::pin(async { Ok(()) }));
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
         message_repo
             .expect_create_message()
             .returning(move |new: &NewMessage| {
                 assert!(new.text.as_ref().unwrap().contains('h'));
-                Ok(msg_for_repo.clone())
+                let m = msg_for_repo.clone();
+                Box::pin(async move { Ok(m) })
             });
-        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo
             .expect_get_attachments_for_message()
-            .return_once(move |_| Ok(vec![]));
+            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
 
-        let mut thread_repo = MockThreadRepo::new();
+        let mut thread_repo = MockMessageThreadRepository::new();
         thread_repo
             .expect_get_by_root_message()
-            .return_once(move |_| Ok(None));
+            .return_once(move |_| Box::pin(async { Ok(None) }));
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let dto = svc
             .send_message(SendMessageCmd {
@@ -177,39 +189,44 @@ mod tests {
         let conv_id = ConversationId::new();
         let conv = conversation(server_id);
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
         let msg = message(other_id, conv_id);
         let msg_id = msg.id;
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
-        message_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(msg_for_repo.clone())));
+        message_repo.expect_get_by_id().returning(move |_id| {
+            let m = msg_for_repo.clone();
+            Box::pin(async move { Ok(Some(m)) })
+        });
         message_repo.expect_update_message_text().never();
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
-            message_thread_repo: Arc::new(MockThreadRepo::new()),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .edit_message(EditMessageCmd {
@@ -229,29 +246,33 @@ mod tests {
         let server_id = ServerId::new();
         let conv_id = ConversationId::new();
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conversation(server_id))));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conversation(server_id);
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(MockMessageRepo::new()),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
-            message_thread_repo: Arc::new(MockThreadRepo::new()),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .delete_message(DeleteMessageCmd {
@@ -273,24 +294,25 @@ mod tests {
         let conv_id = ConversationId::new();
         let conv = conversation(server_id);
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
         let msg = message(actor_id, conv_id);
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
         message_repo
             .expect_list_messages()
@@ -298,30 +320,34 @@ mod tests {
                 assert_eq!(params.conversation_id, conv_id);
                 assert_eq!(params.thread_id, None);
                 assert_eq!(params.order, SortOrder::Desc);
-                Ok(Page::new(vec![msg_for_repo.clone()], None, None))
+                let m = msg_for_repo.clone();
+                Box::pin(async move { Ok(Page::new(vec![m], None, None)) })
             });
-        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo
             .expect_get_attachments_for_messages()
-            .return_once(move |_ids| Ok(std::collections::HashMap::new()));
+            .return_once(move |_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
 
-        let mut thread_repo = MockThreadRepo::new();
+        let mut thread_repo = MockMessageThreadRepository::new();
         thread_repo
             .expect_get_thread_ids_by_root_messages()
             .return_once(move |message_ids| {
                 let mut ids = std::collections::HashMap::new();
                 ids.insert(message_ids[0], MessageThreadId::new());
-                Ok(ids)
+                Box::pin(async move { Ok(ids) })
             });
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let page = svc
             .list_messages(ListMessagesQuery {
@@ -359,38 +385,41 @@ mod tests {
             sent_at: chrono::Utc::now(),
         };
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
         conversation_repo
             .expect_touch_last_activity_at()
-            .returning(|_, _| Ok(()));
+            .returning(|_, _| Box::pin(async { Ok(()) }));
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_, _| Ok(true));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         message_repo.expect_get_by_id().return_once(move |_| {
-            Ok(Some(Message {
-                id: root_id,
-                conversation_id: conv_id,
-                thread_id: None,
-                sent_by: actor_id,
-                text: Some("root".to_string()),
-                has_attachments: false,
-                parent_message_id: None,
-                is_deleted: false,
-                sent_at: chrono::Utc::now(),
-            }))
+            Box::pin(async move {
+                Ok(Some(Message {
+                    id: root_id,
+                    conversation_id: conv_id,
+                    thread_id: None,
+                    sent_by: actor_id,
+                    text: Some("root".to_string()),
+                    has_attachments: false,
+                    parent_message_id: None,
+                    is_deleted: false,
+                    sent_at: chrono::Utc::now(),
+                }))
+            })
         });
         let created_for_repo = created.clone();
         message_repo
@@ -398,36 +427,42 @@ mod tests {
             .return_once(move |new| {
                 assert_eq!(new.conversation_id, conv_id);
                 assert_eq!(new.thread_id, Some(thread_id));
-                Ok(created_for_repo.clone())
+                let c = created_for_repo.clone();
+                Box::pin(async move { Ok(c) })
             });
-        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo
             .expect_get_attachments_for_message()
-            .return_once(move |_| Ok(vec![]));
+            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
 
-        let mut thread_repo = MockThreadRepo::new();
+        let mut thread_repo = MockMessageThreadRepository::new();
         thread_repo.expect_get_by_id().return_once(move |_| {
-            Ok(Some(MessageThread {
-                id: thread_id,
-                conversation_id: conv_id,
-                first_message_id: Some(root_id),
-                created_at: chrono::Utc::now(),
-                last_message_at: chrono::Utc::now(),
-            }))
+            Box::pin(async move {
+                Ok(Some(MessageThread {
+                    id: thread_id,
+                    conversation_id: conv_id,
+                    first_message_id: Some(root_id),
+                    created_at: chrono::Utc::now(),
+                    last_message_at: chrono::Utc::now(),
+                }))
+            })
         });
         thread_repo
             .expect_touch_last_message_at()
-            .returning(|_, _| Ok(()));
+            .returning(|_, _| Box::pin(async { Ok(()) }));
         thread_repo.expect_get_by_root_message().never();
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let dto = svc
             .send_thread_message(SendThreadMessageCmd {
@@ -454,34 +489,37 @@ mod tests {
         let thread_id = MessageThreadId::new();
         let conv = conversation(server_id);
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_| Ok(Some(conv_for_repo.clone())));
-
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_, _| Ok(true));
-
-        let mut thread_repo = MockThreadRepo::new();
-        thread_repo.expect_get_by_id().return_once(move |_| {
-            Ok(Some(MessageThread {
-                id: thread_id,
-                conversation_id: conv_id,
-                first_message_id: None,
-                created_at: chrono::Utc::now(),
-                last_message_at: chrono::Utc::now(),
-            }))
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
         });
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        let mut thread_repo = MockMessageThreadRepository::new();
+        thread_repo.expect_get_by_id().return_once(move |_| {
+            Box::pin(async move {
+                Ok(Some(MessageThread {
+                    id: thread_id,
+                    conversation_id: conv_id,
+                    first_message_id: None,
+                    created_at: chrono::Utc::now(),
+                    last_message_at: chrono::Utc::now(),
+                }))
+            })
+        });
+
+        let mut message_repo = MockMessageRepository::new();
         let msg = Message {
             id: MessageId::new(),
             conversation_id: conv_id,
@@ -499,21 +537,24 @@ mod tests {
             .return_once(move |params| {
                 assert_eq!(params.conversation_id, conv_id);
                 assert_eq!(params.thread_id, Some(thread_id));
-                Ok(Page::new(vec![msg_for_repo], None, None))
+                Box::pin(async move { Ok(Page::new(vec![msg_for_repo], None, None)) })
             });
-        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo
             .expect_get_attachments_for_messages()
-            .return_once(move |_ids| Ok(std::collections::HashMap::new()));
+            .return_once(move |_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let page = svc
             .list_thread_messages(ListThreadMessagesQuery {
@@ -543,53 +584,59 @@ mod tests {
         let msg = message(actor_id, conv_id);
         let thread_id = MessageThreadId::new();
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_, _| Ok(true));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
         message_repo
             .expect_get_by_id()
-            .return_once(move |_| Ok(Some(msg_for_repo.clone())));
-        let mut message_attachment_repo = MockMessageAttachmentRepo::new();
+            .return_once(move |_| Box::pin(async move { Ok(Some(msg_for_repo)) }));
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo
             .expect_get_attachments_for_message()
-            .return_once(move |_| Ok(vec![]));
+            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
 
-        let mut thread_repo = MockThreadRepo::new();
+        let mut thread_repo = MockMessageThreadRepository::new();
         thread_repo
             .expect_get_by_root_message()
             .return_once(move |_| {
-                Ok(Some(MessageThread {
-                    id: thread_id,
-                    conversation_id: conv_id,
-                    first_message_id: Some(msg.id),
-                    created_at: chrono::Utc::now(),
-                    last_message_at: chrono::Utc::now(),
-                }))
+                Box::pin(async move {
+                    Ok(Some(MessageThread {
+                        id: thread_id,
+                        conversation_id: conv_id,
+                        first_message_id: Some(msg.id),
+                        created_at: chrono::Utc::now(),
+                        last_message_at: chrono::Utc::now(),
+                    }))
+                })
             });
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            message_thread_repo: Arc::new(thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let dto = svc
             .get_message(GetMessageQuery {
@@ -613,36 +660,40 @@ mod tests {
         let conv = conversation(server_id);
         let msg = message(actor_id, conv_id);
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_, _| Ok(true));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
         message_repo
             .expect_get_by_id()
-            .return_once(move |_| Ok(Some(msg_for_repo.clone())));
+            .return_once(move |_| Box::pin(async move { Ok(Some(msg_for_repo)) }));
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
-            message_thread_repo: Arc::new(MockThreadRepo::new()),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let reference: MessageReferenceDto = svc
             .get_message_reference(GetMessageReferenceQuery {
@@ -672,29 +723,33 @@ mod tests {
         let server_id = ServerId::new();
         let conv_id = ConversationId::new();
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_| Ok(Some(conversation(server_id))));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conversation(server_id);
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_, _| Ok(true));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
 
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(MockMessageRepo::new()),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
-            message_thread_repo: Arc::new(MockThreadRepo::new()),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .search_messages(SearchMessagesQuery {
@@ -718,36 +773,41 @@ mod tests {
         let conv = conversation(server_id);
         let msg = message(actor_id, ConversationId::new());
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let mut conversation_repo = MockConversationRepo::new();
+        let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
 
-        let mut conversation_member_repo = MockConversationMemberRepo::new();
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
-        let mut message_repo = MockMessageRepo::new();
+        let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
-        message_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(msg_for_repo.clone())));
-
-        let svc = DefaultMessageService::new_for_tests(MessageReposPorts {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepo::new()),
-            message_thread_repo: Arc::new(MockThreadRepo::new()),
-            server_member_repo: Arc::new(server_member_repo),
+        message_repo.expect_get_by_id().returning(move |_id| {
+            let m = msg_for_repo.clone();
+            Box::pin(async move { Ok(Some(m)) })
         });
+
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .get_message(GetMessageQuery {

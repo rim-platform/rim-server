@@ -3,12 +3,12 @@ use crate::conversation_member::model::{ConversationMember, ConversationMemberId
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 use async_trait::async_trait;
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 use std::collections::HashMap;
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationMemberRepository: Send + Sync {
     async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
 

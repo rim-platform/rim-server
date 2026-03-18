@@ -11,12 +11,6 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::AttachmentRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
-#[cfg(test)]
-use crate::test_support::attachment::{
-    AttachmentReposPorts, ConversationMemberRepoPortAdapter, ConversationRepoPortAdapter,
-    MessageAttachmentRepoPortAdapter, MessageRepoPortAdapter, ServerMemberRepoPortAdapter,
-};
-
 #[derive(Clone)]
 pub struct DefaultMessageAttachmentService {
     repos: AttachmentRepos,
@@ -28,25 +22,6 @@ impl DefaultMessageAttachmentService {
 
     pub fn new(repos: AttachmentRepos) -> Self {
         Self { repos }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: AttachmentReposPorts) -> Self {
-        Self::new(AttachmentRepos {
-            message_attachment_repo: std::sync::Arc::new(MessageAttachmentRepoPortAdapter(
-                repos.message_attachment_repo,
-            )),
-            conversation_repo: std::sync::Arc::new(ConversationRepoPortAdapter(
-                repos.conversation_repo,
-            )),
-            conversation_member_repo: std::sync::Arc::new(ConversationMemberRepoPortAdapter(
-                repos.conversation_member_repo,
-            )),
-            message_repo: std::sync::Arc::new(MessageRepoPortAdapter(repos.message_repo)),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                repos.server_member_repo,
-            )),
-        })
     }
 
     pub(crate) fn metadata_status(metadata: Option<&serde_json::Value>) -> AttachmentStatus {

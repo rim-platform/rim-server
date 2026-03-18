@@ -12,11 +12,6 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::ServerMemberRepos;
 use crate::util::{ensure_server_exists, ensure_server_member, ensure_server_owner};
 
-#[cfg(test)]
-use crate::test_support::server_member::{
-    ServerMemberRepoPortAdapter, ServerMemberReposPorts, ServerRepoPortAdapter,
-};
-
 #[derive(Clone)]
 pub struct DefaultServerMemberService {
     repos: ServerMemberRepos,
@@ -25,16 +20,6 @@ pub struct DefaultServerMemberService {
 impl DefaultServerMemberService {
     pub fn new(repos: ServerMemberRepos) -> Self {
         Self { repos }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(repos: ServerMemberReposPorts) -> Self {
-        Self::new(ServerMemberRepos {
-            server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
-            server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                repos.server_member_repo,
-            )),
-        })
     }
 
     fn to_dto(member: rim_core::server_member::model::ServerMember) -> ServerMemberDto {

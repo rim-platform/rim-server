@@ -2,54 +2,29 @@
 
 mod support;
 
-use rim_core::conversation::model::{ConversationType, NewConversation};
-use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation::model::ConversationType;
 use rim_core::message::model::{MessageId, NewMessage};
 use rim_core::message::repository::{ListMessagesParams, MessageRepository};
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{PageDir, SortOrder};
-use rim_core::server::repository::ServerRepository;
-use rim_core::user::model::NewUser;
-use rim_core::user::repository::UserRepository;
-use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
-use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
-use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_get_update_text_and_soft_delete() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmMessageRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let user = user_repo
-        .create_user(NewUser {
-            username: "msg-user-1".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
-    let thread = thread_repo.create_thread(conv.id).await.unwrap();
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-1").await;
+    let thread = ctx.create_thread(conv.id).await;
 
     let created = repo
         .create_message(&NewMessage {
@@ -92,58 +67,25 @@ async fn create_get_update_text_and_soft_delete() {
 
 #[tokio::test]
 async fn list_messages_respects_include_deleted_and_ordering() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmMessageRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let user = user_repo
-        .create_user(NewUser {
-            username: "msg-user-2".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
-    let thread = thread_repo.create_thread(conv.id).await.unwrap();
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-2").await;
+    let thread = ctx.create_thread(conv.id).await;
 
-    let m1 = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: Some(thread.id),
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("m1".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
-    let m2 = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: Some(thread.id),
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("m2".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let m1 = ctx
+        .create_thread_message(conv.id, thread.id, user.id, "m1")
+        .await;
+    let m2 = ctx
+        .create_thread_message(conv.id, thread.id, user.id, "m2")
+        .await;
 
     repo.soft_delete_message(m1.id).await.unwrap();
 
@@ -180,63 +122,29 @@ async fn list_messages_respects_include_deleted_and_ordering() {
 
 #[tokio::test]
 async fn timeline_listing_excludes_thread_messages() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let thread_repo = SeaOrmMessageThreadRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmMessageRepository::new(db.clone());
+    let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let user = user_repo
-        .create_user(NewUser {
-            username: "msg-user-3".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
-    let thread = thread_repo.create_thread(conv.id).await.unwrap();
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-3").await;
+    let thread = ctx.create_thread(conv.id).await;
 
-    let root = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("root".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let root = ctx.create_message(conv.id, user.id, "root").await;
     thread_repo
         .set_first_message(thread.id, root.id)
         .await
         .unwrap();
 
-    let _thread_reply = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: Some(thread.id),
-            parent_message_id: Some(root.id),
-            sent_by: user.id,
-            text: Some("reply".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let _thread_reply = ctx
+        .create_thread_message(conv.id, thread.id, user.id, "reply")
+        .await;
 
     let timeline = repo
         .list_messages(ListMessagesParams {
@@ -271,69 +179,23 @@ async fn timeline_listing_excludes_thread_messages() {
 
 #[tokio::test]
 async fn desc_pagination_advances_to_older_messages() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmMessageRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let user = user_repo
-        .create_user(NewUser {
-            username: "msg-user-4".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-4").await;
 
-    let m1 = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("m1".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let m1 = ctx.create_message(conv.id, user.id, "m1").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let m2 = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("m2".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let m2 = ctx.create_message(conv.id, user.id, "m2").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let m3 = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("m3".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let m3 = ctx.create_message(conv.id, user.id, "m3").await;
 
     let page1 = repo
         .list_messages(ListMessagesParams {
@@ -391,57 +253,25 @@ async fn desc_pagination_advances_to_older_messages() {
 
 #[tokio::test]
 async fn search_messages_returns_recent_matches() {
-    let Some(conn) = support::db_conn_or_skip().await else {
+    let Some(ctx) = support::TestCtx::new().await else {
         return;
     };
-    support::reset_db(&conn).await;
-    let db: DbHandle = conn.into();
 
-    let server_repo = SeaOrmServerRepository::new(db.clone());
-    let conv_repo = SeaOrmConversationRepository::new(db.clone());
-    let user_repo = SeaOrmUserRepository::new(db.clone());
-    let repo = SeaOrmMessageRepository::new(db.clone());
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
-    let server = server_repo.create_server("s").await.unwrap();
-    let conv = conv_repo
-        .create_conversation(NewConversation {
-            server_id: server.id,
-            conversation_type: ConversationType::Group,
-            title: None,
-        })
-        .await
-        .unwrap();
-    let user = user_repo
-        .create_user(NewUser {
-            username: "msg-user-5".to_string(),
-            password: "password".to_string(),
-        })
-        .await
-        .unwrap();
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-5").await;
 
-    let older = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("deploy failed earlier".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let older = ctx
+        .create_message(conv.id, user.id, "deploy failed earlier")
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    let newer = repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: None,
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("deploy failed now".to_string()),
-            attachments: vec![],
-        })
-        .await
-        .unwrap();
+    let newer = ctx
+        .create_message(conv.id, user.id, "deploy failed now")
+        .await;
 
     let results = repo
         .search_messages(conv.id, "deploy failed", 10, false)
@@ -451,4 +281,71 @@ async fn search_messages_returns_recent_matches() {
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].id, newer.id);
     assert_eq!(results[1].id, older.id);
+}
+
+#[tokio::test]
+async fn get_by_ids_returns_matching_messages() {
+    let Some(ctx) = support::TestCtx::new().await else {
+        return;
+    };
+
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-6").await;
+
+    let m1 = ctx.create_message(conv.id, user.id, "m1").await;
+    let m2 = ctx.create_message(conv.id, user.id, "m2").await;
+    let m3 = ctx.create_message(conv.id, user.id, "m3").await;
+
+    let map = repo.get_by_ids(&[m1.id, m3.id]).await.unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map[&m1.id].text.as_deref(), Some("m1"));
+    assert_eq!(map[&m3.id].text.as_deref(), Some("m3"));
+    assert!(!map.contains_key(&m2.id));
+}
+
+#[tokio::test]
+async fn get_by_ids_with_empty_slice_returns_empty() {
+    let Some(ctx) = support::TestCtx::new().await else {
+        return;
+    };
+
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let map = repo.get_by_ids(&[]).await.unwrap();
+    assert!(map.is_empty());
+}
+
+#[tokio::test]
+async fn set_has_attachments_updates_flag() {
+    let Some(ctx) = support::TestCtx::new().await else {
+        return;
+    };
+
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-7").await;
+
+    let msg = ctx.create_message(conv.id, user.id, "attach-test").await;
+    assert!(!msg.has_attachments);
+
+    let updated = repo.set_has_attachments(msg.id, true).await.unwrap();
+    assert!(updated.has_attachments);
+
+    let fetched = repo.get_by_id(msg.id).await.unwrap().unwrap();
+    assert!(fetched.has_attachments);
+
+    let updated = repo.set_has_attachments(msg.id, false).await.unwrap();
+    assert!(!updated.has_attachments);
+
+    let fetched = repo.get_by_id(msg.id).await.unwrap().unwrap();
+    assert!(!fetched.has_attachments);
 }

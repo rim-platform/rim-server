@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
 use crate::command::model::{NewUserCommand, UpdateUserCommand, UserCommand, UserCommandId};
@@ -7,7 +7,7 @@ use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait UserCommandRepository: Send + Sync {
     async fn get_by_id(&self, id: UserCommandId) -> RepoResult<Option<UserCommand>>;
 

@@ -22,12 +22,6 @@ use crate::AuthRepos;
 use crate::repos::AppRepos;
 use crate::util::ensure_server_owner;
 
-#[cfg(test)]
-use crate::test_support::auth::{
-    AuthReposPorts, InviteRepoPortAdapter, ServerMemberRepoPortAdapter, ServerRepoPortAdapter,
-    SessionRepoPortAdapter, UserRepoPortAdapter,
-};
-
 #[derive(Clone)]
 pub struct DefaultAuthService {
     repos: AuthRepos,
@@ -39,35 +33,13 @@ pub struct DefaultAuthService {
 impl DefaultAuthService {
     pub fn new(
         repos: AuthRepos,
-        db: DatabaseConnection,
+        db: Option<DatabaseConnection>,
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
     ) -> Self {
         Self {
             repos,
-            db: Some(db),
-            bootstrap_secret,
-            session_ttl,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_tests(
-        repos: AuthReposPorts,
-        bootstrap_secret: Option<String>,
-        session_ttl: Duration,
-    ) -> Self {
-        Self {
-            repos: AuthRepos {
-                user_repo: std::sync::Arc::new(UserRepoPortAdapter(repos.user_repo)),
-                server_repo: std::sync::Arc::new(ServerRepoPortAdapter(repos.server_repo)),
-                server_member_repo: std::sync::Arc::new(ServerMemberRepoPortAdapter(
-                    repos.server_member_repo,
-                )),
-                session_repo: std::sync::Arc::new(SessionRepoPortAdapter(repos.session_repo)),
-                invite_repo: std::sync::Arc::new(InviteRepoPortAdapter(repos.invite_repo)),
-            },
-            db: None,
+            db,
             bootstrap_secret,
             session_ttl,
         }

@@ -4,7 +4,7 @@ use crate::message_thread::model::MessageThreadId;
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir, SortOrder};
 use async_trait::async_trait;
-#[cfg(test)]
+#[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 use std::collections::HashMap;
 
@@ -26,7 +26,7 @@ pub struct ListMessagesParams {
 }
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageRepository: Send + Sync {
     async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
 

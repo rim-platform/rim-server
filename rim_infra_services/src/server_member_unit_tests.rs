@@ -3,7 +3,9 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::server::model::{Server, ServerId};
+    use rim_core::server::repository::MockServerRepository;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::server_member::command::{
         AddServerMemberCmd, GetServerMemberQuery, LeaveServerCmd, RemoveServerMemberCmd,
@@ -11,10 +13,8 @@ mod tests {
     use rim_services::server_member::service::ServerMemberService;
     use rim_services::{Actor, ServiceError};
 
+    use crate::ServerMemberRepos;
     use crate::server_member::DefaultServerMemberService;
-    use crate::test_support::server_member::{
-        MockServerMemberRepo, MockServerRepo, ServerMemberReposPorts,
-    };
 
     fn server(server_id: ServerId) -> Server {
         let now = chrono::Utc::now();
@@ -31,12 +31,12 @@ mod tests {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo
             .expect_get_by_id()
             .returning(move |_id| Ok(Some(server(server_id))));
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         // owner check path needs get_member
         server_member_repo
             .expect_get_member()
@@ -50,7 +50,7 @@ mod tests {
                 }))
             });
 
-        let svc = DefaultServerMemberService::new_for_tests(ServerMemberReposPorts {
+        let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -72,12 +72,12 @@ mod tests {
         let actor_id = UserId::new();
         let target_id = UserId::new();
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo
             .expect_get_by_id()
             .returning(move |_id| Ok(Some(server(server_id))));
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         // owner check
         server_member_repo
             .expect_get_member()
@@ -97,7 +97,7 @@ mod tests {
             });
         server_member_repo.expect_remove_member().never();
 
-        let svc = DefaultServerMemberService::new_for_tests(ServerMemberReposPorts {
+        let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -118,12 +118,12 @@ mod tests {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo
             .expect_get_by_id()
             .returning(move |_id| Ok(Some(server(server_id))));
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_get_member()
             .returning(move |_sid, _uid| {
@@ -137,7 +137,7 @@ mod tests {
             });
         server_member_repo.expect_remove_member().never();
 
-        let svc = DefaultServerMemberService::new_for_tests(ServerMemberReposPorts {
+        let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
         });
@@ -157,17 +157,17 @@ mod tests {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo
             .expect_get_by_id()
             .returning(move |_id| Ok(Some(server(server_id))));
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
 
-        let svc = DefaultServerMemberService::new_for_tests(ServerMemberReposPorts {
+        let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
         });

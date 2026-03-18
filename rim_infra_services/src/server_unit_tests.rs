@@ -3,24 +3,31 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::server::model::{Server, ServerId};
+    use rim_core::server::repository::MockServerRepository;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
     use rim_services::server::service::ServerService;
     use rim_services::{Actor, ServiceError};
 
+    use crate::ServerRepos;
     use crate::server::DefaultServerService;
-    use crate::test_support::server::{MockServerMemberRepo, MockServerRepo, ServerReposPorts};
 
     #[tokio::test]
     async fn create_server_validates_name() {
         let actor_id = UserId::new();
-        let (server_repo, server_member_repo) =
-            (MockServerRepo::new(), MockServerMemberRepo::new());
-        let svc = DefaultServerService::new_for_tests(ServerReposPorts {
-            server_repo: Arc::new(server_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let (server_repo, server_member_repo) = (
+            MockServerRepository::new(),
+            MockServerMemberRepository::new(),
+        );
+        let svc = DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .create_server(CreateServerCmd {
@@ -38,7 +45,7 @@ mod tests {
         let server_id = ServerId::new();
         let now = chrono::Utc::now();
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo.expect_create_server().returning(move |name| {
             Ok(Server {
                 id: server_id,
@@ -48,7 +55,7 @@ mod tests {
             })
         });
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_add_member()
             .returning(move |sid, uid, role| {
@@ -64,10 +71,13 @@ mod tests {
                 })
             });
 
-        let svc = DefaultServerService::new_for_tests(ServerReposPorts {
-            server_repo: Arc::new(server_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let dto = svc
             .create_server(CreateServerCmd {
@@ -84,18 +94,21 @@ mod tests {
         let actor_id = UserId::new();
         let server_id = ServerId::new();
 
-        let mut server_member_repo = MockServerMemberRepo::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo.expect_get_by_id().never();
 
-        let svc = DefaultServerService::new_for_tests(ServerReposPorts {
-            server_repo: Arc::new(server_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let err = svc
             .get_server(GetServerQuery {
@@ -124,17 +137,20 @@ mod tests {
             updated_at: now,
         };
 
-        let mut server_repo = MockServerRepo::new();
+        let mut server_repo = MockServerRepository::new();
         server_repo
             .expect_get_servers_for_user()
             .returning(move |_uid| Ok(vec![s1.clone(), s2.clone()]));
 
-        let server_member_repo = MockServerMemberRepo::new();
+        let server_member_repo = MockServerMemberRepository::new();
 
-        let svc = DefaultServerService::new_for_tests(ServerReposPorts {
-            server_repo: Arc::new(server_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
+        let svc = DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            None,
+        );
 
         let list = svc
             .list_my_servers(ListMyServersQuery {
