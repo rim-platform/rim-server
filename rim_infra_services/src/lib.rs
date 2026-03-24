@@ -8,6 +8,7 @@ pub mod integration;
 pub mod keybind;
 pub mod message;
 pub mod message_attachment;
+pub mod message_reaction;
 pub mod provider;
 pub mod repos;
 pub mod request_auth;
@@ -24,6 +25,9 @@ mod thread_unit_tests;
 
 #[cfg(test)]
 mod message_attachment_unit_tests;
+
+#[cfg(test)]
+mod message_reaction_unit_tests;
 
 #[cfg(test)]
 mod auth_unit_tests;
@@ -46,5 +50,6 @@ mod user_unit_tests;
 pub use provider::DefaultAppServiceProvider;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
-    MessageRepos, RequestAuthRepos, ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
+    MessageRepos, ReactionRepos, RequestAuthRepos, ServerMemberRepos, ServerRepos, ThreadRepos,
+    UserRepos,
 };

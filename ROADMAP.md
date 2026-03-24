@@ -1,24 +1,31 @@
 # Roadmap
 
-RIM is a modern team chat app on steroids.
+RIM is a programmable communication workspace — not another chat app.
 
-Fast communication is the base, but the product is defined by how customizable and programmable it
-is. Plugins, commands, and keybinds are not side features; they are core product differentiators.
-RIM should make it easy to communicate, act on communication context, and tailor the workspace to
- how a team works.
+Chat is the communication medium, but the product is defined by how customizable and
+programmable the workspace is. Commands, keybinds, macros, and plugins are not side
+features; they are the core product. RIM should make it easy to communicate, act on
+communication context, and build workflows that match how a team actually works.
 
-Privacy and security are core product principles from the beginning. Optional end-to-end encrypted
-messaging is a later dedicated phase, not a rushed add-on.
+No competing product combines a command palette, user-defined keybinds, chainable macro
+commands, client-side plugins, and a non-Electron desktop runtime. RIM occupies a new
+category: a programmable communication workspace for power users and technical teams.
+
+Privacy and security are core product principles from the beginning. Optional end-to-end
+encrypted messaging is a later dedicated phase, not a rushed add-on.
 
 ## Product Identity
 
+See also: `docs/vision.md` for the full product vision and competitive positioning.
 See also: `docs/architecture.md` for the current high-level system architecture.
 
-- Modern team communication app with channels, DMs, groups, threads, and later voice/video/screen
-  sharing.
-- Chat app on steroids: communication plus deep customization.
-- Commands, keybinds, and plugins must be easy to create, configure, and use.
-- Communication context should turn into action quickly.
+- Programmable communication workspace, not a chat app with plugins bolted on.
+- Communication is the foundation — commands, keybinds, macros, and plugins are the
+  product.
+- The user builds their own workflow instead of adapting to the platform.
+- Keyboard-first: the user should be able to do everything without a mouse.
+- Desktop-first: Tauri v2 for performance and native integration.
+- Extensible by design: plugins extend the same systems as built-in features.
 
 ## Core Principles
 
@@ -127,6 +134,13 @@ See also: `docs/command_model.md` for the command contract and current Phase 2 d
 - Chained commands and macros.
 - Command execution context.
 - Stable command contracts for built-ins and plugins.
+- Vim-style command mode in the palette (future):
+  - Prefix `:` switches the palette from fuzzy search to structured command parsing.
+  - Messages in timeline get temporary line numbers (like Vim).
+  - Examples: `:l 46` (select message 46), `:d 12` (delete message 12), `:r 5 hello`
+    (reply to message 5), `:t 3` (open thread), `:j #general` (jump to channel),
+    `:react 5 👍` (add reaction).
+  - This is a later enhancement, not a launch requirement.
 
 ## Phase 3: Keybind System
 

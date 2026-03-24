@@ -1,18 +1,35 @@
 # RIM
 
-RIM is a desktop-first, modular chat workspace. The long-term goal is to keep the backend stable
-while enabling teams and individuals to extend the desktop UI with plugins (panels, message actions,
-composer actions) and integrations.
+RIM is a programmable communication workspace — not another chat app.
 
-This repository currently contains the Rust server workspace (Actix Web + async-graphql) and the
+Chat is the medium, but the product is defined by commands, keybinds, macros, plugins,
+and context actions that turn conversations into workflows. Think VS Code meets team
+communication: a command palette, user-defined shortcuts, chainable macros, and a
+client-side plugin system with a marketplace.
+
+This repository contains the Rust backend workspace (Actix Web + async-graphql) and the
 supporting domain/service/db crates.
+
+## Why RIM Exists
+
+Every team chat app dictates how you work. RIM lets you build your own workflow:
+
+- **Command palette** — fuzzy-search any action, not just channels.
+- **Custom keybinds** — bind any command to any key, scoped by context.
+- **Macro commands** — chain multiple actions into one keystroke.
+- **Client-side plugins** — extend the app itself, not just post messages.
+- **Tauri v2** — lightweight desktop runtime, not Electron.
+
+See `docs/vision.md` for the full product vision and competitive positioning.
 
 ## Project Direction
 
-- Desktop-first client: planned to be built with Tauri for low CPU/RAM usage.
-- Extensibility: a plugin host in the desktop client (sandboxed, capability-based permissions).
-- Integrations: Slack/Discord-style external apps (webhooks + APIs) come later.
-- Policies: server-enforced moderation/restrictions (e.g., kids mode) come later.
+- Desktop-first client built with Tauri v2 for low CPU/RAM usage.
+- Keyboard-first UX — the user should never need a mouse for common workflows.
+- Extensibility through a plugin host in the desktop client (sandboxed, capability-based).
+- Communication is the foundation, not the product — commands, keybinds, and plugins
+  are the product.
+- Integrations (webhooks, APIs, bots) come in later phases.
 
 See `ROADMAP.md` for the implementation plan.
 
@@ -50,7 +67,7 @@ export DATABASE_URL='postgres://postgres:postgres@localhost:5432/testdb'
 Run migrations:
 
 ```sh
-cargo run -p migration -- up
+sea migrate up
 ```
 
 Run the server:
@@ -75,5 +92,12 @@ cargo test --workspace
 
 ## Docs
 
-- `ROADMAP.md`
-- `docs/pagination.md`
+- `docs/vision.md` — product vision and competitive positioning
+- `ROADMAP.md` — implementation phases
+- `docs/architecture.md` — system architecture
+- `docs/command_model.md` — command system contract
+- `docs/keybind_model.md` — keybind system contract
+- `docs/plugin_model.md` — plugin system contract
+- `docs/capability_security_model.md` — capability and security model
+- `docs/context_model.md` — typed runtime context
+- `docs/pagination.md` — cursor pagination contract

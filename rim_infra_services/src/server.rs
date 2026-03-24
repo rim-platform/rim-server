@@ -59,7 +59,7 @@ impl ServerService for DefaultServerService {
             None
         };
         let repos = match &scope {
-            Some(s) => AppRepos::with_handle(s.handle()).for_server(),
+            Some(s) => AppRepos::with_handle(&s.handle()).for_server(),
             None => self.repos.clone(),
         };
 

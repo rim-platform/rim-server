@@ -6,6 +6,7 @@ use rim_core::user::model::UserId;
 pub struct ServerMemberDto {
     pub server_id: ServerId,
     pub user_id: UserId,
+    pub username: String,
     pub member_role: String,
     pub joined_at: chrono::DateTime<chrono::Utc>,
 }

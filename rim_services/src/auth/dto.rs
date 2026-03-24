@@ -58,6 +58,12 @@ pub struct AcceptInviteResultDto {
     pub csrf_token: String,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct JoinServerByInviteResultDto {
+    pub server_id: ServerId,
+}
+
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestAuthResultDto {

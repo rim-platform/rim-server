@@ -7,6 +7,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::user::repository::MockUserRepository;
     use rim_services::server_member::command::{
         AddServerMemberCmd, GetServerMemberQuery, LeaveServerCmd, RemoveServerMemberCmd,
     };
@@ -50,9 +51,12 @@ mod tests {
                 }))
             });
 
+        let user_repo = MockUserRepository::new();
+
         let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
+            user_repo: Arc::new(user_repo),
         });
 
         let err = svc
@@ -97,9 +101,12 @@ mod tests {
             });
         server_member_repo.expect_remove_member().never();
 
+        let user_repo = MockUserRepository::new();
+
         let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
+            user_repo: Arc::new(user_repo),
         });
 
         let err = svc
@@ -137,9 +144,12 @@ mod tests {
             });
         server_member_repo.expect_remove_member().never();
 
+        let user_repo = MockUserRepository::new();
+
         let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
+            user_repo: Arc::new(user_repo),
         });
 
         let err = svc
@@ -167,9 +177,12 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
 
+        let user_repo = MockUserRepository::new();
+
         let svc = DefaultServerMemberService::new(ServerMemberRepos {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
+            user_repo: Arc::new(user_repo),
         });
 
         let err = svc

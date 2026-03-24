@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use rim_services::conversation::command::CreateConversationCmd;
 use rim_services::conversation::types::ConversationParticipants;
-use rim_services::message::command::SendMessageCmd;
+use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd, SendMessageCmd};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::CommandServices;
@@ -168,11 +168,87 @@ pub(super) async fn execute_builtin_command(
                 follow_up_commands: vec![],
             })
         }
-        "workspace.open_command_palette" | "workspace.cycle_recent_activity" => {
-            Err(ServiceError::Validation(
-                "desktop-local commands must run in the client runtime".to_string(),
-            ))
+        "chat.delete_message" => {
+            let Some(context) = context else {
+                return Err(ServiceError::Validation(
+                    "command requires context".to_string(),
+                ));
+            };
+            let server_id = context.workspace_id.ok_or_else(|| {
+                ServiceError::Validation("command requires workspace context".to_string())
+            })?;
+            let conversation_id = context.conversation_id.ok_or_else(|| {
+                ServiceError::Validation("command requires conversation context".to_string())
+            })?;
+            let message_id = context.selected_message_id.ok_or_else(|| {
+                ServiceError::Validation("command requires selected message context".to_string())
+            })?;
+
+            services
+                .message_service
+                .delete_message(DeleteMessageCmd {
+                    actor,
+                    server_id,
+                    conversation_id,
+                    message_id,
+                    hard: false,
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "message deleted".to_string(),
+                payload: Some(serde_json::json!({
+                    "message_id": message_id.to_string(),
+                    "conversation_id": conversation_id.to_string(),
+                })),
+                follow_up_commands: vec![],
+            })
         }
+        "chat.edit_message" => {
+            let Some(context) = context else {
+                return Err(ServiceError::Validation(
+                    "command requires context".to_string(),
+                ));
+            };
+            let server_id = context.workspace_id.ok_or_else(|| {
+                ServiceError::Validation("command requires workspace context".to_string())
+            })?;
+            let conversation_id = context.conversation_id.ok_or_else(|| {
+                ServiceError::Validation("command requires conversation context".to_string())
+            })?;
+            let message_id = context.selected_message_id.ok_or_else(|| {
+                ServiceError::Validation("command requires selected message context".to_string())
+            })?;
+            let text = require_string_arg(&args, "text")?;
+
+            let message = services
+                .message_service
+                .edit_message(EditMessageCmd {
+                    actor,
+                    server_id,
+                    conversation_id,
+                    message_id,
+                    text,
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "message edited".to_string(),
+                payload: Some(serde_json::json!({
+                    "message_id": message.id.to_string(),
+                    "conversation_id": message.conversation_id.to_string(),
+                })),
+                follow_up_commands: vec![],
+            })
+        }
+        "workspace.open_command_palette"
+        | "workspace.cycle_recent_activity"
+        | "chat.copy_message_text"
+        | "chat.open_thread" => Err(ServiceError::Validation(
+            "desktop-local commands must run in the client runtime".to_string(),
+        )),
         _ => Err(ServiceError::NotFound),
     }
 }

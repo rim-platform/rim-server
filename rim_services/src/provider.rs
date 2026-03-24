@@ -10,6 +10,7 @@ use crate::integration::service::IntegrationService;
 use crate::keybind::service::KeybindService;
 use crate::message::service::MessageService;
 use crate::message_attachment::service::MessageAttachmentService;
+use crate::message_reaction::service::MessageReactionService;
 use crate::message_thread::service::ThreadService;
 use crate::server::service::ServerService;
 use crate::server_member::service::ServerMemberService;
@@ -27,6 +28,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn keybind_service(&self) -> Arc<dyn KeybindService>;
     fn message_service(&self) -> Arc<dyn MessageService>;
     fn message_attachment_service(&self) -> Arc<dyn MessageAttachmentService>;
+    fn message_reaction_service(&self) -> Arc<dyn MessageReactionService>;
     fn server_service(&self) -> Arc<dyn ServerService>;
     fn server_member_service(&self) -> Arc<dyn ServerMemberService>;
     fn setting_service(&self) -> Arc<dyn SettingService>;

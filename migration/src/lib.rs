@@ -27,6 +27,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260318_173750_add_missing_indexes::Migration),
             Box::new(m20260318_200000_make_user_last_login_at_nullable::Migration),
             Box::new(m20260318_210000_add_conversation_member_joined_at::Migration),
+            Box::new(m20260320_000000_create_message_reaction::Migration),
+            Box::new(m20260322_000000_add_unique_channel_title::Migration),
         ]
     }
 }
@@ -51,3 +53,5 @@ mod m20260310_235420_create_keybind;
 mod m20260318_173750_add_missing_indexes;
 mod m20260318_200000_make_user_last_login_at_nullable;
 mod m20260318_210000_add_conversation_member_joined_at;
+mod m20260320_000000_create_message_reaction;
+mod m20260322_000000_add_unique_channel_title;

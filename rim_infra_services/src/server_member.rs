@@ -22,13 +22,31 @@ impl DefaultServerMemberService {
         Self { repos }
     }
 
-    fn to_dto(member: rim_core::server_member::model::ServerMember) -> ServerMemberDto {
+    fn to_dto(
+        member: rim_core::server_member::model::ServerMember,
+        username: String,
+    ) -> ServerMemberDto {
         ServerMemberDto {
             server_id: member.server_id,
             user_id: member.user_id,
+            username,
             member_role: member.member_role.as_str().to_string(),
             joined_at: member.joined_at,
         }
+    }
+
+    async fn resolve_username(
+        &self,
+        user_id: rim_core::user::model::UserId,
+    ) -> ServiceResult<String> {
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+        Ok(user.username)
     }
 }
 
@@ -57,13 +75,15 @@ impl ServerMemberService for DefaultServerMemberService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        let username = self.resolve_username(member.user_id).await?;
+
         info!(
             server_id = %cmd.server_id,
             added_user_id = %cmd.user_id,
             "added server member"
         );
 
-        Ok(Self::to_dto(member))
+        Ok(Self::to_dto(member, username))
     }
 
     async fn remove_member(&self, cmd: RemoveServerMemberCmd) -> ServiceResult<()> {
@@ -158,7 +178,9 @@ impl ServerMemberService for DefaultServerMemberService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        Ok(Self::to_dto(member))
+        let username = self.resolve_username(member.user_id).await?;
+
+        Ok(Self::to_dto(member, username))
     }
 
     async fn list_members(
@@ -179,7 +201,13 @@ impl ServerMemberService for DefaultServerMemberService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        Ok(members.into_iter().map(Self::to_dto).collect())
+        let mut result = Vec::with_capacity(members.len());
+        for member in members {
+            let username = self.resolve_username(member.user_id).await?;
+            result.push(Self::to_dto(member, username));
+        }
+
+        Ok(result)
     }
 }
 use tracing::info;
