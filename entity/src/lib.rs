@@ -14,6 +14,8 @@ pub mod message;
 pub mod message_attachment;
 mod message_attachment_mapper;
 mod message_mapper;
+pub mod message_reaction;
+mod message_reaction_mapper;
 pub mod message_thread;
 mod message_thread_mapper;
 pub mod sea_orm_active_enums;

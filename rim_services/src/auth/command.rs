@@ -38,3 +38,9 @@ pub struct AcceptInviteCmd {
     pub username: String,
     pub password: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct JoinServerByInviteCmd {
+    pub actor: Actor,
+    pub invite_token: String,
+}

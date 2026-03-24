@@ -66,6 +66,9 @@ pub trait ConversationRepository: Send + Sync {
         cursor: Option<ConversationCreatedCursor>,
     ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>>;
 
+    /// Check whether a channel with the given title already exists on the server.
+    async fn exists_channel_by_title(&self, server_id: ServerId, title: &str) -> RepoResult<bool>;
+
     /// Update the conversation activity timestamp.
     /// Intended to be called when a new message is persisted.
     async fn touch_last_activity_at(

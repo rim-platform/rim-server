@@ -1,5 +1,6 @@
 use actix_web::HttpRequest;
 use async_graphql_actix_web::GraphQLResponse;
+use async_graphql_parser::types::{ExecutableDocument, OperationType, Selection};
 use rim_services::auth::service::RequestAuthenticator;
 
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
@@ -7,42 +8,99 @@ use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 pub const COOKIE_SESSION: &str = "rim_session";
 pub const COOKIE_CSRF: &str = "rim_csrf";
 
+/// Extract the actual mutation field names from a parsed GraphQL document.
+///
+/// This inspects the AST rather than trusting the client-supplied `operationName`,
+/// preventing CSRF bypass via operationName manipulation.
+fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
+    let mut fields = Vec::new();
+    for (_name, operation) in doc.operations.iter() {
+        if matches!(operation.node.ty, OperationType::Mutation) {
+            for selection in &operation.node.selection_set.node.items {
+                match &selection.node {
+                    Selection::Field(field) => {
+                        fields.push(field.node.name.node.to_string());
+                    }
+                    Selection::InlineFragment(inline) => {
+                        for sub_selection in &inline.node.selection_set.node.items {
+                            if let Selection::Field(field) = &sub_selection.node {
+                                fields.push(field.node.name.node.to_string());
+                            }
+                        }
+                    }
+                    Selection::FragmentSpread(spread) => {
+                        let frag_name = &spread.node.fragment_name.node;
+                        if let Some(frag) = doc.fragments.get(frag_name.as_str()) {
+                            for sub_selection in &frag.node.selection_set.node.items {
+                                if let Selection::Field(field) = &sub_selection.node {
+                                    fields.push(field.node.name.node.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fields
+}
+
 #[allow(clippy::result_large_err)]
 pub fn enforce_csrf(
     req: &HttpRequest,
     gql: &async_graphql::Request,
 ) -> Result<(), GraphQLResponse> {
-    const ALLOW: &[&str] = &["bootstrap", "login", "accept_invite", "logout"];
+    /// Mutation field names (camelCase, matching the GraphQL schema) that are
+    /// exempt from CSRF validation because they are used before the client has
+    /// a CSRF token.
+    const CSRF_EXEMPT_MUTATIONS: &[&str] = &["bootstrap", "login", "acceptInvite", "logout"];
 
     let doc = match async_graphql_parser::parse_query(gql.query.as_str()) {
         Ok(d) => d,
-        Err(_) => return Ok(()),
+        Err(_) => {
+            // Fail-closed: if we can't parse the query, require CSRF.
+            // async-graphql will also reject it, but defence-in-depth.
+            return validate_csrf_tokens(req);
+        }
     };
 
-    let has_mutation = doc.operations.iter().any(|(_, op)| {
-        matches!(
-            op.node.ty,
-            async_graphql_parser::types::OperationType::Mutation
-        )
-    });
+    let has_mutation_ops = doc
+        .operations
+        .iter()
+        .any(|(_, op)| matches!(op.node.ty, OperationType::Mutation));
 
-    if !has_mutation {
+    let mutation_fields = extract_mutation_fields(&doc);
+
+    // No mutation operations at all → nothing to protect.
+    if !has_mutation_ops {
         return Ok(());
     }
 
-    let Some(op_name) = gql.operation_name.as_deref() else {
-        return Err(GraphQLResponse::from(async_graphql::Response::from_errors(
-            vec![async_graphql::ServerError::new(
-                "missing operationName for mutation",
-                None,
-            )],
-        )));
-    };
+    // Fail-closed: if mutation operations exist but we couldn't extract any
+    // field names (e.g. deeply nested fragment spreads we don't resolve),
+    // require CSRF rather than silently skipping validation.
+    if mutation_fields.is_empty() {
+        // Fall through to CSRF check below.
+    }
 
-    if ALLOW.contains(&op_name) {
+    // All mutation fields must be in the exempt list to skip CSRF.
+    // !is_empty() ensures that an empty list (unresolvable fragments) doesn't
+    // vacuously pass — Iterator::all() returns true on empty iterators.
+    let all_exempt = !mutation_fields.is_empty()
+        && mutation_fields.iter().all(|f| {
+            CSRF_EXEMPT_MUTATIONS
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(f))
+        });
+
+    if all_exempt {
         return Ok(());
     }
 
+    validate_csrf_tokens(req)
+}
+
+fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
     let csrf_cookie = req.cookie(COOKIE_CSRF).map(|c| c.value().to_string());
     let csrf_header = req
         .headers()

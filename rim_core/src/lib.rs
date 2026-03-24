@@ -10,6 +10,7 @@ pub mod keybind;
 mod macros;
 pub mod message;
 pub mod message_attachment;
+pub mod message_reaction;
 pub mod message_thread;
 pub mod principal;
 pub mod repository;

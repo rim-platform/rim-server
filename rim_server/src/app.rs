@@ -1,5 +1,7 @@
 use crate::config::RIMConfig;
+use rim_api::broadcast::InMemoryBroadcaster;
 use rim_api::{AppSchema, build_schema};
+use rim_services::events::{Broadcaster, Observers};
 use sea_orm::Database;
 use std::sync::Arc;
 
@@ -55,6 +57,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_thread_repo: Arc::new(
             sea_orm_impl::message_thread::SeaOrmMessageThreadRepository::new(db.clone()),
         ),
+        message_reaction_repo: Arc::new(
+            sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(db.clone()),
+        ),
         user_command_repo: Arc::new(SeaOrmUserCommandRepository::new(db.clone())),
         server_repo: Arc::clone(&server_repo),
         server_member_repo: Arc::clone(&server_member_repo),
@@ -63,13 +68,18 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         invite_repo: Arc::clone(&invite_repo),
     };
 
+    let broadcaster = InMemoryBroadcaster::new(1024);
+    let broadcaster_arc: Arc<dyn Broadcaster> = Arc::new(broadcaster.clone());
+    let observers = Observers::new(broadcaster_arc);
+
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
         raw_db,
         config.bootstrap_secret.clone(),
         chrono::Duration::days(i64::from(config.session_ttl_days)),
+        observers,
     ));
-    let schema = build_schema(Arc::clone(&service_provider));
+    let schema = build_schema(Arc::clone(&service_provider), broadcaster);
     let request_authenticator = service_provider.request_authenticator();
 
     Ok(AppRuntime {

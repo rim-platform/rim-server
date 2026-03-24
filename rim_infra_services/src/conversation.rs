@@ -14,17 +14,20 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 
+use rim_services::events::Observers;
+
 use crate::ConversationRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
 #[derive(Clone)]
 pub struct DefaultConversationService {
     repos: ConversationRepos,
+    observers: Observers,
 }
 
 impl DefaultConversationService {
-    pub fn new(repos: ConversationRepos) -> Self {
-        Self { repos }
+    pub fn new(repos: ConversationRepos, observers: Observers) -> Self {
+        Self { repos, observers }
     }
 
     async fn to_dto(
@@ -132,7 +135,21 @@ impl ConversationService for DefaultConversationService {
                     (CoreConversationType::Group, unique)
                 }
                 ConversationParticipants::Channel => {
-                    // v0: channels have no extra metadata here; just create and add creator.
+                    if let Some(ref channel_title) = title {
+                        let exists = self
+                            .repos
+                            .conversation_repo
+                            .exists_channel_by_title(cmd.server_id, channel_title)
+                            .await
+                            .map_err(rim_services::map_repo_error)?;
+
+                        if exists {
+                            return Err(ServiceError::Conflict(
+                                "A channel with this name already exists".to_string(),
+                            ));
+                        }
+                    }
+
                     (CoreConversationType::Channel, vec![cmd.actor.user_id])
                 }
             };
@@ -158,7 +175,17 @@ impl ConversationService for DefaultConversationService {
             "initialized conversation members"
         );
 
-        self.to_dto(conversation).await
+        let dto = self.to_dto(conversation).await?;
+
+        self.observers.workspace.on_conversation_created(
+            &dto.server_id.to_string(),
+            &dto.id.to_string(),
+            dto.title.as_deref(),
+            dto.conversation_type.as_str(),
+            dto.member_ids.iter().map(|id| id.to_string()).collect(),
+        );
+
+        Ok(dto)
     }
 
     async fn get_conversation(
@@ -322,13 +349,42 @@ impl ConversationService for DefaultConversationService {
             return Err(ServiceError::PermissionDenied);
         }
 
+        // Check that the target user is a server member.
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.user_id,
+        )
+        .await?;
+
+        // Check that the target user is not already a conversation member.
+        let already_member = self
+            .repos
+            .conversation_member_repo
+            .is_member(cmd.conversation_id, cmd.user_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        if already_member {
+            return Err(ServiceError::Conflict(
+                "user is already a member of this conversation".to_string(),
+            ));
+        }
+
         self.repos
             .conversation_member_repo
             .add_member(cmd.conversation_id, cmd.user_id)
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        self.to_dto(conversation).await
+        let dto = self.to_dto(conversation).await?;
+
+        self.observers.workspace.on_member_added_to_conversation(
+            &cmd.server_id.to_string(),
+            &cmd.conversation_id.to_string(),
+            &cmd.user_id.to_string(),
+        );
+
+        Ok(dto)
     }
 
     async fn remove_member(
@@ -359,12 +415,33 @@ impl ConversationService for DefaultConversationService {
             return Err(ServiceError::PermissionDenied);
         }
 
+        // Check that the target user is actually a member of the conversation.
+        let target_is_member = self
+            .repos
+            .conversation_member_repo
+            .is_member(cmd.conversation_id, cmd.user_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        if !target_is_member {
+            return Err(ServiceError::NotFound);
+        }
+
         self.repos
             .conversation_member_repo
             .remove_member(cmd.conversation_id, cmd.user_id)
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        self.to_dto(conversation).await
+        let dto = self.to_dto(conversation).await?;
+
+        self.observers
+            .workspace
+            .on_member_removed_from_conversation(
+                &cmd.server_id.to_string(),
+                &cmd.conversation_id.to_string(),
+                &cmd.user_id.to_string(),
+            );
+
+        Ok(dto)
     }
 }

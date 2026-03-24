@@ -7,6 +7,7 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
+use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
@@ -27,6 +28,7 @@ pub struct AppRepos {
     pub user_repo: Arc<dyn UserRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
+    pub message_reaction_repo: Arc<dyn MessageReactionRepository>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,7 @@ pub struct ServerRepos {
 pub struct ServerMemberRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub user_repo: Arc<dyn UserRepository>,
 }
 
 #[derive(Clone)]
@@ -95,6 +98,15 @@ pub struct CommandRepos {
 #[derive(Clone)]
 pub struct AttachmentRepos {
     pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    pub message_repo: Arc<dyn MessageRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+}
+
+#[derive(Clone)]
+pub struct ReactionRepos {
+    pub message_reaction_repo: Arc<dyn MessageReactionRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
@@ -154,6 +166,7 @@ impl AppRepos {
         ServerMemberRepos {
             server_repo: Arc::clone(&self.server_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 
@@ -182,6 +195,16 @@ impl AppRepos {
     pub fn for_attachment(&self) -> AttachmentRepos {
         AttachmentRepos {
             message_attachment_repo: Arc::clone(&self.message_attachment_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_reaction(&self) -> ReactionRepos {
+        ReactionRepos {
+            message_reaction_repo: Arc::clone(&self.message_reaction_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             message_repo: Arc::clone(&self.message_repo),
@@ -243,6 +266,11 @@ impl AppRepos {
             invite_repo: Arc::new(sea_orm_impl::invite::SeaOrmInviteRepository::new(
                 handle.clone(),
             )),
+            message_reaction_repo: Arc::new(
+                sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(
+                    handle.clone(),
+                ),
+            ),
         }
     }
 }

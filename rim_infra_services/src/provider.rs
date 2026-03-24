@@ -7,10 +7,12 @@ use rim_services::capability::service::CapabilityService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::event::service::EventService;
+use rim_services::events::Observers;
 use rim_services::integration::service::IntegrationService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::service::ThreadService;
 use rim_services::provider::AppServiceProvider;
 use rim_services::server::service::ServerService;
@@ -33,6 +35,7 @@ pub struct DefaultAppServiceProvider {
     keybind_service: Arc<dyn KeybindService>,
     message_service: Arc<dyn MessageService>,
     message_attachment_service: Arc<dyn MessageAttachmentService>,
+    message_reaction_service: Arc<dyn MessageReactionService>,
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
     setting_service: Arc<dyn SettingService>,
@@ -47,6 +50,7 @@ impl DefaultAppServiceProvider {
         db: DatabaseConnection,
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
+        observers: Observers,
     ) -> Self {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         let auth_service: Arc<dyn AuthService> = Arc::new(crate::auth::DefaultAuthService::new(
@@ -57,18 +61,28 @@ impl DefaultAppServiceProvider {
         ));
         let capability_service: Arc<dyn CapabilityService> =
             Arc::new(crate::capability::DefaultCapabilityService);
-        let conversation_service: Arc<dyn ConversationService> = Arc::new(
-            crate::conversation::DefaultConversationService::new(repos.for_conversation()),
-        );
+        let conversation_service: Arc<dyn ConversationService> =
+            Arc::new(crate::conversation::DefaultConversationService::new(
+                repos.for_conversation(),
+                observers.clone(),
+            ));
         let event_service: Arc<dyn EventService> = Arc::new(crate::event::DefaultEventService);
         let integration_service: Arc<dyn IntegrationService> =
             Arc::new(crate::integration::DefaultIntegrationService);
-        let message_service: Arc<dyn MessageService> = Arc::new(
-            crate::message::DefaultMessageService::new(repos.for_message(), Some(db.clone())),
-        );
+        let message_service: Arc<dyn MessageService> =
+            Arc::new(crate::message::DefaultMessageService::new(
+                repos.for_message(),
+                Some(db.clone()),
+                observers.clone(),
+            ));
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(repos.for_attachment()),
         );
+        let message_reaction_service: Arc<dyn MessageReactionService> =
+            Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
+                repos.for_reaction(),
+                observers,
+            ));
         let server_service: Arc<dyn ServerService> = Arc::new(
             crate::server::DefaultServerService::new(repos.for_server(), Some(db.clone())),
         );
@@ -111,6 +125,7 @@ impl DefaultAppServiceProvider {
             keybind_service,
             message_service,
             message_attachment_service,
+            message_reaction_service,
             server_service,
             server_member_service,
             setting_service,
@@ -151,6 +166,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn message_attachment_service(&self) -> Arc<dyn MessageAttachmentService> {
         Arc::clone(&self.message_attachment_service)
+    }
+    fn message_reaction_service(&self) -> Arc<dyn MessageReactionService> {
+        Arc::clone(&self.message_reaction_service)
     }
     fn server_service(&self) -> Arc<dyn ServerService> {
         Arc::clone(&self.server_service)

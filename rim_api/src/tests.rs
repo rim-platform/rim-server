@@ -25,6 +25,7 @@ mod tests {
     use rim_services::keybind::service::MockKeybindService;
     use rim_services::message::service::MockMessageService;
     use rim_services::message_attachment::service::MockMessageAttachmentService;
+    use rim_services::message_reaction::service::MockMessageReactionService;
     use rim_services::message_thread::service::MockThreadService;
     use rim_services::provider::AppServiceProvider;
     use rim_services::server::service::MockServerService;
@@ -33,6 +34,7 @@ mod tests {
     use rim_services::user::service::MockUserService;
 
     use crate::auth_context::AuthActorCtx;
+    use crate::broadcast::InMemoryBroadcaster;
     use crate::build_schema;
 
     // ── Test helpers ──────────────────────────────────────────────────────
@@ -46,69 +48,81 @@ mod tests {
     }
 
     fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(user),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(user),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     fn schema_with_server_mocks(
         server: MockServerService,
         server_member: MockServerMemberService,
     ) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(server),
-            server_member: Arc::new(server_member),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                server: Arc::new(server),
+                server_member: Arc::new(server_member),
+                setting: Arc::new(MockSettingService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(keybind),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(keybind),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     // ── DTO factory helpers ───────────────────────────────────────────────
@@ -188,6 +202,7 @@ mod tests {
         rim_services::server_member::dto::ServerMemberDto {
             server_id: ServerId::new(),
             user_id: UserId::new(),
+            username: "testuser".to_string(),
             member_role: "member".to_string(),
             joined_at: chrono::Utc::now(),
         }
@@ -216,6 +231,7 @@ mod tests {
         keybind: Arc<dyn rim_services::keybind::service::KeybindService>,
         message: Arc<dyn rim_services::message::service::MessageService>,
         attachment: Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
+        reaction: Arc<dyn rim_services::message_reaction::service::MessageReactionService>,
         server: Arc<dyn rim_services::server::service::ServerService>,
         server_member: Arc<dyn rim_services::server_member::service::ServerMemberService>,
         setting: Arc<dyn rim_services::setting::service::SettingService>,
@@ -273,6 +289,12 @@ mod tests {
             Arc::clone(&self.attachment)
         }
 
+        fn message_reaction_service(
+            &self,
+        ) -> Arc<dyn rim_services::message_reaction::service::MessageReactionService> {
+            Arc::clone(&self.reaction)
+        }
+
         fn server_service(&self) -> Arc<dyn rim_services::server::service::ServerService> {
             Arc::clone(&self.server)
         }
@@ -309,24 +331,32 @@ mod tests {
         attachment: MockMessageAttachmentService,
         thread: MockThreadService,
     ) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(auth),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(conv),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            message: Arc::new(msg),
-            attachment: Arc::new(attachment),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(thread),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        let mut reaction = MockMessageReactionService::new();
+        reaction
+            .expect_get_reactions_for_messages()
+            .returning(|_| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                auth: Arc::new(auth),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(conv),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                message: Arc::new(msg),
+                attachment: Arc::new(attachment),
+                reaction: Arc::new(reaction),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                thread: Arc::new(thread),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     fn schema_with_platform_mocks(
@@ -336,45 +366,53 @@ mod tests {
         integration: MockIntegrationService,
         setting: MockSettingService,
     ) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(action),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(capability),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(event),
-            integration: Arc::new(integration),
-            keybind: Arc::new(MockKeybindService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(setting),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(action),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(capability),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(event),
+                integration: Arc::new(integration),
+                keybind: Arc::new(MockKeybindService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(setting),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
-        build_schema(Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(command),
-            conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-        }))
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(command),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+            }),
+            InMemoryBroadcaster::new(16),
+        )
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────

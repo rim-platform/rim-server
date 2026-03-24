@@ -32,11 +32,13 @@ use rim_services::message::command::{
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::command::GetAttachmentQuery;
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::message_reaction::command::GetReactionsForMessagesQuery;
+use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::command::{
     GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::service::ThreadService;
-use rim_services::server::command::GetServerQuery;
+use rim_services::server::command::{GetServerQuery, ListMyServersQuery};
 use rim_services::server::service::ServerService;
 use rim_services::server_member::command::ListServerMembersQuery;
 use rim_services::server_member::service::ServerMemberService;
@@ -348,6 +350,7 @@ impl Query {
     ) -> Result<MessagePage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -365,7 +368,16 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        Ok(MessagePage::from_page(page))
+        let message_ids: Vec<_> = page.items.iter().map(|m| m.id).collect();
+        let reaction_map = reaction_svc
+            .get_reactions_for_messages(GetReactionsForMessagesQuery {
+                actor: Actor::new(actor),
+                message_ids,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(MessagePage::from_page(page, &reaction_map))
     }
 
     async fn search_messages(
@@ -379,11 +391,12 @@ impl Query {
     ) -> Result<Vec<Message>> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
 
-        let messages = svc
+        let dtos = svc
             .search_messages(SearchMessagesQuery {
                 actor: Actor::new(actor),
                 server_id,
@@ -395,7 +408,26 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        Ok(messages.into_iter().map(Into::into).collect())
+        let message_ids: Vec<_> = dtos.iter().map(|m| m.id).collect();
+        let reaction_map = reaction_svc
+            .get_reactions_for_messages(GetReactionsForMessagesQuery {
+                actor: Actor::new(actor),
+                message_ids,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(dtos
+            .into_iter()
+            .map(|dto| {
+                let msg_id = dto.id;
+                let mut msg: Message = dto.into();
+                if let Some(groups) = reaction_map.get(&msg_id) {
+                    msg.reactions = groups.iter().cloned().map(Into::into).collect();
+                }
+                msg
+            })
+            .collect())
     }
 
     async fn message(
@@ -407,12 +439,13 @@ impl Query {
     ) -> Result<Message> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
         let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&message_id)?;
 
-        let msg = svc
+        let dto = svc
             .get_message(GetMessageQuery {
                 actor: Actor::new(actor),
                 server_id,
@@ -422,7 +455,21 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        Ok(msg.into())
+        let reaction_map = reaction_svc
+            .get_reactions_for_messages(GetReactionsForMessagesQuery {
+                actor: Actor::new(actor),
+                message_ids: vec![dto.id],
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        let msg_id = dto.id;
+        let mut msg: Message = dto.into();
+        if let Some(groups) = reaction_map.get(&msg_id) {
+            msg.reactions = groups.iter().cloned().map(Into::into).collect();
+        }
+
+        Ok(msg)
     }
 
     async fn message_reference(
@@ -552,6 +599,7 @@ impl Query {
     ) -> Result<MessagePage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -572,7 +620,16 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        Ok(MessagePage::from_page(page))
+        let message_ids: Vec<_> = page.items.iter().map(|m| m.id).collect();
+        let reaction_map = reaction_svc
+            .get_reactions_for_messages(GetReactionsForMessagesQuery {
+                actor: Actor::new(actor),
+                message_ids,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(MessagePage::from_page(page, &reaction_map))
     }
 
     async fn attachment(
@@ -612,6 +669,20 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(dto.into())
+    }
+
+    async fn my_servers(&self, ctx: &Context<'_>) -> Result<Vec<Server>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ServerService>>()?;
+
+        let servers = svc
+            .list_my_servers(ListMyServersQuery {
+                actor: Actor::new(actor),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(servers.into_iter().map(Into::into).collect())
     }
 
     async fn server(&self, ctx: &Context<'_>, server_id: ID) -> Result<Server> {

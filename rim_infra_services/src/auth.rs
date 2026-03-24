@@ -9,11 +9,11 @@ use rim_core::auth::model::{NewInvite, NewSession};
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
 };
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, BootstrapResultDto, CreateInviteResultDto, InviteDto,
-    LoginResultDto,
+    JoinServerByInviteResultDto, LoginResultDto,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::{ServiceError, ServiceResult};
@@ -186,7 +186,7 @@ impl AuthService for DefaultAuthService {
             None
         };
         let repos = match &scope {
-            Some(s) => AppRepos::with_handle(s.handle()).for_auth(),
+            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
             None => self.repos.clone(),
         };
 
@@ -407,7 +407,7 @@ impl AuthService for DefaultAuthService {
             None
         };
         let repos = match &scope {
-            Some(s) => AppRepos::with_handle(s.handle()).for_auth(),
+            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
             None => self.repos.clone(),
         };
 
@@ -464,6 +464,88 @@ impl AuthService for DefaultAuthService {
             session: Self::to_session_dto(&sess),
             session_token: raw_token,
             csrf_token: csrf,
+        })
+    }
+
+    #[instrument(name = "auth.join_server_by_invite", skip_all, fields(actor_id = %cmd.actor.user_id))]
+    async fn join_server_by_invite(
+        &self,
+        cmd: JoinServerByInviteCmd,
+    ) -> ServiceResult<JoinServerByInviteResultDto> {
+        let JoinServerByInviteCmd {
+            actor,
+            invite_token,
+        } = cmd;
+
+        let token_hash = hash_token(&invite_token);
+        let inv = self
+            .repos
+            .invite_repo
+            .get_by_token_hash(&token_hash)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        if inv.revoked_at.is_some() {
+            return Err(ServiceError::PermissionDenied);
+        }
+        if let Some(expires_at) = inv.expires_at
+            && expires_at < Utc::now()
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        // Check if user is already a member of the server.
+        let already_member = self
+            .repos
+            .server_member_repo
+            .is_member(inv.server_id, actor.user_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        if already_member {
+            return Err(ServiceError::Conflict(
+                "already a member of this server".to_string(),
+            ));
+        }
+
+        // Run all writes inside a single transaction when DB is available.
+        let scope = if let Some(db) = &self.db {
+            Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            )
+        } else {
+            None
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
+            None => self.repos.clone(),
+        };
+
+        let consumed = repos
+            .invite_repo
+            .try_consume(inv.id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        if !consumed {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        let _member = repos
+            .server_member_repo
+            .add_member(inv.server_id, actor.user_id, ServerMemberRole::Guest)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        info!(user_id = %actor.user_id, server_id = %inv.server_id, "user joined server via invite");
+
+        Ok(JoinServerByInviteResultDto {
+            server_id: inv.server_id,
         })
     }
 }

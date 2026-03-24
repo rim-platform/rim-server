@@ -1,5 +1,13 @@
 # Agent Guide (rim-server)
 
+## Product Identity
+
+RIM is a programmable communication workspace, not another chat app. Chat is the
+communication medium; the product is commands, keybinds, macros, and plugins. See
+`docs/vision.md` for the full product vision. Agents working in this repo should
+understand that they are not building a Slack/Discord alternative — they are building
+the backend for a programmable workspace platform.
+
 This repo is a multi-crate Rust workspace (edition 2024). Most work happens in `rim_server`,
 `rim_api`, `rim_core`, `rim_services`, `rim_infra_db`, `entity`, and `migration`.
 
@@ -76,26 +84,42 @@ cargo run -p migration -- up
 
 ## Migration CLI (SeaORM)
 
-Run via the `migration` crate (expects `DATABASE_URL`):
+Run via `sea migrate` (expects `DATABASE_URL`):
 
 ```sh
 # Generate a new migration
-cargo run -p migration -- generate MIGRATION_NAME
+sea migrate generate MIGRATION_NAME
 
 # Apply/rollback
-cargo run -p migration -- up
-cargo run -p migration -- up -n 10
-cargo run -p migration -- down
-cargo run -p migration -- down -n 10
+sea migrate up
+sea migrate up -n 10
+sea migrate down
+sea migrate down -n 10
 
 # Reset flows
-cargo run -p migration -- fresh
-cargo run -p migration -- refresh
-cargo run -p migration -- reset
+sea migrate fresh
+sea migrate refresh
+sea migrate reset
 
 # Inspect
-cargo run -p migration -- status
+sea migrate status
 ```
+
+## Entity Generation (SeaORM)
+
+**IMPORTANT:** The `entity/` directory contains hand-written mappers alongside generated entity
+code. Regenerating entities directly into `entity/` would overwrite those mappers.
+
+To safely regenerate entities after a migration:
+
+1. Generate entities into a temporary directory:
+   ```sh
+   sea-orm-cli generate entity -o /tmp/rim-entities
+   ```
+2. Manually merge the new/changed entity files from `/tmp/rim-entities` into `entity/src/`.
+3. Preserve all existing mapper code in `entity/` — do not overwrite files blindly.
+
+Never run `sea-orm-cli generate entity -o entity/src/` directly.
 
 ## Crates / Responsibilities
 

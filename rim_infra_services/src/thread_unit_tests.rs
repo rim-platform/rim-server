@@ -67,6 +67,11 @@ mod tests {
                 dir: PageDir,
                 cursor: Option<ConversationCreatedCursor>,
             ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>>;
+            async fn exists_channel_by_title(
+                &self,
+                server_id: ServerId,
+                title: &str,
+            ) -> RepoResult<bool>;
             async fn touch_last_activity_at(
                 &self,
                 conversation_id: ConversationId,

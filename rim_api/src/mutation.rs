@@ -2,7 +2,7 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::dto::UserCommandStepDto;
@@ -20,8 +20,12 @@ use rim_services::message_attachment::command::{
     CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
 };
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::message_reaction::command::ToggleReactionCmd;
+use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::command::CreateThreadCmd;
 use rim_services::message_thread::service::ThreadService;
+use rim_services::server::command::CreateServerCmd;
+use rim_services::server::service::ServerService;
 
 use crate::auth_context::{require_actor, require_session_id};
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
@@ -29,7 +33,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Attachment, Command, CommandContextInput, CommandResult, Conversation, Keybind, KeybindContext,
-    KeybindScope, Message, Thread, UploadTicket,
+    KeybindScope, Message, ReactionGroup, Server, Thread, UploadTicket,
 };
 
 pub struct Mutation;
@@ -82,6 +86,16 @@ pub struct AcceptInviteInput {
 #[derive(SimpleObject)]
 pub struct AcceptInvitePayload {
     pub user_id: ID,
+    pub server_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct JoinServerByInviteInput {
+    pub invite_token: String,
+}
+
+#[derive(SimpleObject)]
+pub struct JoinServerByInvitePayload {
     pub server_id: ID,
 }
 
@@ -223,6 +237,19 @@ pub struct DeleteKeybindInput {
     pub keybind_id: ID,
 }
 
+#[derive(InputObject)]
+pub struct CreateServerInput {
+    pub name: String,
+}
+
+#[derive(InputObject)]
+pub struct ToggleReactionInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub message_id: ID,
+    pub emoji: String,
+}
+
 #[Object]
 impl Mutation {
     async fn bootstrap(
@@ -343,6 +370,27 @@ impl Mutation {
 
         Ok(AcceptInvitePayload {
             user_id: ID(res.user_id.to_string()),
+            server_id: ID(res.server_id.to_string()),
+        })
+    }
+
+    async fn join_server_by_invite(
+        &self,
+        ctx: &Context<'_>,
+        input: JoinServerByInviteInput,
+    ) -> Result<JoinServerByInvitePayload> {
+        let actor = require_actor(ctx)?;
+
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let res = auth
+            .join_server_by_invite(JoinServerByInviteCmd {
+                actor: Actor::new(actor),
+                invite_token: input.invite_token,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(JoinServerByInvitePayload {
             server_id: ID(res.server_id.to_string()),
         })
     }
@@ -746,6 +794,48 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         Ok(keybind.into())
+    }
+
+    async fn toggle_reaction(
+        &self,
+        ctx: &Context<'_>,
+        input: ToggleReactionInput,
+    ) -> Result<Vec<ReactionGroup>> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        let groups = svc
+            .toggle_reaction(ToggleReactionCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                message_id,
+                emoji: input.emoji,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(groups.into_iter().map(Into::into).collect())
+    }
+
+    async fn create_server(&self, ctx: &Context<'_>, input: CreateServerInput) -> Result<Server> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn ServerService>>()?;
+        let server = svc
+            .create_server(CreateServerCmd {
+                actor: Actor::new(actor),
+                name: input.name,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(server.into())
     }
 
     async fn delete_keybind(&self, ctx: &Context<'_>, input: DeleteKeybindInput) -> Result<bool> {

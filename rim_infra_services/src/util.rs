@@ -1,4 +1,5 @@
 use rim_core::conversation::model::ConversationId;
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
@@ -69,6 +70,27 @@ pub async fn ensure_conversation_in_server(
     }
 
     Ok(conv)
+}
+
+/// Check that the user can access the conversation.
+/// For channels (public), server membership is sufficient — no conversation_member check needed.
+/// For DMs and groups, the user must be an explicit conversation member.
+pub async fn ensure_conversation_access(
+    conversation_member_repo: &dyn ConversationMemberRepository,
+    conversation: &rim_core::conversation::model::Conversation,
+    user_id: rim_core::user::model::UserId,
+) -> ServiceResult<()> {
+    if conversation.conversation_type == rim_core::conversation::model::ConversationType::Channel {
+        return Ok(());
+    }
+    let is_member = conversation_member_repo
+        .is_member(conversation.id, user_id)
+        .await
+        .map_err(rim_services::map_repo_error)?;
+    if !is_member {
+        return Err(ServiceError::PermissionDenied);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -282,6 +304,14 @@ mod tests {
             _cursor: Option<ConversationCreatedCursor>,
         ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>> {
             Ok(Page::new(vec![], None, None))
+        }
+
+        async fn exists_channel_by_title(
+            &self,
+            _server_id: ServerId,
+            _title: &str,
+        ) -> RepoResult<bool> {
+            Ok(false)
         }
 
         async fn touch_last_activity_at(

@@ -15,8 +15,8 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, JoinType, QueryFilter, QueryOrder,
-    QuerySelect, QueryTrait, RelationTrait, Set,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, JoinType, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set,
 };
 
 use crate::DbHandle;
@@ -233,18 +233,15 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
     async fn list_channels_for_user(
         &self,
-        user_id: UserId,
+        _user_id: UserId,
         server_id: ServerId,
         limit: u32,
         dir: PageDir,
         cursor: Option<ConversationCreatedCursor>,
     ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>> {
+        // Channels are public — all server members can see all channels.
+        // Server membership is verified at the service layer.
         let mut q = conversation::Entity::find()
-            .join(
-                JoinType::InnerJoin,
-                conversation::Relation::ConversationMember.def(),
-            )
-            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
             .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
             .filter(
                 conversation::Column::ConversationType
@@ -318,6 +315,21 @@ impl ConversationRepository for SeaOrmConversationRepository {
         };
 
         Ok(Page::new(items, next, prev))
+    }
+
+    async fn exists_channel_by_title(&self, server_id: ServerId, title: &str) -> RepoResult<bool> {
+        let channel: entity::sea_orm_active_enums::ConversationType =
+            ConversationType::Channel.into();
+
+        let count = conversation::Entity::find()
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(conversation::Column::Title.eq(title))
+            .filter(conversation::Column::ConversationType.eq(channel))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(count > 0)
     }
 
     async fn touch_last_activity_at(

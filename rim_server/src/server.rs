@@ -3,8 +3,8 @@ use crate::config::RIMConfig;
 use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf, extract_actor_and_session_id, internal_graphql_error_response,
 };
-use actix_web::{App, HttpRequest, HttpServer, guard, web};
-use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
+use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use log::info;
 use rim_api::AppSchema;
 use rim_api::auth_intent::insert_auth_intent_ctx;
@@ -71,11 +71,14 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             }
         };
 
-        let mut app = App::new().wrap(cors).service(
-            web::resource("/api")
-                .guard(guard::Post())
-                .to(graphql_handler),
-        );
+        let mut app = App::new()
+            .wrap(cors)
+            .service(
+                web::resource("/api")
+                    .guard(guard::Post())
+                    .to(graphql_handler),
+            )
+            .service(web::resource("/api/ws").route(web::get().to(graphql_ws_handler)));
 
         if enable_graphiql {
             app = app.service(index_graphiql);
@@ -204,6 +207,51 @@ async fn graphql_handler(
     }
     .instrument(span)
     .await
+}
+
+async fn graphql_ws_handler(
+    schema: web::Data<AppSchema>,
+    req: HttpRequest,
+    payload: web::Payload,
+) -> Result<HttpResponse, actix_web::Error> {
+    // Extract auth from the HTTP upgrade request — same as graphql_handler does —
+    // so that `require_actor(ctx)` works inside subscription resolvers.
+    let request_authenticator = req
+        .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
+        .map(|d| Arc::clone(d.get_ref()));
+
+    let (actor, session_id) = match request_authenticator {
+        Some(authenticator) => {
+            match extract_actor_and_session_id(&req, authenticator.as_ref()).await {
+                Ok(v) => v,
+                Err(err) => {
+                    tracing::error!(error = ?err, "WS: failed to extract auth session");
+                    return Err(actix_web::error::ErrorUnauthorized(
+                        "failed to validate session",
+                    ));
+                }
+            }
+        }
+        None => (None, None),
+    };
+
+    // Defense-in-depth: reject unauthenticated users at the transport level
+    // so that even if a subscription resolver forgets `require_actor`, the
+    // WebSocket connection is never established for anonymous users.
+    let Some(actor) = actor else {
+        return Err(actix_web::error::ErrorUnauthorized(
+            "authentication required",
+        ));
+    };
+
+    let actor_ctx = AuthActorCtx::new(Some(actor), session_id);
+
+    let mut data = async_graphql::Data::default();
+    data.insert(actor_ctx);
+
+    GraphQLSubscription::new(schema.into_inner().as_ref().clone())
+        .with_data(data)
+        .start(&req, payload)
 }
 
 fn graphql_has_mutation(req: &async_graphql::Request) -> bool {

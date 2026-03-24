@@ -24,7 +24,13 @@ mod tests {
     use rim_services::{Actor, ServiceError};
 
     use crate::MessageRepos;
+    use rim_services::events::{NoopBroadcaster, Observers};
+
     use crate::message::DefaultMessageService;
+
+    fn test_observers() -> Observers {
+        Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
+    }
 
     fn conversation(server_id: ServerId) -> Conversation {
         Conversation {
@@ -89,6 +95,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let err = svc
@@ -134,6 +141,9 @@ mod tests {
         conversation_member_repo
             .expect_is_member()
             .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id]) }));
 
         let mut message_repo = MockMessageRepository::new();
         let msg_for_repo = msg.clone();
@@ -164,6 +174,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let dto = svc
@@ -226,6 +237,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let err = svc
@@ -272,6 +284,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let err = svc
@@ -347,6 +360,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let page = svc
@@ -404,6 +418,9 @@ mod tests {
         conversation_member_repo
             .expect_is_member()
             .returning(|_, _| Box::pin(async { Ok(true) }));
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id]) }));
 
         let mut message_repo = MockMessageRepository::new();
         message_repo.expect_get_by_id().return_once(move |_| {
@@ -462,6 +479,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let dto = svc
@@ -554,6 +572,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let page = svc
@@ -636,6 +655,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let dto = svc
@@ -693,6 +713,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let reference: MessageReferenceDto = svc
@@ -749,6 +770,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let err = svc
@@ -807,6 +829,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             None,
+            test_observers(),
         );
 
         let err = svc

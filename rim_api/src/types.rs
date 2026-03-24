@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
 use async_graphql::{Enum, InputObject, SimpleObject};
 
+use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
+use rim_services::message_reaction::dto::ReactionGroupDto;
 
 // ── GraphQL output enums (stable wire contract) ──────────────────────────
 
@@ -188,6 +192,7 @@ impl From<rim_services::server::dto::ServerDto> for Server {
 pub struct ServerMember {
     pub server_id: async_graphql::ID,
     pub user_id: async_graphql::ID,
+    pub username: String,
     pub member_role: String,
     pub joined_at: chrono::DateTime<chrono::Utc>,
 }
@@ -197,6 +202,7 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
         Self {
             server_id: async_graphql::ID(value.server_id.to_string()),
             user_id: async_graphql::ID(value.user_id.to_string()),
+            username: value.username,
             member_role: value.member_role,
             joined_at: value.joined_at,
         }
@@ -595,6 +601,7 @@ pub struct Message {
     pub text: Option<String>,
     pub has_attachments: bool,
     pub attachments: Vec<Attachment>,
+    pub reactions: Vec<ReactionGroup>,
     pub parent_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
@@ -637,6 +644,7 @@ impl From<rim_services::message::dto::MessageDto> for Message {
             text: value.text,
             has_attachments: value.has_attachments,
             attachments: value.attachments.into_iter().map(Into::into).collect(),
+            reactions: Vec::new(),
             parent_message_id: value
                 .parent_message_id
                 .map(|id| async_graphql::ID(id.to_string())),
@@ -877,11 +885,24 @@ impl MessagePage {
             rim_services::message::dto::MessageDto,
             rim_services::message::dto::MessagePageCursor,
         >,
+        reaction_map: &HashMap<MessageId, Vec<ReactionGroupDto>>,
     ) -> Self {
         let has_next = page.next.is_some();
         let has_prev = page.prev.is_some();
+        let items = page
+            .items
+            .into_iter()
+            .map(|dto| {
+                let msg_id = dto.id;
+                let mut msg: Message = dto.into();
+                if let Some(groups) = reaction_map.get(&msg_id) {
+                    msg.reactions = groups.iter().cloned().map(Into::into).collect();
+                }
+                msg
+            })
+            .collect();
         Self {
-            items: page.items.into_iter().map(Into::into).collect(),
+            items,
             next: page.next.map(|c| MessageCursorOutput {
                 sent_at: c.sent_at,
                 message_id: async_graphql::ID(c.message_id.to_string()),
@@ -943,6 +964,23 @@ pub struct ChannelCursorOutput {
 pub struct MessageCursorOutput {
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub message_id: async_graphql::ID,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ReactionGroup {
+    pub emoji: String,
+    pub count: u32,
+    pub reacted_by_me: bool,
+}
+
+impl From<rim_services::message_reaction::dto::ReactionGroupDto> for ReactionGroup {
+    fn from(value: rim_services::message_reaction::dto::ReactionGroupDto) -> Self {
+        Self {
+            emoji: value.emoji,
+            count: value.count,
+            reacted_by_me: value.reacted_by_me,
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]
