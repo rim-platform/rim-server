@@ -5,6 +5,8 @@ mod tests {
     use chrono::Duration;
     use rim_core::auth::model::{Invite, InviteId, Session, SessionId};
     use rim_core::auth::repository::{MockInviteRepository, MockSessionRepository};
+    use rim_core::conversation::model::{Conversation, ConversationId};
+    use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server::repository::MockServerRepository;
@@ -25,6 +27,7 @@ mod tests {
         MockServerMemberRepository,
         MockSessionRepository,
         MockInviteRepository,
+        MockConversationRepository,
     ) {
         (
             MockUserRepository::new(),
@@ -32,12 +35,32 @@ mod tests {
             MockServerMemberRepository::new(),
             MockSessionRepository::new(),
             MockInviteRepository::new(),
+            mock_conversation_repo(),
         )
+    }
+
+    fn mock_conversation_repo() -> MockConversationRepository {
+        let mut repo = MockConversationRepository::new();
+        repo.expect_create_conversation_with_members()
+            .returning(|conv_type, server_id, title, _member_ids| {
+                Box::pin(async move {
+                    let now = chrono::Utc::now();
+                    Ok(Conversation {
+                        id: ConversationId::new(),
+                        conversation_type: conv_type,
+                        title,
+                        created_at: now,
+                        last_activity_at: now,
+                        server_id,
+                    })
+                })
+            });
+        repo
     }
 
     #[tokio::test]
     async fn bootstrap_denies_if_secret_missing() {
-        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo) = repos();
+        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
 
         let svc = DefaultAuthService::new(
             AuthRepos {
@@ -46,6 +69,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             None,
@@ -66,7 +90,7 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_denies_if_users_exist() {
-        let (mut user_repo, server_repo, server_member_repo, session_repo, invite_repo) = repos();
+        let (mut user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
         user_repo.expect_any_users_exist().returning(|| Ok(true));
 
         let svc = DefaultAuthService::new(
@@ -76,6 +100,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),
@@ -101,7 +126,7 @@ mod tests {
         let session_id = SessionId::new();
         let now = chrono::Utc::now();
 
-        let (user_repo, server_repo, server_member_repo, mut session_repo, invite_repo) = repos();
+        let (user_repo, server_repo, server_member_repo, mut session_repo, invite_repo, conversation_repo) = repos();
         session_repo.expect_get_by_id().returning(move |id| {
             assert_eq!(id, session_id);
             Ok(Some(Session {
@@ -125,6 +150,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),
@@ -146,7 +172,7 @@ mod tests {
         let server_id = ServerId::new();
         let actor_user_id = UserId::new();
 
-        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo) = repos();
+        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
         let svc = DefaultAuthService::new(
             AuthRepos {
                 user_repo: Arc::new(user_repo),
@@ -154,6 +180,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),
@@ -179,7 +206,7 @@ mod tests {
         let invite_id = InviteId::new();
         let now = chrono::Utc::now();
 
-        let (mut user_repo, server_repo, server_member_repo, session_repo, mut invite_repo) =
+        let (mut user_repo, server_repo, server_member_repo, session_repo, mut invite_repo, conversation_repo) =
             repos();
         user_repo.expect_find_by_username().returning(move |_u| {
             Ok(Some(User {
@@ -215,6 +242,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),
@@ -236,7 +264,7 @@ mod tests {
     async fn bootstrap_maps_repo_errors_to_service_error() {
         let now = chrono::Utc::now();
 
-        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo) =
+        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo, conversation_repo) =
             repos();
         user_repo.expect_any_users_exist().returning(|| Ok(false));
         user_repo
@@ -259,6 +287,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),
@@ -286,7 +315,7 @@ mod tests {
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo) =
+        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo, conversation_repo) =
             repos();
 
         user_repo.expect_any_users_exist().returning(|| Ok(false));
@@ -351,6 +380,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 session_repo: Arc::new(session_repo),
                 invite_repo: Arc::new(invite_repo),
+                conversation_repo: Arc::new(conversation_repo),
             },
             None,
             Some("secret".to_string()),

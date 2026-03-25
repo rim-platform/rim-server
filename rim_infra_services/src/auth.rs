@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use rim_auth::password::{hash_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInvite, NewSession};
+use rim_core::conversation::model::ConversationType;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
@@ -219,6 +220,37 @@ impl AuthService for DefaultAuthService {
             .add_member(server.id, user.id, ServerMemberRole::Owner)
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        // Create default #general and #random channels.
+        for channel_name in &["general", "random"] {
+            match repos
+                .conversation_repo
+                .create_conversation_with_members(
+                    ConversationType::Channel,
+                    server.id,
+                    Some(channel_name.to_string()),
+                    &[user.id],
+                )
+                .await
+            {
+                Ok(conv) => {
+                    info!(
+                        server_id = %server.id,
+                        conversation_id = %conv.id,
+                        channel = %channel_name,
+                        "created default channel"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        server_id = %server.id,
+                        channel = %channel_name,
+                        error = %err,
+                        "failed to create default channel during bootstrap"
+                    );
+                }
+            }
+        }
 
         info!(username = %username, "create session");
         let raw_token = generate_session_token();

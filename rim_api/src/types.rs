@@ -971,6 +971,7 @@ pub struct ReactionGroup {
     pub emoji: String,
     pub count: u32,
     pub reacted_by_me: bool,
+    pub user_ids: Vec<async_graphql::ID>,
 }
 
 impl From<rim_services::message_reaction::dto::ReactionGroupDto> for ReactionGroup {
@@ -979,6 +980,11 @@ impl From<rim_services::message_reaction::dto::ReactionGroupDto> for ReactionGro
             emoji: value.emoji,
             count: value.count,
             reacted_by_me: value.reacted_by_me,
+            user_ids: value
+                .user_ids
+                .into_iter()
+                .map(|id| async_graphql::ID(id.to_string()))
+                .collect(),
         }
     }
 }

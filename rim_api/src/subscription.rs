@@ -37,7 +37,7 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
             if conversation_type == "Channel" {
                 true
             } else {
-                member_user_ids.iter().any(|id| id == user_id)
+                member_user_ids.iter().any(|id| id.to_string() == user_id)
             }
         }
 
@@ -46,11 +46,16 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
             conversation_type,
             member_user_ids,
             ..
+        }
+        | WorkspaceEvent::ThreadCreated {
+            conversation_type,
+            member_user_ids,
+            ..
         } => {
             if conversation_type == "Channel" {
                 true
             } else {
-                member_user_ids.iter().any(|id| id == user_id)
+                member_user_ids.iter().any(|id| id.to_string() == user_id)
             }
         }
 

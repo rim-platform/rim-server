@@ -178,11 +178,11 @@ impl ConversationService for DefaultConversationService {
         let dto = self.to_dto(conversation).await?;
 
         self.observers.workspace.on_conversation_created(
-            &dto.server_id.to_string(),
-            &dto.id.to_string(),
+            dto.server_id,
+            dto.id,
             dto.title.as_deref(),
             dto.conversation_type.as_str(),
-            dto.member_ids.iter().map(|id| id.to_string()).collect(),
+            dto.member_ids.clone(),
         );
 
         Ok(dto)
@@ -379,9 +379,9 @@ impl ConversationService for DefaultConversationService {
         let dto = self.to_dto(conversation).await?;
 
         self.observers.workspace.on_member_added_to_conversation(
-            &cmd.server_id.to_string(),
-            &cmd.conversation_id.to_string(),
-            &cmd.user_id.to_string(),
+            cmd.server_id,
+            cmd.conversation_id,
+            cmd.user_id,
         );
 
         Ok(dto)
@@ -436,11 +436,7 @@ impl ConversationService for DefaultConversationService {
 
         self.observers
             .workspace
-            .on_member_removed_from_conversation(
-                &cmd.server_id.to_string(),
-                &cmd.conversation_id.to_string(),
-                &cmd.user_id.to_string(),
-            );
+            .on_member_removed_from_conversation(cmd.server_id, cmd.conversation_id, cmd.user_id);
 
         Ok(dto)
     }

@@ -13,8 +13,8 @@ use rim_services::conversation::command::CreateConversationCmd;
 use rim_services::conversation::service::ConversationService;
 use rim_services::keybind::request::{CreateKeybindCmd, DeleteKeybindCmd, UpdateKeybindCmd};
 use rim_services::keybind::service::KeybindService;
-use rim_services::message::command::SendMessageCmd;
-use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd, SendThreadMessageCmd};
+use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd};
+use rim_services::message::command::{ReplyToMessageCmd, SendMessageCmd};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::command::{
     CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
@@ -22,8 +22,6 @@ use rim_services::message_attachment::command::{
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::command::ToggleReactionCmd;
 use rim_services::message_reaction::service::MessageReactionService;
-use rim_services::message_thread::command::CreateThreadCmd;
-use rim_services::message_thread::service::ThreadService;
 use rim_services::server::command::CreateServerCmd;
 use rim_services::server::service::ServerService;
 
@@ -33,7 +31,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Attachment, Command, CommandContextInput, CommandResult, Conversation, Keybind, KeybindContext,
-    KeybindScope, Message, ReactionGroup, Server, Thread, UploadTicket,
+    KeybindScope, Message, ReactionGroup, Server, UploadTicket,
 };
 
 pub struct Mutation;
@@ -108,10 +106,10 @@ pub struct SendMessageInput {
 }
 
 #[derive(InputObject)]
-pub struct SendThreadMessageInput {
+pub struct ReplyToMessageInput {
     pub server_id: ID,
     pub conversation_id: ID,
-    pub thread_id: ID,
+    pub root_message_id: ID,
     pub text: String,
     pub parent_message_id: Option<ID>,
 }
@@ -145,13 +143,6 @@ pub struct DeleteMessageInput {
     pub server_id: ID,
     pub conversation_id: ID,
     pub message_id: ID,
-}
-
-#[derive(InputObject)]
-pub struct CreateThreadInput {
-    pub server_id: ID,
-    pub conversation_id: ID,
-    pub root_message_id: ID,
 }
 
 #[derive(InputObject)]
@@ -422,6 +413,41 @@ impl Mutation {
         Ok(msg.into())
     }
 
+    async fn reply_to_message(
+        &self,
+        ctx: &Context<'_>,
+        input: ReplyToMessageInput,
+    ) -> Result<Message> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let root_message_id =
+            parse_uuid_id::<rim_core::message::model::MessageId>(&input.root_message_id)?;
+        let parent_message_id = input
+            .parent_message_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::message::model::MessageId>)
+            .transpose()?;
+
+        let msg = svc
+            .reply_to_message(ReplyToMessageCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                root_message_id,
+                text: input.text,
+                parent_message_id,
+                attachments: vec![],
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(msg.into())
+    }
+
     async fn create_conversation(
         &self,
         ctx: &Context<'_>,
@@ -458,41 +484,6 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         Ok(conv.into())
-    }
-
-    async fn send_thread_message(
-        &self,
-        ctx: &Context<'_>,
-        input: SendThreadMessageInput,
-    ) -> Result<Message> {
-        let actor = require_actor(ctx)?;
-
-        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-        let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
-        let thread_id =
-            parse_uuid_id::<rim_core::message_thread::model::MessageThreadId>(&input.thread_id)?;
-        let parent_message_id = input
-            .parent_message_id
-            .as_ref()
-            .map(parse_uuid_id::<rim_core::message::model::MessageId>)
-            .transpose()?;
-
-        let msg = svc
-            .send_thread_message(SendThreadMessageCmd {
-                actor: Actor::new(actor),
-                server_id,
-                conversation_id,
-                thread_id,
-                text: Some(input.text),
-                parent_message_id,
-                attachments: vec![],
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        Ok(msg.into())
     }
 
     async fn edit_message(&self, ctx: &Context<'_>, input: EditMessageInput) -> Result<Message> {
@@ -538,29 +529,6 @@ impl Mutation {
         .map_err(map_service_error)?;
 
         Ok(true)
-    }
-
-    async fn create_thread(&self, ctx: &Context<'_>, input: CreateThreadInput) -> Result<Thread> {
-        let actor = require_actor(ctx)?;
-
-        let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-        let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
-        let root_message_id =
-            parse_uuid_id::<rim_core::message::model::MessageId>(&input.root_message_id)?;
-
-        let thread = svc
-            .create_thread(CreateThreadCmd {
-                actor: Actor::new(actor),
-                server_id,
-                conversation_id,
-                root_message_id,
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        Ok(thread.into())
     }
 
     async fn create_attachment(

@@ -67,6 +67,7 @@ pub struct ThreadRepos {
 pub struct ServerRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
 }
 
 #[derive(Clone)]
@@ -88,6 +89,7 @@ pub struct AuthRepos {
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
 }
 
 #[derive(Clone)]
@@ -159,6 +161,7 @@ impl AppRepos {
         ServerRepos {
             server_repo: Arc::clone(&self.server_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
         }
     }
 
@@ -183,6 +186,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             session_repo: Arc::clone(&self.session_repo),
             invite_repo: Arc::clone(&self.invite_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
         }
     }
 

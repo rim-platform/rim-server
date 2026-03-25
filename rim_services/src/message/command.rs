@@ -9,6 +9,18 @@ use crate::message::dto::MessagePageCursor;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ReplyToMessageCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub root_message_id: MessageId,
+    pub text: String,
+    pub parent_message_id: Option<MessageId>,
+    pub attachments: Vec<MessageAttachmentRef>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SendMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -18,18 +30,6 @@ pub struct SendMessageCmd {
 
     pub parent_message_id: Option<MessageId>,
 
-    pub attachments: Vec<MessageAttachmentRef>,
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SendThreadMessageCmd {
-    pub actor: Actor,
-    pub server_id: ServerId,
-    pub conversation_id: ConversationId,
-    pub thread_id: MessageThreadId,
-    pub text: Option<String>,
-    pub parent_message_id: Option<MessageId>,
     pub attachments: Vec<MessageAttachmentRef>,
 }
 

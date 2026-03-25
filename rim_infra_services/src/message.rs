@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rim_infra_db::TransactionScope;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
@@ -8,7 +9,7 @@ use rim_infra_db::begin_transaction;
 use rim_services::events::{MessageEventData, Observers};
 use rim_services::message::command::{
     DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery,
-    ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd, SendThreadMessageCmd,
+    ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery, SendMessageCmd,
 };
 use rim_services::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_services::message::service::MessageService;
@@ -35,6 +36,42 @@ impl DefaultMessageService {
             db,
             observers,
         }
+    }
+
+    /// Begin a transaction if a database connection is available.
+    ///
+    /// Returns `(repos, optional_scope)`. The caller must commit the scope on
+    /// success — if dropped without committing it rolls back automatically.
+    async fn begin_write(&self) -> ServiceResult<(MessageRepos, Option<TransactionScope>)> {
+        if let Some(db) = &self.db {
+            let scope = begin_transaction(db)
+                .await
+                .map_err(ServiceError::internal)?;
+            let repos = AppRepos::with_handle(&scope.handle()).for_message();
+            Ok((repos, Some(scope)))
+        } else {
+            Ok((self.repos.clone(), None))
+        }
+    }
+
+    /// Commit the transaction scope if present.
+    async fn commit_if_present(scope: Option<TransactionScope>) -> ServiceResult<()> {
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        Ok(())
+    }
+
+    /// Collect conversation member IDs for event broadcasting.
+    async fn list_member_user_ids(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> ServiceResult<Vec<rim_core::user::model::UserId>> {
+        self.repos
+            .conversation_member_repo
+            .list_member_ids(conversation_id)
+            .await
+            .map_err(rim_services::map_repo_error)
     }
 
     async fn to_dto(
@@ -314,42 +351,21 @@ impl MessageService for DefaultMessageService {
         };
 
         // Run create + activity touch inside a transaction when DB is available.
-        let message = if let Some(db) = &self.db {
-            let scope = begin_transaction(db)
-                .await
-                .map_err(ServiceError::internal)?;
-            let txn_repos = AppRepos::with_handle(&scope.handle());
+        let (repos, scope) = self.begin_write().await?;
 
-            let message = txn_repos
-                .message_repo
-                .create_message(&new_message)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        let message = repos
+            .message_repo
+            .create_message(&new_message)
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
-            txn_repos
-                .conversation_repo
-                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        repos
+            .conversation_repo
+            .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
-            scope.commit().await.map_err(ServiceError::internal)?;
-            message
-        } else {
-            let message = self
-                .repos
-                .message_repo
-                .create_message(&new_message)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-
-            self.repos
-                .conversation_repo
-                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-
-            message
-        };
+        Self::commit_if_present(scope).await?;
 
         info!(message_id = %message.id, is_reply = parent_message_id.is_some(), "created timeline message");
         info!(
@@ -359,41 +375,33 @@ impl MessageService for DefaultMessageService {
 
         let dto = self.to_dto(message, cmd.server_id).await?;
 
-        let member_user_ids = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>();
+        let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
         self.observers.message.on_message_sent(
-            &cmd.server_id.to_string(),
-            &dto.conversation_id.to_string(),
+            cmd.server_id,
+            dto.conversation_id,
             conv.conversation_type.as_str(),
             member_user_ids,
-            MessageEventData {
-                id: dto.id.to_string(),
-                server_id: dto.server_id.to_string(),
-                conversation_id: dto.conversation_id.to_string(),
-                thread_id: dto.thread_id.map(|id| id.to_string()),
-                root_thread_id: dto.root_thread_id.map(|id| id.to_string()),
-                author_id: dto.author_id.to_string(),
-                text: dto.text.clone(),
-                has_attachments: dto.has_attachments,
-                parent_message_id: dto.parent_message_id.map(|id| id.to_string()),
-                is_deleted: dto.is_deleted,
-                sent_at: dto.sent_at.to_rfc3339(),
-                reactions: vec![],
-            },
+            MessageEventData::from(&dto),
         );
 
         Ok(dto)
     }
 
-    async fn send_thread_message(&self, cmd: SendThreadMessageCmd) -> ServiceResult<MessageDto> {
+    #[instrument(
+        name = "message.reply_to_message",
+        skip_all,
+        fields(
+            actor_id = %cmd.actor.user_id,
+            server_id = %cmd.server_id,
+            conversation_id = %cmd.conversation_id,
+            root_message_id = %cmd.root_message_id,
+            parent_message_id = ?cmd.parent_message_id,
+            text_len = cmd.text.len()
+        )
+    )]
+    async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
+        // 1. Validate access
         ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
@@ -415,31 +423,81 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
+        // 2. Validate root message exists and belongs to conversation
+        let root_message = self
+            .repos
+            .message_repo
+            .get_by_id(cmd.root_message_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        if root_message.conversation_id != cmd.conversation_id || root_message.thread_id.is_some() {
+            return Err(ServiceError::NotFound);
+        }
+
+        // 3. Validate text and attachments
         if !cmd.attachments.is_empty() {
             return Err(ServiceError::Validation(
                 "attachments are not supported in v0".to_string(),
             ));
         }
 
-        let thread = self
-            .ensure_thread_in_conversation(cmd.thread_id, cmd.conversation_id)
-            .await?;
+        let text = cmd.text.trim().to_string();
+        if text.is_empty() {
+            return Err(ServiceError::Validation(
+                "message text must be non-empty".to_string(),
+            ));
+        }
 
-        let text = cmd.text.as_deref().map(str::trim).map(ToString::to_string);
-        let text = match text {
-            Some(t) if !t.is_empty() => Some(t),
-            _ => {
-                return Err(ServiceError::Validation(
-                    "message text must be non-empty".to_string(),
-                ));
+        // 4. Begin transaction
+        let (repos, scope) = self.begin_write().await?;
+
+        // 5. Find or create thread
+        let mut thread_was_created = false;
+        let thread = match repos
+            .message_thread_repo
+            .get_by_root_message(cmd.root_message_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+        {
+            Some(existing) => existing,
+            None => {
+                match repos
+                    .message_thread_repo
+                    .create_thread_for_root(cmd.conversation_id, cmd.root_message_id)
+                    .await
+                {
+                    Ok(thread) => {
+                        thread_was_created = true;
+                        thread
+                    }
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            rim_core::repository::error::RepoErrorKind::Conflict
+                        ) =>
+                    {
+                        // Race condition: another request created the thread concurrently.
+                        repos
+                            .message_thread_repo
+                            .get_by_root_message(cmd.root_message_id)
+                            .await
+                            .map_err(rim_services::map_repo_error)?
+                            .ok_or(ServiceError::Conflict(
+                                "thread already exists for message".to_string(),
+                            ))?
+                    }
+                    Err(err) => return Err(rim_services::map_repo_error(err)),
+                }
             }
         };
 
+        // Validate parent_message_id if provided
         let parent_message_id = match cmd.parent_message_id {
             None => None,
             Some(parent_id) => {
-                let parent = self
-                    .repos
+                let parent = repos
                     .message_repo
                     .get_by_id(parent_id)
                     .await
@@ -448,7 +506,7 @@ impl MessageService for DefaultMessageService {
 
                 let is_root_parent =
                     thread.first_message_id == Some(parent.id) && parent.thread_id.is_none();
-                let is_thread_parent = parent.thread_id == Some(cmd.thread_id);
+                let is_thread_parent = parent.thread_id == Some(thread.id);
                 let valid_parent = is_root_parent || is_thread_parent;
 
                 if parent.conversation_id != cmd.conversation_id || !valid_parent {
@@ -458,98 +516,68 @@ impl MessageService for DefaultMessageService {
             }
         };
 
+        // 6. Create message with thread_id
         let new_msg = NewMessage {
             conversation_id: cmd.conversation_id,
-            text,
+            text: Some(text),
             sent_by: cmd.actor.user_id,
-            thread_id: Some(cmd.thread_id),
+            thread_id: Some(thread.id),
             parent_message_id,
             attachments: vec![],
         };
 
-        // Run create + touch inside a transaction when DB is available.
-        let message = if let Some(db) = &self.db {
-            let scope = begin_transaction(db)
-                .await
-                .map_err(ServiceError::internal)?;
-            let txn_repos = AppRepos::with_handle(&scope.handle());
+        let message = repos
+            .message_repo
+            .create_message(&new_msg)
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
-            let message = txn_repos
-                .message_repo
-                .create_message(&new_msg)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        // 7. Touch thread last_message_at
+        repos
+            .message_thread_repo
+            .touch_last_message_at(thread.id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
-            txn_repos
-                .message_thread_repo
-                .touch_last_message_at(cmd.thread_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        // 8. Touch conversation last_activity_at
+        repos
+            .conversation_repo
+            .touch_last_activity_at(cmd.conversation_id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
 
-            txn_repos
-                .conversation_repo
-                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        // 9. Commit transaction
+        Self::commit_if_present(scope).await?;
 
-            scope.commit().await.map_err(ServiceError::internal)?;
-            message
-        } else {
-            let message = self
-                .repos
-                .message_repo
-                .create_message(&new_msg)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-
-            self.repos
-                .message_thread_repo
-                .touch_last_message_at(cmd.thread_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-
-            self.repos
-                .conversation_repo
-                .touch_last_activity_at(cmd.conversation_id, message.sent_at)
-                .await
-                .map_err(rim_services::map_repo_error)?;
-
-            message
-        };
-
-        info!(message_id = %message.id, thread_id = %cmd.thread_id, "created thread message");
+        info!(
+            message_id = %message.id,
+            thread_id = %thread.id,
+            thread_was_created,
+            "created reply message"
+        );
 
         let dto = self.to_dto(message, cmd.server_id).await?;
 
-        let member_user_ids = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>();
+        let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
+
+        // 10. Emit events
+        if thread_was_created {
+            self.observers.thread.on_thread_created(
+                cmd.server_id,
+                cmd.conversation_id,
+                thread.id,
+                cmd.root_message_id,
+                conv.conversation_type.as_str(),
+                member_user_ids.clone(),
+            );
+        }
 
         self.observers.message.on_message_sent(
-            &cmd.server_id.to_string(),
-            &dto.conversation_id.to_string(),
+            cmd.server_id,
+            dto.conversation_id,
             conv.conversation_type.as_str(),
             member_user_ids,
-            MessageEventData {
-                id: dto.id.to_string(),
-                server_id: dto.server_id.to_string(),
-                conversation_id: dto.conversation_id.to_string(),
-                thread_id: dto.thread_id.map(|id| id.to_string()),
-                root_thread_id: dto.root_thread_id.map(|id| id.to_string()),
-                author_id: dto.author_id.to_string(),
-                text: dto.text.clone(),
-                has_attachments: dto.has_attachments,
-                parent_message_id: dto.parent_message_id.map(|id| id.to_string()),
-                is_deleted: dto.is_deleted,
-                sent_at: dto.sent_at.to_rfc3339(),
-                reactions: vec![],
-            },
+            MessageEventData::from(&dto),
         );
 
         Ok(dto)
@@ -779,7 +807,7 @@ impl MessageService for DefaultMessageService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        if msg.conversation_id != cmd.conversation_id || msg.thread_id.is_some() {
+        if msg.conversation_id != cmd.conversation_id {
             return Err(ServiceError::NotFound);
         }
 
@@ -803,35 +831,14 @@ impl MessageService for DefaultMessageService {
 
         let dto = self.to_dto(updated, cmd.server_id).await?;
 
-        let member_user_ids = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>();
+        let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
         self.observers.message.on_message_updated(
-            &cmd.server_id.to_string(),
-            &dto.conversation_id.to_string(),
+            cmd.server_id,
+            dto.conversation_id,
             conv.conversation_type.as_str(),
             member_user_ids,
-            MessageEventData {
-                id: dto.id.to_string(),
-                server_id: dto.server_id.to_string(),
-                conversation_id: dto.conversation_id.to_string(),
-                thread_id: dto.thread_id.map(|id| id.to_string()),
-                root_thread_id: dto.root_thread_id.map(|id| id.to_string()),
-                author_id: dto.author_id.to_string(),
-                text: dto.text.clone(),
-                has_attachments: dto.has_attachments,
-                parent_message_id: dto.parent_message_id.map(|id| id.to_string()),
-                is_deleted: dto.is_deleted,
-                sent_at: dto.sent_at.to_rfc3339(),
-                reactions: vec![],
-            },
+            MessageEventData::from(&dto),
         );
 
         Ok(dto)
@@ -874,7 +881,7 @@ impl MessageService for DefaultMessageService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        if msg.conversation_id != cmd.conversation_id || msg.thread_id.is_some() {
+        if msg.conversation_id != cmd.conversation_id {
             return Err(ServiceError::NotFound);
         }
 
@@ -888,22 +895,14 @@ impl MessageService for DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let member_user_ids = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>();
+        let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
         self.observers.message.on_message_deleted(
-            &cmd.server_id.to_string(),
-            &cmd.conversation_id.to_string(),
+            cmd.server_id,
+            cmd.conversation_id,
             conv.conversation_type.as_str(),
             member_user_ids,
-            &cmd.message_id.to_string(),
+            cmd.message_id,
         );
 
         Ok(())
