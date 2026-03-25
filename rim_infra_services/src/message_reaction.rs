@@ -34,21 +34,32 @@ impl DefaultMessageReactionService {
     ) -> Vec<ReactionGroupDto> {
         use std::collections::BTreeMap;
 
-        let mut groups: BTreeMap<String, (u32, bool)> = BTreeMap::new();
+        use rim_services::message_reaction::dto::MAX_REACTION_USER_IDS;
+
+        let mut groups: BTreeMap<String, (u32, bool, Vec<rim_core::user::model::UserId>)> =
+            BTreeMap::new();
         for r in &reactions {
-            let entry = groups.entry(r.emoji.clone()).or_insert((0, false));
+            let entry = groups
+                .entry(r.emoji.clone())
+                .or_insert((0, false, Vec::new()));
             entry.0 += 1;
             if r.user_id == actor_user_id {
                 entry.1 = true;
             }
+            entry.2.push(r.user_id);
         }
 
         groups
             .into_iter()
-            .map(|(emoji, (count, reacted_by_me))| ReactionGroupDto {
-                emoji,
-                count,
-                reacted_by_me,
+            .map(|(emoji, (count, reacted_by_me, user_ids))| {
+                let mut user_ids = user_ids;
+                user_ids.truncate(MAX_REACTION_USER_IDS);
+                ReactionGroupDto {
+                    emoji,
+                    count,
+                    reacted_by_me,
+                    user_ids,
+                }
             })
             .collect()
     }
@@ -164,22 +175,20 @@ impl MessageReactionService for DefaultMessageReactionService {
             .conversation_member_repo
             .list_member_ids(cmd.conversation_id)
             .await
-            .map_err(rim_services::map_repo_error)?
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>();
+            .map_err(rim_services::map_repo_error)?;
 
         self.observers.reaction.on_reactions_changed(
-            &cmd.server_id.to_string(),
-            &cmd.conversation_id.to_string(),
+            cmd.server_id,
+            cmd.conversation_id,
             conv.conversation_type.as_str(),
             member_user_ids,
-            &cmd.message_id.to_string(),
+            cmd.message_id,
             groups
                 .iter()
                 .map(|g| ReactionGroupData {
                     emoji: g.emoji.clone(),
                     count: g.count,
+                    user_ids: g.user_ids.clone(),
                 })
                 .collect(),
         );

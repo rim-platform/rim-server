@@ -17,7 +17,6 @@ mod tests {
     use rim_services::message::command::{
         DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
         ListMessagesQuery, ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd,
-        SendThreadMessageCmd,
     };
     use rim_services::message::dto::MessageReferenceDto;
     use rim_services::message::service::MessageService;
@@ -377,126 +376,6 @@ mod tests {
             .unwrap();
         assert_eq!(page.items.len(), 1);
         assert!(page.items[0].root_thread_id.is_some());
-    }
-
-    #[tokio::test]
-    async fn send_thread_message_creates_thread_reply() {
-        let actor_id = UserId::new();
-        let server_id = ServerId::new();
-        let conv_id = ConversationId::new();
-        let thread_id = MessageThreadId::new();
-        let root_id = MessageId::new();
-        let conv = conversation(server_id);
-        let created = Message {
-            id: MessageId::new(),
-            conversation_id: conv_id,
-            thread_id: Some(thread_id),
-            sent_by: actor_id,
-            text: Some("reply".to_string()),
-            has_attachments: false,
-            parent_message_id: Some(root_id),
-            is_deleted: false,
-            sent_at: chrono::Utc::now(),
-        };
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_, _| Ok(true));
-
-        let mut conversation_repo = MockConversationRepository::new();
-        let conv_for_repo = conv.clone();
-        conversation_repo.expect_get_by_id().returning(move |_| {
-            let c = conv_for_repo.clone();
-            Box::pin(async move { Ok(Some(c)) })
-        });
-        conversation_repo
-            .expect_touch_last_activity_at()
-            .returning(|_, _| Box::pin(async { Ok(()) }));
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-        conversation_member_repo
-            .expect_list_member_ids()
-            .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id]) }));
-
-        let mut message_repo = MockMessageRepository::new();
-        message_repo.expect_get_by_id().return_once(move |_| {
-            Box::pin(async move {
-                Ok(Some(Message {
-                    id: root_id,
-                    conversation_id: conv_id,
-                    thread_id: None,
-                    sent_by: actor_id,
-                    text: Some("root".to_string()),
-                    has_attachments: false,
-                    parent_message_id: None,
-                    is_deleted: false,
-                    sent_at: chrono::Utc::now(),
-                }))
-            })
-        });
-        let created_for_repo = created.clone();
-        message_repo
-            .expect_create_message()
-            .return_once(move |new| {
-                assert_eq!(new.conversation_id, conv_id);
-                assert_eq!(new.thread_id, Some(thread_id));
-                let c = created_for_repo.clone();
-                Box::pin(async move { Ok(c) })
-            });
-        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
-        message_attachment_repo
-            .expect_get_attachments_for_message()
-            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
-
-        let mut thread_repo = MockMessageThreadRepository::new();
-        thread_repo.expect_get_by_id().return_once(move |_| {
-            Box::pin(async move {
-                Ok(Some(MessageThread {
-                    id: thread_id,
-                    conversation_id: conv_id,
-                    first_message_id: Some(root_id),
-                    created_at: chrono::Utc::now(),
-                    last_message_at: chrono::Utc::now(),
-                }))
-            })
-        });
-        thread_repo
-            .expect_touch_last_message_at()
-            .returning(|_, _| Box::pin(async { Ok(()) }));
-        thread_repo.expect_get_by_root_message().never();
-
-        let svc = DefaultMessageService::new(
-            MessageRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                message_thread_repo: Arc::new(thread_repo),
-                server_member_repo: Arc::new(server_member_repo),
-            },
-            None,
-            test_observers(),
-        );
-
-        let dto = svc
-            .send_thread_message(SendThreadMessageCmd {
-                actor: Actor::new(actor_id),
-                server_id,
-                conversation_id: conv_id,
-                thread_id,
-                text: Some("reply".to_string()),
-                parent_message_id: Some(root_id),
-                attachments: vec![],
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(dto.thread_id, Some(thread_id));
-        assert_eq!(dto.root_thread_id, None);
     }
 
     #[tokio::test]

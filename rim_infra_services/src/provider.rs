@@ -78,13 +78,18 @@ impl DefaultAppServiceProvider {
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(repos.for_attachment()),
         );
+        let server_observers = observers.clone();
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
                 observers,
             ));
         let server_service: Arc<dyn ServerService> = Arc::new(
-            crate::server::DefaultServerService::new(repos.for_server(), Some(db.clone())),
+            crate::server::DefaultServerService::new(
+                repos.for_server(),
+                Some(db.clone()),
+                server_observers,
+            ),
         );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),

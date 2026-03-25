@@ -2,17 +2,44 @@
 mod tests {
     use std::sync::Arc;
 
+    use rim_core::conversation::model::{Conversation, ConversationId};
+    use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server::repository::MockServerRepository;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_services::events::Observers;
     use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
     use rim_services::server::service::ServerService;
     use rim_services::{Actor, ServiceError};
 
     use crate::ServerRepos;
     use crate::server::DefaultServerService;
+
+    fn mock_conversation_repo() -> MockConversationRepository {
+        let mut repo = MockConversationRepository::new();
+        repo.expect_create_conversation_with_members()
+            .returning(|conv_type, server_id, title, _member_ids| {
+                Box::pin(async move {
+                    let now = chrono::Utc::now();
+                    Ok(Conversation {
+                        id: ConversationId::new(),
+                        conversation_type: conv_type,
+                        title,
+                        created_at: now,
+                        last_activity_at: now,
+                        server_id,
+                    })
+                })
+            });
+        repo
+    }
+
+    fn noop_observers() -> Observers {
+        use rim_services::events::NoopBroadcaster;
+        Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
+    }
 
     #[tokio::test]
     async fn create_server_validates_name() {
@@ -25,8 +52,10 @@ mod tests {
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                conversation_repo: Arc::new(mock_conversation_repo()),
             },
             None,
+            noop_observers(),
         );
 
         let err = svc
@@ -75,8 +104,10 @@ mod tests {
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                conversation_repo: Arc::new(mock_conversation_repo()),
             },
             None,
+            noop_observers(),
         );
 
         let dto = svc
@@ -106,8 +137,10 @@ mod tests {
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                conversation_repo: Arc::new(mock_conversation_repo()),
             },
             None,
+            noop_observers(),
         );
 
         let err = svc
@@ -148,8 +181,10 @@ mod tests {
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                conversation_repo: Arc::new(mock_conversation_repo()),
             },
             None,
+            noop_observers(),
         );
 
         let list = svc
