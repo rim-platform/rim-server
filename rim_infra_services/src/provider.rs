@@ -6,18 +6,27 @@ use rim_services::auth::service::{AuthService, RequestAuthenticator};
 use rim_services::capability::service::CapabilityService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
+use rim_services::custom_emoji::service::CustomEmojiService;
+use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::event::service::EventService;
 use rim_services::events::Observers;
 use rim_services::integration::service::IntegrationService;
 use rim_services::keybind::service::KeybindService;
+use rim_services::macro_def::service::MacroService;
+use rim_services::mention::service::MentionService;
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::service::MessageReactionService;
+use rim_services::notification_preference::service::NotificationPreferenceService;
+use rim_services::password_reset::service::PasswordResetService;
+use rim_services::pin::service::PinService;
 use rim_services::message_thread::service::ThreadService;
 use rim_services::provider::AppServiceProvider;
+use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
 use rim_services::setting::service::SettingService;
+use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use sea_orm::DatabaseConnection;
 
@@ -30,15 +39,24 @@ pub struct DefaultAppServiceProvider {
     capability_service: Arc<dyn CapabilityService>,
     command_service: Arc<dyn CommandService>,
     conversation_service: Arc<dyn ConversationService>,
+    custom_emoji_service: Arc<dyn CustomEmojiService>,
     event_service: Arc<dyn EventService>,
     integration_service: Arc<dyn IntegrationService>,
     keybind_service: Arc<dyn KeybindService>,
+    link_preview_service: Arc<dyn LinkPreviewService>,
+    macro_service: Arc<dyn MacroService>,
+    mention_service: Arc<dyn MentionService>,
     message_service: Arc<dyn MessageService>,
     message_attachment_service: Arc<dyn MessageAttachmentService>,
     message_reaction_service: Arc<dyn MessageReactionService>,
+    notification_preference_service: Arc<dyn NotificationPreferenceService>,
+    password_reset_service: Arc<dyn PasswordResetService>,
+    pin_service: Arc<dyn PinService>,
+    read_state_service: Arc<dyn ReadStateService>,
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
     setting_service: Arc<dyn SettingService>,
+    storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
@@ -51,6 +69,7 @@ impl DefaultAppServiceProvider {
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
         observers: Observers,
+        storage_service: Arc<dyn StorageService>,
     ) -> Self {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         let auth_service: Arc<dyn AuthService> = Arc::new(crate::auth::DefaultAuthService::new(
@@ -58,6 +77,7 @@ impl DefaultAppServiceProvider {
             Some(db.clone()),
             bootstrap_secret,
             session_ttl,
+            observers.clone(),
         ));
         let capability_service: Arc<dyn CapabilityService> =
             Arc::new(crate::capability::DefaultCapabilityService);
@@ -76,21 +96,55 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
             ));
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
-            crate::message_attachment::DefaultMessageAttachmentService::new(repos.for_attachment()),
+            crate::message_attachment::DefaultMessageAttachmentService::new(
+                repos.for_attachment(),
+                Arc::clone(&storage_service),
+            ),
         );
+        let mention_service: Arc<dyn MentionService> =
+            Arc::new(crate::mention::DefaultMentionService::new(
+                repos.for_mention(),
+                Arc::clone(&message_service),
+            ));
+        let pin_observers = observers.clone();
         let server_observers = observers.clone();
+        let read_state_observers = observers.clone();
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
+                Some(db.clone()),
                 observers,
             ));
-        let server_service: Arc<dyn ServerService> = Arc::new(
-            crate::server::DefaultServerService::new(
+        let notification_preference_service: Arc<dyn NotificationPreferenceService> =
+            Arc::new(crate::notification_preference::DefaultNotificationPreferenceService::new(
+                repos.for_notification_preference(),
+            ));
+        let password_reset_service: Arc<dyn PasswordResetService> = Arc::new(
+            crate::password_reset::DefaultPasswordResetService::new(
+                crate::password_reset::PasswordResetRepos {
+                    user_repo: Arc::clone(&repos.user_repo),
+                    password_reset_token_repo: Arc::clone(&repos.password_reset_token_repo),
+                },
+                Arc::new(crate::email::LogEmailSender),
+            ),
+        );
+        let pin_service: Arc<dyn PinService> =
+            Arc::new(crate::pin::DefaultPinService::new(
+                repos.for_pin(),
+                pin_observers,
+                Arc::clone(&message_service),
+            ));
+        let read_state_service: Arc<dyn ReadStateService> =
+            Arc::new(crate::read_state::DefaultReadStateService::new(
+                repos.for_read_state(),
+                read_state_observers,
+            ));
+        let server_service: Arc<dyn ServerService> =
+            Arc::new(crate::server::DefaultServerService::new(
                 repos.for_server(),
                 Some(db.clone()),
                 server_observers,
-            ),
-        );
+            ));
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
         );
@@ -104,8 +158,10 @@ impl DefaultAppServiceProvider {
             Arc::new(crate::command::DefaultCommandService::new(
                 repos.for_command(),
                 crate::command::CommandServices {
+                    auth_service: Arc::clone(&auth_service),
                     conversation_service: Arc::clone(&conversation_service),
                     message_service: Arc::clone(&message_service),
+                    read_state_service: Arc::clone(&read_state_service),
                 },
             ));
         let keybind_service: Arc<dyn KeybindService> =
@@ -118,6 +174,22 @@ impl DefaultAppServiceProvider {
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
+        let link_preview_service: Arc<dyn LinkPreviewService> =
+            Arc::new(crate::link_preview::DefaultLinkPreviewService::new(
+                repos.for_link_preview(),
+            ));
+        let custom_emoji_service: Arc<dyn CustomEmojiService> =
+            Arc::new(crate::custom_emoji::DefaultCustomEmojiService::new(
+                repos.for_custom_emoji(),
+                Arc::clone(&storage_service),
+            ));
+        let macro_service: Arc<dyn MacroService> =
+            Arc::new(crate::macro_def::DefaultMacroService::new(
+                repos.for_macro(),
+                crate::macro_def::MacroServices {
+                    command_service: Arc::clone(&command_service),
+                },
+            ));
 
         Self {
             action_service,
@@ -125,15 +197,24 @@ impl DefaultAppServiceProvider {
             capability_service,
             command_service,
             conversation_service,
+            custom_emoji_service,
             event_service,
             integration_service,
             keybind_service,
+            link_preview_service,
+            macro_service,
+            mention_service,
             message_service,
             message_attachment_service,
             message_reaction_service,
+            notification_preference_service,
+            password_reset_service,
+            pin_service,
+            read_state_service,
             server_service,
             server_member_service,
             setting_service,
+            storage_service,
             thread_service,
             user_service,
             request_authenticator,
@@ -157,6 +238,12 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn conversation_service(&self) -> Arc<dyn ConversationService> {
         Arc::clone(&self.conversation_service)
     }
+    fn custom_emoji_service(&self) -> Arc<dyn CustomEmojiService> {
+        Arc::clone(&self.custom_emoji_service)
+    }
+    fn link_preview_service(&self) -> Arc<dyn LinkPreviewService> {
+        Arc::clone(&self.link_preview_service)
+    }
     fn event_service(&self) -> Arc<dyn EventService> {
         Arc::clone(&self.event_service)
     }
@@ -165,6 +252,12 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn keybind_service(&self) -> Arc<dyn KeybindService> {
         Arc::clone(&self.keybind_service)
+    }
+    fn macro_service(&self) -> Arc<dyn MacroService> {
+        Arc::clone(&self.macro_service)
+    }
+    fn mention_service(&self) -> Arc<dyn MentionService> {
+        Arc::clone(&self.mention_service)
     }
     fn message_service(&self) -> Arc<dyn MessageService> {
         Arc::clone(&self.message_service)
@@ -175,6 +268,18 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn message_reaction_service(&self) -> Arc<dyn MessageReactionService> {
         Arc::clone(&self.message_reaction_service)
     }
+    fn notification_preference_service(&self) -> Arc<dyn NotificationPreferenceService> {
+        Arc::clone(&self.notification_preference_service)
+    }
+    fn password_reset_service(&self) -> Arc<dyn PasswordResetService> {
+        Arc::clone(&self.password_reset_service)
+    }
+    fn pin_service(&self) -> Arc<dyn PinService> {
+        Arc::clone(&self.pin_service)
+    }
+    fn read_state_service(&self) -> Arc<dyn ReadStateService> {
+        Arc::clone(&self.read_state_service)
+    }
     fn server_service(&self) -> Arc<dyn ServerService> {
         Arc::clone(&self.server_service)
     }
@@ -183,6 +288,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn setting_service(&self) -> Arc<dyn SettingService> {
         Arc::clone(&self.setting_service)
+    }
+    fn storage_service(&self) -> Arc<dyn StorageService> {
+        Arc::clone(&self.storage_service)
     }
     fn thread_service(&self) -> Arc<dyn ThreadService> {
         Arc::clone(&self.thread_service)

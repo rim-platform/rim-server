@@ -44,3 +44,15 @@ pub struct JoinServerByInviteCmd {
     pub actor: Actor,
     pub invite_token: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct ListInvitesQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+}
+
+#[derive(Debug, Clone)]
+pub struct RevokeInviteCmd {
+    pub actor: Actor,
+    pub invite_id: rim_core::auth::model::InviteId,
+}

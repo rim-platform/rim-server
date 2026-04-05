@@ -10,6 +10,7 @@ pub struct Model {
     pub conversation_id: Uuid,
     pub thread_id: Option<Uuid>,
     pub parent_message_id: Option<Uuid>,
+    pub forwarded_from_message_id: Option<Uuid>,
     pub sent_at: DateTimeWithTimeZone,
     pub sent_by: Uuid,
     pub text: Option<String>,

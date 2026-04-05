@@ -19,6 +19,8 @@ pub struct ThreadCursor {
 pub trait MessageThreadRepository: Send + Sync {
     async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
 
+    async fn get_by_ids(&self, ids: &[MessageThreadId]) -> RepoResult<Vec<MessageThread>>;
+
     async fn get_by_root_message(&self, message_id: MessageId)
     -> RepoResult<Option<MessageThread>>;
 

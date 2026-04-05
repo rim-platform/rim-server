@@ -10,6 +10,7 @@ use crate::error::map_db_err;
 use rim_core::auth::model::{Invite, InviteId, NewInvite};
 use rim_core::auth::repository::InviteRepository;
 use rim_core::repository::error::RepoResult;
+use rim_core::server::model::ServerId;
 
 pub struct SeaOrmInviteRepository {
     db: DbHandle,
@@ -91,5 +92,15 @@ impl InviteRepository for SeaOrmInviteRepository {
         active_model.revoked_at = Set(Some(now.into()));
         active_model.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
+    }
+
+    async fn list_active_by_server(&self, server_id: ServerId) -> RepoResult<Vec<Invite>> {
+        let models = invite::Entity::find()
+            .filter(invite::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(invite::Column::RevokedAt.is_null())
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(models.into_iter().map(Into::into).collect())
     }
 }

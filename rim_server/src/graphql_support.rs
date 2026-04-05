@@ -45,22 +45,34 @@ fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
     fields
 }
 
-#[allow(clippy::result_large_err)]
-pub fn enforce_csrf(
-    req: &HttpRequest,
-    gql: &async_graphql::Request,
-) -> Result<(), GraphQLResponse> {
-    /// Mutation field names (camelCase, matching the GraphQL schema) that are
-    /// exempt from CSRF validation because they are used before the client has
-    /// a CSRF token.
-    const CSRF_EXEMPT_MUTATIONS: &[&str] = &["bootstrap", "login", "acceptInvite", "logout"];
+/// Mutation field names (camelCase, matching the GraphQL schema) that are
+/// exempt from CSRF validation because they are used before the client has
+/// a CSRF token.
+const CSRF_EXEMPT_MUTATIONS: &[&str] = &["bootstrap", "login", "acceptInvite", "logout"];
 
+/// Enforce CSRF for a batch request. Checks once at the HTTP level whether any
+/// request in the batch contains non-exempt mutations.
+#[allow(clippy::result_large_err)]
+pub fn enforce_csrf_for_batch(
+    req: &HttpRequest,
+    batch: &async_graphql::BatchRequest,
+) -> Result<(), GraphQLResponse> {
+    let needs_csrf = batch.iter().any(|gql| request_needs_csrf(gql));
+    if needs_csrf {
+        validate_csrf_tokens(req)
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns true if a single GraphQL request contains mutations that require
+/// CSRF validation.
+fn request_needs_csrf(gql: &async_graphql::Request) -> bool {
     let doc = match async_graphql_parser::parse_query(gql.query.as_str()) {
         Ok(d) => d,
         Err(_) => {
             // Fail-closed: if we can't parse the query, require CSRF.
-            // async-graphql will also reject it, but defence-in-depth.
-            return validate_csrf_tokens(req);
+            return true;
         }
     };
 
@@ -69,38 +81,37 @@ pub fn enforce_csrf(
         .iter()
         .any(|(_, op)| matches!(op.node.ty, OperationType::Mutation));
 
-    let mutation_fields = extract_mutation_fields(&doc);
-
-    // No mutation operations at all → nothing to protect.
     if !has_mutation_ops {
-        return Ok(());
+        return false;
     }
+
+    let mutation_fields = extract_mutation_fields(&doc);
 
     // Fail-closed: if mutation operations exist but we couldn't extract any
     // field names (e.g. deeply nested fragment spreads we don't resolve),
     // require CSRF rather than silently skipping validation.
     if mutation_fields.is_empty() {
-        // Fall through to CSRF check below.
+        return true;
     }
 
     // All mutation fields must be in the exempt list to skip CSRF.
-    // !is_empty() ensures that an empty list (unresolvable fragments) doesn't
-    // vacuously pass — Iterator::all() returns true on empty iterators.
-    let all_exempt = !mutation_fields.is_empty()
-        && mutation_fields.iter().all(|f| {
-            CSRF_EXEMPT_MUTATIONS
-                .iter()
-                .any(|a| a.eq_ignore_ascii_case(f))
-        });
+    let all_exempt = mutation_fields.iter().all(|f| {
+        CSRF_EXEMPT_MUTATIONS
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(f))
+    });
 
-    if all_exempt {
-        return Ok(());
-    }
-
-    validate_csrf_tokens(req)
+    !all_exempt
 }
 
-fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
+// TODO: CSRF token is not bound to the user session. An attacker who obtains a
+// valid CSRF cookie+header pair (e.g. via XSS on a sibling subdomain) can reuse
+// it across sessions. The proper fix is to HMAC-sign the CSRF token with the
+// session key so that each token is only valid for its originating session.
+
+/// Validate that the `X-CSRF-Token` header matches the CSRF cookie.
+/// Returns `Ok(())` on success, or an error string on failure.
+pub fn validate_csrf_header(req: &HttpRequest) -> Result<(), &'static str> {
     let csrf_cookie = req.cookie(COOKIE_CSRF).map(|c| c.value().to_string());
     let csrf_header = req
         .headers()
@@ -110,13 +121,17 @@ fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
 
     match (csrf_cookie, csrf_header) {
         (Some(c), Some(h)) if c == h => Ok(()),
-        _ => Err(GraphQLResponse::from(async_graphql::Response::from_errors(
-            vec![async_graphql::ServerError::new(
-                "csrf validation failed",
-                None,
-            )],
-        ))),
+        _ => Err("csrf validation failed"),
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
+    validate_csrf_header(req).map_err(|msg| {
+        GraphQLResponse::from(async_graphql::Response::from_errors(vec![
+            async_graphql::ServerError::new(msg, None),
+        ]))
+    })
 }
 
 pub async fn extract_actor_and_session_id(

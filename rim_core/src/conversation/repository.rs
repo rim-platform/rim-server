@@ -25,6 +25,8 @@ pub struct ConversationCreatedCursor {
 pub trait ConversationRepository: Send + Sync {
     async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
 
+    async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
+
     async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
 
     async fn create_conversation_with_members(
@@ -69,6 +71,14 @@ pub trait ConversationRepository: Send + Sync {
     /// Check whether a channel with the given title already exists on the server.
     async fn exists_channel_by_title(&self, server_id: ServerId, title: &str) -> RepoResult<bool>;
 
+    /// List all conversation IDs that the user can access in a server.
+    /// Includes: all channels (server membership is sufficient) + DM/group where user is member.
+    async fn list_accessible_conversation_ids(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Vec<ConversationId>>;
+
     /// Update the conversation activity timestamp.
     /// Intended to be called when a new message is persisted.
     async fn touch_last_activity_at(
@@ -76,4 +86,11 @@ pub trait ConversationRepository: Send + Sync {
         conversation_id: ConversationId,
         at: DateTime<Utc>,
     ) -> RepoResult<()>;
+
+    /// Update the conversation topic.
+    async fn update_topic(
+        &self,
+        conversation_id: ConversationId,
+        topic: Option<String>,
+    ) -> RepoResult<Conversation>;
 }

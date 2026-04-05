@@ -37,6 +37,7 @@ mod tests {
         #[async_trait]
         impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
+            async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
             async fn create_conversation_with_members(
                 &self,
@@ -72,11 +73,21 @@ mod tests {
                 server_id: ServerId,
                 title: &str,
             ) -> RepoResult<bool>;
+            async fn list_accessible_conversation_ids(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
             async fn touch_last_activity_at(
                 &self,
                 conversation_id: ConversationId,
                 at: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<()>;
+            async fn update_topic(
+                &self,
+                conversation_id: ConversationId,
+                topic: Option<String>,
+            ) -> RepoResult<Conversation>;
         }
     }
 
@@ -133,6 +144,12 @@ mod tests {
                 limit: u32,
                 include_deleted: bool,
             ) -> RepoResult<Vec<Message>>;
+            async fn search_messages_across_conversations(
+                &self,
+                conversation_ids: &[ConversationId],
+                query: &str,
+                limit: u32,
+            ) -> RepoResult<Vec<Message>>;
             async fn update_message_text(
                 &self,
                 message_id: MessageId,
@@ -152,6 +169,7 @@ mod tests {
         #[async_trait]
         impl rim_core::message_thread::repository::MessageThreadRepository for MessageThreadRepository {
             async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+            async fn get_by_ids(&self, ids: &[MessageThreadId]) -> RepoResult<Vec<MessageThread>>;
             async fn get_by_root_message(&self, message_id: MessageId) -> RepoResult<Option<MessageThread>>;
             async fn get_thread_ids_by_root_messages(
                 &self,
@@ -219,6 +237,7 @@ mod tests {
             server_id,
             conversation_type: ConversationType::Channel,
             title: None,
+            topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -286,6 +305,7 @@ mod tests {
             text: Some("root".to_string()),
             has_attachments: false,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         };
@@ -359,6 +379,7 @@ mod tests {
             text: Some("root".to_string()),
             has_attachments: false,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         };
@@ -450,6 +471,7 @@ mod tests {
                         text: Some("root".to_string()),
                         has_attachments: false,
                         parent_message_id: None,
+                        forwarded_from_message_id: None,
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
                     },
@@ -561,6 +583,7 @@ mod tests {
             text: None,
             has_attachments: false,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: now,
         };

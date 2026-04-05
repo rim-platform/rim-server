@@ -8,6 +8,7 @@ mod tests {
     use rim_core::message::model::{Message, MessageId, NewMessage};
     use rim_core::message::repository::MockMessageRepository;
     use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
+    use rim_core::message_mention::repository::MockMessageMentionRepository;
     use rim_core::message_thread::model::{MessageThread, MessageThreadId};
     use rim_core::message_thread::repository::MockMessageThreadRepository;
     use rim_core::repository::pagination::{Page, PageDir, SortOrder};
@@ -37,6 +38,7 @@ mod tests {
             server_id,
             conversation_type: rim_core::conversation::model::ConversationType::Channel,
             title: None,
+            topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -51,13 +53,14 @@ mod tests {
             text: Some("t".to_string()),
             has_attachments: false,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         }
     }
 
     #[tokio::test]
-    async fn send_message_validates_non_empty_text() {
+    async fn send_message_normalizes_whitespace_only_text_to_none() {
         let actor_id = UserId::new();
         let server_id = ServerId::new();
         let conv_id = ConversationId::new();
@@ -74,15 +77,49 @@ mod tests {
             let c = conv_for_repo.clone();
             Box::pin(async move { Ok(Some(c)) })
         });
+        conversation_repo
+            .expect_touch_last_activity_at()
+            .returning(|_cid, _at| Box::pin(async { Ok(()) }));
 
         let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
             .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_cid| Box::pin(async { Ok(vec![]) }));
 
-        let message_repo = MockMessageRepository::new();
-        let message_attachment_repo = MockMessageAttachmentRepository::new();
-        let thread_repo = MockMessageThreadRepository::new();
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_create_message()
+            .withf(|msg| msg.text.is_none())
+            .returning(move |msg| {
+                let conversation_id = msg.conversation_id;
+                let sent_by = msg.sent_by;
+                Box::pin(async move {
+                    Ok(Message {
+                        id: MessageId::new(),
+                        conversation_id,
+                        thread_id: None,
+                        parent_message_id: None,
+                        forwarded_from_message_id: None,
+                        sent_by,
+                        text: None,
+                        has_attachments: false,
+                        is_deleted: false,
+                        sent_at: chrono::Utc::now(),
+                    })
+                })
+            });
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .returning(|_mid| Box::pin(async { Ok(vec![]) }));
+
+        let mut thread_repo = MockMessageThreadRepository::new();
+        thread_repo
+            .expect_get_by_root_message()
+            .returning(|_mid| Box::pin(async { Ok(None) }));
 
         let svc = DefaultMessageService::new(
             MessageRepos {
@@ -90,6 +127,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -97,7 +135,8 @@ mod tests {
             test_observers(),
         );
 
-        let err = svc
+        // Whitespace-only text is normalized to None (empty text for attachment-only messages).
+        let dto = svc
             .send_message(SendMessageCmd {
                 actor: Actor::new(actor_id),
                 server_id,
@@ -107,8 +146,8 @@ mod tests {
                 attachments: vec![],
             })
             .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)));
+            .unwrap();
+        assert!(dto.text.is_none());
     }
 
     #[tokio::test]
@@ -169,6 +208,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -232,6 +272,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -279,6 +320,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(MockMessageRepository::new()),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -355,6 +397,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -415,6 +458,9 @@ mod tests {
                 }))
             })
         });
+        thread_repo
+            .expect_get_by_ids()
+            .return_once(move |_| Box::pin(async move { Ok(vec![]) }));
 
         let mut message_repo = MockMessageRepository::new();
         let msg = Message {
@@ -425,6 +471,7 @@ mod tests {
             text: Some("reply".to_string()),
             has_attachments: false,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         };
@@ -447,6 +494,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -530,6 +578,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -588,6 +637,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -645,6 +695,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(MockMessageRepository::new()),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
             },
@@ -656,7 +707,7 @@ mod tests {
             .search_messages(SearchMessagesQuery {
                 actor: Actor::new(actor_id),
                 server_id,
-                conversation_id: conv_id,
+                conversation_id: Some(conv_id),
                 query: "   ".to_string(),
                 limit: 10,
                 include_deleted: false,
@@ -704,6 +755,7 @@ mod tests {
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 message_repo: Arc::new(message_repo),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
             },

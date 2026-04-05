@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use sea_orm::DatabaseConnection;
 
 use rim_core::message::model::MessageId;
 use rim_core::message_reaction::model::NewMessageReaction;
+use rim_infra_db::TransactionScope;
+use rim_infra_db::begin_transaction;
 use rim_services::events::{Observers, ReactionGroupData};
 use rim_services::message_reaction::command::{
     GetMessageReactionsQuery, GetReactionsForMessagesQuery, ToggleReactionCmd,
@@ -13,6 +16,7 @@ use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ReactionRepos;
+use crate::repos::AppRepos;
 use crate::util::{
     ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
 };
@@ -20,12 +24,36 @@ use crate::util::{
 #[derive(Clone)]
 pub struct DefaultMessageReactionService {
     repos: ReactionRepos,
+    db: Option<DatabaseConnection>,
     observers: Observers,
 }
 
 impl DefaultMessageReactionService {
-    pub fn new(repos: ReactionRepos, observers: Observers) -> Self {
-        Self { repos, observers }
+    pub fn new(repos: ReactionRepos, db: Option<DatabaseConnection>, observers: Observers) -> Self {
+        Self {
+            repos,
+            db,
+            observers,
+        }
+    }
+
+    async fn begin_write(&self) -> ServiceResult<(ReactionRepos, Option<TransactionScope>)> {
+        if let Some(db) = &self.db {
+            let scope = begin_transaction(db)
+                .await
+                .map_err(ServiceError::internal)?;
+            let repos = AppRepos::with_handle(&scope.handle()).for_reaction();
+            Ok((repos, Some(scope)))
+        } else {
+            Ok((self.repos.clone(), None))
+        }
+    }
+
+    async fn commit_if_present(scope: Option<TransactionScope>) -> ServiceResult<()> {
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        Ok(())
     }
 
     fn group_reactions(
@@ -104,6 +132,12 @@ impl DefaultMessageReactionService {
             return Err(ServiceError::NotFound);
         }
 
+        if message.is_deleted {
+            return Err(ServiceError::Validation(
+                "cannot react to a deleted message".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -120,6 +154,9 @@ impl MessageReactionService for DefaultMessageReactionService {
                 "emoji must be non-empty".to_string(),
             ));
         }
+        if emoji.chars().count() > 32 {
+            return Err(ServiceError::Validation("emoji too long".to_string()));
+        }
 
         self.ensure_actor_can_react(
             cmd.server_id,
@@ -129,21 +166,23 @@ impl MessageReactionService for DefaultMessageReactionService {
         )
         .await?;
 
-        let existing = self
-            .repos
+        // Run find + add/remove atomically inside a transaction.
+        let (repos, scope) = self.begin_write().await?;
+
+        let existing = repos
             .message_reaction_repo
             .find_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
             .await
             .map_err(rim_services::map_repo_error)?;
 
         if existing.is_some() {
-            self.repos
+            repos
                 .message_reaction_repo
                 .remove_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
                 .await
                 .map_err(rim_services::map_repo_error)?;
         } else {
-            self.repos
+            repos
                 .message_reaction_repo
                 .add_reaction(NewMessageReaction {
                     message_id: cmd.message_id,
@@ -154,12 +193,13 @@ impl MessageReactionService for DefaultMessageReactionService {
                 .map_err(rim_services::map_repo_error)?;
         }
 
-        let all = self
-            .repos
+        let all = repos
             .message_reaction_repo
             .get_reactions_for_message(cmd.message_id)
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
 
         let groups = Self::group_reactions(all, cmd.actor.user_id);
 

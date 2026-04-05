@@ -1,15 +1,17 @@
 use async_graphql::*;
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
     AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
+    RevokeInviteCmd,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::dto::UserCommandStepDto;
 use rim_services::command::request::{CreateUserCommandCmd, ExecuteCommandCmd};
 use rim_services::command::request::{DeleteUserCommandCmd, UpdateUserCommandCmd};
 use rim_services::command::service::CommandService;
-use rim_services::conversation::command::CreateConversationCmd;
+use rim_services::conversation::command::{CreateConversationCmd, UpdateConversationTopicCmd};
 use rim_services::conversation::service::ConversationService;
 use rim_services::keybind::request::{CreateKeybindCmd, DeleteKeybindCmd, UpdateKeybindCmd};
 use rim_services::keybind::service::KeybindService;
@@ -22,6 +24,13 @@ use rim_services::message_attachment::command::{
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::command::ToggleReactionCmd;
 use rim_services::message_reaction::service::MessageReactionService;
+use rim_services::pin::command::{PinMessageCmd, UnpinMessageCmd};
+use rim_services::pin::service::PinService;
+use rim_services::macro_def::dto::MacroStepDto;
+use rim_services::macro_def::request::{
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, UpdateMacroCmd,
+};
+use rim_services::macro_def::service::MacroService;
 use rim_services::server::command::CreateServerCmd;
 use rim_services::server::service::ServerService;
 
@@ -31,7 +40,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Attachment, Command, CommandContextInput, CommandResult, Conversation, Keybind, KeybindContext,
-    KeybindScope, Message, ReactionGroup, Server, UploadTicket,
+    KeybindScope, MacroDef, Message, PresenceStatus, ReactionGroup, Server, UploadTicket,
 };
 
 pub struct Mutation;
@@ -131,11 +140,26 @@ pub struct CreateConversationInput {
 }
 
 #[derive(InputObject)]
+pub struct UpdateConversationTopicInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub topic: Option<String>,
+}
+
+#[derive(InputObject)]
 pub struct EditMessageInput {
     pub server_id: ID,
     pub conversation_id: ID,
     pub message_id: ID,
     pub text: String,
+}
+
+#[derive(InputObject)]
+pub struct ForwardMessageInput {
+    pub server_id: ID,
+    pub source_conversation_id: ID,
+    pub target_conversation_id: ID,
+    pub message_id: ID,
 }
 
 #[derive(InputObject)]
@@ -226,6 +250,38 @@ pub struct UpdateKeybindInput {
 #[derive(InputObject)]
 pub struct DeleteKeybindInput {
     pub keybind_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct PinMessageInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub message_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct UnpinMessageInput {
+    pub server_id: ID,
+    pub conversation_id: ID,
+    pub message_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct MarkAsReadInput {
+    pub workspace_id: ID,
+    pub conversation_id: ID,
+    pub read_at: DateTime<Utc>,
+}
+
+#[derive(InputObject)]
+pub struct MarkAllAsReadInput {
+    pub workspace_id: ID,
+}
+
+#[derive(InputObject)]
+pub struct HeartbeatInput {
+    pub workspace_id: ID,
+    pub status: PresenceStatus,
 }
 
 #[derive(InputObject)]
@@ -386,6 +442,21 @@ impl Mutation {
         })
     }
 
+    async fn revoke_invite(&self, ctx: &Context<'_>, invite_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let invite_id = parse_uuid_id::<rim_core::auth::model::InviteId>(&invite_id)?;
+
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        auth.revoke_invite(RevokeInviteCmd {
+            actor: Actor::new(actor),
+            invite_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
     async fn send_message(&self, ctx: &Context<'_>, input: SendMessageInput) -> Result<Message> {
         let actor = require_actor(ctx)?;
 
@@ -398,6 +469,7 @@ impl Mutation {
             Some(id) => Some(parse_uuid_id::<rim_core::message::model::MessageId>(&id)?),
         };
 
+        let text_for_preview = input.text.clone();
         let msg = svc
             .send_message(SendMessageCmd {
                 actor: Actor::new(actor),
@@ -409,6 +481,9 @@ impl Mutation {
             })
             .await
             .map_err(map_service_error)?;
+
+        // Spawn background link preview fetch
+        spawn_link_preview_fetch(ctx, msg.id, server_id, conversation_id, &text_for_preview)?;
 
         Ok(msg.into())
     }
@@ -432,18 +507,22 @@ impl Mutation {
             .map(parse_uuid_id::<rim_core::message::model::MessageId>)
             .transpose()?;
 
+        let text_for_preview = input.text.clone();
         let msg = svc
             .reply_to_message(ReplyToMessageCmd {
                 actor: Actor::new(actor),
                 server_id,
                 conversation_id,
                 root_message_id,
-                text: input.text,
+                text: text_for_preview.clone(),
                 parent_message_id,
                 attachments: vec![],
             })
             .await
             .map_err(map_service_error)?;
+
+        // Spawn background link preview fetch
+        spawn_link_preview_fetch(ctx, msg.id, server_id, conversation_id, &text_for_preview)?;
 
         Ok(msg.into())
     }
@@ -486,6 +565,31 @@ impl Mutation {
         Ok(conv.into())
     }
 
+    async fn update_conversation_topic(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateConversationTopicInput,
+    ) -> Result<Conversation> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+
+        let conv = svc
+            .update_topic(UpdateConversationTopicCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                topic: input.topic,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(conv.into())
+    }
+
     async fn edit_message(&self, ctx: &Context<'_>, input: EditMessageInput) -> Result<Message> {
         let actor = require_actor(ctx)?;
 
@@ -502,6 +606,39 @@ impl Mutation {
                 conversation_id,
                 message_id,
                 text: input.text,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(msg.into())
+    }
+
+    async fn forward_message(
+        &self,
+        ctx: &Context<'_>,
+        input: ForwardMessageInput,
+    ) -> Result<Message> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let source_conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+                &input.source_conversation_id,
+            )?;
+        let target_conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+                &input.target_conversation_id,
+            )?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        let msg = svc
+            .forward_message(rim_services::message::command::ForwardMessageCmd {
+                actor: Actor::new(actor),
+                server_id,
+                source_conversation_id,
+                target_conversation_id,
+                message_id,
             })
             .await
             .map_err(map_service_error)?;
@@ -791,6 +928,42 @@ impl Mutation {
         Ok(groups.into_iter().map(Into::into).collect())
     }
 
+    async fn mark_as_read(&self, ctx: &Context<'_>, input: MarkAsReadInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>>()?;
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+
+        svc.mark_as_read(rim_services::read_state::dto::MarkAsReadCmd {
+            actor: Actor::new(actor),
+            workspace_id,
+            conversation_id,
+            read_at: input.read_at,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn mark_all_as_read(&self, ctx: &Context<'_>, input: MarkAllAsReadInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>>()?;
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
+
+        svc.mark_all_as_read(rim_services::read_state::dto::MarkAllAsReadCmd {
+            actor: Actor::new(actor),
+            workspace_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
     async fn create_server(&self, ctx: &Context<'_>, input: CreateServerInput) -> Result<Server> {
         let actor = require_actor(ctx)?;
 
@@ -818,4 +991,436 @@ impl Mutation {
 
         Ok(true)
     }
+
+    async fn pin_message(&self, ctx: &Context<'_>, input: PinMessageInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn PinService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        svc.pin_message(PinMessageCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+            message_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn unpin_message(&self, ctx: &Context<'_>, input: UnpinMessageInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn PinService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        svc.unpin_message(UnpinMessageCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+            message_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn start_typing(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        // Verify membership
+        let member_svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
+            )?;
+        member_svc
+            .get_member(rim_services::server_member::command::GetServerMemberQuery {
+                actor: Actor::new(actor),
+                server_id,
+                user_id: actor,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        let typing_tracker =
+            ctx.data::<std::sync::Arc<rim_infra_services::typing::TypingTracker>>()?;
+
+        if typing_tracker.should_broadcast(actor, conversation_id) {
+            let conv_svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+            let conversation = conv_svc
+                .get_conversation(rim_services::conversation::command::GetConversationQuery {
+                    actor: Actor::new(actor),
+                    server_id,
+                    conversation_id,
+                })
+                .await
+                .map_err(map_service_error)?;
+            let conversation_type = conversation.conversation_type.as_str().to_owned();
+            let member_user_ids = conversation.member_ids;
+
+            let observers =
+                ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
+            observers.workspace.on_typing_started(server_id, conversation_id, actor, conversation_type, member_user_ids);
+        }
+
+        Ok(true)
+    }
+
+    async fn heartbeat(&self, ctx: &Context<'_>, input: HeartbeatInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+
+        // CSO: Reject OFFLINE status from clients.
+        let status: rim_services::presence::PresenceStatus = input.status.into();
+        if status == rim_services::presence::PresenceStatus::Offline {
+            return Err(async_graphql::Error::new(
+                "Clients cannot set OFFLINE status",
+            ));
+        }
+
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
+
+        // Verify membership.
+        let member_svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
+            )?;
+        member_svc
+            .get_member(rim_services::server_member::command::GetServerMemberQuery {
+                actor: Actor::new(actor),
+                server_id: workspace_id,
+                user_id: actor,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        let presence_mgr =
+            ctx.data::<std::sync::Arc<rim_infra_services::presence::PresenceManager>>()?;
+        presence_mgr.heartbeat(actor, workspace_id, status);
+
+        Ok(true)
+    }
+
+    // ── Mute / Unmute ────────────────────────────────────────────────────
+
+    async fn mute_conversation(
+        &self,
+        ctx: &Context<'_>,
+        input: MuteConversationInput,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+
+        svc.mute_conversation(rim_services::notification_preference::command::MuteConversationCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+            muted_until: input.muted_until,
+        })
+        .await
+        .map_err(map_service_error)
+    }
+
+    async fn unmute_conversation(
+        &self,
+        ctx: &Context<'_>,
+        input: UnmuteConversationInput,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+
+        svc.unmute_conversation(rim_services::notification_preference::command::UnmuteConversationCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+        })
+        .await
+        .map_err(map_service_error)
+    }
+
+    async fn request_password_reset(
+        &self,
+        ctx: &Context<'_>,
+        username: String,
+    ) -> Result<bool> {
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::password_reset::service::PasswordResetService>>(
+            )?;
+        svc.request_reset(
+            rim_services::password_reset::command::RequestPasswordResetCmd { username },
+        )
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn reset_password(
+        &self,
+        ctx: &Context<'_>,
+        token: String,
+        new_password: String,
+    ) -> Result<bool> {
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::password_reset::service::PasswordResetService>>(
+            )?;
+        svc.reset_password(rim_services::password_reset::command::ResetPasswordCmd {
+            token,
+            new_password,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn create_custom_emoji(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateCustomEmojiInput,
+    ) -> Result<crate::types::CustomEmoji> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let image_data = base64::engine::general_purpose::STANDARD
+            .decode(&input.image_base64)
+            .map_err(|e| async_graphql::Error::new(format!("invalid base64: {e}")))?;
+
+        let emoji = svc
+            .create(rim_services::custom_emoji::command::CreateCustomEmojiCmd {
+                actor: Actor::new(actor),
+                server_id,
+                name: input.name,
+                image_data,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(emoji.into())
+    }
+
+    async fn delete_custom_emoji(
+        &self,
+        ctx: &Context<'_>,
+        emoji_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let emoji_id = parse_uuid_id::<rim_core::custom_emoji::model::CustomEmojiId>(&emoji_id)?;
+
+        svc.delete(rim_services::custom_emoji::command::DeleteCustomEmojiCmd {
+            actor: Actor::new(actor),
+            emoji_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    // ── Macros ──────────────────────────────────────────────────────────
+
+    async fn create_macro(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateMacroInput,
+    ) -> Result<MacroDef> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
+
+        let result = svc
+            .create_macro(CreateMacroCmd {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&input.server_id)?,
+                name: input.name,
+                description: input.description,
+                steps: input
+                    .steps
+                    .into_iter()
+                    .map(|s| MacroStepDto {
+                        command_id: s.command_id,
+                        args: s.args.map(|j| j.0),
+                    })
+                    .collect(),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+
+    async fn update_macro(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateMacroInput,
+    ) -> Result<MacroDef> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
+
+        let result = svc
+            .update_macro(UpdateMacroCmd {
+                actor: Actor::new(actor),
+                macro_id: parse_uuid_id(&input.macro_id)?,
+                name: input.name,
+                description: input.description,
+                steps: input
+                    .steps
+                    .into_iter()
+                    .map(|s| MacroStepDto {
+                        command_id: s.command_id,
+                        args: s.args.map(|j| j.0),
+                    })
+                    .collect(),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+
+    async fn delete_macro(&self, ctx: &Context<'_>, macro_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
+
+        svc.delete_macro(DeleteMacroCmd {
+            actor: Actor::new(actor),
+            macro_id: parse_uuid_id(&macro_id)?,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn execute_macro(
+        &self,
+        ctx: &Context<'_>,
+        input: ExecuteMacroInput,
+    ) -> Result<CommandResult> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(actor),
+                macro_id: parse_uuid_id(&input.macro_id)?,
+                command_context: input
+                    .command_context
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+}
+
+#[derive(InputObject)]
+struct CreateMacroInput {
+    server_id: ID,
+    name: String,
+    description: Option<String>,
+    steps: Vec<MacroStepInput>,
+}
+
+#[derive(InputObject)]
+struct UpdateMacroInput {
+    macro_id: ID,
+    name: String,
+    description: Option<String>,
+    steps: Vec<MacroStepInput>,
+}
+
+#[derive(InputObject)]
+struct MacroStepInput {
+    command_id: String,
+    args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+#[derive(InputObject)]
+struct ExecuteMacroInput {
+    macro_id: ID,
+    command_context: Option<CommandContextInput>,
+    confirmed_dangerous: Option<bool>,
+}
+
+#[derive(InputObject)]
+struct MuteConversationInput {
+    server_id: ID,
+    conversation_id: ID,
+    muted_until: Option<DateTime<Utc>>,
+}
+
+#[derive(InputObject)]
+struct UnmuteConversationInput {
+    server_id: ID,
+    conversation_id: ID,
+}
+
+#[derive(InputObject)]
+struct CreateCustomEmojiInput {
+    server_id: ID,
+    name: String,
+    image_base64: String,
+}
+
+fn spawn_link_preview_fetch(
+    ctx: &Context<'_>,
+    message_id: rim_core::message::model::MessageId,
+    workspace_id: rim_core::server::model::ServerId,
+    conversation_id: rim_core::conversation::model::ConversationId,
+    text: &str,
+) -> Result<()> {
+    let urls = rim_infra_services::link_preview::extract_urls(text);
+    if urls.is_empty() {
+        return Ok(());
+    }
+
+    let link_svc = ctx.data::<std::sync::Arc<dyn rim_services::link_preview::service::LinkPreviewService>>()?.clone();
+    let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?.clone();
+
+    tokio::spawn(async move {
+        match link_svc.fetch_and_store(message_id, urls).await {
+            Ok(previews) if !previews.is_empty() => {
+                use rim_services::events::EventObserver;
+                observers.workspace.notify(
+                    rim_services::events::WorkspaceEvent::LinkPreviewReady {
+                        workspace_id,
+                        conversation_id,
+                        message_id,
+                    },
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "link preview fetch failed");
+            }
+        }
+    });
+
+    Ok(())
 }

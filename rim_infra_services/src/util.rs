@@ -258,6 +258,13 @@ mod tests {
             Ok(self.conv.clone())
         }
 
+        async fn get_by_ids(
+            &self,
+            _ids: &[rim_core::conversation::model::ConversationId],
+        ) -> RepoResult<Vec<Conversation>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn create_conversation(
             &self,
             _conv: rim_core::conversation::model::NewConversation,
@@ -314,12 +321,28 @@ mod tests {
             Ok(false)
         }
 
+        async fn list_accessible_conversation_ids(
+            &self,
+            _server_id: ServerId,
+            _user_id: UserId,
+        ) -> RepoResult<Vec<ConversationId>> {
+            Ok(vec![])
+        }
+
         async fn touch_last_activity_at(
             &self,
             _conversation_id: rim_core::conversation::model::ConversationId,
             _at: chrono::DateTime<chrono::Utc>,
         ) -> RepoResult<()> {
             Ok(())
+        }
+
+        async fn update_topic(
+            &self,
+            _conversation_id: rim_core::conversation::model::ConversationId,
+            _topic: Option<String>,
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
         }
     }
 
@@ -397,6 +420,7 @@ mod tests {
                 id: ConversationId::new(),
                 conversation_type: ConversationType::Channel,
                 title: None,
+                topic: None,
                 created_at: chrono::Utc::now(),
                 last_activity_at: chrono::Utc::now(),
                 server_id: other_server,

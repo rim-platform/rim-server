@@ -4,6 +4,7 @@ mod types;
 
 pub use broadcast::{Broadcaster, NoopBroadcaster};
 pub use observers::{
-    EventObserver, MessageObserver, Observers, ReactionObserver, ThreadObserver, WorkspaceObserver,
+    EventObserver, MentionObserver, MessageObserver, Observers, ReactionObserver,
+    ReadStateObserver, ThreadObserver, WorkspaceObserver,
 };
 pub use types::*;

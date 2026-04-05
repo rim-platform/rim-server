@@ -45,6 +45,7 @@ mod tests {
             server_id,
             conversation_type: ConversationType::Direct,
             title: None,
+            topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }

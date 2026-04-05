@@ -62,6 +62,7 @@ impl MessageRepository for SeaOrmMessageRepository {
             conversation_id: Set(new_message.conversation_id.into()),
             thread_id: Set(new_message.thread_id.map(Into::into)),
             parent_message_id: Set(new_message.parent_message_id.map(Into::into)),
+            forwarded_from_message_id: Set(new_message.forwarded_from_message_id.map(Into::into)),
             sent_by: Set(new_message.sent_by.into()),
             text: Set(new_message.text.to_owned()),
             is_deleted: Set(false),
@@ -204,6 +205,35 @@ impl MessageRepository for SeaOrmMessageRepository {
         }
 
         let items = q
+            .order_by_desc(message::Column::SentAt)
+            .order_by_desc(message::Column::Id)
+            .limit(limit as u64)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+
+        Ok(items)
+    }
+
+    async fn search_messages_across_conversations(
+        &self,
+        conversation_ids: &[ConversationId],
+        query: &str,
+        limit: u32,
+    ) -> RepoResult<Vec<Message>> {
+        if conversation_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conv_uuids: Vec<Uuid> = conversation_ids.iter().copied().map(Into::into).collect();
+
+        let items = message::Entity::find()
+            .filter(message::Column::ConversationId.is_in(conv_uuids))
+            .filter(message::Column::Text.contains(query))
+            .filter(message::Column::IsDeleted.eq(false))
             .order_by_desc(message::Column::SentAt)
             .order_by_desc(message::Column::Id)
             .limit(limit as u64)

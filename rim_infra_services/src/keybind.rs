@@ -28,8 +28,69 @@ pub struct DefaultKeybindService {
 }
 
 impl DefaultKeybindService {
+    const MAX_USER_KEYBINDS: usize = 200;
+    const MAX_WORKSPACE_KEYBINDS: usize = 100;
+    const MAX_PRESET_ARGS_BYTES: usize = 4096;
+    const MAX_KEYSTROKE_LEN: usize = 50;
+
+    const VALID_MODIFIERS: &'static [&'static str] = &["Ctrl", "Shift", "Alt", "Meta"];
+
     pub fn new(repos: KeybindRepos, services: KeybindServices) -> Self {
         Self { repos, services }
+    }
+
+    fn validate_keystroke(keystroke: &str) -> ServiceResult<()> {
+        let keystroke = keystroke.trim();
+        if keystroke.is_empty() {
+            return Err(ServiceError::Validation(
+                "keystroke must be non-empty".to_string(),
+            ));
+        }
+        if keystroke.len() > Self::MAX_KEYSTROKE_LEN {
+            return Err(ServiceError::Validation(format!(
+                "keystroke exceeds maximum length of {} characters",
+                Self::MAX_KEYSTROKE_LEN
+            )));
+        }
+
+        let parts: Vec<&str> = keystroke.split('+').collect();
+        if parts.is_empty() {
+            return Err(ServiceError::Validation(
+                "keystroke must contain at least one key".to_string(),
+            ));
+        }
+
+        let (modifiers, key_parts) = parts.split_at(parts.len() - 1);
+
+        for modifier in modifiers {
+            if !Self::VALID_MODIFIERS.contains(modifier) {
+                return Err(ServiceError::Validation(format!(
+                    "invalid modifier `{modifier}` in keystroke; allowed: Ctrl, Shift, Alt, Meta"
+                )));
+            }
+        }
+
+        let key = key_parts[0];
+        if key.is_empty() {
+            return Err(ServiceError::Validation(
+                "keystroke must end with a key name".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_preset_args_size(preset_args: &Option<serde_json::Value>) -> ServiceResult<()> {
+        if let Some(args) = preset_args {
+            let size = serde_json::to_vec(args).map(|v| v.len()).unwrap_or(0);
+            if size > Self::MAX_PRESET_ARGS_BYTES {
+                return Err(ServiceError::Validation(format!(
+                    "preset_args exceeds maximum size of {} bytes",
+                    Self::MAX_PRESET_ARGS_BYTES
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn subject_for_request(
@@ -83,8 +144,120 @@ impl DefaultKeybindService {
             },
             DefaultKeybindDto {
                 source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Alt+S".to_string(),
+                command_id: "workspace.open_settings".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+F".to_string(),
+                command_id: "workspace.open_search".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+F".to_string(),
+                command_id: "workspace.search_in_channel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+X".to_string(),
+                command_id: "workspace.open_marketplace".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
                 keystroke: "Ctrl+R".to_string(),
                 command_id: "workspace.cycle_recent_activity".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+A".to_string(),
+                command_id: "workspace.open_agent".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+B".to_string(),
+                command_id: "workspace.toggle_sidebar".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+T".to_string(),
+                command_id: "workspace.reopen_last_thread".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+E".to_string(),
+                command_id: "workspace.focus_composer".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+K".to_string(),
+                command_id: "workspace.navigate_to_channel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Alt+ArrowUp".to_string(),
+                command_id: "workspace.previous_channel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Alt+ArrowDown".to_string(),
+                command_id: "workspace.next_channel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Alt+Shift+ArrowDown".to_string(),
+                command_id: "workspace.next_unread_channel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Escape".to_string(),
+                command_id: "workspace.close_panel".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+M".to_string(),
+                command_id: "chat.mark_all_as_read".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+G".to_string(),
+                command_id: "chat.create_group".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            },
+            DefaultKeybindDto {
+                source: KeybindSourceDto::Default,
+                keystroke: "Ctrl+Shift+C".to_string(),
+                command_id: "chat.create_channel".to_string(),
                 context: rim_services::keybind::dto::KeybindContextDto::Global,
                 preset_args: None,
             },
@@ -374,10 +547,24 @@ impl KeybindService for DefaultKeybindService {
         self.ensure_scope_access(cmd.actor, subject).await?;
         self.validate_command_bindable(cmd.actor, &cmd.command_id)
             .await?;
-        if cmd.keystroke.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                "keystroke must be non-empty".to_string(),
-            ));
+        Self::validate_keystroke(&cmd.keystroke)?;
+        Self::validate_preset_args_size(&cmd.preset_args)?;
+
+        let existing_count = self
+            .repos
+            .keybind_repo
+            .list_for_subject(subject)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .len();
+        let limit = match subject {
+            KeybindSubject::User(_) => Self::MAX_USER_KEYBINDS,
+            KeybindSubject::Workspace(_) => Self::MAX_WORKSPACE_KEYBINDS,
+        };
+        if existing_count >= limit {
+            return Err(ServiceError::Validation(format!(
+                "maximum number of keybinds ({limit}) reached for this scope"
+            )));
         }
 
         if self
@@ -428,11 +615,8 @@ impl KeybindService for DefaultKeybindService {
             .await?;
         self.validate_command_bindable(cmd.actor, &cmd.command_id)
             .await?;
-        if cmd.keystroke.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                "keystroke must be non-empty".to_string(),
-            ));
-        }
+        Self::validate_keystroke(&cmd.keystroke)?;
+        Self::validate_preset_args_size(&cmd.preset_args)?;
 
         if let Some(other) = self
             .repos
@@ -783,7 +967,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved.len(), 18);
         let ctrl_r = resolved.iter().find(|k| k.keystroke == "Ctrl+R").unwrap();
         assert_eq!(ctrl_r.scope, KeybindScopeDto::Workspace);
         assert_eq!(ctrl_r.source, KeybindSourceDto::Workspace);

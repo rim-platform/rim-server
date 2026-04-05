@@ -4,6 +4,7 @@ use rim_core::message_attachment::model::MessageAttachmentId;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AttachmentStatus {
     PendingUpload,
+    Uploaded,
     Ready,
 }
 
@@ -16,6 +17,10 @@ pub struct AttachmentDto {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: u64,
+
+    /// Storage key for downloading the file (e.g. via `/api/files/{storage_key}`).
+    /// `None` when the attachment is still pending upload.
+    pub storage_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -4,11 +4,12 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery,
+    LoginCmd, LogoutCmd, RevokeInviteCmd,
 };
 use crate::auth::dto::{
-    AcceptInviteResultDto, BootstrapResultDto, CreateInviteResultDto, JoinServerByInviteResultDto,
-    LoginResultDto, RequestAuthResultDto,
+    AcceptInviteResultDto, BootstrapResultDto, CreateInviteResultDto, InviteDto,
+    JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto,
 };
 
 #[async_trait]
@@ -28,6 +29,10 @@ pub trait AuthService: Send + Sync {
         &self,
         cmd: JoinServerByInviteCmd,
     ) -> ServiceResult<JoinServerByInviteResultDto>;
+
+    async fn list_invites(&self, query: ListInvitesQuery) -> ServiceResult<Vec<InviteDto>>;
+
+    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<()>;
 }
 
 #[async_trait]

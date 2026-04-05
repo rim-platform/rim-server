@@ -13,6 +13,7 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     pub last_activity_at: DateTimeWithTimeZone,
     pub server_id: Uuid,
+    pub topic: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

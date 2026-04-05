@@ -17,6 +17,7 @@ pub enum WorkspaceEvent {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
         message: MessageEventData,
     },
@@ -24,6 +25,7 @@ pub enum WorkspaceEvent {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
         message: MessageEventData,
     },
@@ -31,13 +33,16 @@ pub enum WorkspaceEvent {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
         message_id: MessageId,
+        thread_id: Option<MessageThreadId>,
     },
     ReactionsUpdated {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
         message_id: MessageId,
         reactions: Vec<ReactionGroupData>,
@@ -47,6 +52,7 @@ pub enum WorkspaceEvent {
         conversation_id: ConversationId,
         title: Option<String>,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
     MemberJoined {
@@ -60,17 +66,74 @@ pub enum WorkspaceEvent {
         thread_id: MessageThreadId,
         root_message_id: MessageId,
         conversation_type: String,
+        #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
     MemberAddedToConversation {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         user_id: UserId,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
     },
     MemberRemovedFromConversation {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         user_id: UserId,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    ConversationUpdated {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+    },
+    MessagePinned {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        pinned_by: UserId,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    MessageUnpinned {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    TypingStarted {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        #[serde(skip_serializing)]
+        conversation_type: String,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    ReadStateUpdated {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        last_read_at: chrono::DateTime<chrono::Utc>,
+    },
+    PresenceChanged {
+        workspace_id: ServerId,
+        user_id: UserId,
+        status: String,
+    },
+    UserMentioned {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        #[serde(skip_serializing)]
+        mentioned_user_ids: Vec<UserId>,
+        author_id: UserId,
+    },
+    LinkPreviewReady {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
     },
 }
 
@@ -93,6 +156,7 @@ pub struct MessageEventData {
     pub text: Option<String>,
     pub has_attachments: bool,
     pub parent_message_id: Option<MessageId>,
+    pub forwarded_from_message_id: Option<MessageId>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub reactions: Vec<ReactionGroupData>,
@@ -107,9 +171,14 @@ impl From<&MessageDto> for MessageEventData {
             thread_id: dto.thread_id,
             root_thread_id: dto.root_thread_id,
             author_id: dto.author_id,
-            text: dto.text.clone(),
+            text: if dto.is_deleted {
+                None
+            } else {
+                dto.text.clone()
+            },
             has_attachments: dto.has_attachments,
             parent_message_id: dto.parent_message_id,
+            forwarded_from_message_id: dto.forwarded_from_message_id,
             is_deleted: dto.is_deleted,
             sent_at: dto.sent_at,
             reactions: vec![],
@@ -133,10 +202,18 @@ impl WorkspaceEvent {
             | Self::MessageDeleted { workspace_id, .. }
             | Self::ReactionsUpdated { workspace_id, .. }
             | Self::ConversationCreated { workspace_id, .. }
+            | Self::ConversationUpdated { workspace_id, .. }
+            | Self::TypingStarted { workspace_id, .. }
+            | Self::MessagePinned { workspace_id, .. }
+            | Self::MessageUnpinned { workspace_id, .. }
             | Self::ThreadCreated { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
             | Self::MemberAddedToConversation { workspace_id, .. }
-            | Self::MemberRemovedFromConversation { workspace_id, .. } => workspace_id.to_string(),
+            | Self::MemberRemovedFromConversation { workspace_id, .. }
+            | Self::ReadStateUpdated { workspace_id, .. }
+            | Self::PresenceChanged { workspace_id, .. }
+            | Self::UserMentioned { workspace_id, .. }
+            | Self::LinkPreviewReady { workspace_id, .. } => workspace_id.to_string(),
         }
     }
 
@@ -161,9 +238,34 @@ impl WorkspaceEvent {
             | Self::ThreadCreated {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            Self::MemberJoined { .. }
-            | Self::MemberAddedToConversation { .. }
-            | Self::MemberRemovedFromConversation { .. } => None,
+            Self::MemberAddedToConversation {
+                member_user_ids, ..
+            }
+            | Self::MemberRemovedFromConversation {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            Self::MemberJoined { .. } => None,
+            // ConversationUpdated is visible to all workspace members.
+            Self::ConversationUpdated { .. } => None,
+            Self::TypingStarted {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            Self::MessagePinned {
+                member_user_ids, ..
+            }
+            | Self::MessageUnpinned {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            // ReadStateUpdated is filtered by user_id in the subscription, not by member list.
+            Self::ReadStateUpdated { .. } => None,
+            // PresenceChanged is visible to all workspace members.
+            Self::PresenceChanged { .. } => None,
+            // UserMentioned is filtered per-user in the subscription.
+            Self::UserMentioned {
+                mentioned_user_ids, ..
+            } => Some(mentioned_user_ids),
+            // LinkPreviewReady is visible to all workspace members.
+            Self::LinkPreviewReady { .. } => None,
         }
     }
 }

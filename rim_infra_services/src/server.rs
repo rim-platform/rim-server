@@ -100,7 +100,7 @@ impl ServerService for DefaultServerService {
                 "server name cannot be empty".to_string(),
             ));
         }
-        if name.len() > 128 {
+        if name.chars().count() > 128 {
             return Err(ServiceError::Validation(
                 "server name is too long".to_string(),
             ));

@@ -5,9 +5,10 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::conversation::command::{
     AddConversationMemberCmd, CreateConversationCmd, GetConversationQuery, ListChannelsQuery,
-    ListInboxConversationsQuery, RemoveConversationMemberCmd,
+    ListInboxConversationsQuery, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
 use crate::conversation::dto::{ChannelPageCursor, ConversationDto, InboxPageCursor};
+use rim_core::conversation::model::ConversationId;
 use rim_core::repository::pagination::Page;
 
 #[async_trait]
@@ -20,6 +21,11 @@ pub trait ConversationService: Send + Sync {
 
     async fn get_conversation(&self, query: GetConversationQuery)
     -> ServiceResult<ConversationDto>;
+
+    async fn get_conversations_by_ids(
+        &self,
+        ids: &[ConversationId],
+    ) -> ServiceResult<Vec<ConversationDto>>;
 
     async fn list_inbox_conversations(
         &self,
@@ -36,5 +42,10 @@ pub trait ConversationService: Send + Sync {
     async fn remove_member(
         &self,
         cmd: RemoveConversationMemberCmd,
+    ) -> ServiceResult<ConversationDto>;
+
+    async fn update_topic(
+        &self,
+        cmd: UpdateConversationTopicCmd,
     ) -> ServiceResult<ConversationDto>;
 }

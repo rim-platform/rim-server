@@ -18,8 +18,14 @@ mod tests {
     use rim_services::auth::service::AuthService;
     use rim_services::{Actor, ServiceError};
 
+    use rim_services::events::{NoopBroadcaster, Observers};
+
     use crate::AuthRepos;
     use crate::auth::DefaultAuthService;
+
+    fn noop_observers() -> Observers {
+        Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
+    }
 
     fn repos() -> (
         MockUserRepository,
@@ -41,26 +47,35 @@ mod tests {
 
     fn mock_conversation_repo() -> MockConversationRepository {
         let mut repo = MockConversationRepository::new();
-        repo.expect_create_conversation_with_members()
-            .returning(|conv_type, server_id, title, _member_ids| {
+        repo.expect_create_conversation_with_members().returning(
+            |conv_type, server_id, title, _member_ids| {
                 Box::pin(async move {
                     let now = chrono::Utc::now();
                     Ok(Conversation {
                         id: ConversationId::new(),
                         conversation_type: conv_type,
                         title,
+                        topic: None,
                         created_at: now,
                         last_activity_at: now,
                         server_id,
                     })
                 })
-            });
+            },
+        );
         repo
     }
 
     #[tokio::test]
     async fn bootstrap_denies_if_secret_missing() {
-        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
+        let (
+            user_repo,
+            server_repo,
+            server_member_repo,
+            session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
 
         let svc = DefaultAuthService::new(
             AuthRepos {
@@ -74,6 +89,7 @@ mod tests {
             None,
             None,
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -90,7 +106,14 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_denies_if_users_exist() {
-        let (mut user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
+        let (
+            mut user_repo,
+            server_repo,
+            server_member_repo,
+            session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
         user_repo.expect_any_users_exist().returning(|| Ok(true));
 
         let svc = DefaultAuthService::new(
@@ -105,6 +128,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -126,7 +150,14 @@ mod tests {
         let session_id = SessionId::new();
         let now = chrono::Utc::now();
 
-        let (user_repo, server_repo, server_member_repo, mut session_repo, invite_repo, conversation_repo) = repos();
+        let (
+            user_repo,
+            server_repo,
+            server_member_repo,
+            mut session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
         session_repo.expect_get_by_id().returning(move |id| {
             assert_eq!(id, session_id);
             Ok(Some(Session {
@@ -155,6 +186,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -172,7 +204,14 @@ mod tests {
         let server_id = ServerId::new();
         let actor_user_id = UserId::new();
 
-        let (user_repo, server_repo, server_member_repo, session_repo, invite_repo, conversation_repo) = repos();
+        let (
+            user_repo,
+            server_repo,
+            server_member_repo,
+            session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
         let svc = DefaultAuthService::new(
             AuthRepos {
                 user_repo: Arc::new(user_repo),
@@ -185,6 +224,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -206,8 +246,14 @@ mod tests {
         let invite_id = InviteId::new();
         let now = chrono::Utc::now();
 
-        let (mut user_repo, server_repo, server_member_repo, session_repo, mut invite_repo, conversation_repo) =
-            repos();
+        let (
+            mut user_repo,
+            server_repo,
+            server_member_repo,
+            session_repo,
+            mut invite_repo,
+            conversation_repo,
+        ) = repos();
         user_repo.expect_find_by_username().returning(move |_u| {
             Ok(Some(User {
                 id: existing_user_id,
@@ -216,6 +262,10 @@ mod tests {
                 created_at: now,
                 updated_at: now,
                 last_login_at: Some(now),
+                display_name: None,
+                avatar_url: None,
+                status_text: None,
+                bio: None,
             }))
         });
         user_repo.expect_create_user().never();
@@ -247,6 +297,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -264,8 +315,14 @@ mod tests {
     async fn bootstrap_maps_repo_errors_to_service_error() {
         let now = chrono::Utc::now();
 
-        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo, conversation_repo) =
-            repos();
+        let (
+            mut user_repo,
+            mut server_repo,
+            mut server_member_repo,
+            mut session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
         user_repo.expect_any_users_exist().returning(|| Ok(false));
         user_repo
             .expect_create_user()
@@ -292,6 +349,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let err = svc
@@ -315,8 +373,14 @@ mod tests {
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let (mut user_repo, mut server_repo, mut server_member_repo, mut session_repo, invite_repo, conversation_repo) =
-            repos();
+        let (
+            mut user_repo,
+            mut server_repo,
+            mut server_member_repo,
+            mut session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
 
         user_repo.expect_any_users_exist().returning(|| Ok(false));
         user_repo
@@ -330,6 +394,10 @@ mod tests {
                     created_at: now,
                     updated_at: now,
                     last_login_at: Some(now),
+                    display_name: None,
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
                 })
             });
 
@@ -385,6 +453,7 @@ mod tests {
             None,
             Some("secret".to_string()),
             Duration::hours(1),
+            noop_observers(),
         );
 
         let res = svc

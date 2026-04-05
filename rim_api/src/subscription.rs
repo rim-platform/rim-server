@@ -1,9 +1,39 @@
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
+
 use async_graphql::*;
+use futures_util::Stream;
+use rim_core::user::model::UserId;
+use rim_infra_services::presence::PresenceManager;
 use rim_services::events::WorkspaceEvent;
 
 use crate::broadcast::InMemoryBroadcaster;
 
 pub struct Subscription;
+
+/// Wrapper stream that calls `PresenceManager::mark_offline` when dropped
+/// (i.e. when the WebSocket disconnects and the subscription stream ends).
+struct DisconnectGuardStream<S> {
+    inner: Pin<Box<S>>,
+    presence: Arc<PresenceManager>,
+    user_id: UserId,
+}
+
+impl<S: Stream> Stream for DisconnectGuardStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl<S> Drop for DisconnectGuardStream<S> {
+    fn drop(&mut self) {
+        tracing::info!(user_id = %self.user_id, "WS subscription stream dropped, marking user offline");
+        self.presence.mark_offline(self.user_id);
+    }
+}
 
 /// Check whether a subscriber should see a given workspace event.
 ///
@@ -59,10 +89,56 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
             }
         }
 
+        // ReadStateUpdated — only visible to the owning user
+        WorkspaceEvent::ReadStateUpdated {
+            user_id: event_user_id,
+            ..
+        } => event_user_id.to_string() == user_id,
+
+        // ConversationUpdated is visible to all workspace members
+        WorkspaceEvent::ConversationUpdated { .. } => true,
+
+        // TypingStarted — filter by conversation type like messages
+        WorkspaceEvent::TypingStarted {
+            conversation_type,
+            member_user_ids,
+            ..
+        } => {
+            if conversation_type == "Channel" {
+                true
+            } else {
+                member_user_ids.iter().any(|id| id.to_string() == user_id)
+            }
+        }
+
+        // Pin events — filter by conversation membership
+        WorkspaceEvent::MessagePinned {
+            member_user_ids, ..
+        }
+        | WorkspaceEvent::MessageUnpinned {
+            member_user_ids, ..
+        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+
         // Workspace-level events: visible to all workspace members
-        WorkspaceEvent::MemberJoined { .. }
-        | WorkspaceEvent::MemberAddedToConversation { .. }
-        | WorkspaceEvent::MemberRemovedFromConversation { .. } => true,
+        WorkspaceEvent::MemberJoined { .. } | WorkspaceEvent::PresenceChanged { .. } => true,
+
+        // Conversation membership events: only visible to conversation members
+        WorkspaceEvent::MemberAddedToConversation {
+            member_user_ids, ..
+        }
+        | WorkspaceEvent::MemberRemovedFromConversation {
+            member_user_ids, ..
+        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+
+        // UserMentioned is only visible to mentioned users
+        WorkspaceEvent::UserMentioned {
+            mentioned_user_ids, ..
+        } => mentioned_user_ids
+            .iter()
+            .any(|id| id.to_string() == user_id),
+
+        // LinkPreviewReady is visible to all workspace members
+        WorkspaceEvent::LinkPreviewReady { .. } => true,
     }
 }
 
@@ -92,6 +168,7 @@ impl Subscription {
         .await
         .map_err(crate::errors::map_service_error)?;
 
+        let presence = ctx.data::<Arc<PresenceManager>>()?;
         let broadcaster = ctx.data_unchecked::<InMemoryBroadcaster>();
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();
@@ -99,7 +176,7 @@ impl Subscription {
 
         // Use async_stream to handle Lagged errors gracefully without ending the stream.
         // BroadcastStream ends on Lagged, so we use the raw receiver directly.
-        Ok(async_stream::stream! {
+        let inner = async_stream::stream! {
             let mut rx = rx;
             loop {
                 match rx.recv().await {
@@ -120,6 +197,13 @@ impl Subscription {
                     }
                 }
             }
+        };
+
+        // Wrap the stream so mark_offline is called when the client disconnects.
+        Ok(DisconnectGuardStream {
+            inner: Box::pin(inner),
+            presence: Arc::clone(presence),
+            user_id: actor,
         })
     }
 }

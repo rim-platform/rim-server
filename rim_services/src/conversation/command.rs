@@ -65,3 +65,12 @@ pub struct RemoveConversationMemberCmd {
     pub conversation_id: ConversationId,
     pub user_id: UserId,
 }
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct UpdateConversationTopicCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub topic: Option<String>,
+}

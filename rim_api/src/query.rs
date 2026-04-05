@@ -4,10 +4,11 @@ use crate::auth_context::require_actor;
 use crate::pagination::PageDir;
 use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelPage, Command, CommandContextInput,
-    CommandSurface, Conversation, ConversationPage, DefaultKeybind, Event, InboxCursorInput,
-    Integration, Keybind, KeybindContext, KeybindLayers, KeybindScope, Message, MessageCursorInput,
-    MessagePage, MessageReference, Server, ServerMember, Setting, Thread, ThreadCursorInput,
-    ThreadPage, User,
+    CommandSurface, Conversation, ConversationPage, ConversationTypeEnum, CustomEmoji,
+    DefaultKeybind, Event, InboxCursorInput, Integration, Invite, Keybind, KeybindContext,
+    KeybindLayers, KeybindScope, MacroDef, Message, MessageCursorInput, MessagePage,
+    MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember, Setting, Thread,
+    ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -32,12 +33,12 @@ use rim_services::message::command::{
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::command::GetAttachmentQuery;
 use rim_services::message_attachment::service::MessageAttachmentService;
-use rim_services::message_reaction::command::GetReactionsForMessagesQuery;
-use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::command::{
     GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::service::ThreadService;
+use rim_services::auth::command::ListInvitesQuery;
+use rim_services::auth::service::AuthService;
 use rim_services::server::command::{GetServerQuery, ListMyServersQuery};
 use rim_services::server::service::ServerService;
 use rim_services::server_member::command::ListServerMembersQuery;
@@ -350,7 +351,6 @@ impl Query {
     ) -> Result<MessagePage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -368,33 +368,26 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        let message_ids: Vec<_> = page.items.iter().map(|m| m.id).collect();
-        let reaction_map = reaction_svc
-            .get_reactions_for_messages(GetReactionsForMessagesQuery {
-                actor: Actor::new(actor),
-                message_ids,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(MessagePage::from_page(page, &reaction_map))
+        Ok(MessagePage::from_page(page))
     }
 
     async fn search_messages(
         &self,
         ctx: &Context<'_>,
         server_id: ID,
-        conversation_id: ID,
+        conversation_id: Option<ID>,
         query: String,
         limit: i32,
         include_deleted: bool,
-    ) -> Result<Vec<Message>> {
+    ) -> Result<Vec<SearchResultMessage>> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
+        let conv_svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-        let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+        let conversation_id = conversation_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::conversation::model::ConversationId>)
+            .transpose()?;
 
         let dtos = svc
             .search_messages(SearchMessagesQuery {
@@ -402,30 +395,51 @@ impl Query {
                 server_id,
                 conversation_id,
                 query,
-                limit: (limit.max(1) as u32).min(100),
+                limit: (limit.max(1) as u32).min(50),
                 include_deleted,
             })
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        let message_ids: Vec<_> = dtos.iter().map(|m| m.id).collect();
-        let reaction_map = reaction_svc
-            .get_reactions_for_messages(GetReactionsForMessagesQuery {
-                actor: Actor::new(actor),
-                message_ids,
-            })
+        // Batch-load conversation metadata for results
+        let unique_conv_ids: Vec<_> = {
+            let mut seen = std::collections::HashSet::new();
+            dtos.iter()
+                .filter_map(|d| {
+                    if seen.insert(d.conversation_id) {
+                        Some(d.conversation_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let conversations = conv_svc
+            .get_conversations_by_ids(&unique_conv_ids)
             .await
             .map_err(crate::errors::map_service_error)?;
+        let conv_map: std::collections::HashMap<_, _> =
+            conversations.into_iter().map(|c| (c.id, c)).collect();
 
         Ok(dtos
             .into_iter()
             .map(|dto| {
-                let msg_id = dto.id;
-                let mut msg: Message = dto.into();
-                if let Some(groups) = reaction_map.get(&msg_id) {
-                    msg.reactions = groups.iter().cloned().map(Into::into).collect();
+                let conv = conv_map.get(&dto.conversation_id);
+                SearchResultMessage {
+                    id: ID(dto.id.to_string()),
+                    server_id: ID(dto.server_id.to_string()),
+                    conversation_id: ID(dto.conversation_id.to_string()),
+                    conversation_title: conv.and_then(|c| c.title.clone()),
+                    conversation_type: conv
+                        .map(|c| ConversationTypeEnum::from(c.conversation_type))
+                        .unwrap_or(ConversationTypeEnum::Channel),
+                    thread_id: dto.thread_id.map(|id| ID(id.to_string())),
+                    root_message_id: dto.thread_root_message_id.map(|id| ID(id.to_string())),
+                    author_id: ID(dto.author_id.to_string()),
+                    text: dto.text,
+                    sent_at: dto.sent_at,
                 }
-                msg
             })
             .collect())
     }
@@ -439,7 +453,6 @@ impl Query {
     ) -> Result<Message> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -455,21 +468,7 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        let reaction_map = reaction_svc
-            .get_reactions_for_messages(GetReactionsForMessagesQuery {
-                actor: Actor::new(actor),
-                message_ids: vec![dto.id],
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        let msg_id = dto.id;
-        let mut msg: Message = dto.into();
-        if let Some(groups) = reaction_map.get(&msg_id) {
-            msg.reactions = groups.iter().cloned().map(Into::into).collect();
-        }
-
-        Ok(msg)
+        Ok(dto.into())
     }
 
     async fn message_reference(
@@ -599,7 +598,6 @@ impl Query {
     ) -> Result<MessagePage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let reaction_svc = ctx.data::<std::sync::Arc<dyn MessageReactionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -620,16 +618,7 @@ impl Query {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        let message_ids: Vec<_> = page.items.iter().map(|m| m.id).collect();
-        let reaction_map = reaction_svc
-            .get_reactions_for_messages(GetReactionsForMessagesQuery {
-                actor: Actor::new(actor),
-                message_ids,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(MessagePage::from_page(page, &reaction_map))
+        Ok(MessagePage::from_page(page))
     }
 
     async fn attachment(
@@ -701,6 +690,23 @@ impl Query {
         Ok(dto.into())
     }
 
+    async fn unread_counts(&self, ctx: &Context<'_>, workspace_id: ID) -> Result<Vec<UnreadCount>> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>>()?;
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&workspace_id)?;
+
+        let counts = svc
+            .get_unread_counts(rim_services::read_state::dto::UnreadCountsQuery {
+                actor: Actor::new(actor),
+                workspace_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(counts.into_iter().map(Into::into).collect())
+    }
+
     async fn server_members(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<ServerMember>> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ServerMemberService>>()?;
@@ -715,5 +721,167 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(members.into_iter().map(Into::into).collect())
+    }
+
+    async fn my_mentions(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        #[graphql(default = 50)] limit: u32,
+    ) -> Result<Vec<Message>> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::mention::service::MentionService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let messages = svc
+            .get_my_mentions(rim_services::mention::command::MyMentionsQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+                limit,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(messages.into_iter().map(Into::into).collect())
+    }
+
+    async fn pinned_messages(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<Vec<Message>> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::pin::service::PinService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        let messages = svc
+            .list_pinned_messages(rim_services::pin::command::ListPinnedMessagesQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+                conversation_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(messages.into_iter().map(Into::into).collect())
+    }
+
+    async fn workspace_presence(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: ID,
+    ) -> Result<Vec<UserPresenceGql>> {
+        let _actor = require_actor(ctx)?;
+        let presence_mgr =
+            ctx.data::<std::sync::Arc<rim_infra_services::presence::PresenceManager>>()?;
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&workspace_id)?;
+
+        let entries = presence_mgr.get_workspace_presence(workspace_id);
+        Ok(entries.into_iter().map(Into::into).collect())
+    }
+
+    async fn my_invites(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<Invite>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let invites = svc
+            .list_invites(ListInvitesQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(invites.into_iter().map(Into::into).collect())
+    }
+
+    async fn muted_conversations(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<MutedConversation>> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let items = svc
+            .list_muted_conversations(rim_services::notification_preference::command::ListMutedConversationsQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(items.into_iter().map(Into::into).collect())
+    }
+
+    async fn custom_emojis(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<CustomEmoji>> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let emojis = svc
+            .list(rim_services::custom_emoji::command::ListCustomEmojisQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(emojis.into_iter().map(Into::into).collect())
+    }
+
+    // ── Macros ──────────────────────────────────────────────────────────
+
+    async fn my_macros(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<MacroDef>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let macros = svc
+            .list_user_macros(rim_services::macro_def::request::ListUserMacrosQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(macros.into_iter().map(Into::into).collect())
+    }
+
+    async fn server_macros(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<MacroDef>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let macros = svc
+            .list_server_macros(rim_services::macro_def::request::ListServerMacrosQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(macros.into_iter().map(Into::into).collect())
     }
 }

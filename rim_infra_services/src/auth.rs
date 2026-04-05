@@ -10,7 +10,8 @@ use rim_core::conversation::model::ConversationType;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
+    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery,
+    LoginCmd, LogoutCmd, RevokeInviteCmd,
 };
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, BootstrapResultDto, CreateInviteResultDto, InviteDto,
@@ -18,6 +19,8 @@ use rim_services::auth::dto::{
 };
 use rim_services::auth::service::AuthService;
 use rim_services::{ServiceError, ServiceResult};
+
+use rim_services::events::Observers;
 
 use crate::AuthRepos;
 use crate::repos::AppRepos;
@@ -29,6 +32,7 @@ pub struct DefaultAuthService {
     db: Option<DatabaseConnection>,
     bootstrap_secret: Option<String>,
     session_ttl: Duration,
+    observers: Observers,
 }
 
 impl DefaultAuthService {
@@ -37,12 +41,14 @@ impl DefaultAuthService {
         db: Option<DatabaseConnection>,
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
+        observers: Observers,
     ) -> Self {
         Self {
             repos,
             db,
             bootstrap_secret,
             session_ttl,
+            observers,
         }
     }
 
@@ -488,6 +494,10 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        self.observers
+            .workspace
+            .on_member_joined(inv.server_id, user.id, username);
+
         let csrf = Self::new_csrf_token();
 
         Ok(AcceptInviteResultDto {
@@ -574,10 +584,72 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        // Emit MemberJoined event so other workspace members see the new member in real-time.
+        if let Ok(Some(user)) = self
+            .repos
+            .user_repo
+            .get_by_id(actor.user_id)
+            .await
+            .map_err(rim_services::map_repo_error)
+        {
+            self.observers
+                .workspace
+                .on_member_joined(inv.server_id, actor.user_id, &user.username);
+        }
+
         info!(user_id = %actor.user_id, server_id = %inv.server_id, "user joined server via invite");
 
         Ok(JoinServerByInviteResultDto {
             server_id: inv.server_id,
         })
+    }
+
+    #[instrument(name = "auth.list_invites", skip_all, fields(actor_id = %query.actor.user_id, server_id = %query.server_id))]
+    async fn list_invites(
+        &self,
+        query: ListInvitesQuery,
+    ) -> ServiceResult<Vec<InviteDto>> {
+        ensure_server_owner(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        let invites = self
+            .repos
+            .invite_repo
+            .list_active_by_server(query.server_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        Ok(invites.into_iter().map(Self::to_invite_dto).collect())
+    }
+
+    #[instrument(name = "auth.revoke_invite", skip_all, fields(actor_id = %cmd.actor.user_id, invite_id = %cmd.invite_id))]
+    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<()> {
+        let inv = self
+            .repos
+            .invite_repo
+            .get_by_id(cmd.invite_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        ensure_server_owner(
+            self.repos.server_member_repo.as_ref(),
+            inv.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        self.repos
+            .invite_repo
+            .revoke_invite(cmd.invite_id)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        info!(invite_id = %cmd.invite_id, "invite revoked");
+        Ok(())
     }
 }

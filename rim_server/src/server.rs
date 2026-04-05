@@ -1,13 +1,17 @@
 use crate::app::build_app_runtime;
 use crate::config::RIMConfig;
+use crate::file_handlers::{
+    handle_attachment_download, handle_avatar_upload, handle_file_download, handle_file_upload,
+};
 use crate::graphql_support::{
-    apply_auth_cookies, enforce_csrf, extract_actor_and_session_id, internal_graphql_error_response,
+    apply_auth_cookies, enforce_csrf_for_batch, extract_actor_and_session_id,
+    internal_graphql_error_response,
 };
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
-use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
 use log::info;
 use rim_api::AppSchema;
-use rim_api::auth_intent::insert_auth_intent_ctx;
+use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
 use tracing::{Instrument, info_span};
 
@@ -44,6 +48,13 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
     let request_authenticator = runtime.request_authenticator;
+    let storage_backend = runtime.storage_backend;
+    let storage_service = runtime.storage_service;
+    let message_attachment_repo = runtime.message_attachment_repo;
+    let message_repo = runtime.message_repo;
+    let conversation_repo = runtime.conversation_repo;
+    let conversation_member_repo = runtime.conversation_member_repo;
+    let server_member_repo = runtime.server_member_repo;
 
     HttpServer::new(move || {
         let schema = schema.clone();
@@ -78,7 +89,16 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
                     .guard(guard::Post())
                     .to(graphql_handler),
             )
-            .service(web::resource("/api/ws").route(web::get().to(graphql_ws_handler)));
+            .service(web::resource("/api/ws").route(web::get().to(graphql_ws_handler)))
+            .service(web::resource("/api/files/upload").route(web::post().to(handle_file_upload)))
+            .service(web::resource("/api/files/avatar").route(web::post().to(handle_avatar_upload)))
+            .service(
+                web::resource("/api/attachments/{attachment_id}/download")
+                    .route(web::get().to(handle_attachment_download)),
+            )
+            .service(
+                web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
+            );
 
         if enable_graphiql {
             app = app.service(index_graphiql);
@@ -86,6 +106,13 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
 
         app.app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
+            .app_data(web::Data::new(Arc::clone(&storage_backend)))
+            .app_data(web::Data::new(Arc::clone(&storage_service)))
+            .app_data(web::Data::new(Arc::clone(&message_attachment_repo)))
+            .app_data(web::Data::new(Arc::clone(&message_repo)))
+            .app_data(web::Data::new(Arc::clone(&conversation_repo)))
+            .app_data(web::Data::new(Arc::clone(&conversation_member_repo)))
+            .app_data(web::Data::new(Arc::clone(&server_member_repo)))
             .app_data(web::Data::new(handler_cfg))
     })
     .bind(bind_host)?
@@ -97,7 +124,7 @@ async fn graphql_handler(
     schema: web::Data<AppSchema>,
     handler_cfg: web::Data<HandlerConfig>,
     req: HttpRequest,
-    gql: GraphQLRequest,
+    gql: GraphQLBatchRequest,
 ) -> GraphQLResponse {
     let request_id = req
         .headers()
@@ -106,18 +133,18 @@ async fn graphql_handler(
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::now_v7().to_string());
 
-    let op_name = gql.0.operation_name.clone().unwrap_or_default();
-    let has_mutation = graphql_has_mutation(&gql.0);
+    let batch = gql.into_inner();
+    let has_mutation = batch_has_mutation(&batch);
     let span = info_span!(
         "graphql.request",
         request_id = %request_id,
-        operation_name = %op_name,
-        has_operation_name = %(!op_name.is_empty()),
+        batch_size = %batch.iter().count(),
         has_mutation = %has_mutation
     );
 
     async move {
-        if let Err(resp) = enforce_csrf(&req, &gql.0) {
+        // CSRF is enforced once at the HTTP level for the entire batch.
+        if let Err(resp) = enforce_csrf_for_batch(&req, &batch) {
             return resp;
         }
         // `Schema::data` is only available via GraphQL execution context, so we inject auth here via
@@ -139,68 +166,16 @@ async fn graphql_handler(
         let actor_ctx = AuthActorCtx::new(actor, session_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
-        let request = gql.into_inner().data(actor_ctx);
-        let (request, auth_intent) = insert_auth_intent_ctx(request);
-        let resp = schema.execute(request).await;
+        // Inject auth context and auth intent into each request in the batch.
+        // Auth intent is shared across the batch so cookies are set once.
+        let auth_intent = Arc::new(AuthIntentCtx::default());
+        let batch = batch.data(actor_ctx).data(Arc::clone(&auth_intent));
 
-        if !resp.errors.is_empty() {
-            for e in &resp.errors {
-                // Server-side visibility: log full GraphQL error details.
-                // Client response remains unchanged.
-                let code = e
-                    .extensions
-                    .as_ref()
-                    .and_then(|ext| ext.get("code"))
-                    .and_then(|v| match v {
-                        async_graphql::Value::String(s) => Some(s.as_str()),
-                        async_graphql::Value::Enum(n) => Some(n.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("UNKNOWN");
+        let resp = schema.execute_batch(batch).await;
 
-                if code == "INTERNAL" || code == "UNKNOWN" {
-                    if let Some(src) = &e.source {
-                        tracing::error!(
-                            request_id = %request_id,
-                            actor_user_id = ?actor_user_id,
-                            code = %code,
-                            source = ?src,
-                            "graphql internal error source"
-                        );
-                    }
-                    tracing::error!(
-                        request_id = %request_id,
-                        actor_user_id = ?actor_user_id,
-                        code = %code,
-                        message = %e.message,
-                        path = ?e.path,
-                        locations = ?e.locations,
-                        extensions = ?e.extensions,
-                        "graphql error"
-                    );
-                } else {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        actor_user_id = ?actor_user_id,
-                        code = %code,
-                        message = %e.message,
-                        path = ?e.path,
-                        locations = ?e.locations,
-                        extensions = ?e.extensions,
-                        "graphql error"
-                    );
-                }
-            }
-        }
+        log_batch_errors(&resp, &request_id, actor_user_id.as_deref());
 
-        let mut resp = resp;
-        // Add request_id for correlation (safe to expose).
-        for e in &mut resp.errors {
-            let ext = e.extensions.get_or_insert_with(Default::default);
-            if ext.get("request_id").is_none() {
-                ext.set("request_id", request_id.clone());
-            }
-        }
+        let resp = annotate_batch_request_id(resp, &request_id);
 
         let gql_resp = GraphQLResponse::from(resp);
         apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req, handler_cfg.session_ttl_days)
@@ -254,7 +229,7 @@ async fn graphql_ws_handler(
         .start(&req, payload)
 }
 
-fn graphql_has_mutation(req: &async_graphql::Request) -> bool {
+fn request_has_mutation(req: &async_graphql::Request) -> bool {
     let doc = match async_graphql_parser::parse_query(req.query.as_str()) {
         Ok(d) => d,
         Err(_) => return false,
@@ -266,4 +241,95 @@ fn graphql_has_mutation(req: &async_graphql::Request) -> bool {
             async_graphql_parser::types::OperationType::Mutation
         )
     })
+}
+
+fn batch_has_mutation(batch: &async_graphql::BatchRequest) -> bool {
+    batch.iter().any(request_has_mutation)
+}
+
+fn log_batch_errors(
+    resp: &async_graphql::BatchResponse,
+    request_id: &str,
+    actor_user_id: Option<&str>,
+) {
+    let responses: Vec<&async_graphql::Response> = match resp {
+        async_graphql::BatchResponse::Single(r) => vec![r],
+        async_graphql::BatchResponse::Batch(rs) => rs.iter().collect(),
+    };
+
+    for resp in responses {
+        for e in &resp.errors {
+            let code = e
+                .extensions
+                .as_ref()
+                .and_then(|ext| ext.get("code"))
+                .and_then(|v| match v {
+                    async_graphql::Value::String(s) => Some(s.as_str()),
+                    async_graphql::Value::Enum(n) => Some(n.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("UNKNOWN");
+
+            if code == "INTERNAL" || code == "UNKNOWN" {
+                if let Some(src) = &e.source {
+                    tracing::error!(
+                        request_id = %request_id,
+                        actor_user_id = ?actor_user_id,
+                        code = %code,
+                        source = ?src,
+                        "graphql internal error source"
+                    );
+                }
+                tracing::error!(
+                    request_id = %request_id,
+                    actor_user_id = ?actor_user_id,
+                    code = %code,
+                    message = %e.message,
+                    path = ?e.path,
+                    locations = ?e.locations,
+                    extensions = ?e.extensions,
+                    "graphql error"
+                );
+            } else {
+                tracing::warn!(
+                    request_id = %request_id,
+                    actor_user_id = ?actor_user_id,
+                    code = %code,
+                    message = %e.message,
+                    path = ?e.path,
+                    locations = ?e.locations,
+                    extensions = ?e.extensions,
+                    "graphql error"
+                );
+            }
+        }
+    }
+}
+
+fn annotate_batch_request_id(
+    resp: async_graphql::BatchResponse,
+    request_id: &str,
+) -> async_graphql::BatchResponse {
+    match resp {
+        async_graphql::BatchResponse::Single(mut r) => {
+            for e in &mut r.errors {
+                let ext = e.extensions.get_or_insert_with(Default::default);
+                if ext.get("request_id").is_none() {
+                    ext.set("request_id", request_id.to_owned());
+                }
+            }
+            async_graphql::BatchResponse::Single(r)
+        }
+        async_graphql::BatchResponse::Batch(mut rs) => {
+            for r in &mut rs {
+                for e in &mut r.errors {
+                    let ext = e.extensions.get_or_insert_with(Default::default);
+                    if ext.get("request_id").is_none() {
+                        ext.set("request_id", request_id.to_owned());
+                    }
+                }
+            }
+            async_graphql::BatchResponse::Batch(rs)
+        }
+    }
 }

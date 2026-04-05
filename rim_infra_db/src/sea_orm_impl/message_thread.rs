@@ -40,6 +40,21 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn get_by_ids(&self, ids: &[MessageThreadId]) -> RepoResult<Vec<MessageThread>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let uuids: Vec<Uuid> = ids.iter().copied().map(Into::into).collect();
+        let models = message_thread::Entity::find()
+            .filter(message_thread::Column::Id.is_in(uuids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models.into_iter().map(Into::into).collect())
+    }
+
     async fn get_by_root_message(
         &self,
         message_id: MessageId,

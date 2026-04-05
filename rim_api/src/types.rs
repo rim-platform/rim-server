@@ -1,10 +1,6 @@
-use std::collections::HashMap;
+use async_graphql::{ComplexObject, Context, Enum, InputObject, Object, Result, SimpleObject};
 
-use async_graphql::{Enum, InputObject, SimpleObject};
-
-use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
-use rim_services::message_reaction::dto::ReactionGroupDto;
 
 // ── GraphQL output enums (stable wire contract) ──────────────────────────
 
@@ -121,6 +117,7 @@ impl From<rim_core::conversation::model::ConversationType> for ConversationTypeE
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum AttachmentStatusEnum {
     PendingUpload,
+    Uploaded,
     Ready,
 }
 
@@ -129,6 +126,7 @@ impl From<rim_services::message_attachment::dto::AttachmentStatus> for Attachmen
         use rim_services::message_attachment::dto::AttachmentStatus as D;
         match value {
             D::PendingUpload => Self::PendingUpload,
+            D::Uploaded => Self::Uploaded,
             D::Ready => Self::Ready,
         }
     }
@@ -159,6 +157,7 @@ pub struct User {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
+    pub bio: Option<String>,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -169,6 +168,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             display_name: value.display_name,
             avatar_url: value.avatar_url,
             status_text: value.status_text,
+            bio: value.bio,
         }
     }
 }
@@ -193,6 +193,10 @@ pub struct ServerMember {
     pub server_id: async_graphql::ID,
     pub user_id: async_graphql::ID,
     pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub status_text: Option<String>,
+    pub bio: Option<String>,
     pub member_role: String,
     pub joined_at: chrono::DateTime<chrono::Utc>,
 }
@@ -203,6 +207,10 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             server_id: async_graphql::ID(value.server_id.to_string()),
             user_id: async_graphql::ID(value.user_id.to_string()),
             username: value.username,
+            display_name: value.display_name,
+            avatar_url: value.avatar_url,
+            status_text: value.status_text,
+            bio: value.bio,
             member_role: value.member_role,
             joined_at: value.joined_at,
         }
@@ -566,12 +574,30 @@ impl From<rim_services::setting::dto::SettingDto> for Setting {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct Conversation {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
     pub conversation_type: ConversationTypeEnum,
     pub title: Option<String>,
+    pub topic: Option<String>,
     pub member_ids: Vec<async_graphql::ID>,
+}
+
+#[ComplexObject]
+impl Conversation {
+    async fn is_muted(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<bool> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+        let conversation_id = crate::ids::parse_uuid_id::<rim_core::conversation::model::ConversationId>(&self.id)?;
+
+        svc.is_muted(rim_services::notification_preference::command::IsMutedQuery {
+            actor: rim_services::Actor::new(actor),
+            conversation_id,
+        })
+        .await
+        .map_err(crate::errors::map_service_error)
+    }
 }
 
 impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
@@ -581,6 +607,7 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
             server_id: async_graphql::ID(value.server_id.to_string()),
             conversation_type: value.conversation_type.into(),
             title: value.title,
+            topic: value.topic,
             member_ids: value
                 .member_ids
                 .into_iter()
@@ -591,6 +618,20 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+pub struct SearchResultMessage {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub conversation_id: async_graphql::ID,
+    pub conversation_title: Option<String>,
+    pub conversation_type: ConversationTypeEnum,
+    pub thread_id: Option<async_graphql::ID>,
+    pub root_message_id: Option<async_graphql::ID>,
+    pub author_id: async_graphql::ID,
+    pub text: Option<String>,
+    pub sent_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Message {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
@@ -601,8 +642,8 @@ pub struct Message {
     pub text: Option<String>,
     pub has_attachments: bool,
     pub attachments: Vec<Attachment>,
-    pub reactions: Vec<ReactionGroup>,
     pub parent_message_id: Option<async_graphql::ID>,
+    pub forwarded_from_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
 }
@@ -641,16 +682,174 @@ impl From<rim_services::message::dto::MessageDto> for Message {
                 .root_thread_id
                 .map(|id| async_graphql::ID(id.to_string())),
             author_id: async_graphql::ID(value.author_id.to_string()),
-            text: value.text,
+            text: if value.is_deleted { None } else { value.text },
             has_attachments: value.has_attachments,
             attachments: value.attachments.into_iter().map(Into::into).collect(),
-            reactions: Vec::new(),
             parent_message_id: value
                 .parent_message_id
+                .map(|id| async_graphql::ID(id.to_string())),
+            forwarded_from_message_id: value
+                .forwarded_from_message_id
                 .map(|id| async_graphql::ID(id.to_string())),
             is_deleted: value.is_deleted,
             sent_at: value.sent_at,
         }
+    }
+}
+
+#[Object]
+impl Message {
+    async fn id(&self) -> &async_graphql::ID {
+        &self.id
+    }
+
+    async fn server_id(&self) -> &async_graphql::ID {
+        &self.server_id
+    }
+
+    async fn conversation_id(&self) -> &async_graphql::ID {
+        &self.conversation_id
+    }
+
+    async fn thread_id(&self) -> &Option<async_graphql::ID> {
+        &self.thread_id
+    }
+
+    async fn root_thread_id(&self) -> &Option<async_graphql::ID> {
+        &self.root_thread_id
+    }
+
+    async fn author_id(&self) -> &async_graphql::ID {
+        &self.author_id
+    }
+
+    async fn text(&self) -> &Option<String> {
+        &self.text
+    }
+
+    async fn has_attachments(&self) -> bool {
+        self.has_attachments
+    }
+
+    async fn attachments(&self) -> &Vec<Attachment> {
+        &self.attachments
+    }
+
+    async fn parent_message_id(&self) -> &Option<async_graphql::ID> {
+        &self.parent_message_id
+    }
+
+    async fn forwarded_from_message_id(&self) -> &Option<async_graphql::ID> {
+        &self.forwarded_from_message_id
+    }
+
+    #[graphql(complexity = 5)]
+    async fn forwarded_from(&self, ctx: &Context<'_>) -> Result<Option<Message>> {
+        let Some(ref fwd_id) = self.forwarded_from_message_id else {
+            return Ok(None);
+        };
+        let msg_svc = ctx.data::<std::sync::Arc<dyn rim_services::message::service::MessageService>>()?;
+        let message_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(fwd_id)?;
+        let messages = msg_svc
+            .get_messages_by_ids(&[message_id])
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        Ok(messages.into_iter().next().map(Into::into))
+    }
+
+    async fn is_deleted(&self) -> bool {
+        self.is_deleted
+    }
+
+    async fn sent_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.sent_at
+    }
+
+    #[graphql(complexity = 5)]
+    async fn author(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
+        let user_id = crate::ids::parse_uuid_id::<rim_core::user::model::UserId>(&self.author_id)?;
+        let user = loader
+            .load_one(user_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(user.map(Into::into))
+    }
+
+    #[graphql(complexity = "child_complexity * 10")]
+    async fn reactions(&self, ctx: &Context<'_>) -> Result<Vec<ReactionGroup>> {
+        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::ReactionLoader>>();
+        let actor_user_id = crate::auth_context::require_actor(ctx)?;
+        let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
+        let key = crate::loaders::ReactionLoaderKey {
+            message_id: msg_id,
+            actor_user_id,
+        };
+        let groups = loader
+            .load_one(key)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?
+            .unwrap_or_default();
+        Ok(groups.into_iter().map(Into::into).collect())
+    }
+
+    #[graphql(complexity = 5)]
+    async fn is_pinned(&self, ctx: &Context<'_>) -> Result<bool> {
+        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::PinLoader>>();
+        let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
+        let pinned = loader
+            .load_one(msg_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?
+            .unwrap_or(false);
+        Ok(pinned)
+    }
+
+    #[graphql(complexity = 5)]
+    async fn mentioned_user_ids(&self, ctx: &Context<'_>) -> Result<Vec<async_graphql::ID>> {
+        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>();
+        let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
+        let user_ids = loader
+            .load_one(msg_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?
+            .unwrap_or_default();
+        Ok(user_ids
+            .into_iter()
+            .map(|id| async_graphql::ID(id.to_string()))
+            .collect())
+    }
+
+    #[graphql(complexity = 5)]
+    async fn link_previews(&self, ctx: &Context<'_>) -> Result<Vec<LinkPreview>> {
+        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::LinkPreviewLoader>>();
+        let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
+        let previews = loader
+            .load_one(msg_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?
+            .unwrap_or_default();
+        Ok(previews)
+    }
+
+    #[graphql(complexity = "child_complexity * 10")]
+    async fn mentions(&self, ctx: &Context<'_>) -> Result<Vec<User>> {
+        let mention_loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>();
+        let user_loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
+        let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
+        let user_ids = mention_loader
+            .load_one(msg_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?
+            .unwrap_or_default();
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let users = user_loader
+            .load_many(user_ids)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(users.into_values().map(Into::into).collect())
     }
 }
 
@@ -885,22 +1084,10 @@ impl MessagePage {
             rim_services::message::dto::MessageDto,
             rim_services::message::dto::MessagePageCursor,
         >,
-        reaction_map: &HashMap<MessageId, Vec<ReactionGroupDto>>,
     ) -> Self {
         let has_next = page.next.is_some();
         let has_prev = page.prev.is_some();
-        let items = page
-            .items
-            .into_iter()
-            .map(|dto| {
-                let msg_id = dto.id;
-                let mut msg: Message = dto.into();
-                if let Some(groups) = reaction_map.get(&msg_id) {
-                    msg.reactions = groups.iter().cloned().map(Into::into).collect();
-                }
-                msg
-            })
-            .collect();
+        let items = page.items.into_iter().map(Into::into).collect();
         Self {
             items,
             next: page.next.map(|c| MessageCursorOutput {
@@ -993,4 +1180,199 @@ impl From<rim_services::message_reaction::dto::ReactionGroupDto> for ReactionGro
 pub struct ThreadCursorOutput {
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub thread_id: async_graphql::ID,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct UnreadCount {
+    pub conversation_id: async_graphql::ID,
+    pub count: i64,
+}
+
+impl From<rim_services::read_state::dto::UnreadCountDto> for UnreadCount {
+    fn from(value: rim_services::read_state::dto::UnreadCountDto) -> Self {
+        Self {
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            count: value.count,
+        }
+    }
+}
+
+// ── Presence ──────────────────────────────────────────────────────────────
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum PresenceStatus {
+    Online,
+    Away,
+    Offline,
+}
+
+impl From<PresenceStatus> for rim_services::presence::PresenceStatus {
+    fn from(value: PresenceStatus) -> Self {
+        match value {
+            PresenceStatus::Online => Self::Online,
+            PresenceStatus::Away => Self::Away,
+            PresenceStatus::Offline => Self::Offline,
+        }
+    }
+}
+
+impl From<rim_services::presence::PresenceStatus> for PresenceStatus {
+    fn from(value: rim_services::presence::PresenceStatus) -> Self {
+        match value {
+            rim_services::presence::PresenceStatus::Online => Self::Online,
+            rim_services::presence::PresenceStatus::Away => Self::Away,
+            rim_services::presence::PresenceStatus::Offline => Self::Offline,
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+pub struct UserPresenceGql {
+    pub user_id: async_graphql::ID,
+    pub status: PresenceStatus,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::presence::UserPresence> for UserPresenceGql {
+    fn from(value: rim_services::presence::UserPresence) -> Self {
+        Self {
+            user_id: async_graphql::ID(value.user_id.to_string()),
+            status: value.status.into(),
+            last_seen_at: value.last_seen_at,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MutedConversation {
+    pub conversation_id: async_graphql::ID,
+    pub muted_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<rim_services::notification_preference::dto::MutedConversationDto> for MutedConversation {
+    fn from(value: rim_services::notification_preference::dto::MutedConversationDto) -> Self {
+        Self {
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            muted_until: value.muted_until,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Invite {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub created_by_user_id: async_graphql::ID,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub max_uses: i32,
+    pub use_count: i32,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<rim_services::auth::dto::InviteDto> for Invite {
+    fn from(value: rim_services::auth::dto::InviteDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            created_by_user_id: async_graphql::ID(value.created_by_user_id.to_string()),
+            expires_at: value.expires_at,
+            max_uses: value.max_uses,
+            use_count: value.use_count,
+            revoked_at: value.revoked_at,
+        }
+    }
+}
+
+// ── Link Preview ──────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct LinkPreview {
+    pub id: async_graphql::ID,
+    pub message_id: async_graphql::ID,
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    pub site_name: Option<String>,
+    pub fetched_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::link_preview::dto::LinkPreviewDto> for LinkPreview {
+    fn from(value: rim_services::link_preview::dto::LinkPreviewDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            message_id: async_graphql::ID(value.message_id.to_string()),
+            url: value.url,
+            title: value.title,
+            description: value.description,
+            image_url: value.image_url,
+            site_name: value.site_name,
+            fetched_at: value.fetched_at,
+        }
+    }
+}
+
+// ── Custom Emoji ──────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CustomEmoji {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub name: String,
+    pub image_url: String,
+    pub uploaded_by: async_graphql::ID,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::custom_emoji::dto::CustomEmojiDto> for CustomEmoji {
+    fn from(value: rim_services::custom_emoji::dto::CustomEmojiDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            name: value.name,
+            image_url: value.image_url,
+            uploaded_by: async_graphql::ID(value.uploaded_by.to_string()),
+            created_at: value.created_at,
+        }
+    }
+}
+
+// ── Macro ────────────────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MacroStep {
+    pub command_id: String,
+    pub args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MacroDef {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub user_id: async_graphql::ID,
+    pub name: String,
+    pub description: Option<String>,
+    pub steps: Vec<MacroStep>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::macro_def::dto::MacroDto> for MacroDef {
+    fn from(value: rim_services::macro_def::dto::MacroDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            user_id: async_graphql::ID(value.user_id.to_string()),
+            name: value.name,
+            description: value.description,
+            steps: value
+                .steps
+                .into_iter()
+                .map(|s| MacroStep {
+                    command_id: s.command_id,
+                    args: s.args.map(async_graphql::Json),
+                })
+                .collect(),
+            created_at: value.created_at,
+        }
+    }
 }

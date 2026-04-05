@@ -88,7 +88,7 @@ pub struct ListThreadMessagesQuery {
 pub struct SearchMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
-    pub conversation_id: ConversationId,
+    pub conversation_id: Option<ConversationId>,
     pub query: String,
     pub limit: u32,
     pub include_deleted: bool,
@@ -103,6 +103,16 @@ pub struct EditMessageCmd {
     pub message_id: MessageId,
 
     pub text: String,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ForwardMessageCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub source_conversation_id: ConversationId,
+    pub target_conversation_id: ConversationId,
+    pub message_id: MessageId,
 }
 
 #[derive(Debug, Clone)]

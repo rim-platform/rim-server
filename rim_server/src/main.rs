@@ -3,6 +3,7 @@ use rim_logging::init_tracing_json;
 
 mod app;
 pub(crate) mod config;
+mod file_handlers;
 mod graphql_support;
 mod server;
 

@@ -40,6 +40,7 @@ mod domain_helpers {
             conversation_id: ConversationId::new(),
             thread_id: None,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             sent_at: chrono::Utc::now(),
             sent_by: UserId::new(),
             text: Some("hello".to_string()),
@@ -65,6 +66,7 @@ mod domain_helpers {
             sent_by: UserId::new(),
             thread_id: None,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             attachments: vec![],
         };
         let reply = NewMessage {
