@@ -27,6 +27,7 @@ mod tests {
     };
     use rim_services::message_attachment::dto::AttachmentStatus;
     use rim_services::message_attachment::service::MessageAttachmentService;
+    use rim_services::storage::service::MockStorageService;
     use rim_services::{Actor, ServiceError};
 
     use crate::message_attachment::DefaultMessageAttachmentService;
@@ -66,6 +67,7 @@ mod tests {
         #[async_trait]
         impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
+            async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
             async fn create_conversation_with_members(
                 &self,
@@ -101,11 +103,21 @@ mod tests {
                 server_id: ServerId,
                 title: &str,
             ) -> RepoResult<bool>;
+            async fn list_accessible_conversation_ids(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
             async fn touch_last_activity_at(
                 &self,
                 conversation_id: ConversationId,
                 at: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<()>;
+            async fn update_topic(
+                &self,
+                conversation_id: ConversationId,
+                topic: Option<String>,
+            ) -> RepoResult<Conversation>;
         }
     }
 
@@ -162,6 +174,12 @@ mod tests {
                 limit: u32,
                 include_deleted: bool,
             ) -> RepoResult<Vec<Message>>;
+            async fn search_messages_across_conversations(
+                &self,
+                conversation_ids: &[ConversationId],
+                query: &str,
+                limit: u32,
+            ) -> RepoResult<Vec<Message>>;
             async fn update_message_text(
                 &self,
                 message_id: MessageId,
@@ -206,12 +224,17 @@ mod tests {
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
+    fn noop_storage() -> Arc<dyn rim_services::storage::service::StorageService> {
+        Arc::new(MockStorageService::new())
+    }
+
     fn conversation(server_id: ServerId, id: ConversationId) -> Conversation {
         Conversation {
             id,
             server_id,
             conversation_type: ConversationType::Group,
             title: None,
+            topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -223,6 +246,7 @@ mod tests {
             conversation_id,
             thread_id: None,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             sent_by: UserId::new(),
             text: Some("hello".to_string()),
             has_attachments: true,
@@ -265,7 +289,7 @@ mod tests {
             message_repo: Arc::new(message_repo),
             message_attachment_repo: Arc::new(message_attachment_repo),
             server_member_repo: Arc::new(server_member_repo),
-        });
+        }, noop_storage());
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -303,7 +327,7 @@ mod tests {
             message_repo: Arc::new(message_repo),
             message_attachment_repo: Arc::new(message_attachment_repo),
             server_member_repo: Arc::new(server_member_repo),
-        });
+        }, noop_storage());
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -356,7 +380,7 @@ mod tests {
             message_repo: Arc::new(message_repo),
             message_attachment_repo: Arc::new(message_attachment_repo),
             server_member_repo: Arc::new(server_member_repo),
-        });
+        }, noop_storage());
 
         let dto = svc
             .get_attachment(GetAttachmentQuery {
@@ -412,7 +436,7 @@ mod tests {
             message_repo: Arc::new(message_repo),
             message_attachment_repo: Arc::new(message_attachment_repo),
             server_member_repo: Arc::new(server_member_repo),
-        });
+        }, noop_storage());
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -423,6 +447,74 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn create_attachment_rejects_traversal_filename() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+        let mut msg = message(message_id, conversation_id);
+        msg.sent_by = actor_id;
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(conversation(server_id, conversation_id))));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(move |_cid, uid| Ok(uid == actor_id));
+
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(msg.clone())));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+            server_member_repo: Arc::new(server_member_repo),
+        }, noop_storage());
+
+        // Filenames containing ".." are rejected outright (not stripped).
+        let err = svc
+            .create_attachment(CreateAttachmentCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id,
+                message_id: Some(message_id),
+                filename: "..".to_string(),
+                content_type: "text/plain".to_string(),
+                size_bytes: 10,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+
+        // Null bytes in filename should be stripped
+        let err = svc
+            .create_attachment(CreateAttachmentCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id,
+                message_id: Some(message_id),
+                filename: "\0\0".to_string(),
+                content_type: "text/plain".to_string(),
+                size_bytes: 10,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 
     #[tokio::test]
@@ -440,7 +532,7 @@ mod tests {
                 repo.expect_is_member().returning(|_, _| Ok(true));
                 repo
             }),
-        });
+        }, noop_storage());
 
         let err = svc
             .create_attachment(CreateAttachmentCmd {
@@ -460,11 +552,12 @@ mod tests {
 
     #[tokio::test]
     async fn create_finalize_and_delete_attachment_manage_message_state() {
+        use std::sync::Mutex;
+
         let server_id = ServerId::new();
         let actor_id = UserId::new();
         let conversation_id = ConversationId::new();
         let message_id = MessageId::new();
-        let attachment_id = MessageAttachmentId::new();
 
         let mut msg = message(message_id, conversation_id);
         msg.sent_by = actor_id;
@@ -511,66 +604,89 @@ mod tests {
             .withf(move |id, has| *id == message_id && !*has)
             .return_once(move |_, _| Ok(msg_for_delete.clone()));
 
-        let pending_att = MessageAttachment {
-            id: attachment_id,
-            message_id,
-            storage_url: "pending://upload".to_string(),
-            file_name: "f.txt".to_string(),
-            file_size: 10,
-            mime_type: "text/plain".to_string(),
-            metadata: Some(serde_json::json!({ "status": "pending_upload" })),
-        };
-        let ready_att = MessageAttachment {
-            metadata: Some(serde_json::json!({ "status": "ready" })),
-            storage_url: format!("attachment://{attachment_id}"),
-            ..pending_att.clone()
-        };
-
-        let add_result = pending_att.clone();
-        let pending_for_get = pending_att.clone();
-        let pending_for_finalize = pending_att.clone();
-        let ready_for_update = ready_att.clone();
+        // Capture the service-generated attachment ID from add_attachment.
+        let captured_id: Arc<Mutex<Option<MessageAttachmentId>>> = Arc::new(Mutex::new(None));
+        let captured_id_for_add = Arc::clone(&captured_id);
 
         let mut message_attachment_repo = MockMessageAttachmentRepository::new();
         message_attachment_repo.expect_add_attachment().return_once(
             move |att: NewMessageAttachment| {
                 assert_eq!(att.message_id, message_id);
-                assert!(att.storage_url.starts_with("pending://upload-"));
+                assert!(att.storage_url.starts_with("pending://"));
                 assert_eq!(att.file_name, "f.txt");
                 assert_eq!(att.file_size, 10);
                 assert_eq!(att.mime_type, "text/plain");
                 assert_eq!(
-                    att.metadata.and_then(|v| v.get("status").cloned()),
+                    att.metadata.as_ref().and_then(|v| v.get("status").cloned()),
                     Some(serde_json::json!("pending_upload"))
                 );
-                Ok(add_result)
+                let service_id = att.id;
+                *captured_id_for_add.lock().unwrap() = Some(service_id);
+                Ok(MessageAttachment {
+                    id: service_id,
+                    message_id: att.message_id,
+                    storage_url: att.storage_url,
+                    file_name: att.file_name,
+                    file_size: att.file_size,
+                    mime_type: att.mime_type,
+                    metadata: att.metadata,
+                })
             },
         );
+
+        let captured_id_for_get = Arc::clone(&captured_id);
+        let get_call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         message_attachment_repo
             .expect_get_by_id()
             .times(3)
-            .returning(move |_id| {
-                if _id == attachment_id {
-                    Ok(Some(pending_for_get.clone()))
+            .returning(move |_req_id| {
+                let att_id = captured_id_for_get.lock().unwrap().unwrap();
+                let call_num = get_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // First call (from get_attachment): return pending status
+                // Second/third calls (from finalize/delete): return uploaded status
+                let (status, storage_url) = if call_num == 0 {
+                    ("pending_upload", format!("pending://upload-{att_id}"))
                 } else {
-                    Ok(Some(pending_for_finalize.clone()))
-                }
+                    ("uploaded", format!("uploads/{att_id}/f.txt"))
+                };
+                Ok(Some(MessageAttachment {
+                    id: att_id,
+                    message_id,
+                    storage_url,
+                    file_name: "f.txt".to_string(),
+                    file_size: 10,
+                    mime_type: "text/plain".to_string(),
+                    metadata: Some(serde_json::json!({ "status": status })),
+                }))
             });
+
+        let captured_id_for_update = Arc::clone(&captured_id);
         message_attachment_repo
             .expect_update_attachment()
             .return_once(move |id, storage_url, metadata| {
-                assert_eq!(id, attachment_id);
-                assert_eq!(storage_url, format!("attachment://{attachment_id}"));
+                let att_id = captured_id_for_update.lock().unwrap().unwrap();
+                assert_eq!(id, att_id);
                 assert_eq!(
                     metadata.and_then(|v| v.get("status").cloned()),
                     Some(serde_json::json!("ready"))
                 );
-                Ok(ready_for_update)
+                Ok(MessageAttachment {
+                    id: att_id,
+                    message_id,
+                    storage_url,
+                    file_name: "f.txt".to_string(),
+                    file_size: 10,
+                    mime_type: "text/plain".to_string(),
+                    metadata: Some(serde_json::json!({ "status": "ready" })),
+                })
             });
+
+        let captured_id_for_delete = Arc::clone(&captured_id);
         message_attachment_repo
             .expect_delete_attachment()
             .return_once(move |id| {
-                assert_eq!(id, attachment_id);
+                let att_id = captured_id_for_delete.lock().unwrap().unwrap();
+                assert_eq!(id, att_id);
                 Ok(())
             });
         message_attachment_repo
@@ -583,13 +699,18 @@ mod tests {
             .times(4)
             .returning(|_sid, _uid| Ok(true));
 
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_delete_file()
+            .returning(|_key| Box::pin(async { Ok(()) }));
+
         let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
             message_repo: Arc::new(message_repo),
             message_attachment_repo: Arc::new(message_attachment_repo),
             server_member_repo: Arc::new(server_member_repo),
-        });
+        }, Arc::new(storage));
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {
@@ -603,8 +724,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(ticket.attachment_id, attachment_id);
-        assert!(ticket.upload_token.starts_with("upload-"));
+
+        let attachment_id = ticket.attachment_id;
+        assert!(!ticket.upload_token.is_empty());
 
         let pending = svc
             .get_attachment(GetAttachmentQuery {

@@ -20,6 +20,10 @@ mod tests {
             created_at: now,
             updated_at: now,
             last_login_at: Some(now),
+            display_name: None,
+            avatar_url: None,
+            status_text: None,
+            bio: None,
         }
     }
 
@@ -66,7 +70,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_profile_is_validation_error_in_v0() {
+    async fn update_profile_sets_fields() {
+        let id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_update_profile()
+            .returning(move |uid, dn, _av, st, bio| {
+                assert_eq!(uid, id);
+                let mut u = user(id);
+                if let Some(v) = dn {
+                    u.display_name = v;
+                }
+                if let Some(v) = st {
+                    u.status_text = v;
+                }
+                if let Some(v) = bio {
+                    u.bio = v;
+                }
+                Ok(u)
+            });
+
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        });
+
+        let dto = svc
+            .update_my_profile(UpdateMyProfileCmd {
+                actor: Actor::new(id),
+                display_name: Some("Alice".to_string()),
+                status_text: Some("busy".to_string()),
+                avatar_url: None,
+                bio: Some("hello".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(dto.display_name, Some("Alice".to_string()));
+    }
+
+    #[tokio::test]
+    async fn update_profile_rejects_long_display_name() {
+        let user_repo = MockUserRepository::new();
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        });
+
+        let err = svc
+            .update_my_profile(UpdateMyProfileCmd {
+                actor: Actor::new(UserId::new()),
+                display_name: Some("x".repeat(65)),
+                status_text: None,
+                avatar_url: None,
+                bio: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn update_profile_rejects_external_avatar_url() {
         let user_repo = MockUserRepository::new();
         let svc = DefaultUserService::new(UserRepos {
             user_repo: Arc::new(user_repo),
@@ -77,10 +139,43 @@ mod tests {
                 actor: Actor::new(UserId::new()),
                 display_name: None,
                 status_text: None,
-                avatar_url: None,
+                avatar_url: Some("https://evil.com/avatar.png".to_string()),
+                bio: None,
             })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn update_profile_strips_control_chars() {
+        let id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_update_profile()
+            .returning(move |_uid, dn, _av, _st, _bio| {
+                // Control chars should be stripped
+                let mut u = user(id);
+                if let Some(v) = dn {
+                    u.display_name = v;
+                }
+                Ok(u)
+            });
+
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        });
+
+        let dto = svc
+            .update_my_profile(UpdateMyProfileCmd {
+                actor: Actor::new(id),
+                display_name: Some("Al\x00ice\x07".to_string()),
+                status_text: None,
+                avatar_url: None,
+                bio: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(dto.display_name, Some("Alice".to_string()));
     }
 }

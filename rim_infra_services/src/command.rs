@@ -25,8 +25,10 @@ use crate::command::user_commands::PersistedUserCommandStep;
 
 #[derive(Clone)]
 pub struct CommandServices {
+    pub auth_service: std::sync::Arc<dyn rim_services::auth::service::AuthService>,
     pub conversation_service: std::sync::Arc<dyn ConversationService>,
     pub message_service: std::sync::Arc<dyn MessageService>,
+    pub read_state_service: std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>,
 }
 
 #[derive(Clone)]
@@ -230,6 +232,7 @@ impl DefaultCommandService {
         actor: Actor,
         user_command: UserCommandDto,
         context: Option<CommandContextDto>,
+        confirmed_dangerous: bool,
         depth: usize,
     ) -> ServiceResult<CommandResultDto> {
         if depth >= Self::MAX_RECURSION_DEPTH {
@@ -246,7 +249,7 @@ impl DefaultCommandService {
                     &step.command_id,
                     step.args,
                     context.clone(),
-                    true,
+                    confirmed_dangerous,
                     depth + 1,
                 )
                 .await?;
@@ -298,8 +301,14 @@ impl DefaultCommandService {
             .transpose()?
             .ok_or(ServiceError::NotFound)?;
 
-        self.execute_user_command_recursive(actor, user_command, context, depth)
-            .await
+        self.execute_user_command_recursive(
+            actor,
+            user_command,
+            context,
+            confirmed_dangerous,
+            depth,
+        )
+        .await
     }
 }
 
@@ -545,8 +554,12 @@ mod tests {
                 user_command_repo: Arc::new(repo),
             },
             CommandServices {
+                auth_service: Arc::new(rim_services::auth::service::MockAuthService::new()),
                 conversation_service: Arc::new(conversation_service),
                 message_service: Arc::new(message_service),
+                read_state_service: Arc::new(
+                    rim_services::read_state::service::MockReadStateService::new(),
+                ),
             },
         )
     }
@@ -643,6 +656,8 @@ mod tests {
                         has_attachments: false,
                         attachments: vec![],
                         parent_message_id: None,
+                        forwarded_from_message_id: None,
+                        thread_root_message_id: None,
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
                     })

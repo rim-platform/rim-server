@@ -16,6 +16,7 @@ pub mod broadcast;
 pub mod errors;
 pub mod graphql;
 pub mod ids;
+pub mod loaders;
 pub mod mutation;
 pub mod observers;
 pub mod pagination;
@@ -29,7 +30,34 @@ mod tests;
 pub fn build_schema(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
+    presence_manager: Arc<rim_infra_services::presence::PresenceManager>,
+    typing_tracker: Arc<rim_infra_services::typing::TypingTracker>,
+    observers: Arc<rim_services::events::Observers>,
 ) -> AppSchema {
+    use async_graphql::dataloader::DataLoader;
+    use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
+
+    let user_loader = DataLoader::new(
+        UserLoader::new(service_provider.user_service()),
+        tokio::spawn,
+    );
+    let reaction_loader = DataLoader::new(
+        ReactionLoader::new(service_provider.message_reaction_service()),
+        tokio::spawn,
+    );
+    let mention_loader = DataLoader::new(
+        MentionLoader::new(service_provider.mention_service()),
+        tokio::spawn,
+    );
+    let pin_loader = DataLoader::new(
+        PinLoader::new(service_provider.pin_service()),
+        tokio::spawn,
+    );
+    let link_preview_loader = DataLoader::new(
+        LinkPreviewLoader::new(service_provider.link_preview_service()),
+        tokio::spawn,
+    );
+
     Schema::build(Query, Mutation, Subscription)
         // Default per-request auth intent container.
         // Actix inserts a fresh one per request; tests that execute schema directly may rely on this.
@@ -48,14 +76,30 @@ pub fn build_schema(
         .data(service_provider.event_service())
         .data(service_provider.integration_service())
         .data(service_provider.keybind_service())
+        .data(service_provider.macro_service())
+        .data(service_provider.mention_service())
         .data(service_provider.message_service())
         .data(service_provider.message_attachment_service())
         .data(service_provider.message_reaction_service())
+        .data(service_provider.notification_preference_service())
+        .data(service_provider.password_reset_service())
+        .data(service_provider.pin_service())
+        .data(service_provider.read_state_service())
         .data(service_provider.setting_service())
         .data(service_provider.thread_service())
         .data(service_provider.user_service())
         .data(service_provider.server_service())
         .data(service_provider.server_member_service())
+        .data(service_provider.link_preview_service())
+        .data(service_provider.custom_emoji_service())
+        .data(presence_manager)
+        .data(typing_tracker)
+        .data(observers)
+        .data(user_loader)
+        .data(reaction_loader)
+        .data(mention_loader)
+        .data(pin_loader)
+        .data(link_preview_loader)
         .limit_depth(10)
         .limit_complexity(200)
         .finish()

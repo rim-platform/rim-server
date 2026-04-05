@@ -47,6 +47,7 @@ async fn add_get_and_list_attachments_for_message() {
 
     let att = repo
         .add_attachment(NewMessageAttachment {
+            id: MessageAttachmentId::new(),
             message_id: msg.id,
             storage_url: "url".to_owned(),
             file_name: "file.txt".to_owned(),
@@ -133,6 +134,7 @@ async fn get_attachments_for_messages_batch() {
 
     // Add 2 attachments to msg1
     repo.add_attachment(NewMessageAttachment {
+        id: MessageAttachmentId::new(),
         message_id: msg1.id,
         storage_url: "url1".to_owned(),
         file_name: "a.txt".to_owned(),
@@ -144,6 +146,7 @@ async fn get_attachments_for_messages_batch() {
     .unwrap();
 
     repo.add_attachment(NewMessageAttachment {
+        id: MessageAttachmentId::new(),
         message_id: msg1.id,
         storage_url: "url2".to_owned(),
         file_name: "b.txt".to_owned(),
@@ -156,6 +159,7 @@ async fn get_attachments_for_messages_batch() {
 
     // Add 1 attachment to msg2
     repo.add_attachment(NewMessageAttachment {
+        id: MessageAttachmentId::new(),
         message_id: msg2.id,
         storage_url: "url3".to_owned(),
         file_name: "c.txt".to_owned(),

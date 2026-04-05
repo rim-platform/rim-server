@@ -8,15 +8,20 @@ use rim_core::repository::pagination::SortOrder;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{MessageEventData, Observers};
 use rim_services::message::command::{
-    DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery,
-    ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
+    GetMessageReferenceQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
+    SearchMessagesQuery, SendMessageCmd,
 };
 use rim_services::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::dto::AttachmentDto;
 use rim_services::{ServiceError, ServiceResult};
 
+/// Maximum allowed length (in characters) for message text.
+const MAX_MESSAGE_TEXT_LENGTH: usize = 10_000;
+
 use crate::MessageRepos;
+use crate::mention::parse_mention_ids;
 use crate::repos::AppRepos;
 use crate::util::{
     ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
@@ -62,6 +67,57 @@ impl DefaultMessageService {
         Ok(())
     }
 
+    /// Parse mentions from message text, validate them against workspace members,
+    /// store in DB, and emit UserMentioned event.
+    async fn process_mentions(
+        &self,
+        text: Option<&str>,
+        message_id: rim_core::message::model::MessageId,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        author_id: rim_core::user::model::UserId,
+    ) {
+        let Some(text) = text else { return };
+        let mention_ids = parse_mention_ids(text);
+        if mention_ids.is_empty() {
+            return;
+        }
+
+        // Validate: each mentioned user must be a workspace member.
+        let mut valid_ids = Vec::new();
+        for uid in &mention_ids {
+            if *uid == author_id {
+                continue; // Don't mention yourself
+            }
+            match self.repos.server_member_repo.is_member(server_id, *uid).await {
+                Ok(true) => valid_ids.push(*uid),
+                _ => {}
+            }
+        }
+
+        if valid_ids.is_empty() {
+            return;
+        }
+
+        if let Err(e) = self
+            .repos
+            .message_mention_repo
+            .create_mentions(message_id, &valid_ids)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to store mentions");
+            return;
+        }
+
+        self.observers.mention.on_user_mentioned(
+            server_id,
+            conversation_id,
+            message_id,
+            valid_ids,
+            author_id,
+        );
+    }
+
     /// Collect conversation member IDs for event broadcasting.
     async fn list_member_user_ids(
         &self,
@@ -97,15 +153,7 @@ impl DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?
             .into_iter()
-            .map(|att| AttachmentDto {
-                id: att.id,
-                status: crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
-                    att.metadata.as_ref(),
-                ),
-                filename: att.file_name,
-                content_type: att.mime_type,
-                size_bytes: att.file_size.max(0) as u64,
-            })
+            .map(crate::message_attachment::DefaultMessageAttachmentService::attachment_dto)
             .collect();
 
         Ok(MessageDto {
@@ -119,6 +167,8 @@ impl DefaultMessageService {
             has_attachments: message.has_attachments,
             attachments,
             parent_message_id: message.parent_message_id,
+            forwarded_from_message_id: message.forwarded_from_message_id,
+            thread_root_message_id: None,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
         })
@@ -130,6 +180,7 @@ impl DefaultMessageService {
         server_id: rim_core::server::model::ServerId,
         root_thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
         attachments: Vec<AttachmentDto>,
+        thread_root_message_id: Option<rim_core::message::model::MessageId>,
     ) -> MessageDto {
         MessageDto {
             id: message.id,
@@ -142,6 +193,8 @@ impl DefaultMessageService {
             has_attachments: message.has_attachments,
             attachments,
             parent_message_id: message.parent_message_id,
+            forwarded_from_message_id: message.forwarded_from_message_id,
+            thread_root_message_id,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
         }
@@ -236,6 +289,33 @@ impl DefaultMessageService {
             std::collections::HashMap::new()
         };
 
+        // Batch-load threads for messages that are thread replies, so we can
+        // resolve thread_root_message_id (= thread.first_message_id).
+        let thread_ids_from_messages: Vec<rim_core::message_thread::model::MessageThreadId> =
+            messages
+                .iter()
+                .filter_map(|m| m.thread_id)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+        let thread_root_message_map: std::collections::HashMap<
+            rim_core::message_thread::model::MessageThreadId,
+            rim_core::message::model::MessageId,
+        > = if !thread_ids_from_messages.is_empty() {
+            let threads = self
+                .repos
+                .message_thread_repo
+                .get_by_ids(&thread_ids_from_messages)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+            threads
+                .into_iter()
+                .filter_map(|t| t.first_message_id.map(|mid| (t.id, mid)))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
         let mut items = Vec::with_capacity(messages.len());
         for message in messages {
             let root_thread_id = if include_root_thread_ids && message.thread_id.is_none() {
@@ -243,27 +323,22 @@ impl DefaultMessageService {
             } else {
                 None
             };
+            let thread_root_message_id = message
+                .thread_id
+                .and_then(|tid| thread_root_message_map.get(&tid).copied());
             let attachments = attachments_by_message
                 .get(&message.id)
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|att| AttachmentDto {
-                    id: att.id,
-                    status:
-                        crate::message_attachment::DefaultMessageAttachmentService::metadata_status(
-                            att.metadata.as_ref(),
-                        ),
-                    filename: att.file_name,
-                    content_type: att.mime_type,
-                    size_bytes: att.file_size.max(0) as u64,
-                })
+                .map(crate::message_attachment::DefaultMessageAttachmentService::attachment_dto)
                 .collect();
             items.push(self.to_dto_with_root_thread_id(
                 message,
                 server_id,
                 root_thread_id,
                 attachments,
+                thread_root_message_id,
             ));
         }
 
@@ -316,12 +391,17 @@ impl MessageService for DefaultMessageService {
         let text = cmd.text.as_deref().map(str::trim).map(ToString::to_string);
         let text = match text {
             Some(t) if !t.is_empty() => Some(t),
-            _ => {
-                return Err(ServiceError::Validation(
-                    "message text must be non-empty".to_string(),
-                ));
-            }
+            _ => None, // Allow empty text (e.g. attachment-only messages)
         };
+
+        if let Some(ref t) = text
+            && t.chars().count() > MAX_MESSAGE_TEXT_LENGTH
+        {
+            return Err(ServiceError::Validation(format!(
+                "message text too long (max {} characters)",
+                MAX_MESSAGE_TEXT_LENGTH
+            )));
+        }
 
         let parent_message_id = match cmd.parent_message_id {
             None => None,
@@ -347,6 +427,7 @@ impl MessageService for DefaultMessageService {
             sent_by: cmd.actor.user_id,
             thread_id: None,
             parent_message_id,
+            forwarded_from_message_id: None,
             attachments: vec![],
         };
 
@@ -384,6 +465,15 @@ impl MessageService for DefaultMessageService {
             member_user_ids,
             MessageEventData::from(&dto),
         );
+
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            cmd.server_id,
+            cmd.conversation_id,
+            cmd.actor.user_id,
+        )
+        .await;
 
         Ok(dto)
     }
@@ -448,6 +538,13 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::Validation(
                 "message text must be non-empty".to_string(),
             ));
+        }
+
+        if text.chars().count() > MAX_MESSAGE_TEXT_LENGTH {
+            return Err(ServiceError::Validation(format!(
+                "message text too long (max {} characters)",
+                MAX_MESSAGE_TEXT_LENGTH
+            )));
         }
 
         // 4. Begin transaction
@@ -523,6 +620,7 @@ impl MessageService for DefaultMessageService {
             sent_by: cmd.actor.user_id,
             thread_id: Some(thread.id),
             parent_message_id,
+            forwarded_from_message_id: None,
             attachments: vec![],
         };
 
@@ -579,6 +677,15 @@ impl MessageService for DefaultMessageService {
             member_user_ids,
             MessageEventData::from(&dto),
         );
+
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            cmd.server_id,
+            cmd.conversation_id,
+            cmd.actor.user_id,
+        )
+        .await;
 
         Ok(dto)
     }
@@ -659,7 +766,7 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
-        let page = self
+        let mut page = self
             .repos
             .message_repo
             .list_messages(rim_core::message::repository::ListMessagesParams {
@@ -673,6 +780,9 @@ impl MessageService for DefaultMessageService {
             })
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        // Reverse items to return in display order (oldest-first)
+        page.items.reverse();
 
         let items = self
             .map_messages_to_dtos(query.server_id, page.items, true)
@@ -712,7 +822,7 @@ impl MessageService for DefaultMessageService {
         self.ensure_thread_in_conversation(query.thread_id, query.conversation_id)
             .await?;
 
-        let page = self
+        let mut page = self
             .repos
             .message_repo
             .list_messages(rim_core::message::repository::ListMessagesParams {
@@ -726,6 +836,10 @@ impl MessageService for DefaultMessageService {
             })
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        // Reverse items to return in display order (oldest-first)
+        page.items.reverse();
+
         let items = self
             .map_messages_to_dtos(query.server_id, page.items, false)
             .await?;
@@ -745,20 +859,6 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            query.actor.user_id,
-        )
-        .await?;
-
         let q = query.query.trim();
         if q.is_empty() {
             return Err(ServiceError::Validation(
@@ -766,12 +866,46 @@ impl MessageService for DefaultMessageService {
             ));
         }
 
-        let messages = self
-            .repos
-            .message_repo
-            .search_messages(query.conversation_id, q, query.limit, query.include_deleted)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let messages = match query.conversation_id {
+            Some(conversation_id) => {
+                // Scoped search: single conversation
+                let conv = ensure_conversation_in_server(
+                    self.repos.conversation_repo.as_ref(),
+                    conversation_id,
+                    query.server_id,
+                )
+                .await?;
+
+                ensure_conversation_access(
+                    self.repos.conversation_member_repo.as_ref(),
+                    &conv,
+                    query.actor.user_id,
+                )
+                .await?;
+
+                // Security: always exclude deleted messages from search results.
+                self.repos
+                    .message_repo
+                    .search_messages(conversation_id, q, query.limit, false)
+                    .await
+                    .map_err(rim_services::map_repo_error)?
+            }
+            None => {
+                // Workspace-wide search: all accessible conversations
+                let accessible_ids = self
+                    .repos
+                    .conversation_repo
+                    .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
+                    .await
+                    .map_err(rim_services::map_repo_error)?;
+
+                self.repos
+                    .message_repo
+                    .search_messages_across_conversations(&accessible_ids, q, query.limit)
+                    .await
+                    .map_err(rim_services::map_repo_error)?
+            }
+        };
 
         self.map_messages_to_dtos(query.server_id, messages, true)
             .await
@@ -799,8 +933,24 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
 
-        let msg = self
-            .repos
+        let new_text = cmd.text.trim();
+        if new_text.is_empty() {
+            return Err(ServiceError::Validation(
+                "message text must be non-empty".to_string(),
+            ));
+        }
+
+        if new_text.chars().count() > MAX_MESSAGE_TEXT_LENGTH {
+            return Err(ServiceError::Validation(format!(
+                "message text too long (max {} characters)",
+                MAX_MESSAGE_TEXT_LENGTH
+            )));
+        }
+
+        // Run validation + update inside a transaction.
+        let (repos, scope) = self.begin_write().await?;
+
+        let msg = repos
             .message_repo
             .get_by_id(cmd.message_id)
             .await
@@ -815,19 +965,19 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        let new_text = cmd.text.trim();
-        if new_text.is_empty() {
+        if msg.is_deleted {
             return Err(ServiceError::Validation(
-                "message text must be non-empty".to_string(),
+                "cannot edit a deleted message".to_string(),
             ));
         }
 
-        let updated = self
-            .repos
+        let updated = repos
             .message_repo
             .update_message_text(cmd.message_id, new_text.to_string())
             .await
             .map_err(rim_services::map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
 
         let dto = self.to_dto(updated, cmd.server_id).await?;
 
@@ -837,6 +987,138 @@ impl MessageService for DefaultMessageService {
             cmd.server_id,
             dto.conversation_id,
             conv.conversation_type.as_str(),
+            member_user_ids,
+            MessageEventData::from(&dto),
+        );
+
+        // Re-process mentions: delete old, create new.
+        let _ = self
+            .repos
+            .message_mention_repo
+            .delete_mentions_for_message(cmd.message_id)
+            .await;
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            cmd.server_id,
+            cmd.conversation_id,
+            cmd.actor.user_id,
+        )
+        .await;
+
+        Ok(dto)
+    }
+
+    #[instrument(
+        name = "message.forward_message",
+        skip_all,
+        fields(
+            actor_id = %cmd.actor.user_id,
+            server_id = %cmd.server_id,
+            source_conversation_id = %cmd.source_conversation_id,
+            target_conversation_id = %cmd.target_conversation_id,
+            message_id = %cmd.message_id
+        )
+    )]
+    async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto> {
+        // Verify membership in workspace
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        // Verify access to source conversation
+        let source_conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.source_conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &source_conv,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        // Verify access to target conversation
+        let target_conv = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.target_conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &target_conv,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        // Get the source message
+        let source_msg = self
+            .repos
+            .message_repo
+            .get_by_id(cmd.message_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        if source_msg.conversation_id != cmd.source_conversation_id {
+            return Err(ServiceError::NotFound);
+        }
+
+        if source_msg.is_deleted {
+            return Err(ServiceError::Validation(
+                "cannot forward a deleted message".to_string(),
+            ));
+        }
+
+        // Create the forwarded message in the target conversation
+        let new_message = NewMessage {
+            conversation_id: cmd.target_conversation_id,
+            text: source_msg.text.clone(),
+            sent_by: cmd.actor.user_id,
+            thread_id: None,
+            parent_message_id: None,
+            forwarded_from_message_id: Some(cmd.message_id),
+            attachments: vec![],
+        };
+
+        let (repos, scope) = self.begin_write().await?;
+
+        let message = repos
+            .message_repo
+            .create_message(&new_message)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        repos
+            .conversation_repo
+            .touch_last_activity_at(cmd.target_conversation_id, message.sent_at)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
+
+        info!(
+            message_id = %message.id,
+            forwarded_from = %cmd.message_id,
+            "forwarded message"
+        );
+
+        let dto = self.to_dto(message, cmd.server_id).await?;
+
+        let member_user_ids = self
+            .list_member_user_ids(cmd.target_conversation_id)
+            .await?;
+
+        self.observers.message.on_message_sent(
+            cmd.server_id,
+            dto.conversation_id,
+            target_conv.conversation_type.as_str(),
             member_user_ids,
             MessageEventData::from(&dto),
         );
@@ -889,6 +1171,8 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::PermissionDenied);
         }
 
+        let thread_id = msg.thread_id;
+
         self.repos
             .message_repo
             .soft_delete_message(cmd.message_id)
@@ -903,8 +1187,44 @@ impl MessageService for DefaultMessageService {
             conv.conversation_type.as_str(),
             member_user_ids,
             cmd.message_id,
+            thread_id,
         );
 
         Ok(())
+    }
+
+    async fn get_messages_by_ids(
+        &self,
+        ids: &[rim_core::message::model::MessageId],
+    ) -> ServiceResult<Vec<MessageDto>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let messages_map = self
+            .repos
+            .message_repo
+            .get_by_ids(ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let mut result = Vec::with_capacity(messages_map.len());
+        for msg in messages_map.into_values() {
+            let conv = self
+                .repos
+                .conversation_repo
+                .get_by_id(msg.conversation_id)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            let server_id = conv
+                .map(|c| c.server_id)
+                .unwrap_or_else(rim_core::server::model::ServerId::new);
+
+            let dto = self.to_dto(msg, server_id).await?;
+            result.push(dto);
+        }
+
+        Ok(result)
     }
 }

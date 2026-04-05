@@ -24,29 +24,31 @@ impl DefaultServerMemberService {
 
     fn to_dto(
         member: rim_core::server_member::model::ServerMember,
-        username: String,
+        user: &rim_core::user::model::User,
     ) -> ServerMemberDto {
         ServerMemberDto {
             server_id: member.server_id,
             user_id: member.user_id,
-            username,
+            username: user.username.clone(),
+            display_name: user.display_name.clone(),
+            avatar_url: user.avatar_url.clone(),
+            status_text: user.status_text.clone(),
+            bio: user.bio.clone(),
             member_role: member.member_role.as_str().to_string(),
             joined_at: member.joined_at,
         }
     }
 
-    async fn resolve_username(
+    async fn resolve_user(
         &self,
         user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<String> {
-        let user = self
-            .repos
+    ) -> ServiceResult<rim_core::user::model::User> {
+        self.repos
             .user_repo
             .get_by_id(user_id)
             .await
             .map_err(rim_services::map_repo_error)?
-            .ok_or(ServiceError::NotFound)?;
-        Ok(user.username)
+            .ok_or(ServiceError::NotFound)
     }
 }
 
@@ -75,7 +77,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let username = self.resolve_username(member.user_id).await?;
+        let user = self.resolve_user(member.user_id).await?;
 
         info!(
             server_id = %cmd.server_id,
@@ -83,7 +85,7 @@ impl ServerMemberService for DefaultServerMemberService {
             "added server member"
         );
 
-        Ok(Self::to_dto(member, username))
+        Ok(Self::to_dto(member, &user))
     }
 
     async fn remove_member(&self, cmd: RemoveServerMemberCmd) -> ServiceResult<()> {
@@ -178,9 +180,9 @@ impl ServerMemberService for DefaultServerMemberService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        let username = self.resolve_username(member.user_id).await?;
+        let user = self.resolve_user(member.user_id).await?;
 
-        Ok(Self::to_dto(member, username))
+        Ok(Self::to_dto(member, &user))
     }
 
     async fn list_members(
@@ -203,8 +205,8 @@ impl ServerMemberService for DefaultServerMemberService {
 
         let mut result = Vec::with_capacity(members.len());
         for member in members {
-            let username = self.resolve_username(member.user_id).await?;
-            result.push(Self::to_dto(member, username));
+            let user = self.resolve_user(member.user_id).await?;
+            result.push(Self::to_dto(member, &user));
         }
 
         Ok(result)

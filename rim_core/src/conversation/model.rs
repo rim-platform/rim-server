@@ -69,6 +69,7 @@ pub struct Conversation {
     pub id: ConversationId,
     pub conversation_type: ConversationType,
     pub title: Option<String>,
+    pub topic: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
     pub server_id: ServerId,

@@ -11,7 +11,9 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 
 use crate::ThreadRepos;
-use crate::util::{ensure_conversation_in_server, ensure_server_member};
+use crate::util::{
+    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+};
 
 #[derive(Clone)]
 pub struct DefaultThreadService {
@@ -23,22 +25,9 @@ impl DefaultThreadService {
         Self { repos }
     }
 
-    async fn ensure_conversation_member(
-        &self,
-        conversation_id: rim_core::conversation::model::ConversationId,
-        user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<()> {
-        let is_member = self
-            .repos
-            .conversation_member_repo
-            .is_member(conversation_id, user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-        if !is_member {
-            return Err(ServiceError::PermissionDenied);
-        }
-        Ok(())
-    }
+    // Conversation access check removed — use ensure_conversation_access from util
+    // which correctly handles channels (server membership sufficient) vs DM/group
+    // (explicit conversation_member required).
 
     async fn to_dto(
         &self,
@@ -101,15 +90,19 @@ impl ThreadService for DefaultThreadService {
         )
         .await?;
 
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             cmd.conversation_id,
             cmd.server_id,
         )
         .await?;
 
-        self.ensure_conversation_member(cmd.conversation_id, cmd.actor.user_id)
-            .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conv,
+            cmd.actor.user_id,
+        )
+        .await?;
 
         let root_message = self
             .repos
@@ -174,15 +167,19 @@ impl ThreadService for DefaultThreadService {
         )
         .await?;
 
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             query.conversation_id,
             query.server_id,
         )
         .await?;
 
-        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
-            .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conv,
+            query.actor.user_id,
+        )
+        .await?;
 
         let root_message = self
             .repos
@@ -218,15 +215,19 @@ impl ThreadService for DefaultThreadService {
         )
         .await?;
 
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             query.conversation_id,
             query.server_id,
         )
         .await?;
 
-        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
-            .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conv,
+            query.actor.user_id,
+        )
+        .await?;
 
         let thread = self
             .repos
@@ -254,15 +255,19 @@ impl ThreadService for DefaultThreadService {
         )
         .await?;
 
-        let _conv = ensure_conversation_in_server(
+        let conv = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             query.conversation_id,
             query.server_id,
         )
         .await?;
 
-        self.ensure_conversation_member(query.conversation_id, query.actor.user_id)
-            .await?;
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conv,
+            query.actor.user_id,
+        )
+        .await?;
 
         let page = self
             .repos

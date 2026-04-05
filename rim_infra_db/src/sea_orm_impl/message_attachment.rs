@@ -40,6 +40,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         attachment: NewMessageAttachment,
     ) -> RepoResult<MessageAttachment> {
         let NewMessageAttachment {
+            id,
             message_id,
             storage_url,
             file_name,
@@ -49,7 +50,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         } = attachment;
 
         let active = message_attachment::ActiveModel {
-            id: Set(MessageAttachmentId::new().into()),
+            id: Set(id.into()),
             message_id: Set(message_id.into()),
             storage_url: Set(storage_url),
             file_name: Set(file_name),

@@ -19,23 +19,51 @@ mod tests {
     use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
     use rim_services::capability::service::MockCapabilityService;
     use rim_services::command::service::MockCommandService;
+    use rim_services::custom_emoji::service::MockCustomEmojiService;
+    use rim_services::link_preview::service::MockLinkPreviewService;
     use rim_services::conversation::service::MockConversationService;
     use rim_services::event::service::MockEventService;
     use rim_services::integration::service::MockIntegrationService;
     use rim_services::keybind::service::MockKeybindService;
+    use rim_services::macro_def::service::MockMacroService;
+    use rim_services::mention::service::MockMentionService;
     use rim_services::message::service::MockMessageService;
     use rim_services::message_attachment::service::MockMessageAttachmentService;
     use rim_services::message_reaction::service::MockMessageReactionService;
     use rim_services::message_thread::service::MockThreadService;
+    use rim_services::notification_preference::service::MockNotificationPreferenceService;
+    use rim_services::password_reset::service::MockPasswordResetService;
+    use rim_services::pin::service::MockPinService;
     use rim_services::provider::AppServiceProvider;
+    use rim_services::read_state::service::MockReadStateService;
     use rim_services::server::service::MockServerService;
     use rim_services::server_member::service::MockServerMemberService;
     use rim_services::setting::service::MockSettingService;
+    use rim_services::storage::service::MockStorageService;
     use rim_services::user::service::MockUserService;
 
     use crate::auth_context::AuthActorCtx;
     use crate::broadcast::InMemoryBroadcaster;
     use crate::build_schema;
+
+    fn test_presence_manager() -> Arc<rim_infra_services::presence::PresenceManager> {
+        let broadcaster: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(rim_services::events::NoopBroadcaster);
+        let observers = Arc::new(rim_services::events::Observers::new(broadcaster));
+        Arc::new(rim_infra_services::presence::PresenceManager::new(
+            observers,
+        ))
+    }
+
+    fn test_typing_tracker() -> Arc<rim_infra_services::typing::TypingTracker> {
+        Arc::new(rim_infra_services::typing::TypingTracker::new())
+    }
+
+    fn test_observers() -> Arc<rim_services::events::Observers> {
+        let broadcaster: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(rim_services::events::NoopBroadcaster);
+        Arc::new(rim_services::events::Observers::new(broadcaster))
+    }
 
     // ── Test helpers ──────────────────────────────────────────────────────
 
@@ -58,17 +86,29 @@ mod tests {
                 event: Arc::new(MockEventService::new()),
                 integration: Arc::new(MockIntegrationService::new()),
                 keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(MockMessageService::new()),
                 attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
                 reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(MockServerService::new()),
                 server_member: Arc::new(MockServerMemberService::new()),
                 setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(MockThreadService::new()),
                 user: Arc::new(user),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -86,17 +126,29 @@ mod tests {
                 event: Arc::new(MockEventService::new()),
                 integration: Arc::new(MockIntegrationService::new()),
                 keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(MockMessageService::new()),
                 attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
                 reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(server),
                 server_member: Arc::new(server_member),
                 setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(MockThreadService::new()),
                 user: Arc::new(MockUserService::new()),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -111,17 +163,29 @@ mod tests {
                 event: Arc::new(MockEventService::new()),
                 integration: Arc::new(MockIntegrationService::new()),
                 keybind: Arc::new(keybind),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(MockMessageService::new()),
                 attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
                 reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(MockServerService::new()),
                 server_member: Arc::new(MockServerMemberService::new()),
                 setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(MockThreadService::new()),
                 user: Arc::new(MockUserService::new()),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -133,6 +197,7 @@ mod tests {
             server_id: ServerId::new(),
             conversation_type: ConversationType::Group,
             title: None,
+            topic: None,
             member_ids: vec![],
         }
     }
@@ -149,6 +214,8 @@ mod tests {
             has_attachments: false,
             attachments: vec![],
             parent_message_id: None,
+            forwarded_from_message_id: None,
+            thread_root_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         }
@@ -188,6 +255,7 @@ mod tests {
             display_name: Some("Test User".to_string()),
             avatar_url: None,
             status_text: None,
+            bio: None,
         }
     }
 
@@ -203,6 +271,10 @@ mod tests {
             server_id: ServerId::new(),
             user_id: UserId::new(),
             username: "testuser".to_string(),
+            display_name: None,
+            avatar_url: None,
+            status_text: None,
+            bio: None,
             member_role: "member".to_string(),
             joined_at: chrono::Utc::now(),
         }
@@ -215,6 +287,7 @@ mod tests {
             filename: "file.txt".to_string(),
             content_type: "text/plain".to_string(),
             size_bytes: 42,
+            storage_key: Some("uploads/test/file.txt".to_string()),
         }
     }
 
@@ -229,15 +302,24 @@ mod tests {
         event: Arc<dyn rim_services::event::service::EventService>,
         integration: Arc<dyn rim_services::integration::service::IntegrationService>,
         keybind: Arc<dyn rim_services::keybind::service::KeybindService>,
+        macro_def: Arc<dyn rim_services::macro_def::service::MacroService>,
+        mention: Arc<dyn rim_services::mention::service::MentionService>,
         message: Arc<dyn rim_services::message::service::MessageService>,
         attachment: Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
+        pin: Arc<dyn rim_services::pin::service::PinService>,
+        notification_preference: Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>,
+        password_reset: Arc<dyn rim_services::password_reset::service::PasswordResetService>,
         reaction: Arc<dyn rim_services::message_reaction::service::MessageReactionService>,
+        read_state: Arc<dyn rim_services::read_state::service::ReadStateService>,
         server: Arc<dyn rim_services::server::service::ServerService>,
         server_member: Arc<dyn rim_services::server_member::service::ServerMemberService>,
         setting: Arc<dyn rim_services::setting::service::SettingService>,
+        storage: Arc<dyn rim_services::storage::service::StorageService>,
         thread: Arc<dyn rim_services::message_thread::service::ThreadService>,
         user: Arc<dyn rim_services::user::service::UserService>,
         request_auth: Arc<dyn rim_services::auth::service::RequestAuthenticator>,
+        link_preview: Arc<dyn rim_services::link_preview::service::LinkPreviewService>,
+        custom_emoji: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
     }
 
     impl AppServiceProvider for TestAppServiceProvider {
@@ -279,6 +361,14 @@ mod tests {
             Arc::clone(&self.keybind)
         }
 
+        fn macro_service(&self) -> Arc<dyn rim_services::macro_def::service::MacroService> {
+            Arc::clone(&self.macro_def)
+        }
+
+        fn mention_service(&self) -> Arc<dyn rim_services::mention::service::MentionService> {
+            Arc::clone(&self.mention)
+        }
+
         fn message_service(&self) -> Arc<dyn rim_services::message::service::MessageService> {
             Arc::clone(&self.message)
         }
@@ -295,6 +385,24 @@ mod tests {
             Arc::clone(&self.reaction)
         }
 
+        fn notification_preference_service(&self) -> Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService> {
+            Arc::clone(&self.notification_preference)
+        }
+
+        fn password_reset_service(&self) -> Arc<dyn rim_services::password_reset::service::PasswordResetService> {
+            Arc::clone(&self.password_reset)
+        }
+
+        fn pin_service(&self) -> Arc<dyn rim_services::pin::service::PinService> {
+            Arc::clone(&self.pin)
+        }
+
+        fn read_state_service(
+            &self,
+        ) -> Arc<dyn rim_services::read_state::service::ReadStateService> {
+            Arc::clone(&self.read_state)
+        }
+
         fn server_service(&self) -> Arc<dyn rim_services::server::service::ServerService> {
             Arc::clone(&self.server)
         }
@@ -307,6 +415,10 @@ mod tests {
 
         fn setting_service(&self) -> Arc<dyn rim_services::setting::service::SettingService> {
             Arc::clone(&self.setting)
+        }
+
+        fn storage_service(&self) -> Arc<dyn rim_services::storage::service::StorageService> {
+            Arc::clone(&self.storage)
         }
 
         fn thread_service(&self) -> Arc<dyn rim_services::message_thread::service::ThreadService> {
@@ -322,6 +434,18 @@ mod tests {
         ) -> Arc<dyn rim_services::auth::service::RequestAuthenticator> {
             Arc::clone(&self.request_auth)
         }
+
+        fn link_preview_service(
+            &self,
+        ) -> Arc<dyn rim_services::link_preview::service::LinkPreviewService> {
+            Arc::clone(&self.link_preview)
+        }
+
+        fn custom_emoji_service(
+            &self,
+        ) -> Arc<dyn rim_services::custom_emoji::service::CustomEmojiService> {
+            Arc::clone(&self.custom_emoji)
+        }
     }
 
     fn schema_with_mocks(
@@ -331,10 +455,6 @@ mod tests {
         attachment: MockMessageAttachmentService,
         thread: MockThreadService,
     ) -> crate::AppSchema {
-        let mut reaction = MockMessageReactionService::new();
-        reaction
-            .expect_get_reactions_for_messages()
-            .returning(|_| Box::pin(async { Ok(std::collections::HashMap::new()) }));
         build_schema(
             Arc::new(TestAppServiceProvider {
                 action: Arc::new(MockActionService::new()),
@@ -345,17 +465,29 @@ mod tests {
                 event: Arc::new(MockEventService::new()),
                 integration: Arc::new(MockIntegrationService::new()),
                 keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(msg),
                 attachment: Arc::new(attachment),
-                reaction: Arc::new(reaction),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(MockServerService::new()),
                 server_member: Arc::new(MockServerMemberService::new()),
                 setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(thread),
                 user: Arc::new(MockUserService::new()),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -376,17 +508,29 @@ mod tests {
                 event: Arc::new(event),
                 integration: Arc::new(integration),
                 keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(MockMessageService::new()),
                 attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
                 reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(MockServerService::new()),
                 server_member: Arc::new(MockServerMemberService::new()),
                 setting: Arc::new(setting),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(MockThreadService::new()),
                 user: Arc::new(MockUserService::new()),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -401,17 +545,29 @@ mod tests {
                 event: Arc::new(MockEventService::new()),
                 integration: Arc::new(MockIntegrationService::new()),
                 keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
                 message: Arc::new(MockMessageService::new()),
                 attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
                 reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
                 server: Arc::new(MockServerService::new()),
                 server_member: Arc::new(MockServerMemberService::new()),
                 setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
                 thread: Arc::new(MockThreadService::new()),
                 user: Arc::new(MockUserService::new()),
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
             }),
             InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
         )
     }
 
@@ -1260,16 +1416,31 @@ mod tests {
             })
         });
 
+        let mut conv = MockConversationService::new();
+        conv.expect_get_conversations_by_ids()
+            .returning(move |_ids| {
+                Box::pin(async move {
+                    Ok(vec![rim_services::conversation::dto::ConversationDto {
+                        id: conversation_id,
+                        server_id,
+                        conversation_type: rim_core::conversation::model::ConversationType::Channel,
+                        title: Some("general".to_string()),
+                        topic: None,
+                        member_ids: vec![],
+                    }])
+                })
+            });
+
         let schema = schema_with_mocks(
             MockAuthService::new(),
-            MockConversationService::new(),
+            conv,
             msg,
             MockMessageAttachmentService::new(),
             MockThreadService::new(),
         );
 
         let req = authed_request(
-            r#"query($sid: ID!, $cid: ID!) { searchMessages(serverId: $sid, conversationId: $cid, query: "deploy", limit: 10, includeDeleted: false) { id text } }"#,
+            r#"query($sid: ID!, $cid: ID!) { searchMessages(serverId: $sid, conversationId: $cid, query: "deploy", limit: 10, includeDeleted: false) { id text conversationTitle conversationType } }"#,
             actor,
         )
         .variables(Variables::from_json(serde_json::json!({

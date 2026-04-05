@@ -3,7 +3,7 @@ use entity::user;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::{NewUser, User, UserId};
 use rim_core::user::repository::UserRepository;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -28,6 +28,20 @@ impl UserRepository for SeaOrmUserRepository {
             .map_err(map_db_err)?;
 
         Ok(model.map(Into::into))
+    }
+
+    async fn get_by_ids(&self, ids: &[UserId]) -> RepoResult<Vec<User>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uuids: Vec<sea_orm::prelude::Uuid> = ids.iter().copied().map(Into::into).collect();
+        let models = user::Entity::find()
+            .filter(user::Column::Id.is_in(uuids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models.into_iter().map(Into::into).collect())
     }
 
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User> {
@@ -75,5 +89,58 @@ impl UserRepository for SeaOrmUserRepository {
             .await
             .map_err(map_db_err)?;
         Ok(model.is_some())
+    }
+
+    async fn update_profile(
+        &self,
+        id: UserId,
+        display_name: Option<Option<String>>,
+        avatar_url: Option<Option<String>>,
+        status_text: Option<Option<String>>,
+        bio: Option<Option<String>>,
+    ) -> RepoResult<User> {
+        let model = user::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or(RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active = model.into_active_model();
+
+        if let Some(val) = display_name {
+            active.display_name = Set(val);
+        }
+        if let Some(val) = avatar_url {
+            active.avatar_url = Set(val);
+        }
+        if let Some(val) = status_text {
+            active.status_text = Set(val);
+        }
+        if let Some(val) = bio {
+            active.bio = Set(val);
+        }
+
+        active.updated_at = Set(chrono::Utc::now().into());
+
+        let updated = user::Entity::update(active)
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(updated.into())
+    }
+
+    async fn update_password(&self, id: UserId, password_hash: String) -> RepoResult<()> {
+        let model = user::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or(RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active = model.into_active_model();
+        active.password_hash = Set(password_hash);
+        active.updated_at = Set(chrono::Utc::now().into());
+        active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(())
     }
 }

@@ -25,6 +25,12 @@ pub struct MessageDto {
     /// Threading / replies:
     pub parent_message_id: Option<MessageId>,
 
+    /// Forwarding: the original message this was forwarded from.
+    pub forwarded_from_message_id: Option<MessageId>,
+
+    /// For thread replies: the root message ID of the thread (= thread.first_message_id).
+    pub thread_root_message_id: Option<MessageId>,
+
     pub is_deleted: bool,
 
     pub sent_at: chrono::DateTime<chrono::Utc>,

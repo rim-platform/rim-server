@@ -13,6 +13,7 @@ pub struct ConversationDto {
     pub conversation_type: ConversationType,
 
     pub title: Option<String>,
+    pub topic: Option<String>,
 
     pub member_ids: Vec<UserId>,
 }

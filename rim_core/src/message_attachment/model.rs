@@ -16,6 +16,7 @@ pub struct MessageAttachment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMessageAttachment {
+    pub id: MessageAttachmentId,
     pub storage_url: String,
     pub message_id: MessageId,
     pub file_size: i64,

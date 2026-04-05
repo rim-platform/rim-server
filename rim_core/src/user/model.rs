@@ -11,6 +11,10 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub status_text: Option<String>,
+    pub bio: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

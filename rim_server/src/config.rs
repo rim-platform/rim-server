@@ -16,6 +16,14 @@ pub struct RIMConfig {
     pub enable_graphiql: bool,
 
     pub cors_allowed_origin: Option<String>,
+
+    pub data_dir: String,
+
+    pub storage_backend: Option<String>,
+    pub storage_local_path: Option<String>,
+    pub storage_s3_bucket: Option<String>,
+    pub storage_s3_region: Option<String>,
+    pub max_workspace_storage_bytes: Option<u64>,
 }
 
 impl Default for RIMConfig {
@@ -28,6 +36,12 @@ impl Default for RIMConfig {
             session_ttl_days: 30,
             enable_graphiql: false,
             cors_allowed_origin: None,
+            data_dir: "./data".to_string(),
+            storage_backend: Some("local".to_string()),
+            storage_local_path: None,
+            storage_s3_bucket: None,
+            storage_s3_region: None,
+            max_workspace_storage_bytes: Some(1_073_741_824), // 1 GB default
         }
     }
 }
@@ -39,6 +53,9 @@ impl RIMConfig {
             .set_default("server_port", 8080)?
             .set_default("session_ttl_days", 30)?
             .set_default("enable_graphiql", false)?
+            .set_default("data_dir", "./data")?
+            .set_default("storage_backend", "local")?
+            .set_default("max_workspace_storage_bytes", 1_073_741_824_i64)?
             .add_source(Environment::with_prefix("RIM"))
             .add_source(Environment::default());
         c.build()?.try_deserialize()

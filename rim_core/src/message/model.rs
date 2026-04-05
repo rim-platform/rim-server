@@ -13,6 +13,7 @@ pub struct Message {
     pub conversation_id: ConversationId,
     pub thread_id: Option<MessageThreadId>,
     pub parent_message_id: Option<MessageId>,
+    pub forwarded_from_message_id: Option<MessageId>,
     pub sent_at: DateTime<Utc>,
     pub sent_by: UserId,
     pub text: Option<String>,
@@ -37,6 +38,7 @@ pub struct NewMessage {
     pub sent_by: UserId,
     pub thread_id: Option<MessageThreadId>,
     pub parent_message_id: Option<MessageId>,
+    pub forwarded_from_message_id: Option<MessageId>,
     pub attachments: Vec<NewMessageAttachment>,
 }
 

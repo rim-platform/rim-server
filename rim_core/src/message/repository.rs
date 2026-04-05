@@ -47,6 +47,13 @@ pub trait MessageRepository: Send + Sync {
         include_deleted: bool,
     ) -> RepoResult<Vec<Message>>;
 
+    async fn search_messages_across_conversations(
+        &self,
+        conversation_ids: &[ConversationId],
+        query: &str,
+        limit: u32,
+    ) -> RepoResult<Vec<Message>>;
+
     async fn update_message_text(
         &self,
         message_id: MessageId,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -6,22 +8,29 @@ use rim_services::message_attachment::command::{
 };
 use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus, UploadTicketDto};
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::storage::service::StorageService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::AttachmentRepos;
-use crate::util::{ensure_conversation_in_server, ensure_server_member};
+use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_member};
 
 #[derive(Clone)]
 pub struct DefaultMessageAttachmentService {
     repos: AttachmentRepos,
+    storage_service: Arc<dyn StorageService>,
 }
 
 impl DefaultMessageAttachmentService {
     const PENDING_STATUS: &'static str = "pending_upload";
+    const UPLOADED_STATUS: &'static str = "uploaded";
     const READY_STATUS: &'static str = "ready";
 
-    pub fn new(repos: AttachmentRepos) -> Self {
-        Self { repos }
+    fn sanitize_filename(name: &str) -> Option<String> {
+        rim_core::util::sanitize_filename(name)
+    }
+
+    pub fn new(repos: AttachmentRepos, storage_service: Arc<dyn StorageService>) -> Self {
+        Self { repos, storage_service }
     }
 
     pub(crate) fn metadata_status(metadata: Option<&serde_json::Value>) -> AttachmentStatus {
@@ -31,6 +40,7 @@ impl DefaultMessageAttachmentService {
 
         match status {
             Some(Self::PENDING_STATUS) => AttachmentStatus::PendingUpload,
+            Some(Self::UPLOADED_STATUS) => AttachmentStatus::Uploaded,
             _ => AttachmentStatus::Ready,
         }
     }
@@ -38,12 +48,19 @@ impl DefaultMessageAttachmentService {
     pub(crate) fn attachment_dto(
         att: rim_core::message_attachment::model::MessageAttachment,
     ) -> AttachmentDto {
+        let status = Self::metadata_status(att.metadata.as_ref());
+        let storage_key = if att.storage_url.starts_with("pending://") {
+            None
+        } else {
+            Some(att.storage_url)
+        };
         AttachmentDto {
             id: att.id,
-            status: Self::metadata_status(att.metadata.as_ref()),
+            status,
             filename: att.file_name,
             content_type: att.mime_type,
             size_bytes: att.file_size.max(0) as u64,
+            storage_key,
         }
     }
 
@@ -61,22 +78,21 @@ impl DefaultMessageAttachmentService {
             .map_err(rim_services::map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
-        let _conversation = ensure_conversation_in_server(
+        let conversation = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             message.conversation_id,
             server_id,
         )
         .await?;
 
-        let is_member = self
-            .repos
-            .conversation_member_repo
-            .is_member(message.conversation_id, actor_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-        if !is_member {
-            return Err(ServiceError::PermissionDenied);
-        }
+        // Use ensure_conversation_access which correctly handles channels
+        // (channels only require server membership, not conversation_member rows)
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conversation,
+            actor_id,
+        )
+        .await?;
 
         Ok(message)
     }
@@ -138,11 +154,10 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        if cmd.filename.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                "attachment filename must be non-empty".to_string(),
-            ));
-        }
+        let sanitized_filename = Self::sanitize_filename(&cmd.filename).ok_or_else(|| {
+            ServiceError::Validation("attachment filename is invalid".to_string())
+        })?;
+
         if cmd.content_type.trim().is_empty() {
             return Err(ServiceError::Validation(
                 "attachment content_type must be non-empty".to_string(),
@@ -159,17 +174,18 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             ));
         }
 
-        let upload_token = format!(
-            "upload-{}",
-            rim_core::message_attachment::model::MessageAttachmentId::new()
-        );
+        let attachment_id = rim_core::message_attachment::model::MessageAttachmentId::new();
+        let upload_token = uuid::Uuid::new_v4().to_string();
+        let storage_filename = format!("{attachment_id}_{sanitized_filename}");
         let metadata = Some(json!({
             "status": Self::PENDING_STATUS,
+            "storage_filename": storage_filename,
         }));
         let new_attachment = rim_core::message_attachment::model::NewMessageAttachment {
+            id: attachment_id,
             message_id,
             storage_url: format!("pending://{upload_token}"),
-            file_name: cmd.filename.trim().to_owned(),
+            file_name: sanitized_filename,
             file_size: cmd.size_bytes as i64,
             mime_type: cmd.content_type.trim().to_owned(),
             metadata,
@@ -210,12 +226,20 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .ensure_actor_can_manage_attachment(cmd.server_id, cmd.actor.user_id, cmd.attachment_id)
             .await?;
 
+        // Verify the attachment has been uploaded before finalizing.
+        let current_status = Self::metadata_status(attachment.metadata.as_ref());
+        if current_status != AttachmentStatus::Uploaded {
+            return Err(ServiceError::Validation(
+                "attachment must be uploaded before finalizing".to_string(),
+            ));
+        }
+
         let updated = self
             .repos
             .message_attachment_repo
             .update_attachment(
                 attachment.id,
-                format!("attachment://{}", attachment.id),
+                attachment.storage_url.clone(),
                 Some(json!({ "status": Self::READY_STATUS })),
             )
             .await
@@ -258,6 +282,16 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         let (attachment, message) = self
             .ensure_actor_can_manage_attachment(cmd.server_id, cmd.actor.user_id, cmd.attachment_id)
             .await?;
+
+        // Delete the file from storage before removing the DB record.
+        // Ignore NotFound errors — the file may have been deleted manually.
+        if !attachment.storage_url.starts_with("pending://") {
+            if let Err(e) = self.storage_service.delete_file(&attachment.storage_url).await {
+                if !matches!(e, ServiceError::NotFound) {
+                    return Err(e);
+                }
+            }
+        }
 
         self.repos
             .message_attachment_repo

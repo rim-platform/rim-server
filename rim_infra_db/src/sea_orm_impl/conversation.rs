@@ -43,6 +43,20 @@ impl ConversationRepository for SeaOrmConversationRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uuids: Vec<Uuid> = ids.iter().copied().map(Into::into).collect();
+        let models = conversation::Entity::find()
+            .filter(conversation::Column::Id.is_in(uuids))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models.into_iter().map(Into::into).collect())
+    }
+
     async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation> {
         let active = conversation::ActiveModel {
             id: Set(ConversationId::new().into()),
@@ -332,6 +346,40 @@ impl ConversationRepository for SeaOrmConversationRepository {
         Ok(count > 0)
     }
 
+    async fn list_accessible_conversation_ids(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Vec<ConversationId>> {
+        let channel_type: entity::sea_orm_active_enums::ConversationType =
+            ConversationType::Channel.into();
+        let server_uuid: Uuid = server_id.into();
+        let user_uuid: Uuid = user_id.into();
+
+        // Channels: all channels in the server (server membership suffices)
+        // DM/Group: only where user is an explicit conversation_member
+        let subquery = sea_orm::QuerySelect::query(
+            &mut conversation_member::Entity::find()
+                .select_only()
+                .column(conversation_member::Column::ConversationId)
+                .filter(conversation_member::Column::UserId.eq(user_uuid)),
+        )
+        .to_owned();
+
+        let models = conversation::Entity::find()
+            .filter(conversation::Column::ServerId.eq(server_uuid))
+            .filter(
+                Condition::any()
+                    .add(conversation::Column::ConversationType.eq(channel_type))
+                    .add(conversation::Column::Id.in_subquery(subquery)),
+            )
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models.into_iter().map(|m| m.id.into()).collect())
+    }
+
     async fn touch_last_activity_at(
         &self,
         conversation_id: ConversationId,
@@ -350,5 +398,22 @@ impl ConversationRepository for SeaOrmConversationRepository {
         }
 
         Ok(())
+    }
+
+    async fn update_topic(
+        &self,
+        conversation_id: ConversationId,
+        topic: Option<String>,
+    ) -> RepoResult<Conversation> {
+        let model = conversation::Entity::find_by_id(conversation_id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: conversation::ActiveModel = model.into();
+        active.topic = Set(topic);
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
     }
 }

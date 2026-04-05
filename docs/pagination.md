@@ -55,7 +55,7 @@ If `items` is empty, both cursors are `None`.
 ## Endpoint Ordering (Current)
 
 - Messages in a thread:
-  - `ORDER BY sent_at DESC, id DESC` (API returns newest-first; UI can reverse for newest-at-bottom)
+  - `ORDER BY sent_at DESC, id DESC` (DB fetches newest-first; API returns in display order oldest-first)
   - cursor: `(sent_at, message_id)`
 - Threads in a conversation:
   - `ORDER BY last_message_at DESC, id DESC` (thread-first view)

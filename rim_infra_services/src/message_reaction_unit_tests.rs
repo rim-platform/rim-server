@@ -66,6 +66,7 @@ mod tests {
         #[async_trait]
         impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
+            async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
             async fn create_conversation_with_members(
                 &self,
@@ -101,11 +102,21 @@ mod tests {
                 server_id: ServerId,
                 title: &str,
             ) -> RepoResult<bool>;
+            async fn list_accessible_conversation_ids(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
             async fn touch_last_activity_at(
                 &self,
                 conversation_id: ConversationId,
                 at: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<()>;
+            async fn update_topic(
+                &self,
+                conversation_id: ConversationId,
+                topic: Option<String>,
+            ) -> RepoResult<Conversation>;
         }
     }
 
@@ -162,6 +173,12 @@ mod tests {
                 limit: u32,
                 include_deleted: bool,
             ) -> RepoResult<Vec<Message>>;
+            async fn search_messages_across_conversations(
+                &self,
+                conversation_ids: &[ConversationId],
+                query: &str,
+                limit: u32,
+            ) -> RepoResult<Vec<Message>>;
             async fn update_message_text(
                 &self,
                 message_id: MessageId,
@@ -216,6 +233,7 @@ mod tests {
             server_id,
             conversation_type: ConversationType::Group,
             title: None,
+            topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
         }
@@ -227,6 +245,7 @@ mod tests {
             conversation_id,
             thread_id: None,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             sent_by,
             text: Some("hello".to_string()),
             has_attachments: false,
@@ -330,6 +349,7 @@ mod tests {
 
         let svc = DefaultMessageReactionService::new(
             make_repos(smr, cr, cmr, mr, reaction_repo),
+            None,
             test_observers(),
         );
 
@@ -374,6 +394,7 @@ mod tests {
 
         let svc = DefaultMessageReactionService::new(
             make_repos(smr, cr, cmr, mr, reaction_repo),
+            None,
             test_observers(),
         );
 
@@ -409,6 +430,7 @@ mod tests {
                 MockMessageRepository::new(),
                 MockMessageReactionRepository::new(),
             ),
+            None,
             test_observers(),
         );
 
@@ -455,6 +477,7 @@ mod tests {
                 MockMessageRepository::new(),
                 MockMessageReactionRepository::new(),
             ),
+            None,
             test_observers(),
         );
 
@@ -504,6 +527,7 @@ mod tests {
                 message_repo,
                 MockMessageReactionRepository::new(),
             ),
+            None,
             test_observers(),
         );
 
@@ -534,6 +558,7 @@ mod tests {
                 MockMessageRepository::new(),
                 MockMessageReactionRepository::new(),
             ),
+            None,
             test_observers(),
         );
 
@@ -572,6 +597,7 @@ mod tests {
 
         let svc = DefaultMessageReactionService::new(
             make_repos(smr, cr, cmr, mr, reaction_repo),
+            None,
             test_observers(),
         );
 

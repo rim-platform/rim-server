@@ -4,9 +4,17 @@ use rim_core::auth::repository::{InviteRepository, SessionRepository};
 use rim_core::command::repository::UserCommandRepository;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
+use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::keybind::repository::KeybindRepository;
+use rim_core::link_preview::repository::LinkPreviewRepository;
+use rim_core::macro_def::repository::MacroRepository;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
+use rim_core::message_mention::repository::MessageMentionRepository;
+use rim_core::message_pin::repository::MessagePinRepository;
+use rim_core::notification_preference::repository::NotificationPreferenceRepository;
+use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::server::repository::ServerRepository;
@@ -19,6 +27,7 @@ pub struct AppRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub keybind_repo: Arc<dyn KeybindRepository>,
+    pub macro_repo: Arc<dyn MacroRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
     pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
     pub message_thread_repo: Arc<dyn MessageThreadRepository>,
@@ -29,6 +38,13 @@ pub struct AppRepos {
     pub session_repo: Arc<dyn SessionRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
     pub message_reaction_repo: Arc<dyn MessageReactionRepository>,
+    pub message_mention_repo: Arc<dyn MessageMentionRepository>,
+    pub message_pin_repo: Arc<dyn MessagePinRepository>,
+    pub notification_preference_repo: Arc<dyn NotificationPreferenceRepository>,
+    pub password_reset_token_repo: Arc<dyn PasswordResetTokenRepository>,
+    pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
+    pub link_preview_repo: Arc<dyn LinkPreviewRepository>,
+    pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
 }
 
 #[derive(Clone)]
@@ -44,6 +60,7 @@ pub struct MessageRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
     pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
+    pub message_mention_repo: Arc<dyn MessageMentionRepository>,
     pub message_thread_repo: Arc<dyn MessageThreadRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
 }
@@ -116,6 +133,30 @@ pub struct ReactionRepos {
 }
 
 #[derive(Clone)]
+pub struct ReadStateRepos {
+    pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+}
+
+#[derive(Clone)]
+pub struct MentionRepos {
+    pub message_mention_repo: Arc<dyn MessageMentionRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+}
+
+#[derive(Clone)]
+pub struct PinRepos {
+    pub message_pin_repo: Arc<dyn MessagePinRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    pub message_repo: Arc<dyn MessageRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+}
+
+#[derive(Clone)]
 pub struct RequestAuthRepos {
     pub session_repo: Arc<dyn SessionRepository>,
 }
@@ -135,8 +176,15 @@ impl AppRepos {
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             message_repo: Arc::clone(&self.message_repo),
             message_attachment_repo: Arc::clone(&self.message_attachment_repo),
+            message_mention_repo: Arc::clone(&self.message_mention_repo),
             message_thread_repo: Arc::clone(&self.message_thread_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_macro(&self) -> crate::macro_def::MacroRepos {
+        crate::macro_def::MacroRepos {
+            macro_repo: Arc::clone(&self.macro_repo),
         }
     }
 
@@ -216,6 +264,53 @@ impl AppRepos {
         }
     }
 
+    pub fn for_read_state(&self) -> ReadStateRepos {
+        ReadStateRepos {
+            read_state_repo: Arc::clone(&self.read_state_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+        }
+    }
+
+    pub fn for_mention(&self) -> MentionRepos {
+        MentionRepos {
+            message_mention_repo: Arc::clone(&self.message_mention_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_notification_preference(
+        &self,
+    ) -> crate::notification_preference::NotificationPreferenceRepos {
+        crate::notification_preference::NotificationPreferenceRepos {
+            notification_preference_repo: Arc::clone(&self.notification_preference_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_pin(&self) -> PinRepos {
+        PinRepos {
+            message_pin_repo: Arc::clone(&self.message_pin_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_link_preview(&self) -> Arc<dyn LinkPreviewRepository> {
+        Arc::clone(&self.link_preview_repo)
+    }
+
+    pub fn for_custom_emoji(&self) -> crate::custom_emoji::CustomEmojiRepos {
+        crate::custom_emoji::CustomEmojiRepos {
+            custom_emoji_repo: Arc::clone(&self.custom_emoji_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
     pub fn for_request_auth(&self) -> RequestAuthRepos {
         RequestAuthRepos {
             session_repo: Arc::clone(&self.session_repo),
@@ -239,6 +334,9 @@ impl AppRepos {
                 ),
             ),
             keybind_repo: Arc::new(sea_orm_impl::keybind::SeaOrmKeybindRepository::new(
+                handle.clone(),
+            )),
+            macro_repo: Arc::new(sea_orm_impl::macro_def::SeaOrmMacroRepository::new(
                 handle.clone(),
             )),
             message_repo: Arc::new(sea_orm_impl::message::SeaOrmMessageRepository::new(
@@ -274,6 +372,33 @@ impl AppRepos {
                 sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(
                     handle.clone(),
                 ),
+            ),
+            message_mention_repo: Arc::new(
+                sea_orm_impl::message_mention::SeaOrmMessageMentionRepository::new(handle.clone()),
+            ),
+            message_pin_repo: Arc::new(
+                sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(handle.clone()),
+            ),
+            notification_preference_repo: Arc::new(
+                sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            password_reset_token_repo: Arc::new(
+                sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            read_state_repo: Arc::new(
+                sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            link_preview_repo: Arc::new(
+                sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(handle.clone()),
+            ),
+            custom_emoji_repo: Arc::new(
+                sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(handle.clone()),
             ),
         }
     }

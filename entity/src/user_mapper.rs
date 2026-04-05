@@ -10,6 +10,10 @@ impl From<user::Model> for User {
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
             last_login_at: m.last_login_at.map(Into::into),
+            display_name: m.display_name,
+            avatar_url: m.avatar_url,
+            status_text: m.status_text,
+            bio: m.bio,
         }
     }
 }

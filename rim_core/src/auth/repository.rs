@@ -29,4 +29,8 @@ pub trait InviteRepository: Send + Sync {
     /// already exhausted or missing.
     async fn try_consume(&self, id: InviteId) -> RepoResult<bool>;
     async fn revoke_invite(&self, id: InviteId) -> RepoResult<()>;
+    async fn list_active_by_server(
+        &self,
+        server_id: crate::server::model::ServerId,
+    ) -> RepoResult<Vec<Invite>>;
 }

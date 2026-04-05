@@ -13,6 +13,7 @@ impl From<conversation::Model> for Conversation {
         Self {
             id: m.id.into(),
             title: m.title,
+            topic: m.topic,
             created_at: m.created_at.into(),
             last_activity_at: m.last_activity_at.into(),
             conversation_type,

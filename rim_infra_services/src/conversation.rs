@@ -4,7 +4,7 @@ use tracing::{info, instrument};
 use rim_core::conversation::model::ConversationType as CoreConversationType;
 use rim_services::conversation::command::{
     AddConversationMemberCmd, CreateConversationCmd, GetConversationQuery, ListChannelsQuery,
-    ListInboxConversationsQuery, RemoveConversationMemberCmd,
+    ListInboxConversationsQuery, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
@@ -17,7 +17,7 @@ use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 use rim_services::events::Observers;
 
 use crate::ConversationRepos;
-use crate::util::{ensure_conversation_in_server, ensure_server_member};
+use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_member};
 
 #[derive(Clone)]
 pub struct DefaultConversationService {
@@ -46,6 +46,7 @@ impl DefaultConversationService {
             server_id: conversation.server_id,
             conversation_type: conversation.conversation_type,
             title: conversation.title,
+            topic: conversation.topic,
             member_ids,
         })
     }
@@ -60,15 +61,27 @@ impl DefaultConversationService {
             server_id: conversation.server_id,
             conversation_type: conversation.conversation_type,
             title: conversation.title,
+            topic: conversation.topic,
             member_ids,
         }
     }
 
-    fn normalize_title(title: Option<String>) -> Option<String> {
-        title.and_then(|title| {
-            let trimmed = title.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
+    fn normalize_title(title: Option<String>) -> ServiceResult<Option<String>> {
+        match title {
+            Some(title) => {
+                let trimmed = title.trim();
+                if trimmed.is_empty() {
+                    Ok(None)
+                } else if trimmed.chars().count() > 100 {
+                    Err(ServiceError::Validation(
+                        "title must be at most 100 characters".to_string(),
+                    ))
+                } else {
+                    Ok(Some(trimmed.to_string()))
+                }
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -83,7 +96,7 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: CreateConversationCmd,
     ) -> ServiceResult<ConversationDto> {
-        let title = Self::normalize_title(cmd.title);
+        let title = Self::normalize_title(cmd.title)?;
 
         ensure_server_member(
             self.repos.server_member_repo.as_ref(),
@@ -106,6 +119,14 @@ impl ConversationService for DefaultConversationService {
                             "cannot create DM with yourself".to_string(),
                         ));
                     }
+
+                    // Verify the other user is a server member.
+                    ensure_server_member(
+                        self.repos.server_member_repo.as_ref(),
+                        cmd.server_id,
+                        other_user_id,
+                    )
+                    .await?;
 
                     let existing = self
                         .repos
@@ -132,6 +153,23 @@ impl ConversationService for DefaultConversationService {
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
                         .collect::<Vec<_>>();
+
+                    // Verify all members are server members.
+                    for &uid in &unique {
+                        ensure_server_member(
+                            self.repos.server_member_repo.as_ref(),
+                            cmd.server_id,
+                            uid,
+                        )
+                        .await?;
+                    }
+
+                    if unique.len() < 2 {
+                        return Err(ServiceError::Validation(
+                            "group conversations require at least 2 members".to_string(),
+                        ));
+                    }
+
                     (CoreConversationType::Group, unique)
                 }
                 ConversationParticipants::Channel => {
@@ -219,6 +257,37 @@ impl ConversationService for DefaultConversationService {
         }
 
         self.to_dto(conversation).await
+    }
+
+    async fn get_conversations_by_ids(
+        &self,
+        ids: &[rim_core::conversation::model::ConversationId],
+    ) -> ServiceResult<Vec<ConversationDto>> {
+        let conversations = self
+            .repos
+            .conversation_repo
+            .get_by_ids(ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let conv_ids: Vec<_> = conversations.iter().map(|c| c.id).collect();
+        let member_ids_by_conversation = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids_for_conversations(&conv_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        Ok(conversations
+            .into_iter()
+            .map(|conv| {
+                let member_ids = member_ids_by_conversation
+                    .get(&conv.id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.to_dto_with_members(conv, member_ids)
+            })
+            .collect())
     }
 
     async fn list_inbox_conversations(
@@ -382,6 +451,7 @@ impl ConversationService for DefaultConversationService {
             cmd.server_id,
             cmd.conversation_id,
             cmd.user_id,
+            dto.member_ids.clone(),
         );
 
         Ok(dto)
@@ -404,6 +474,12 @@ impl ConversationService for DefaultConversationService {
             cmd.server_id,
         )
         .await?;
+
+        if conversation.conversation_type == CoreConversationType::Direct {
+            return Err(ServiceError::Validation(
+                "cannot remove members from a direct message".to_string(),
+            ));
+        }
 
         let is_member = self
             .repos
@@ -434,9 +510,93 @@ impl ConversationService for DefaultConversationService {
 
         let dto = self.to_dto(conversation).await?;
 
+        // Include both remaining members and the removed user so that the removed
+        // user's client also receives the event.
+        let mut notify_user_ids = dto.member_ids.clone();
+        if !notify_user_ids.contains(&cmd.user_id) {
+            notify_user_ids.push(cmd.user_id);
+        }
         self.observers
             .workspace
-            .on_member_removed_from_conversation(cmd.server_id, cmd.conversation_id, cmd.user_id);
+            .on_member_removed_from_conversation(
+                cmd.server_id,
+                cmd.conversation_id,
+                cmd.user_id,
+                notify_user_ids,
+            );
+
+        Ok(dto)
+    }
+
+    #[instrument(
+        name = "conversation.update_topic",
+        skip_all,
+        fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
+    )]
+    async fn update_topic(
+        &self,
+        cmd: UpdateConversationTopicCmd,
+    ) -> ServiceResult<ConversationDto> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        let conversation = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+
+        ensure_conversation_access(
+            self.repos.conversation_member_repo.as_ref(),
+            &conversation,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        // Validate topic
+        let topic = match cmd.topic {
+            Some(t) => {
+                let trimmed: String = t
+                    .chars()
+                    .filter(|c| !c.is_control() || *c == '\n')
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.chars().count() > 512 {
+                    return Err(ServiceError::Validation(
+                        "topic must be at most 512 characters".to_string(),
+                    ));
+                } else {
+                    Some(trimmed)
+                }
+            }
+            None => None,
+        };
+
+        let updated = self
+            .repos
+            .conversation_repo
+            .update_topic(cmd.conversation_id, topic)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        info!(
+            conversation_id = %updated.id,
+            "updated conversation topic"
+        );
+
+        let dto = self.to_dto(updated).await?;
+
+        self.observers
+            .workspace
+            .on_conversation_updated(dto.server_id, dto.id);
 
         Ok(dto)
     }

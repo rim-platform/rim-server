@@ -243,6 +243,97 @@ pub(super) async fn execute_builtin_command(
                 follow_up_commands: vec![],
             })
         }
+        "chat.create_channel" => {
+            let server_id =
+                parse_uuid_arg::<rim_core::server::model::ServerId>(&args, "server_id")?;
+            let name = require_string_arg(&args, "name")?;
+
+            let conversation = services
+                .conversation_service
+                .create_conversation(CreateConversationCmd {
+                    actor,
+                    server_id,
+                    participants: ConversationParticipants::Channel,
+                    title: Some(name),
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "channel created".to_string(),
+                payload: Some(serde_json::json!({
+                    "conversation_id": conversation.id.to_string(),
+                })),
+                follow_up_commands: vec![],
+            })
+        }
+        "admin.invite_member" => {
+            let server_id =
+                parse_uuid_arg::<rim_core::server::model::ServerId>(&args, "server_id")?;
+
+            let result = services
+                .auth_service
+                .create_invite(rim_services::auth::command::CreateInviteCmd {
+                    actor,
+                    server_id,
+                    expires_at: None,
+                    max_uses: 1,
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "invite created".to_string(),
+                payload: Some(serde_json::json!({
+                    "invite_token": result.invite_token,
+                })),
+                follow_up_commands: vec![],
+            })
+        }
+        "chat.mark_as_read" => {
+            let server_id =
+                parse_uuid_arg::<rim_core::server::model::ServerId>(&args, "server_id")?;
+            let conversation_id = parse_uuid_arg::<rim_core::conversation::model::ConversationId>(
+                &args,
+                "conversation_id",
+            )?;
+
+            services
+                .read_state_service
+                .mark_as_read(rim_services::read_state::dto::MarkAsReadCmd {
+                    actor,
+                    workspace_id: server_id,
+                    conversation_id,
+                    read_at: chrono::Utc::now(),
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "conversation marked as read".to_string(),
+                payload: None,
+                follow_up_commands: vec![],
+            })
+        }
+        "chat.mark_all_as_read" => {
+            let server_id =
+                parse_uuid_arg::<rim_core::server::model::ServerId>(&args, "server_id")?;
+
+            services
+                .read_state_service
+                .mark_all_as_read(rim_services::read_state::dto::MarkAllAsReadCmd {
+                    actor,
+                    workspace_id: server_id,
+                })
+                .await?;
+
+            Ok(CommandResultDto {
+                status: CommandResultStatusDto::Success,
+                message: "all conversations marked as read".to_string(),
+                payload: None,
+                follow_up_commands: vec![],
+            })
+        }
         "workspace.open_command_palette"
         | "workspace.cycle_recent_activity"
         | "chat.copy_message_text"
