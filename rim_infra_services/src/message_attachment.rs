@@ -12,7 +12,9 @@ use rim_services::storage::service::StorageService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::AttachmentRepos;
-use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_member};
+use crate::util::{
+    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+};
 
 #[derive(Clone)]
 pub struct DefaultMessageAttachmentService {
@@ -24,13 +26,21 @@ impl DefaultMessageAttachmentService {
     const PENDING_STATUS: &'static str = "pending_upload";
     const UPLOADED_STATUS: &'static str = "uploaded";
     const READY_STATUS: &'static str = "ready";
+    const FAILED_STATUS: &'static str = "failed";
+
+    /// Attachments in `PendingUpload` or `Uploaded` status older than this
+    /// threshold are considered stale and reported as `Failed`.
+    const STALE_THRESHOLD_MINUTES: i64 = 15;
 
     fn sanitize_filename(name: &str) -> Option<String> {
         rim_core::util::sanitize_filename(name)
     }
 
     pub fn new(repos: AttachmentRepos, storage_service: Arc<dyn StorageService>) -> Self {
-        Self { repos, storage_service }
+        Self {
+            repos,
+            storage_service,
+        }
     }
 
     pub(crate) fn metadata_status(metadata: Option<&serde_json::Value>) -> AttachmentStatus {
@@ -41,14 +51,40 @@ impl DefaultMessageAttachmentService {
         match status {
             Some(Self::PENDING_STATUS) => AttachmentStatus::PendingUpload,
             Some(Self::UPLOADED_STATUS) => AttachmentStatus::Uploaded,
+            Some(Self::FAILED_STATUS) => AttachmentStatus::Failed,
             _ => AttachmentStatus::Ready,
         }
+    }
+
+    /// Extract the creation timestamp from a UUID v7 attachment ID.
+    fn created_at_from_id(
+        id: rim_core::message_attachment::model::MessageAttachmentId,
+    ) -> chrono::DateTime<chrono::Utc> {
+        let uuid_val: uuid::Uuid = id.into();
+        let (seconds, nanos) = uuid_val.get_timestamp().unwrap().to_unix();
+        chrono::DateTime::from_timestamp(seconds as i64, nanos).unwrap_or_default()
+    }
+
+    /// Returns `true` when the attachment is in a non-terminal upload state
+    /// and was created more than [`Self::STALE_THRESHOLD_MINUTES`] ago.
+    fn is_stale(status: &AttachmentStatus, created_at: chrono::DateTime<chrono::Utc>) -> bool {
+        matches!(
+            status,
+            AttachmentStatus::PendingUpload | AttachmentStatus::Uploaded
+        ) && chrono::Utc::now()
+            .signed_duration_since(created_at)
+            .num_minutes()
+            >= Self::STALE_THRESHOLD_MINUTES
     }
 
     pub(crate) fn attachment_dto(
         att: rim_core::message_attachment::model::MessageAttachment,
     ) -> AttachmentDto {
-        let status = Self::metadata_status(att.metadata.as_ref());
+        let mut status = Self::metadata_status(att.metadata.as_ref());
+        let created_at = Self::created_at_from_id(att.id);
+        if Self::is_stale(&status, created_at) {
+            status = AttachmentStatus::Failed;
+        }
         let storage_key = if att.storage_url.starts_with("pending://") {
             None
         } else {
@@ -61,6 +97,7 @@ impl DefaultMessageAttachmentService {
             content_type: att.mime_type,
             size_bytes: att.file_size.max(0) as u64,
             storage_key,
+            created_at,
         }
     }
 
@@ -286,7 +323,11 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         // Delete the file from storage before removing the DB record.
         // Ignore NotFound errors — the file may have been deleted manually.
         if !attachment.storage_url.starts_with("pending://") {
-            if let Err(e) = self.storage_service.delete_file(&attachment.storage_url).await {
+            if let Err(e) = self
+                .storage_service
+                .delete_file(&attachment.storage_url)
+                .await
+            {
                 if !matches!(e, ServiceError::NotFound) {
                     return Err(e);
                 }
@@ -313,5 +354,45 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .map_err(rim_services::map_repo_error)?;
 
         Ok(())
+    }
+
+    async fn cleanup_stale_attachments(&self, older_than_minutes: i64) -> ServiceResult<u64> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(older_than_minutes);
+        let stale_ids = self
+            .repos
+            .message_attachment_repo
+            .find_ids_with_status_before(
+                vec![
+                    Self::PENDING_STATUS.to_owned(),
+                    Self::UPLOADED_STATUS.to_owned(),
+                ],
+                cutoff,
+            )
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let count = stale_ids.len() as u64;
+        for id in stale_ids {
+            let att = self
+                .repos
+                .message_attachment_repo
+                .get_by_id(id)
+                .await
+                .map_err(rim_services::map_repo_error)?;
+
+            let Some(att) = att else { continue };
+
+            self.repos
+                .message_attachment_repo
+                .update_attachment(
+                    att.id,
+                    att.storage_url,
+                    Some(json!({ "status": Self::FAILED_STATUS })),
+                )
+                .await
+                .map_err(rim_services::map_repo_error)?;
+        }
+
+        Ok(count)
     }
 }

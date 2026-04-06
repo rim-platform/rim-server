@@ -37,16 +37,17 @@ impl DefaultThreadService {
         let mut root_author_id = None;
         let mut root_text = None;
 
-        if let Some(root_message_id) = thread.first_message_id
-            && let Some(root) = self
+        if let Some(root_message_id) = thread.first_message_id {
+            if let Some(root) = self
                 .repos
                 .message_repo
                 .get_by_id(root_message_id)
                 .await
                 .map_err(rim_services::map_repo_error)?
-        {
-            root_author_id = Some(root.sent_by);
-            root_text = root.text;
+            {
+                root_author_id = Some(root.sent_by);
+                root_text = root.text;
+            }
         }
 
         Ok(ThreadDto {

@@ -12,7 +12,9 @@ use rim_services::pin::service::PinService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::PinRepos;
-use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_member};
+use crate::util::{
+    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+};
 
 const MAX_PINS_PER_CONVERSATION: u64 = 50;
 

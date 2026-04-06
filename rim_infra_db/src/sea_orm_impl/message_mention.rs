@@ -28,11 +28,7 @@ impl SeaOrmMessageMentionRepository {
 
 #[async_trait]
 impl MessageMentionRepository for SeaOrmMessageMentionRepository {
-    async fn create_mentions(
-        &self,
-        message_id: MessageId,
-        user_ids: &[UserId],
-    ) -> RepoResult<()> {
+    async fn create_mentions(&self, message_id: MessageId, user_ids: &[UserId]) -> RepoResult<()> {
         for user_id in user_ids {
             let active = message_mention::ActiveModel {
                 message_id: Set(message_id.into()),

@@ -20,15 +20,15 @@ pub mod password_reset;
 pub mod pin;
 pub mod presence;
 pub mod provider;
-pub mod typing;
 pub mod read_state;
 pub mod repos;
 pub mod request_auth;
 pub mod server;
 pub mod server_member;
-pub mod storage;
 pub mod setting;
+pub mod storage;
 pub mod thread;
+pub mod typing;
 pub mod user;
 
 pub(crate) mod util;
@@ -60,10 +60,10 @@ mod server_member_unit_tests;
 #[cfg(test)]
 mod user_unit_tests;
 
-pub use provider::DefaultAppServiceProvider;
-pub use notification_preference::NotificationPreferenceRepos;
 pub use custom_emoji::CustomEmojiRepos;
 pub use macro_def::MacroRepos;
+pub use notification_preference::NotificationPreferenceRepos;
+pub use provider::DefaultAppServiceProvider;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,

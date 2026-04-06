@@ -12,7 +12,12 @@ pub struct StoredFile {
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     /// Store data at the given key. Returns metadata about the stored file.
-    async fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<StoredFile, StorageError>;
+    async fn put(
+        &self,
+        key: &str,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<StoredFile, StorageError>;
 
     /// Retrieve file contents by key.
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError>;

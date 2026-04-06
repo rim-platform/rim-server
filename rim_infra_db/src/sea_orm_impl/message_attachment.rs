@@ -8,7 +8,7 @@ use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, Set};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -134,5 +134,42 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         let active: message_attachment::ActiveModel = model.into();
         active.delete(&self.db).await.map_err(map_db_err)?;
         Ok(())
+    }
+
+    async fn find_ids_with_status_before(
+        &self,
+        statuses: Vec<String>,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<Vec<MessageAttachmentId>> {
+        // Build a condition matching any of the requested metadata status values.
+        let mut status_cond = Condition::any();
+        for s in &statuses {
+            // Postgres JSON: metadata->>'status' = '<s>'
+            status_cond = status_cond.add(
+                sea_orm::sea_query::Expr::cust_with_values(
+                    "metadata->>'status' = $1",
+                    [sea_orm::Value::from(s.as_str())],
+                ),
+            );
+        }
+
+        let models = message_attachment::Entity::find()
+            .filter(status_cond)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        // Filter by UUID v7 encoded timestamp (cheaper in Rust than SQL).
+        let cutoff_ts = before.timestamp() as u64;
+        let ids = models
+            .into_iter()
+            .filter(|m| {
+                let ts = m.id.get_timestamp().map(|t| t.to_unix().0);
+                matches!(ts, Some(secs) if secs < cutoff_ts)
+            })
+            .map(|m| m.id.into())
+            .collect();
+
+        Ok(ids)
     }
 }

@@ -11,11 +11,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(MessageMention::Table)
                     .if_not_exists()
-                    .col(
-                        ColumnDef::new(MessageMention::MessageId)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(MessageMention::MessageId).uuid().not_null())
                     .col(
                         ColumnDef::new(MessageMention::MentionedUserId)
                             .uuid()

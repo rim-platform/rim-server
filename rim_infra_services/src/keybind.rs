@@ -629,11 +629,12 @@ impl KeybindService for DefaultKeybindService {
             )
             .await
             .map_err(rim_services::map_repo_error)?
-            && other.id != existing.id
         {
-            return Err(ServiceError::Conflict(
-                "keybind already exists for this scope/context/keystroke".to_string(),
-            ));
+            if other.id != existing.id {
+                return Err(ServiceError::Conflict(
+                    "keybind already exists for this scope/context/keystroke".to_string(),
+                ));
+            }
         }
 
         let updated = self
@@ -850,6 +851,99 @@ mod tests {
             dangerous: false,
             user_command_id: None,
         }
+    }
+
+    #[test]
+    fn validate_keystroke_rejects_empty() {
+        let err = DefaultKeybindService::validate_keystroke("").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_keystroke_rejects_whitespace_only() {
+        let err = DefaultKeybindService::validate_keystroke("   ").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_keystroke_rejects_too_long() {
+        let long = "A".repeat(51);
+        let err = DefaultKeybindService::validate_keystroke(&long).unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_keystroke_rejects_invalid_modifier() {
+        let err = DefaultKeybindService::validate_keystroke("Hyper+K").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_keystroke_rejects_trailing_plus() {
+        let err = DefaultKeybindService::validate_keystroke("Ctrl+").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_keystroke_accepts_single_key() {
+        DefaultKeybindService::validate_keystroke("K").unwrap();
+    }
+
+    #[test]
+    fn validate_keystroke_accepts_modifier_key_combo() {
+        DefaultKeybindService::validate_keystroke("Ctrl+Shift+K").unwrap();
+    }
+
+    #[test]
+    fn validate_keystroke_accepts_all_modifiers() {
+        DefaultKeybindService::validate_keystroke("Ctrl+Shift+Alt+Meta+K").unwrap();
+    }
+
+    #[test]
+    fn validate_preset_args_size_accepts_none() {
+        DefaultKeybindService::validate_preset_args_size(&None).unwrap();
+    }
+
+    #[test]
+    fn validate_preset_args_size_accepts_small() {
+        let args = serde_json::json!({"key": "value"});
+        DefaultKeybindService::validate_preset_args_size(&Some(args)).unwrap();
+    }
+
+    #[test]
+    fn validate_preset_args_size_rejects_oversized() {
+        let big = serde_json::json!({"data": "x".repeat(5000)});
+        let err = DefaultKeybindService::validate_preset_args_size(&Some(big)).unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn subject_for_request_user_scope() {
+        let uid = rim_core::user::model::UserId::new();
+        let subject =
+            DefaultKeybindService::subject_for_request(uid, KeybindScopeDto::User, None).unwrap();
+        assert_eq!(subject, KeybindSubject::User(uid));
+    }
+
+    #[test]
+    fn subject_for_request_workspace_requires_id() {
+        let uid = rim_core::user::model::UserId::new();
+        let err = DefaultKeybindService::subject_for_request(uid, KeybindScopeDto::Workspace, None)
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn subject_for_request_workspace_with_id() {
+        let uid = rim_core::user::model::UserId::new();
+        let ws_id = rim_core::server::model::WorkspaceId::new();
+        let subject = DefaultKeybindService::subject_for_request(
+            uid,
+            KeybindScopeDto::Workspace,
+            Some(ws_id),
+        )
+        .unwrap();
+        assert_eq!(subject, KeybindSubject::Workspace(ws_id));
     }
 
     #[tokio::test]

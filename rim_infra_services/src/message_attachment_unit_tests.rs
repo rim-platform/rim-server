@@ -59,6 +59,11 @@ mod tests {
                 metadata: Option<serde_json::Value>,
             ) -> RepoResult<MessageAttachment>;
             async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()>;
+            async fn find_ids_with_status_before(
+                &self,
+                statuses: Vec<String>,
+                before: chrono::DateTime<chrono::Utc>,
+            ) -> RepoResult<Vec<MessageAttachmentId>>;
         }
     }
 
@@ -283,13 +288,16 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -321,13 +329,16 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -374,13 +385,16 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
 
         let dto = svc
             .get_attachment(GetAttachmentQuery {
@@ -430,13 +444,16 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
 
         let err = svc
             .get_attachment(GetAttachmentQuery {
@@ -478,13 +495,16 @@ mod tests {
             .expect_is_member()
             .returning(|_, _| Ok(true));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
-            server_member_repo: Arc::new(server_member_repo),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
 
         // Filenames containing ".." are rejected outright (not stripped).
         let err = svc
@@ -522,17 +542,20 @@ mod tests {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(MockConversationRepository::new()),
-            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
-            message_repo: Arc::new(MockMessageRepository::new()),
-            message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
-            server_member_repo: Arc::new({
-                let mut repo = MockServerMemberRepository::new();
-                repo.expect_is_member().returning(|_, _| Ok(true));
-                repo
-            }),
-        }, noop_storage());
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                server_member_repo: Arc::new({
+                    let mut repo = MockServerMemberRepository::new();
+                    repo.expect_is_member().returning(|_, _| Ok(true));
+                    repo
+                }),
+            },
+            noop_storage(),
+        );
 
         let err = svc
             .create_attachment(CreateAttachmentCmd {
@@ -704,13 +727,16 @@ mod tests {
             .expect_delete_file()
             .returning(|_key| Box::pin(async { Ok(()) }));
 
-        let svc = DefaultMessageAttachmentService::new(AttachmentRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_attachment_repo: Arc::new(message_attachment_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        }, Arc::new(storage));
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            Arc::new(storage),
+        );
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {

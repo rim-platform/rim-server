@@ -120,7 +120,8 @@ mod tests {
 
     #[test]
     fn parse_multiple_mentions() {
-        let text = "<@550e8400-e29b-41d4-a716-446655440000> and <@660e8400-e29b-41d4-a716-446655440000>";
+        let text =
+            "<@550e8400-e29b-41d4-a716-446655440000> and <@660e8400-e29b-41d4-a716-446655440000>";
         let ids = parse_mention_ids(text);
         assert_eq!(ids.len(), 2);
     }
@@ -148,8 +149,52 @@ mod tests {
 
     #[test]
     fn parse_duplicate_mentions_deduped() {
-        let text = "<@550e8400-e29b-41d4-a716-446655440000> and <@550e8400-e29b-41d4-a716-446655440000>";
+        let text =
+            "<@550e8400-e29b-41d4-a716-446655440000> and <@550e8400-e29b-41d4-a716-446655440000>";
         let ids = parse_mention_ids(text);
         assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn parse_empty_string() {
+        assert!(parse_mention_ids("").is_empty());
+    }
+
+    #[test]
+    fn parse_nested_angle_brackets_not_confused() {
+        let text = "<<@550e8400-e29b-41d4-a716-446655440000>>";
+        let ids = parse_mention_ids(text);
+        // Should still find the UUID
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn parse_mention_adjacent_to_text() {
+        let text = "hi<@550e8400-e29b-41d4-a716-446655440000>bye";
+        let ids = parse_mention_ids(text);
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn parse_mention_preserves_order() {
+        let text =
+            "<@660e8400-e29b-41d4-a716-446655440000> then <@550e8400-e29b-41d4-a716-446655440000>";
+        let ids = parse_mention_ids(text);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            uuid::Uuid::from(ids[0]),
+            uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+        assert_eq!(
+            uuid::Uuid::from(ids[1]),
+            uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_mention_with_whitespace_in_uuid_ignored() {
+        let text = "<@ 550e8400-e29b-41d4-a716-446655440000>";
+        let ids = parse_mention_ids(text);
+        assert!(ids.is_empty());
     }
 }

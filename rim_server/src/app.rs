@@ -67,9 +67,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository::new(db.clone()),
         ),
         keybind_repo: Arc::new(SeaOrmKeybindRepository::new(db.clone())),
-        macro_repo: Arc::new(
-            sea_orm_impl::macro_def::SeaOrmMacroRepository::new(db.clone()),
-        ),
+        macro_repo: Arc::new(sea_orm_impl::macro_def::SeaOrmMacroRepository::new(
+            db.clone(),
+        )),
         message_repo: Arc::new(sea_orm_impl::message::SeaOrmMessageRepository::new(
             db.clone(),
         )),
@@ -85,18 +85,16 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_mention_repo: Arc::new(
             sea_orm_impl::message_mention::SeaOrmMessageMentionRepository::new(db.clone()),
         ),
-        message_pin_repo: Arc::new(
-            sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(db.clone()),
-        ),
+        message_pin_repo: Arc::new(sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(
+            db.clone(),
+        )),
         notification_preference_repo: Arc::new(
             sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
                 db.clone(),
             ),
         ),
         password_reset_token_repo: Arc::new(
-            sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(
-                db.clone(),
-            ),
+            sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(db.clone()),
         ),
         read_state_repo: Arc::new(
             sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository::new(
@@ -134,12 +132,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let storage_backend: Arc<dyn StorageBackend> = Arc::new(LocalFileStorage::new(files_dir));
 
     let max_workspace_bytes = config.max_workspace_storage_bytes.unwrap_or(1_073_741_824);
-    let storage_service: Arc<dyn StorageService> = Arc::new(
-        rim_infra_services::storage::DefaultStorageService::new(
+    let storage_service: Arc<dyn StorageService> =
+        Arc::new(rim_infra_services::storage::DefaultStorageService::new(
             Arc::clone(&storage_backend),
             max_workspace_bytes,
-        ),
-    );
+        ));
 
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,

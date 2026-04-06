@@ -119,6 +119,7 @@ pub enum AttachmentStatusEnum {
     PendingUpload,
     Uploaded,
     Ready,
+    Failed,
 }
 
 impl From<rim_services::message_attachment::dto::AttachmentStatus> for AttachmentStatusEnum {
@@ -128,6 +129,7 @@ impl From<rim_services::message_attachment::dto::AttachmentStatus> for Attachmen
             D::PendingUpload => Self::PendingUpload,
             D::Uploaded => Self::Uploaded,
             D::Ready => Self::Ready,
+            D::Failed => Self::Failed,
         }
     }
 }
@@ -588,13 +590,18 @@ pub struct Conversation {
 impl Conversation {
     async fn is_muted(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<bool> {
         let actor = crate::auth_context::require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
-        let conversation_id = crate::ids::parse_uuid_id::<rim_core::conversation::model::ConversationId>(&self.id)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::notification_preference::service::NotificationPreferenceService,
+        >>()?;
+        let conversation_id =
+            crate::ids::parse_uuid_id::<rim_core::conversation::model::ConversationId>(&self.id)?;
 
-        svc.is_muted(rim_services::notification_preference::command::IsMutedQuery {
-            actor: rim_services::Actor::new(actor),
-            conversation_id,
-        })
+        svc.is_muted(
+            rim_services::notification_preference::command::IsMutedQuery {
+                actor: rim_services::Actor::new(actor),
+                conversation_id,
+            },
+        )
         .await
         .map_err(crate::errors::map_service_error)
     }
@@ -748,7 +755,8 @@ impl Message {
         let Some(ref fwd_id) = self.forwarded_from_message_id else {
             return Ok(None);
         };
-        let msg_svc = ctx.data::<std::sync::Arc<dyn rim_services::message::service::MessageService>>()?;
+        let msg_svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::message::service::MessageService>>()?;
         let message_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(fwd_id)?;
         let messages = msg_svc
             .get_messages_by_ids(&[message_id])
@@ -767,7 +775,8 @@ impl Message {
 
     #[graphql(complexity = 5)]
     async fn author(&self, ctx: &Context<'_>) -> Result<Option<User>> {
-        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
+        let loader = ctx
+            .data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
         let user_id = crate::ids::parse_uuid_id::<rim_core::user::model::UserId>(&self.author_id)?;
         let user = loader
             .load_one(user_id)
@@ -795,7 +804,8 @@ impl Message {
 
     #[graphql(complexity = 5)]
     async fn is_pinned(&self, ctx: &Context<'_>) -> Result<bool> {
-        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::PinLoader>>();
+        let loader = ctx
+            .data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::PinLoader>>();
         let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
         let pinned = loader
             .load_one(msg_id)
@@ -807,7 +817,9 @@ impl Message {
 
     #[graphql(complexity = 5)]
     async fn mentioned_user_ids(&self, ctx: &Context<'_>) -> Result<Vec<async_graphql::ID>> {
-        let loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>();
+        let loader = ctx
+            .data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>(
+            );
         let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
         let user_ids = loader
             .load_one(msg_id)
@@ -834,8 +846,11 @@ impl Message {
 
     #[graphql(complexity = "child_complexity * 10")]
     async fn mentions(&self, ctx: &Context<'_>) -> Result<Vec<User>> {
-        let mention_loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>();
-        let user_loader = ctx.data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
+        let mention_loader = ctx
+            .data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::MentionLoader>>(
+            );
+        let user_loader = ctx
+            .data_unchecked::<async_graphql::dataloader::DataLoader<crate::loaders::UserLoader>>();
         let msg_id = crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(&self.id)?;
         let user_ids = mention_loader
             .load_one(msg_id)

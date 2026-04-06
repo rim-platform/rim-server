@@ -3,6 +3,7 @@ use dotenvy::dotenv;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct RIMConfig {
     pub server_host: String,
     pub server_port: u16,

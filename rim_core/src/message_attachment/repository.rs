@@ -36,4 +36,13 @@ pub trait MessageAttachmentRepository: Send + Sync {
     ) -> RepoResult<MessageAttachment>;
 
     async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()>;
+
+    /// Find all attachment IDs with the given metadata status strings
+    /// whose UUID v7 id encodes a timestamp older than `before`.
+    /// Used by the stale-attachment cleanup job.
+    async fn find_ids_with_status_before(
+        &self,
+        statuses: Vec<String>,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<Vec<MessageAttachmentId>>;
 }

@@ -22,21 +22,16 @@ impl DefaultStorageService {
 
     /// Build a storage key for an attachment file.
     /// Pattern: `{workspace_id}/attachments/{attachment_id}/{filename}`
-    pub fn attachment_key(
-        workspace_id: &ServerId,
-        attachment_id: &str,
-        filename: &str,
-    ) -> String {
-        format!("{}/attachments/{}/{}", workspace_id, attachment_id, filename)
+    pub fn attachment_key(workspace_id: &ServerId, attachment_id: &str, filename: &str) -> String {
+        format!(
+            "{}/attachments/{}/{}",
+            workspace_id, attachment_id, filename
+        )
     }
 
     /// Build a storage key for an avatar file.
     /// Pattern: `{workspace_id}/avatars/{user_id}/{filename}`
-    pub fn avatar_key(
-        workspace_id: &str,
-        user_id: &str,
-        filename: &str,
-    ) -> String {
+    pub fn avatar_key(workspace_id: &str, user_id: &str, filename: &str) -> String {
         format!("{}/avatars/{}/{}", workspace_id, user_id, filename)
     }
 
@@ -53,18 +48,17 @@ fn map_storage_error(err: StorageError) -> ServiceError {
             ServiceError::NotFound
         }
         StorageError::Io(e) => ServiceError::internal(e),
-        StorageError::TooLarge { size, max } => {
-            ServiceError::Validation(format!("file too large: {} bytes (max {} bytes)", size, max))
+        StorageError::TooLarge { size, max } => ServiceError::Validation(format!(
+            "file too large: {} bytes (max {} bytes)",
+            size, max
+        )),
+        StorageError::QuotaExceeded { used, max } => ServiceError::Validation(format!(
+            "storage quota exceeded: {} of {} bytes used",
+            used, max
+        )),
+        StorageError::Unsupported(msg) => {
+            ServiceError::internal(std::io::Error::new(std::io::ErrorKind::Unsupported, msg))
         }
-        StorageError::QuotaExceeded { used, max } => {
-            ServiceError::Validation(format!(
-                "storage quota exceeded: {} of {} bytes used",
-                used, max
-            ))
-        }
-        StorageError::Unsupported(msg) => ServiceError::internal(
-            std::io::Error::new(std::io::ErrorKind::Unsupported, msg),
-        ),
     }
 }
 

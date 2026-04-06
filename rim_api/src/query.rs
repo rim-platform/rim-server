@@ -7,11 +7,13 @@ use crate::types::{
     CommandSurface, Conversation, ConversationPage, ConversationTypeEnum, CustomEmoji,
     DefaultKeybind, Event, InboxCursorInput, Integration, Invite, Keybind, KeybindContext,
     KeybindLayers, KeybindScope, MacroDef, Message, MessageCursorInput, MessagePage,
-    MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember, Setting, Thread,
-    ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
+    MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember, Setting,
+    Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
+use rim_services::auth::command::ListInvitesQuery;
+use rim_services::auth::service::AuthService;
 use rim_services::capability::service::CapabilityService;
 use rim_services::command::request::ListCommandsQuery;
 use rim_services::command::service::CommandService;
@@ -37,8 +39,6 @@ use rim_services::message_thread::command::{
     GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::service::ThreadService;
-use rim_services::auth::command::ListInvitesQuery;
-use rim_services::auth::service::AuthService;
 use rim_services::server::command::{GetServerQuery, ListMyServersQuery};
 use rim_services::server::service::ServerService;
 use rim_services::server_member::command::ListServerMembersQuery;
@@ -731,7 +731,8 @@ impl Query {
     ) -> Result<Vec<Message>> {
         let actor = require_actor(ctx)?;
 
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::mention::service::MentionService>>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::mention::service::MentionService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
         let messages = svc
@@ -808,28 +809,30 @@ impl Query {
     ) -> Result<Vec<MutedConversation>> {
         let actor = require_actor(ctx)?;
 
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::notification_preference::service::NotificationPreferenceService,
+        >>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
         let items = svc
-            .list_muted_conversations(rim_services::notification_preference::command::ListMutedConversationsQuery {
-                actor: rim_services::Actor::new(actor),
-                server_id,
-            })
+            .list_muted_conversations(
+                rim_services::notification_preference::command::ListMutedConversationsQuery {
+                    actor: rim_services::Actor::new(actor),
+                    server_id,
+                },
+            )
             .await
             .map_err(crate::errors::map_service_error)?;
 
         Ok(items.into_iter().map(Into::into).collect())
     }
 
-    async fn custom_emojis(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-    ) -> Result<Vec<CustomEmoji>> {
+    async fn custom_emojis(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<CustomEmoji>> {
         let actor = require_actor(ctx)?;
 
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
         let emojis = svc
@@ -845,13 +848,10 @@ impl Query {
 
     // ── Macros ──────────────────────────────────────────────────────────
 
-    async fn my_macros(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-    ) -> Result<Vec<MacroDef>> {
+    async fn my_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
         let macros = svc
@@ -865,13 +865,10 @@ impl Query {
         Ok(macros.into_iter().map(Into::into).collect())
     }
 
-    async fn server_macros(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-    ) -> Result<Vec<MacroDef>> {
+    async fn server_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
 
         let macros = svc

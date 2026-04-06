@@ -34,8 +34,8 @@ pub fn build_schema(
     typing_tracker: Arc<rim_infra_services::typing::TypingTracker>,
     observers: Arc<rim_services::events::Observers>,
 ) -> AppSchema {
-    use async_graphql::dataloader::DataLoader;
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
+    use async_graphql::dataloader::DataLoader;
 
     let user_loader = DataLoader::new(
         UserLoader::new(service_provider.user_service()),
@@ -49,10 +49,7 @@ pub fn build_schema(
         MentionLoader::new(service_provider.mention_service()),
         tokio::spawn,
     );
-    let pin_loader = DataLoader::new(
-        PinLoader::new(service_provider.pin_service()),
-        tokio::spawn,
-    );
+    let pin_loader = DataLoader::new(PinLoader::new(service_provider.pin_service()), tokio::spawn);
     let link_preview_loader = DataLoader::new(
         LinkPreviewLoader::new(service_provider.link_preview_service()),
         tokio::spawn,

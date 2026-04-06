@@ -19,12 +19,12 @@ mod tests {
     use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
     use rim_services::capability::service::MockCapabilityService;
     use rim_services::command::service::MockCommandService;
-    use rim_services::custom_emoji::service::MockCustomEmojiService;
-    use rim_services::link_preview::service::MockLinkPreviewService;
     use rim_services::conversation::service::MockConversationService;
+    use rim_services::custom_emoji::service::MockCustomEmojiService;
     use rim_services::event::service::MockEventService;
     use rim_services::integration::service::MockIntegrationService;
     use rim_services::keybind::service::MockKeybindService;
+    use rim_services::link_preview::service::MockLinkPreviewService;
     use rim_services::macro_def::service::MockMacroService;
     use rim_services::mention::service::MockMentionService;
     use rim_services::message::service::MockMessageService;
@@ -288,6 +288,7 @@ mod tests {
             content_type: "text/plain".to_string(),
             size_bytes: 42,
             storage_key: Some("uploads/test/file.txt".to_string()),
+            created_at: chrono::Utc::now(),
         }
     }
 
@@ -307,7 +308,8 @@ mod tests {
         message: Arc<dyn rim_services::message::service::MessageService>,
         attachment: Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
         pin: Arc<dyn rim_services::pin::service::PinService>,
-        notification_preference: Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>,
+        notification_preference:
+            Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>,
         password_reset: Arc<dyn rim_services::password_reset::service::PasswordResetService>,
         reaction: Arc<dyn rim_services::message_reaction::service::MessageReactionService>,
         read_state: Arc<dyn rim_services::read_state::service::ReadStateService>,
@@ -385,11 +387,16 @@ mod tests {
             Arc::clone(&self.reaction)
         }
 
-        fn notification_preference_service(&self) -> Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService> {
+        fn notification_preference_service(
+            &self,
+        ) -> Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>
+        {
             Arc::clone(&self.notification_preference)
         }
 
-        fn password_reset_service(&self) -> Arc<dyn rim_services::password_reset::service::PasswordResetService> {
+        fn password_reset_service(
+            &self,
+        ) -> Arc<dyn rim_services::password_reset::service::PasswordResetService> {
             Arc::clone(&self.password_reset)
         }
 

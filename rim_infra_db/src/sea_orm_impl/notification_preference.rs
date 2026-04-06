@@ -85,11 +85,7 @@ impl NotificationPreferenceRepository for SeaOrmNotificationPreferenceRepository
         Ok(())
     }
 
-    async fn is_muted(
-        &self,
-        user_id: UserId,
-        conversation_id: ConversationId,
-    ) -> RepoResult<bool> {
+    async fn is_muted(&self, user_id: UserId, conversation_id: ConversationId) -> RepoResult<bool> {
         let pref = notification_preference::Entity::find_by_id((
             Uuid::from(user_id),
             Uuid::from(conversation_id),

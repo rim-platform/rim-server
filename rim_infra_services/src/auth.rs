@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
+use rim_auth::csrf::generate_csrf_token;
 use rim_auth::password::{hash_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInvite, NewSession};
@@ -81,12 +82,8 @@ impl DefaultAuthService {
         Ok(())
     }
 
-    fn new_csrf_token() -> String {
-        // Reuse session token generator for entropy; different prefix.
-        let t = generate_session_token();
-        t.strip_prefix("rim_sess_")
-            .map(|s| format!("rim_csrf_{s}"))
-            .unwrap_or_else(|| format!("rim_csrf_{t}"))
+    fn new_csrf_token(session_token: &str) -> String {
+        generate_csrf_token(session_token)
     }
 
     fn to_invite_dto(inv: rim_core::auth::model::Invite) -> InviteDto {
@@ -131,7 +128,7 @@ impl DefaultAuthService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let csrf = Self::new_csrf_token();
+        let csrf = Self::new_csrf_token(&raw_token);
         Ok((sess, raw_token, csrf))
     }
 
@@ -278,7 +275,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        let csrf = Self::new_csrf_token();
+        let csrf = Self::new_csrf_token(&raw_token);
 
         info!(user_id = %user.id, server_id = %server.id, "bootstrapped instance");
 
@@ -412,10 +409,10 @@ impl AuthService for DefaultAuthService {
         if inv.revoked_at.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
-        if let Some(expires_at) = inv.expires_at
-            && expires_at < Utc::now()
-        {
-            return Err(ServiceError::PermissionDenied);
+        if let Some(expires_at) = inv.expires_at {
+            if expires_at < Utc::now() {
+                return Err(ServiceError::PermissionDenied);
+            }
         }
 
         // Ensure username not taken.
@@ -498,7 +495,7 @@ impl AuthService for DefaultAuthService {
             .workspace
             .on_member_joined(inv.server_id, user.id, username);
 
-        let csrf = Self::new_csrf_token();
+        let csrf = Self::new_csrf_token(&raw_token);
 
         Ok(AcceptInviteResultDto {
             user_id: user.id,
@@ -531,10 +528,10 @@ impl AuthService for DefaultAuthService {
         if inv.revoked_at.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
-        if let Some(expires_at) = inv.expires_at
-            && expires_at < Utc::now()
-        {
-            return Err(ServiceError::PermissionDenied);
+        if let Some(expires_at) = inv.expires_at {
+            if expires_at < Utc::now() {
+                return Err(ServiceError::PermissionDenied);
+            }
         }
 
         // Check if user is already a member of the server.
@@ -605,10 +602,7 @@ impl AuthService for DefaultAuthService {
     }
 
     #[instrument(name = "auth.list_invites", skip_all, fields(actor_id = %query.actor.user_id, server_id = %query.server_id))]
-    async fn list_invites(
-        &self,
-        query: ListInvitesQuery,
-    ) -> ServiceResult<Vec<InviteDto>> {
+    async fn list_invites(&self, query: ListInvitesQuery) -> ServiceResult<Vec<InviteDto>> {
         ensure_server_owner(
             self.repos.server_member_repo.as_ref(),
             query.server_id,

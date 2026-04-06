@@ -12,11 +12,7 @@ use crate::user::model::UserId;
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageMentionRepository: Send + Sync {
-    async fn create_mentions(
-        &self,
-        message_id: MessageId,
-        user_ids: &[UserId],
-    ) -> RepoResult<()>;
+    async fn create_mentions(&self, message_id: MessageId, user_ids: &[UserId]) -> RepoResult<()>;
 
     async fn delete_mentions_for_message(&self, message_id: MessageId) -> RepoResult<()>;
 

@@ -54,11 +54,7 @@ impl MacroRepository for SeaOrmMacroRepository {
         Ok(models.into_iter().map(Into::into).collect())
     }
 
-    async fn count_for_user(
-        &self,
-        server_id: ServerId,
-        user_id: UserId,
-    ) -> RepoResult<u64> {
+    async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64> {
         let count = macro_def::Entity::find()
             .filter(macro_def::Column::ServerId.eq::<Uuid>(server_id.into()))
             .filter(macro_def::Column::UserId.eq::<Uuid>(user_id.into()))

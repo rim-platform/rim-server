@@ -1,6 +1,7 @@
 use actix_web::HttpRequest;
 use async_graphql_actix_web::GraphQLResponse;
 use async_graphql_parser::types::{ExecutableDocument, OperationType, Selection};
+use rim_auth::csrf::verify_csrf_token;
 use rim_services::auth::service::RequestAuthenticator;
 
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
@@ -57,7 +58,7 @@ pub fn enforce_csrf_for_batch(
     req: &HttpRequest,
     batch: &async_graphql::BatchRequest,
 ) -> Result<(), GraphQLResponse> {
-    let needs_csrf = batch.iter().any(|gql| request_needs_csrf(gql));
+    let needs_csrf = batch.iter().any(request_needs_csrf);
     if needs_csrf {
         validate_csrf_tokens(req)
     } else {
@@ -104,13 +105,11 @@ fn request_needs_csrf(gql: &async_graphql::Request) -> bool {
     !all_exempt
 }
 
-// TODO: CSRF token is not bound to the user session. An attacker who obtains a
-// valid CSRF cookie+header pair (e.g. via XSS on a sibling subdomain) can reuse
-// it across sessions. The proper fix is to HMAC-sign the CSRF token with the
-// session key so that each token is only valid for its originating session.
-
-/// Validate that the `X-CSRF-Token` header matches the CSRF cookie.
-/// Returns `Ok(())` on success, or an error string on failure.
+/// Validate CSRF token using the double-submit cookie pattern with HMAC session binding.
+///
+/// 1. The `X-CSRF-Token` header must match the `rim_csrf` cookie (double-submit).
+/// 2. The CSRF token must be a valid HMAC signature over the session token from
+///    the `rim_session` cookie, binding the token to the originating session.
 pub fn validate_csrf_header(req: &HttpRequest) -> Result<(), &'static str> {
     let csrf_cookie = req.cookie(COOKIE_CSRF).map(|c| c.value().to_string());
     let csrf_header = req
@@ -119,10 +118,23 @@ pub fn validate_csrf_header(req: &HttpRequest) -> Result<(), &'static str> {
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    match (csrf_cookie, csrf_header) {
-        (Some(c), Some(h)) if c == h => Ok(()),
-        _ => Err("csrf validation failed"),
+    // Step 1: Double-submit check — cookie must match header.
+    let csrf_token = match (csrf_cookie, csrf_header) {
+        (Some(c), Some(h)) if c == h => c,
+        _ => return Err("csrf validation failed"),
+    };
+
+    // Step 2: HMAC session binding — token must be signed with the session token.
+    let session_token = req
+        .cookie(COOKIE_SESSION)
+        .map(|c| c.value().to_string())
+        .ok_or("csrf validation failed: missing session")?;
+
+    if !verify_csrf_token(&csrf_token, &session_token) {
+        return Err("csrf validation failed: token not bound to session");
     }
+
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]

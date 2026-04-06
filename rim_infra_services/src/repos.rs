@@ -13,10 +13,10 @@ use rim_core::message::repository::MessageRepository;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::message_mention::repository::MessageMentionRepository;
 use rim_core::message_pin::repository::MessagePinRepository;
-use rim_core::notification_preference::repository::NotificationPreferenceRepository;
-use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
+use rim_core::notification_preference::repository::NotificationPreferenceRepository;
+use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::repository::UserRepository;
@@ -376,9 +376,9 @@ impl AppRepos {
             message_mention_repo: Arc::new(
                 sea_orm_impl::message_mention::SeaOrmMessageMentionRepository::new(handle.clone()),
             ),
-            message_pin_repo: Arc::new(
-                sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(handle.clone()),
-            ),
+            message_pin_repo: Arc::new(sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(
+                handle.clone(),
+            )),
             notification_preference_repo: Arc::new(
                 sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
                     handle.clone(),
