@@ -15,6 +15,11 @@ use rim_services::conversation::command::{CreateConversationCmd, UpdateConversat
 use rim_services::conversation::service::ConversationService;
 use rim_services::keybind::request::{CreateKeybindCmd, DeleteKeybindCmd, UpdateKeybindCmd};
 use rim_services::keybind::service::KeybindService;
+use rim_services::macro_def::dto::MacroStepDto;
+use rim_services::macro_def::request::{
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, UpdateMacroCmd,
+};
+use rim_services::macro_def::service::MacroService;
 use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd};
 use rim_services::message::command::{ReplyToMessageCmd, SendMessageCmd};
 use rim_services::message::service::MessageService;
@@ -26,11 +31,6 @@ use rim_services::message_reaction::command::ToggleReactionCmd;
 use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::pin::command::{PinMessageCmd, UnpinMessageCmd};
 use rim_services::pin::service::PinService;
-use rim_services::macro_def::dto::MacroStepDto;
-use rim_services::macro_def::request::{
-    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, UpdateMacroCmd,
-};
-use rim_services::macro_def::service::MacroService;
 use rim_services::server::command::CreateServerCmd;
 use rim_services::server::service::ServerService;
 
@@ -622,14 +622,12 @@ impl Mutation {
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-        let source_conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
-                &input.source_conversation_id,
-            )?;
-        let target_conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
-                &input.target_conversation_id,
-            )?;
+        let source_conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+            &input.source_conversation_id,
+        )?;
+        let target_conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+            &input.target_conversation_id,
+        )?;
         let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
 
         let msg = svc
@@ -1075,9 +1073,14 @@ impl Mutation {
             let conversation_type = conversation.conversation_type.as_str().to_owned();
             let member_user_ids = conversation.member_ids;
 
-            let observers =
-                ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
-            observers.workspace.on_typing_started(server_id, conversation_id, actor, conversation_type, member_user_ids);
+            let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
+            observers.workspace.on_typing_started(
+                server_id,
+                conversation_id,
+                actor,
+                conversation_type,
+                member_user_ids,
+            );
         }
 
         Ok(true)
@@ -1124,17 +1127,22 @@ impl Mutation {
         input: MuteConversationInput,
     ) -> Result<bool> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::notification_preference::service::NotificationPreferenceService,
+        >>()?;
 
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-        let conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
 
-        svc.mute_conversation(rim_services::notification_preference::command::MuteConversationCmd {
-            actor: Actor::new(actor),
-            server_id,
-            conversation_id,
-            muted_until: input.muted_until,
-        })
+        svc.mute_conversation(
+            rim_services::notification_preference::command::MuteConversationCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                muted_until: input.muted_until,
+            },
+        )
         .await
         .map_err(map_service_error)
     }
@@ -1145,25 +1153,26 @@ impl Mutation {
         input: UnmuteConversationInput,
     ) -> Result<bool> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>>()?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::notification_preference::service::NotificationPreferenceService,
+        >>()?;
 
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-        let conversation_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
 
-        svc.unmute_conversation(rim_services::notification_preference::command::UnmuteConversationCmd {
-            actor: Actor::new(actor),
-            server_id,
-            conversation_id,
-        })
+        svc.unmute_conversation(
+            rim_services::notification_preference::command::UnmuteConversationCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+            },
+        )
         .await
         .map_err(map_service_error)
     }
 
-    async fn request_password_reset(
-        &self,
-        ctx: &Context<'_>,
-        username: String,
-    ) -> Result<bool> {
+    async fn request_password_reset(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
         let svc = ctx
             .data::<std::sync::Arc<dyn rim_services::password_reset::service::PasswordResetService>>(
             )?;
@@ -1201,7 +1210,9 @@ impl Mutation {
         input: CreateCustomEmojiInput,
     ) -> Result<crate::types::CustomEmoji> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
 
         let image_data = base64::engine::general_purpose::STANDARD
@@ -1221,13 +1232,11 @@ impl Mutation {
         Ok(emoji.into())
     }
 
-    async fn delete_custom_emoji(
-        &self,
-        ctx: &Context<'_>,
-        emoji_id: ID,
-    ) -> Result<bool> {
+    async fn delete_custom_emoji(&self, ctx: &Context<'_>, emoji_id: ID) -> Result<bool> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>(
+            )?;
         let emoji_id = parse_uuid_id::<rim_core::custom_emoji::model::CustomEmojiId>(&emoji_id)?;
 
         svc.delete(rim_services::custom_emoji::command::DeleteCustomEmojiCmd {
@@ -1242,11 +1251,7 @@ impl Mutation {
 
     // ── Macros ──────────────────────────────────────────────────────────
 
-    async fn create_macro(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateMacroInput,
-    ) -> Result<MacroDef> {
+    async fn create_macro(&self, ctx: &Context<'_>, input: CreateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
 
@@ -1271,11 +1276,7 @@ impl Mutation {
         Ok(result.into())
     }
 
-    async fn update_macro(
-        &self,
-        ctx: &Context<'_>,
-        input: UpdateMacroInput,
-    ) -> Result<MacroDef> {
+    async fn update_macro(&self, ctx: &Context<'_>, input: UpdateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
 
@@ -1326,10 +1327,7 @@ impl Mutation {
             .execute_macro(ExecuteMacroCmd {
                 actor: Actor::new(actor),
                 macro_id: parse_uuid_id(&input.macro_id)?,
-                command_context: input
-                    .command_context
-                    .map(TryInto::try_into)
-                    .transpose()?,
+                command_context: input.command_context.map(TryInto::try_into).transpose()?,
                 confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
             })
             .await
@@ -1400,8 +1398,12 @@ fn spawn_link_preview_fetch(
         return Ok(());
     }
 
-    let link_svc = ctx.data::<std::sync::Arc<dyn rim_services::link_preview::service::LinkPreviewService>>()?.clone();
-    let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?.clone();
+    let link_svc = ctx
+        .data::<std::sync::Arc<dyn rim_services::link_preview::service::LinkPreviewService>>()?
+        .clone();
+    let observers = ctx
+        .data::<std::sync::Arc<rim_services::events::Observers>>()?
+        .clone();
 
     tokio::spawn(async move {
         match link_svc.fetch_and_store(message_id, urls).await {

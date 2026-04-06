@@ -81,7 +81,6 @@ impl MessageObserver {
             thread_id,
         });
     }
-
 }
 
 impl EventObserver for MessageObserver {
@@ -246,11 +245,7 @@ impl WorkspaceObserver {
         });
     }
 
-    pub fn on_conversation_updated(
-        &self,
-        workspace_id: ServerId,
-        conversation_id: ConversationId,
-    ) {
+    pub fn on_conversation_updated(&self, workspace_id: ServerId, conversation_id: ConversationId) {
         self.notify(WorkspaceEvent::ConversationUpdated {
             workspace_id,
             conversation_id,

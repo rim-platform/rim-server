@@ -2,7 +2,9 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::password_reset::model::{NewPasswordResetToken, PasswordResetToken, PasswordResetTokenId};
+use crate::password_reset::model::{
+    NewPasswordResetToken, PasswordResetToken, PasswordResetTokenId,
+};
 use crate::repository::error::RepoResult;
 
 #[cfg_attr(any(test, feature = "mocks"), automock)]

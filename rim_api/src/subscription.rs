@@ -183,9 +183,10 @@ impl Subscription {
                     Ok(event) => {
                         if event.workspace_id() == ws_id
                             && user_can_see_event(&event, &subscriber_user_id)
-                            && let Ok(json) = serde_json::to_string(&event)
                         {
-                            yield json;
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                yield json;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

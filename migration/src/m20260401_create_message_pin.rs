@@ -17,16 +17,8 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(MessagePin::ConversationId)
-                            .uuid()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(MessagePin::PinnedBy)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(MessagePin::ConversationId).uuid().not_null())
+                    .col(ColumnDef::new(MessagePin::PinnedBy).uuid().not_null())
                     .col(
                         ColumnDef::new(MessagePin::PinnedAt)
                             .timestamp_with_time_zone()

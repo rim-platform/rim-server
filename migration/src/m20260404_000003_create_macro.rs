@@ -14,11 +14,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Macro::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Macro::ServerId).uuid().not_null())
                     .col(ColumnDef::new(Macro::UserId).uuid().not_null())
-                    .col(
-                        ColumnDef::new(Macro::Name)
-                            .string_len(128)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Macro::Name).string_len(128).not_null())
                     .col(ColumnDef::new(Macro::Description).text().null())
                     .col(
                         ColumnDef::new(Macro::Steps)

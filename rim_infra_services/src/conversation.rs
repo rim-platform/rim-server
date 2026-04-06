@@ -17,7 +17,9 @@ use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 use rim_services::events::Observers;
 
 use crate::ConversationRepos;
-use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_member};
+use crate::util::{
+    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+};
 
 #[derive(Clone)]
 pub struct DefaultConversationService {

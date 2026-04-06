@@ -34,7 +34,10 @@ impl MigrationTrait for Migration {
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_notification_preference_user")
-                            .from(NotificationPreference::Table, NotificationPreference::UserId)
+                            .from(
+                                NotificationPreference::Table,
+                                NotificationPreference::UserId,
+                            )
                             .to(User::Table, User::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )

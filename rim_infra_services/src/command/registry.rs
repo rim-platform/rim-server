@@ -621,14 +621,30 @@ pub(super) fn builtin_commands() -> Vec<CommandDefinitionDto> {
             dangerous: false,
             user_command_id: None,
         },
-        // ── Admin (Backend) ──
+        CommandDefinitionDto {
+            id: "workspace.reload_commands".to_string(),
+            title: "Reload Commands".to_string(),
+            description: "Refresh the command registry from the server.".to_string(),
+            category: "Workspace".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::DesktopLocal,
+            arguments: vec![],
+            required_context: vec![],
+            required_capabilities: vec![],
+            visible_in_palette: true,
+            visible_in_context_menus: false,
+            keybind_capable: true,
+            dangerous: false,
+            user_command_id: None,
+        },
+        // ── Admin ──
         CommandDefinitionDto {
             id: "admin.invite_member".to_string(),
             title: "Invite Member".to_string(),
             description: "Invite a new member to the workspace.".to_string(),
             category: "Admin".to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
-            execution_target: CommandExecutionTargetDto::Backend,
+            execution_target: CommandExecutionTargetDto::DesktopLocal,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
@@ -696,5 +712,154 @@ pub(super) fn command_matches_surface(
                     .all(|key| context_has_key(context, key))
         }
         CommandSurfaceDto::KeybindPicker => definition.keybind_capable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_has_key_workspace() {
+        let ctx = CommandContextDto {
+            workspace_id: Some(rim_core::server::model::ServerId::new()),
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        };
+        assert!(context_has_key(Some(&ctx), "workspace"));
+        assert!(!context_has_key(Some(&ctx), "conversation"));
+    }
+
+    #[test]
+    fn context_has_key_none_context_returns_false() {
+        assert!(!context_has_key(None, "workspace"));
+    }
+
+    #[test]
+    fn context_has_key_selected_text_empty_is_false() {
+        let ctx = CommandContextDto {
+            workspace_id: None,
+            conversation_id: None,
+            thread_id: None,
+            selected_text: Some("   ".to_string()),
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        };
+        assert!(!context_has_key(Some(&ctx), "selected_text"));
+    }
+
+    #[test]
+    fn context_has_key_selected_text_non_empty_is_true() {
+        let ctx = CommandContextDto {
+            workspace_id: None,
+            conversation_id: None,
+            thread_id: None,
+            selected_text: Some("hello".to_string()),
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        };
+        assert!(context_has_key(Some(&ctx), "selected_text"));
+    }
+
+    #[test]
+    fn context_has_key_selected_messages() {
+        let ctx = CommandContextDto {
+            workspace_id: None,
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![rim_core::message::model::MessageId::new()],
+            focused_surface: None,
+            active_panel: None,
+        };
+        assert!(context_has_key(Some(&ctx), "selected_messages"));
+        assert!(!context_has_key(Some(&ctx), "selected_message"));
+    }
+
+    #[test]
+    fn context_has_key_unknown_key_returns_false() {
+        let ctx = CommandContextDto {
+            workspace_id: Some(rim_core::server::model::ServerId::new()),
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        };
+        assert!(!context_has_key(Some(&ctx), "unknown_key"));
+    }
+
+    #[test]
+    fn command_matches_palette_requires_visible_in_palette() {
+        let mut def = builtin_commands()
+            .into_iter()
+            .find(|c| c.visible_in_palette)
+            .unwrap();
+        assert!(command_matches_surface(
+            &def,
+            CommandSurfaceDto::Palette,
+            None
+        ));
+        def.visible_in_palette = false;
+        assert!(!command_matches_surface(
+            &def,
+            CommandSurfaceDto::Palette,
+            None
+        ));
+    }
+
+    #[test]
+    fn command_matches_keybind_picker_requires_keybind_capable() {
+        let mut def = builtin_commands()
+            .into_iter()
+            .find(|c| c.keybind_capable)
+            .unwrap();
+        assert!(command_matches_surface(
+            &def,
+            CommandSurfaceDto::KeybindPicker,
+            None
+        ));
+        def.keybind_capable = false;
+        assert!(!command_matches_surface(
+            &def,
+            CommandSurfaceDto::KeybindPicker,
+            None
+        ));
+    }
+
+    #[test]
+    fn command_matches_context_menu_requires_context() {
+        let def = builtin_commands()
+            .into_iter()
+            .find(|c| c.visible_in_context_menus && !c.required_context.is_empty())
+            .unwrap();
+        // Without context, should not match
+        assert!(!command_matches_surface(
+            &def,
+            CommandSurfaceDto::ContextMenu,
+            None
+        ));
+    }
+
+    #[test]
+    fn builtin_commands_ids_are_unique() {
+        let commands = builtin_commands();
+        let mut ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
+        let original_len = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), original_len, "duplicate command IDs found");
     }
 }

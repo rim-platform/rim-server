@@ -56,6 +56,26 @@ mod tests {
     }
 
     #[test]
+    fn verify_password_with_invalid_hash_format_returns_error() {
+        let result = verify_password("test", "not-a-valid-hash");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hash_password_long_input() {
+        let long_password = "a".repeat(1000);
+        let hash = hash_password(&long_password).unwrap();
+        assert!(verify_password(&long_password, &hash).unwrap());
+    }
+
+    #[test]
+    fn hash_password_unicode() {
+        let password = "p\u{00e4}ssw\u{00f6}rd \u{1f600}";
+        let hash = hash_password(password).unwrap();
+        assert!(verify_password(password, &hash).unwrap());
+    }
+
+    #[test]
     fn empty_password_can_be_hashed_and_verified() {
         let hash = hash_password("").unwrap();
         assert!(verify_password("", &hash).unwrap());

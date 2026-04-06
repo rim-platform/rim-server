@@ -17,26 +17,10 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(CustomEmoji::ServerId)
-                            .uuid()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CustomEmoji::Name)
-                            .string_len(64)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CustomEmoji::ImageUrl)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CustomEmoji::UploadedBy)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(CustomEmoji::ServerId).uuid().not_null())
+                    .col(ColumnDef::new(CustomEmoji::Name).string_len(64).not_null())
+                    .col(ColumnDef::new(CustomEmoji::ImageUrl).text().not_null())
+                    .col(ColumnDef::new(CustomEmoji::UploadedBy).uuid().not_null())
                     .col(
                         ColumnDef::new(CustomEmoji::CreatedAt)
                             .timestamp_with_time_zone()

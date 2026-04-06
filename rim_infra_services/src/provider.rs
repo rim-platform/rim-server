@@ -7,20 +7,20 @@ use rim_services::capability::service::CapabilityService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
-use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::event::service::EventService;
 use rim_services::events::Observers;
 use rim_services::integration::service::IntegrationService;
 use rim_services::keybind::service::KeybindService;
+use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::macro_def::service::MacroService;
 use rim_services::mention::service::MentionService;
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::service::MessageReactionService;
+use rim_services::message_thread::service::ThreadService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::password_reset::service::PasswordResetService;
 use rim_services::pin::service::PinService;
-use rim_services::message_thread::service::ThreadService;
 use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
@@ -115,25 +115,24 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 observers,
             ));
-        let notification_preference_service: Arc<dyn NotificationPreferenceService> =
-            Arc::new(crate::notification_preference::DefaultNotificationPreferenceService::new(
+        let notification_preference_service: Arc<dyn NotificationPreferenceService> = Arc::new(
+            crate::notification_preference::DefaultNotificationPreferenceService::new(
                 repos.for_notification_preference(),
-            ));
-        let password_reset_service: Arc<dyn PasswordResetService> = Arc::new(
-            crate::password_reset::DefaultPasswordResetService::new(
+            ),
+        );
+        let password_reset_service: Arc<dyn PasswordResetService> =
+            Arc::new(crate::password_reset::DefaultPasswordResetService::new(
                 crate::password_reset::PasswordResetRepos {
                     user_repo: Arc::clone(&repos.user_repo),
                     password_reset_token_repo: Arc::clone(&repos.password_reset_token_repo),
                 },
                 Arc::new(crate::email::LogEmailSender),
-            ),
-        );
-        let pin_service: Arc<dyn PinService> =
-            Arc::new(crate::pin::DefaultPinService::new(
-                repos.for_pin(),
-                pin_observers,
-                Arc::clone(&message_service),
             ));
+        let pin_service: Arc<dyn PinService> = Arc::new(crate::pin::DefaultPinService::new(
+            repos.for_pin(),
+            pin_observers,
+            Arc::clone(&message_service),
+        ));
         let read_state_service: Arc<dyn ReadStateService> =
             Arc::new(crate::read_state::DefaultReadStateService::new(
                 repos.for_read_state(),
@@ -174,10 +173,9 @@ impl DefaultAppServiceProvider {
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
-        let link_preview_service: Arc<dyn LinkPreviewService> =
-            Arc::new(crate::link_preview::DefaultLinkPreviewService::new(
-                repos.for_link_preview(),
-            ));
+        let link_preview_service: Arc<dyn LinkPreviewService> = Arc::new(
+            crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview()),
+        );
         let custom_emoji_service: Arc<dyn CustomEmojiService> =
             Arc::new(crate::custom_emoji::DefaultCustomEmojiService::new(
                 repos.for_custom_emoji(),

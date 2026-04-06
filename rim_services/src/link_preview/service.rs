@@ -4,8 +4,8 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::link_preview::dto::LinkPreviewDto;
 use crate::ServiceResult;
+use crate::link_preview::dto::LinkPreviewDto;
 use rim_core::message::model::MessageId;
 
 #[async_trait]

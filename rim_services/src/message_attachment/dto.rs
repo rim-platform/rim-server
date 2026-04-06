@@ -6,6 +6,7 @@ pub enum AttachmentStatus {
     PendingUpload,
     Uploaded,
     Ready,
+    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,9 @@ pub struct AttachmentDto {
     /// Storage key for downloading the file (e.g. via `/api/files/{storage_key}`).
     /// `None` when the attachment is still pending upload.
     pub storage_key: Option<String>,
+
+    /// Timestamp extracted from the UUID v7 attachment ID.
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone)]

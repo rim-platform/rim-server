@@ -25,17 +25,12 @@ impl LocalFileStorage {
         tracing::debug!(root_dir = %self.root_dir.display(), full_path = %full_path.display(), exists = full_path.exists(), "validate_path");
 
         // Canonicalize root_dir for comparison.
-        let canonical_root = self
-            .root_dir
-            .canonicalize()
-            .map_err(|e| StorageError::Io(e))?;
+        let canonical_root = self.root_dir.canonicalize().map_err(StorageError::Io)?;
 
         // For existing paths, canonicalize and verify containment.
         // For new paths (store), verify by normalizing without symlink resolution.
         let canonical = if full_path.exists() {
-            full_path
-                .canonicalize()
-                .map_err(|e| StorageError::Io(e))?
+            full_path.canonicalize().map_err(StorageError::Io)?
         } else {
             // Path doesn't exist yet — this is a store operation.
             // We already rejected ".." and null bytes above.
@@ -47,9 +42,7 @@ impl LocalFileStorage {
             let mut stripped_parts = Vec::new();
             loop {
                 if ancestor.exists() {
-                    let canonical_ancestor = ancestor
-                        .canonicalize()
-                        .map_err(|e| StorageError::Io(e))?;
+                    let canonical_ancestor = ancestor.canonicalize().map_err(StorageError::Io)?;
                     if !canonical_ancestor.starts_with(&canonical_root) {
                         return Err(StorageError::NotFound(path.to_string()));
                     }
@@ -79,7 +72,12 @@ impl LocalFileStorage {
 
 #[async_trait]
 impl StorageBackend for LocalFileStorage {
-    async fn put(&self, key: &str, data: &[u8], _content_type: &str) -> Result<StoredFile, StorageError> {
+    async fn put(
+        &self,
+        key: &str,
+        data: &[u8],
+        _content_type: &str,
+    ) -> Result<StoredFile, StorageError> {
         let full_path = self.validate_path(key)?;
 
         if let Some(parent) = full_path.parent() {
@@ -155,7 +153,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let storage = LocalFileStorage::new(tmp.path().to_path_buf());
 
-        storage.put("to_delete.txt", b"bye", "text/plain").await.unwrap();
+        storage
+            .put("to_delete.txt", b"bye", "text/plain")
+            .await
+            .unwrap();
         storage.delete("to_delete.txt").await.unwrap();
 
         let err = storage.get("to_delete.txt").await;
@@ -187,7 +188,10 @@ mod tests {
     async fn public_url_format() {
         let tmp = TempDir::new().unwrap();
         let storage = LocalFileStorage::new(tmp.path().to_path_buf());
-        assert_eq!(storage.public_url("uploads/test.txt"), Some("/api/files/uploads/test.txt".to_string()));
+        assert_eq!(
+            storage.public_url("uploads/test.txt"),
+            Some("/api/files/uploads/test.txt".to_string())
+        );
     }
 
     #[tokio::test]

@@ -32,7 +32,10 @@ impl DefaultLinkPreviewService {
             .timeout(FETCH_TIMEOUT)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 // Block redirects to private IPs
-                if let Some(addr) = attempt.url().host_str().and_then(|h| h.parse::<IpAddr>().ok())
+                if let Some(addr) = attempt
+                    .url()
+                    .host_str()
+                    .and_then(|h| h.parse::<IpAddr>().ok())
                 {
                     if is_private_ip(&addr) {
                         return attempt.stop();
@@ -149,9 +152,7 @@ struct OgData {
 /// Extract URLs from message text using a simple regex.
 pub fn extract_urls(text: &str) -> Vec<String> {
     let re = regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap();
-    re.find_iter(text)
-        .map(|m| m.as_str().to_string())
-        .collect()
+    re.find_iter(text).map(|m| m.as_str().to_string()).collect()
 }
 
 #[async_trait]
@@ -239,7 +240,7 @@ impl DefaultLinkPreviewService {
             .get(url)
             .send()
             .await
-            .map_err(|e| ServiceError::internal(e))?;
+            .map_err(ServiceError::internal)?;
 
         // Check content length before downloading
         if let Some(len) = response.content_length() {
@@ -248,10 +249,7 @@ impl DefaultLinkPreviewService {
             }
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ServiceError::internal(e))?;
+        let bytes = response.bytes().await.map_err(ServiceError::internal)?;
 
         if bytes.len() > MAX_BODY_SIZE {
             return Err(ServiceError::Validation("response body too large".into()));
@@ -305,7 +303,10 @@ mod tests {
         let og = parse_og_tags(html);
         assert_eq!(og.title.as_deref(), Some("Test Title"));
         assert_eq!(og.description.as_deref(), Some("Test Desc"));
-        assert_eq!(og.image_url.as_deref(), Some("https://img.example.com/pic.jpg"));
+        assert_eq!(
+            og.image_url.as_deref(),
+            Some("https://img.example.com/pic.jpg")
+        );
         assert_eq!(og.site_name.as_deref(), Some("Example"));
     }
 
@@ -315,5 +316,65 @@ mod tests {
         let og = parse_og_tags(html);
         assert_eq!(og.title.as_deref(), Some("My Page"));
         assert!(og.description.is_none());
+    }
+
+    #[test]
+    fn parse_og_tags_empty_html() {
+        let og = parse_og_tags("");
+        assert!(og.title.is_none());
+        assert!(og.description.is_none());
+        assert!(og.image_url.is_none());
+        assert!(og.site_name.is_none());
+    }
+
+    #[test]
+    fn parse_og_tags_og_title_overrides_html_title() {
+        let html = r#"<html><head>
+            <meta property="og:title" content="OG Title">
+            <title>HTML Title</title>
+        </head><body></body></html>"#;
+        let og = parse_og_tags(html);
+        assert_eq!(og.title.as_deref(), Some("OG Title"));
+    }
+
+    #[test]
+    fn extract_urls_ignores_non_http() {
+        let text = "ftp://files.example.com and mailto:a@b.com";
+        assert!(extract_urls(text).is_empty());
+    }
+
+    #[test]
+    fn extract_urls_handles_urls_in_brackets() {
+        let text = "see <https://example.com> for details";
+        let urls = extract_urls(text);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0], "https://example.com");
+    }
+
+    #[test]
+    fn is_private_ip_ipv6_loopback() {
+        let addr: std::net::IpAddr = "::1".parse().unwrap();
+        assert!(is_private_ip(&addr));
+    }
+
+    #[test]
+    fn is_private_ip_169_254_link_local() {
+        assert!(!is_url_safe("http://169.254.1.1/something"));
+    }
+
+    #[test]
+    fn is_url_safe_rejects_dot_local() {
+        assert!(!is_url_safe("http://myserver.local/api"));
+    }
+
+    #[test]
+    fn is_url_safe_rejects_zero_prefix_ip() {
+        assert!(!is_url_safe("http://0.0.0.0/admin"));
+    }
+
+    #[test]
+    fn extract_urls_multiple_same_line() {
+        let text = "https://a.com https://b.com https://c.com";
+        assert_eq!(extract_urls(text).len(), 3);
     }
 }

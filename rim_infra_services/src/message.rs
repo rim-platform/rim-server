@@ -8,9 +8,9 @@ use rim_core::repository::pagination::SortOrder;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{MessageEventData, Observers};
 use rim_services::message::command::{
-    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
-    GetMessageReferenceQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
-    SearchMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
+    ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
+    SendMessageCmd,
 };
 use rim_services::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_services::message::service::MessageService;
@@ -89,9 +89,13 @@ impl DefaultMessageService {
             if *uid == author_id {
                 continue; // Don't mention yourself
             }
-            match self.repos.server_member_repo.is_member(server_id, *uid).await {
-                Ok(true) => valid_ids.push(*uid),
-                _ => {}
+            if let Ok(true) = self
+                .repos
+                .server_member_repo
+                .is_member(server_id, *uid)
+                .await
+            {
+                valid_ids.push(*uid);
             }
         }
 
@@ -394,13 +398,13 @@ impl MessageService for DefaultMessageService {
             _ => None, // Allow empty text (e.g. attachment-only messages)
         };
 
-        if let Some(ref t) = text
-            && t.chars().count() > MAX_MESSAGE_TEXT_LENGTH
-        {
-            return Err(ServiceError::Validation(format!(
-                "message text too long (max {} characters)",
-                MAX_MESSAGE_TEXT_LENGTH
-            )));
+        if let Some(ref t) = text {
+            if t.chars().count() > MAX_MESSAGE_TEXT_LENGTH {
+                return Err(ServiceError::Validation(format!(
+                    "message text too long (max {} characters)",
+                    MAX_MESSAGE_TEXT_LENGTH
+                )));
+            }
         }
 
         let parent_message_id = match cmd.parent_message_id {

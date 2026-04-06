@@ -38,10 +38,7 @@ impl PasswordResetTokenRepository for SeaOrmPasswordResetTokenRepository {
         Ok(res.into())
     }
 
-    async fn get_by_token_hash(
-        &self,
-        token_hash: &str,
-    ) -> RepoResult<Option<PasswordResetToken>> {
+    async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<PasswordResetToken>> {
         let model = password_reset_token::Entity::find()
             .filter(password_reset_token::Column::TokenHash.eq(token_hash))
             .one(&self.db)

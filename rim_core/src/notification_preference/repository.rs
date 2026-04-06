@@ -18,17 +18,10 @@ pub trait NotificationPreferenceRepository: Send + Sync {
         muted_until: Option<DateTime<Utc>>,
     ) -> RepoResult<NotificationPreference>;
 
-    async fn remove_mute(
-        &self,
-        user_id: UserId,
-        conversation_id: ConversationId,
-    ) -> RepoResult<()>;
+    async fn remove_mute(&self, user_id: UserId, conversation_id: ConversationId)
+    -> RepoResult<()>;
 
-    async fn is_muted(
-        &self,
-        user_id: UserId,
-        conversation_id: ConversationId,
-    ) -> RepoResult<bool>;
+    async fn is_muted(&self, user_id: UserId, conversation_id: ConversationId) -> RepoResult<bool>;
 
     async fn get_muted_conversations(
         &self,

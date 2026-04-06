@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use rim_core::custom_emoji::model::{CustomEmojiId, NewCustomEmoji};
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_services::custom_emoji::command::{CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery};
+use rim_services::custom_emoji::command::{
+    CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
+};
 use rim_services::custom_emoji::dto::CustomEmojiDto;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::storage::service::StorageService;
@@ -44,10 +46,7 @@ fn validate_emoji_name(name: &str) -> ServiceResult<()> {
             MAX_NAME_LENGTH
         )));
     }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(ServiceError::Validation(
             "emoji name must contain only alphanumeric characters and underscores".into(),
         ));
@@ -157,5 +156,47 @@ impl CustomEmojiService for DefaultCustomEmojiService {
             .map_err(map_repo_error)?;
 
         Ok(emojis.into_iter().map(Into::into).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_emoji_name_rejects_empty() {
+        let err = validate_emoji_name("").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_emoji_name_rejects_too_long() {
+        let name = "a".repeat(65);
+        let err = validate_emoji_name(&name).unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_emoji_name_rejects_special_chars() {
+        let err = validate_emoji_name("my-emoji").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+        let err = validate_emoji_name("my emoji").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+        let err = validate_emoji_name("emoji!").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_emoji_name_accepts_valid() {
+        validate_emoji_name("my_emoji").unwrap();
+        validate_emoji_name("emoji123").unwrap();
+        validate_emoji_name("A").unwrap();
+        validate_emoji_name("_underscore_").unwrap();
+    }
+
+    #[test]
+    fn validate_emoji_name_accepts_max_length() {
+        let name = "a".repeat(64);
+        validate_emoji_name(&name).unwrap();
     }
 }

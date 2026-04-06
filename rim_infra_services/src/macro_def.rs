@@ -298,8 +298,8 @@ mod tests {
     use rim_core::macro_def::model::{MacroDef, MacroId};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
-    use rim_services::command::service::MockCommandService;
     use rim_services::Actor;
+    use rim_services::command::service::MockCommandService;
 
     use async_trait::async_trait;
     use rim_core::macro_def::repository::MacroRepository;

@@ -17,11 +17,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(LinkPreview::MessageId)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(LinkPreview::MessageId).uuid().not_null())
                     .col(ColumnDef::new(LinkPreview::Url).text().not_null())
                     .col(ColumnDef::new(LinkPreview::Title).text())
                     .col(ColumnDef::new(LinkPreview::Description).text())

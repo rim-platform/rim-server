@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+.env
+.env.*
+*.md
+!migration/
+scripts/
+.claude/
+.idea/
+*.log

@@ -16,6 +16,12 @@ pub struct TypingTracker {
     last_typing: DashMap<(UserId, ConversationId), Instant>,
 }
 
+impl Default for TypingTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypingTracker {
     pub fn new() -> Self {
         Self {

@@ -79,6 +79,39 @@ mod tests {
     }
 
     #[test]
+    fn hash_token_of_empty_string() {
+        let hash = hash_token("");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn hex_encode_known_values() {
+        assert_eq!(hex_encode(&[0x00]), "00");
+        assert_eq!(hex_encode(&[0xff]), "ff");
+        assert_eq!(hex_encode(&[0xab, 0xcd]), "abcd");
+        assert_eq!(hex_encode(&[0x01, 0x23, 0x45, 0x67, 0x89]), "0123456789");
+    }
+
+    #[test]
+    fn generate_session_token_is_url_safe() {
+        let token = generate_session_token();
+        let after_prefix = token.strip_prefix("rim_sess_").unwrap();
+        // base64url chars: A-Z, a-z, 0-9, -, _
+        assert!(
+            after_prefix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "token should only contain URL-safe base64 characters, got: {after_prefix}"
+        );
+    }
+
+    #[test]
     fn hash_token_is_hex_sha256() {
         let token = generate_session_token();
         let hash = hash_token(&token);

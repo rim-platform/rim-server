@@ -44,8 +44,6 @@ pub trait ConversationService: Send + Sync {
         cmd: RemoveConversationMemberCmd,
     ) -> ServiceResult<ConversationDto>;
 
-    async fn update_topic(
-        &self,
-        cmd: UpdateConversationTopicCmd,
-    ) -> ServiceResult<ConversationDto>;
+    async fn update_topic(&self, cmd: UpdateConversationTopicCmd)
+    -> ServiceResult<ConversationDto>;
 }

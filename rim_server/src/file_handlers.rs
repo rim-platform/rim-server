@@ -246,11 +246,11 @@ pub async fn handle_file_upload(
     }
 
     // Check that attachment metadata shows pending_upload status.
-    if let Some(ref metadata) = attachment.metadata
-        && metadata.get("status").and_then(|v| v.as_str()) != Some("pending_upload")
-    {
-        return HttpResponse::BadRequest()
-            .json(serde_json::json!({"error": "attachment is not pending upload"}));
+    if let Some(ref metadata) = attachment.metadata {
+        if metadata.get("status").and_then(|v| v.as_str()) != Some("pending_upload") {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": "attachment is not pending upload"}));
+        }
     }
 
     // Validate MIME type matches the declared content_type.
@@ -350,8 +350,7 @@ pub async fn handle_file_download(
         .to_string();
 
     let filename = file_path.rsplit('/').next().unwrap_or("download");
-    let safe_name = filename
-        .replace(['\0', '"', '\\', '\r', '\n'], "");
+    let safe_name = filename.replace(['\0', '"', '\\', '\r', '\n'], "");
 
     HttpResponse::Ok()
         .content_type(content_type)
@@ -429,7 +428,8 @@ pub async fn handle_attachment_download(
     // Channels only require server membership (no conversation_member rows).
     // DMs/Groups require explicit conversation membership.
     let conversation_repo = req
-        .app_data::<web::Data<Arc<dyn rim_core::conversation::repository::ConversationRepository>>>()
+        .app_data::<web::Data<Arc<dyn rim_core::conversation::repository::ConversationRepository>>>(
+        )
         .map(|d| Arc::clone(d.get_ref()));
     let conversation_repo = match conversation_repo {
         Some(r) => r,
@@ -508,8 +508,7 @@ pub async fn handle_attachment_download(
     let data = match storage_backend.get(storage_key).await {
         Ok(d) => d,
         Err(rim_core::storage::StorageError::NotFound(_)) => {
-            return HttpResponse::NotFound()
-                .json(serde_json::json!({"error": "file not found"}));
+            return HttpResponse::NotFound().json(serde_json::json!({"error": "file not found"}));
         }
         Err(e) => {
             tracing::error!(error = %e, "file download failed");

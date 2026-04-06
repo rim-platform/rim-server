@@ -2,9 +2,11 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::custom_emoji::command::{CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery};
-use crate::custom_emoji::dto::CustomEmojiDto;
 use crate::ServiceResult;
+use crate::custom_emoji::command::{
+    CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
+};
+use crate::custom_emoji::dto::CustomEmojiDto;
 
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]

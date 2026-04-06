@@ -4,9 +4,9 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message::command::{
-    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
-    GetMessageReferenceQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
-    SearchMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
+    ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
+    SendMessageCmd,
 };
 use crate::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
 use rim_core::message::model::MessageId;
