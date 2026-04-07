@@ -18,10 +18,12 @@ mod tests {
     use rim_services::action::service::MockActionService;
     use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
     use rim_services::capability::service::MockCapabilityService;
+    use rim_services::channel_lens::service::MockChannelLensService;
     use rim_services::command::service::MockCommandService;
     use rim_services::conversation::service::MockConversationService;
     use rim_services::custom_emoji::service::MockCustomEmojiService;
     use rim_services::event::service::MockEventService;
+    use rim_services::incident::service::MockIncidentService;
     use rim_services::integration::service::MockIntegrationService;
     use rim_services::keybind::service::MockKeybindService;
     use rim_services::link_preview::service::MockLinkPreviewService;
@@ -39,6 +41,7 @@ mod tests {
     use rim_services::server::service::MockServerService;
     use rim_services::server_member::service::MockServerMemberService;
     use rim_services::setting::service::MockSettingService;
+    use rim_services::skill_profile::service::MockSkillProfileService;
     use rim_services::storage::service::MockStorageService;
     use rim_services::user::service::MockUserService;
 
@@ -104,6 +107,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -144,6 +150,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -181,6 +190,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -322,6 +334,9 @@ mod tests {
         request_auth: Arc<dyn rim_services::auth::service::RequestAuthenticator>,
         link_preview: Arc<dyn rim_services::link_preview::service::LinkPreviewService>,
         custom_emoji: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
+        channel_lens: Arc<dyn rim_services::channel_lens::service::ChannelLensService>,
+        incident: Arc<dyn rim_services::incident::service::IncidentService>,
+        skill_profile: Arc<dyn rim_services::skill_profile::service::SkillProfileService>,
     }
 
     impl AppServiceProvider for TestAppServiceProvider {
@@ -453,6 +468,24 @@ mod tests {
         ) -> Arc<dyn rim_services::custom_emoji::service::CustomEmojiService> {
             Arc::clone(&self.custom_emoji)
         }
+
+        fn channel_lens_service(
+            &self,
+        ) -> Arc<dyn rim_services::channel_lens::service::ChannelLensService> {
+            Arc::clone(&self.channel_lens)
+        }
+
+        fn incident_service(
+            &self,
+        ) -> Arc<dyn rim_services::incident::service::IncidentService> {
+            Arc::clone(&self.incident)
+        }
+
+        fn skill_profile_service(
+            &self,
+        ) -> Arc<dyn rim_services::skill_profile::service::SkillProfileService> {
+            Arc::clone(&self.skill_profile)
+        }
     }
 
     fn schema_with_mocks(
@@ -490,6 +523,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -533,6 +569,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -570,6 +609,9 @@ mod tests {
                 request_auth: Arc::new(MockRequestAuthenticator::new()),
                 link_preview: Arc::new(MockLinkPreviewService::new()),
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),

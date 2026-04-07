@@ -1,11 +1,13 @@
 pub mod action;
 pub mod auth;
 pub mod capability;
+pub mod channel_lens;
 pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
 pub mod event;
 pub mod events;
+pub mod incident;
 pub mod integration;
 pub mod keybind;
 pub mod link_preview;
@@ -25,6 +27,7 @@ pub mod read_state;
 pub mod server;
 pub mod server_member;
 pub mod setting;
+pub mod skill_profile;
 pub mod storage;
 pub mod user;
 

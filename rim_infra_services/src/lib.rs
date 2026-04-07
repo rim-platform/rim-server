@@ -1,12 +1,14 @@
 pub mod action;
 pub mod auth;
 pub mod capability;
+pub mod channel_lens;
 pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
 pub mod email;
 pub mod event;
 pub mod file_storage;
+pub mod incident;
 pub mod integration;
 pub mod keybind;
 pub mod link_preview;
@@ -26,6 +28,7 @@ pub mod request_auth;
 pub mod server;
 pub mod server_member;
 pub mod setting;
+pub mod skill_profile;
 pub mod storage;
 pub mod thread;
 pub mod typing;
@@ -60,7 +63,9 @@ mod server_member_unit_tests;
 #[cfg(test)]
 mod user_unit_tests;
 
+pub use channel_lens::ChannelLensRepos;
 pub use custom_emoji::CustomEmojiRepos;
+pub use incident::IncidentRepos;
 pub use macro_def::MacroRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use provider::DefaultAppServiceProvider;

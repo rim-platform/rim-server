@@ -4,11 +4,13 @@ use chrono::Duration;
 use rim_services::action::service::ActionService;
 use rim_services::auth::service::{AuthService, RequestAuthenticator};
 use rim_services::capability::service::CapabilityService;
+use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::event::service::EventService;
 use rim_services::events::Observers;
+use rim_services::incident::service::IncidentService;
 use rim_services::integration::service::IntegrationService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::link_preview::service::LinkPreviewService;
@@ -26,6 +28,7 @@ use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
 use rim_services::setting::service::SettingService;
+use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use sea_orm::DatabaseConnection;
@@ -37,10 +40,12 @@ pub struct DefaultAppServiceProvider {
     action_service: Arc<dyn ActionService>,
     auth_service: Arc<dyn AuthService>,
     capability_service: Arc<dyn CapabilityService>,
+    channel_lens_service: Arc<dyn ChannelLensService>,
     command_service: Arc<dyn CommandService>,
     conversation_service: Arc<dyn ConversationService>,
     custom_emoji_service: Arc<dyn CustomEmojiService>,
     event_service: Arc<dyn EventService>,
+    incident_service: Arc<dyn IncidentService>,
     integration_service: Arc<dyn IntegrationService>,
     keybind_service: Arc<dyn KeybindService>,
     link_preview_service: Arc<dyn LinkPreviewService>,
@@ -56,6 +61,7 @@ pub struct DefaultAppServiceProvider {
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
     setting_service: Arc<dyn SettingService>,
+    skill_profile_service: Arc<dyn SkillProfileService>,
     storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
@@ -188,15 +194,31 @@ impl DefaultAppServiceProvider {
                     command_service: Arc::clone(&command_service),
                 },
             ));
+        let channel_lens_service: Arc<dyn ChannelLensService> =
+            Arc::new(crate::channel_lens::DefaultChannelLensService::new(
+                repos.for_channel_lens(),
+            ));
+
+        let skill_profile_service: Arc<dyn SkillProfileService> =
+            Arc::new(crate::skill_profile::DefaultSkillProfileService::new(
+                Arc::clone(&repos.skill_profile_repo),
+            ));
+
+        let incident_service: Arc<dyn IncidentService> =
+            Arc::new(crate::incident::DefaultIncidentService::new(
+                repos.for_incident(),
+            ));
 
         Self {
             action_service,
             auth_service,
             capability_service,
+            channel_lens_service,
             command_service,
             conversation_service,
             custom_emoji_service,
             event_service,
+            incident_service,
             integration_service,
             keybind_service,
             link_preview_service,
@@ -212,6 +234,7 @@ impl DefaultAppServiceProvider {
             server_service,
             server_member_service,
             setting_service,
+            skill_profile_service,
             storage_service,
             thread_service,
             user_service,
@@ -230,6 +253,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn capability_service(&self) -> Arc<dyn CapabilityService> {
         Arc::clone(&self.capability_service)
     }
+    fn channel_lens_service(&self) -> Arc<dyn ChannelLensService> {
+        Arc::clone(&self.channel_lens_service)
+    }
     fn command_service(&self) -> Arc<dyn CommandService> {
         Arc::clone(&self.command_service)
     }
@@ -244,6 +270,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn event_service(&self) -> Arc<dyn EventService> {
         Arc::clone(&self.event_service)
+    }
+    fn incident_service(&self) -> Arc<dyn IncidentService> {
+        Arc::clone(&self.incident_service)
     }
     fn integration_service(&self) -> Arc<dyn IntegrationService> {
         Arc::clone(&self.integration_service)
@@ -286,6 +315,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn setting_service(&self) -> Arc<dyn SettingService> {
         Arc::clone(&self.setting_service)
+    }
+    fn skill_profile_service(&self) -> Arc<dyn SkillProfileService> {
+        Arc::clone(&self.skill_profile_service)
     }
     fn storage_service(&self) -> Arc<dyn StorageService> {
         Arc::clone(&self.storage_service)

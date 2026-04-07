@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use rim_core::auth::repository::{InviteRepository, SessionRepository};
+use rim_core::channel_lens::repository::ChannelLensRepository;
 use rim_core::command::repository::UserCommandRepository;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
+use rim_core::incident::repository::{
+    IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
+};
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::macro_def::repository::MacroRepository;
@@ -19,11 +23,13 @@ use rim_core::notification_preference::repository::NotificationPreferenceReposit
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::skill_profile::repository::SkillProfileRepository;
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::DbHandle;
 
 #[derive(Clone)]
 pub struct AppRepos {
+    pub channel_lens_repo: Arc<dyn ChannelLensRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub keybind_repo: Arc<dyn KeybindRepository>,
@@ -45,6 +51,10 @@ pub struct AppRepos {
     pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
     pub link_preview_repo: Arc<dyn LinkPreviewRepository>,
     pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
+    pub incident_repo: Arc<dyn IncidentRepository>,
+    pub incident_phase_repo: Arc<dyn IncidentPhaseRepository>,
+    pub incident_message_tag_repo: Arc<dyn IncidentMessageTagRepository>,
+    pub skill_profile_repo: Arc<dyn SkillProfileRepository>,
 }
 
 #[derive(Clone)]
@@ -162,6 +172,16 @@ pub struct RequestAuthRepos {
 }
 
 impl AppRepos {
+    pub fn for_channel_lens(&self) -> crate::channel_lens::ChannelLensRepos {
+        crate::channel_lens::ChannelLensRepos {
+            channel_lens_repo: Arc::clone(&self.channel_lens_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            message_pin_repo: Arc::clone(&self.message_pin_repo),
+        }
+    }
+
     pub fn for_conversation(&self) -> ConversationRepos {
         ConversationRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
@@ -311,6 +331,15 @@ impl AppRepos {
         }
     }
 
+    pub fn for_incident(&self) -> crate::incident::IncidentRepos {
+        crate::incident::IncidentRepos {
+            incident_repo: Arc::clone(&self.incident_repo),
+            incident_phase_repo: Arc::clone(&self.incident_phase_repo),
+            incident_message_tag_repo: Arc::clone(&self.incident_message_tag_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+        }
+    }
+
     pub fn for_request_auth(&self) -> RequestAuthRepos {
         RequestAuthRepos {
             session_repo: Arc::clone(&self.session_repo),
@@ -325,6 +354,9 @@ impl AppRepos {
         use rim_infra_db::sea_orm_impl;
 
         AppRepos {
+            channel_lens_repo: Arc::new(
+                sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(handle.clone()),
+            ),
             conversation_repo: Arc::new(
                 sea_orm_impl::conversation::SeaOrmConversationRepository::new(handle.clone()),
             ),
@@ -399,6 +431,20 @@ impl AppRepos {
             ),
             custom_emoji_repo: Arc::new(
                 sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(handle.clone()),
+            ),
+            incident_repo: Arc::new(
+                sea_orm_impl::incident::SeaOrmIncidentRepository::new(handle.clone()),
+            ),
+            incident_phase_repo: Arc::new(
+                sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(handle.clone()),
+            ),
+            incident_message_tag_repo: Arc::new(
+                sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(
+                    handle.clone(),
+                ),
+            ),
+            skill_profile_repo: Arc::new(
+                sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(handle.clone()),
             ),
         }
     }

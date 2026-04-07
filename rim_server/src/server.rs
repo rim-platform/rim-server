@@ -98,7 +98,8 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             )
             .service(
                 web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
-            );
+            )
+            .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)));
 
         if enable_graphiql {
             app = app.service(index_graphiql);
@@ -118,6 +119,13 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     .bind(bind_host)?
     .run()
     .await
+}
+
+/// GET /api/sdl — export the GraphQL schema in SDL format for codegen tooling.
+async fn sdl_handler(schema: web::Data<AppSchema>) -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(schema.sdl())
 }
 
 async fn graphql_handler(

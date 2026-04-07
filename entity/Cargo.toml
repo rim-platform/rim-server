@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "mock", "with-chrono", "with-json"] }
+chrono = "0.4.42"
+serde_json = "1.0.145"
 rim_core = {path = "../rim_core" }
