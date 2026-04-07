@@ -60,6 +60,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::new(SeaOrmInviteRepository::new(db.clone()));
 
     let repos = AppRepos {
+        channel_lens_repo: Arc::new(
+            sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(db.clone()),
+        ),
         conversation_repo: Arc::new(
             sea_orm_impl::conversation::SeaOrmConversationRepository::new(db.clone()),
         ),
@@ -112,6 +115,20 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         ),
         custom_emoji_repo: Arc::new(
             sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(db.clone()),
+        ),
+        incident_repo: Arc::new(
+            sea_orm_impl::incident::SeaOrmIncidentRepository::new(db.clone()),
+        ),
+        incident_phase_repo: Arc::new(
+            sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(db.clone()),
+        ),
+        incident_message_tag_repo: Arc::new(
+            sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(
+                db.clone(),
+            ),
+        ),
+        skill_profile_repo: Arc::new(
+            sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(db.clone()),
         ),
     };
 

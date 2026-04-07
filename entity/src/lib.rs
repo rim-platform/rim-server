@@ -2,6 +2,8 @@
 
 pub mod prelude;
 
+pub mod channel_lens;
+mod channel_lens_mapper;
 pub mod conversation;
 mod conversation_mapper;
 pub mod conversation_member;
@@ -10,6 +12,12 @@ pub mod conversation_read_state;
 mod conversation_read_state_mapper;
 pub mod custom_emoji;
 mod custom_emoji_mapper;
+pub mod incident;
+mod incident_mapper;
+pub mod incident_message_tag;
+mod incident_message_tag_mapper;
+pub mod incident_phase;
+mod incident_phase_mapper;
 pub mod invite;
 mod invite_mapper;
 pub mod keybind;
@@ -45,3 +53,5 @@ pub mod user;
 pub mod user_command;
 mod user_command_mapper;
 mod user_mapper;
+pub mod user_skill_profile;
+mod user_skill_profile_mapper;

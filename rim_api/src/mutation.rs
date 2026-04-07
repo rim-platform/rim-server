@@ -200,6 +200,13 @@ pub struct ExecuteCommandInput {
 }
 
 #[derive(InputObject)]
+pub struct ExecutePipedCommandsInput {
+    pub pipe_expression: String,
+    pub command_context: Option<CommandContextInput>,
+    pub confirmed_dangerous: Option<bool>,
+}
+
+#[derive(InputObject)]
 pub struct UserCommandStepInput {
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
@@ -761,6 +768,28 @@ impl Mutation {
                 actor: Actor::new(actor),
                 command_id: input.command_id,
                 args: input.args.map(|json| json.0),
+                context: input.command_context.map(TryInto::try_into).transpose()?,
+                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+
+    async fn execute_piped_commands(
+        &self,
+        ctx: &Context<'_>,
+        input: ExecutePipedCommandsInput,
+    ) -> Result<CommandResult> {
+        let actor = require_actor(ctx)?;
+
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        let result = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(actor),
+                command_id: input.pipe_expression,
+                args: None,
                 context: input.command_context.map(TryInto::try_into).transpose()?,
                 confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
             })
@@ -1335,6 +1364,318 @@ impl Mutation {
 
         Ok(result.into())
     }
+
+    // ── Skill Profile ──────────────────────────────────────────────────
+
+    async fn record_feature_usage(
+        &self,
+        ctx: &Context<'_>,
+        feature_id: String,
+    ) -> Result<crate::types::SkillProfileGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::skill_profile::service::SkillProfileService,
+        >>()?;
+
+        let profile = svc
+            .record_feature_usage(rim_services::skill_profile::dto::RecordFeatureUsageCmd {
+                actor: Actor::new(actor),
+                feature_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(profile.into())
+    }
+
+    async fn override_skill_tier(
+        &self,
+        ctx: &Context<'_>,
+        tier: crate::types::SkillTier,
+    ) -> Result<crate::types::SkillProfileGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::skill_profile::service::SkillProfileService,
+        >>()?;
+
+        let profile = svc
+            .override_skill_tier(rim_services::skill_profile::dto::OverrideSkillTierCmd {
+                actor: Actor::new(actor),
+                tier: tier.into(),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(profile.into())
+    }
+
+    // ── Channel Lenses ────────────────────────────────────────────────────
+
+    async fn create_channel_lens(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateChannelLensInput,
+    ) -> Result<crate::types::ChannelLens> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::channel_lens::service::ChannelLensService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+                &input.conversation_id,
+            )?;
+
+        let lens = svc
+            .create_lens(rim_services::channel_lens::command::CreateLensCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                name: input.name,
+                filter_spec: input.filter_spec.into(),
+                is_shared: input.is_shared.unwrap_or(false),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(lens.into())
+    }
+
+    async fn update_channel_lens(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateChannelLensInput,
+    ) -> Result<crate::types::ChannelLens> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::channel_lens::service::ChannelLensService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let lens_id =
+            parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&input.lens_id)?;
+
+        let lens = svc
+            .update_lens(rim_services::channel_lens::command::UpdateLensCmd {
+                actor: Actor::new(actor),
+                server_id,
+                lens_id,
+                name: input.name,
+                filter_spec: input.filter_spec.map(Into::into),
+                is_shared: input.is_shared,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(lens.into())
+    }
+
+    async fn delete_channel_lens(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        lens_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::channel_lens::service::ChannelLensService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let lens_id =
+            parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&lens_id)?;
+
+        svc.delete_lens(rim_services::channel_lens::command::DeleteLensCmd {
+            actor: Actor::new(actor),
+            server_id,
+            lens_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    // ── Incidents ──────────────────────────────────────────────────────
+
+    async fn start_incident(
+        &self,
+        ctx: &Context<'_>,
+        input: StartIncidentInput,
+    ) -> Result<crate::types::IncidentGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+                &input.conversation_id,
+            )?;
+
+        let incident = svc
+            .start_incident(rim_services::incident::command::StartIncidentCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                title: input.title,
+                severity: input.severity.map(Into::into),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(incident.into())
+    }
+
+    async fn update_incident_status(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateIncidentStatusInput,
+    ) -> Result<crate::types::IncidentGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let incident_id =
+            parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
+
+        let incident = svc
+            .update_incident_status(
+                rim_services::incident::command::UpdateIncidentStatusCmd {
+                    actor: Actor::new(actor),
+                    incident_id,
+                    status: input.status.into(),
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(incident.into())
+    }
+
+    async fn advance_incident_phase(
+        &self,
+        ctx: &Context<'_>,
+        input: AdvanceIncidentPhaseInput,
+    ) -> Result<crate::types::IncidentPhaseGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let incident_id =
+            parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
+
+        let phase = svc
+            .advance_phase(rim_services::incident::command::AdvancePhaseCmd {
+                actor: Actor::new(actor),
+                incident_id,
+                next_phase: input.next_phase.into(),
+                note: input.note,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(phase.into())
+    }
+
+    async fn tag_incident_message(
+        &self,
+        ctx: &Context<'_>,
+        input: TagIncidentMessageInput,
+    ) -> Result<crate::types::IncidentMessageTagGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let incident_id =
+            parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
+        let message_id =
+            parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        let tag = svc
+            .tag_message(rim_services::incident::command::TagMessageCmd {
+                actor: Actor::new(actor),
+                incident_id,
+                message_id,
+                tag_type: input.tag_type.map(Into::into),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(tag.into())
+    }
+
+    async fn generate_postmortem(
+        &self,
+        ctx: &Context<'_>,
+        incident_id: ID,
+    ) -> Result<crate::types::IncidentGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let incident_id =
+            parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+
+        let incident = svc
+            .generate_postmortem(rim_services::incident::command::GeneratePostmortemCmd {
+                actor: Actor::new(actor),
+                incident_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(incident.into())
+    }
+
+    async fn resolve_incident(
+        &self,
+        ctx: &Context<'_>,
+        incident_id: ID,
+    ) -> Result<crate::types::IncidentGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::incident::service::IncidentService,
+        >>()?;
+        let incident_id =
+            parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+
+        let incident = svc
+            .resolve_incident(rim_services::incident::command::ResolveIncidentCmd {
+                actor: Actor::new(actor),
+                incident_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(incident.into())
+    }
+}
+
+#[derive(InputObject)]
+struct StartIncidentInput {
+    server_id: ID,
+    conversation_id: ID,
+    title: String,
+    severity: Option<crate::types::IncidentSeverityGql>,
+}
+
+#[derive(InputObject)]
+struct UpdateIncidentStatusInput {
+    incident_id: ID,
+    status: crate::types::IncidentStatusGql,
+}
+
+#[derive(InputObject)]
+struct AdvanceIncidentPhaseInput {
+    incident_id: ID,
+    next_phase: crate::types::IncidentPhaseNameGql,
+    note: Option<String>,
+}
+
+#[derive(InputObject)]
+struct TagIncidentMessageInput {
+    incident_id: ID,
+    message_id: ID,
+    tag_type: Option<crate::types::MessageTagTypeGql>,
 }
 
 #[derive(InputObject)]
@@ -1384,6 +1725,24 @@ struct CreateCustomEmojiInput {
     server_id: ID,
     name: String,
     image_base64: String,
+}
+
+#[derive(InputObject)]
+struct CreateChannelLensInput {
+    server_id: ID,
+    conversation_id: ID,
+    name: String,
+    filter_spec: crate::types::FilterSpecInput,
+    is_shared: Option<bool>,
+}
+
+#[derive(InputObject)]
+struct UpdateChannelLensInput {
+    server_id: ID,
+    lens_id: ID,
+    name: Option<String>,
+    filter_spec: Option<crate::types::FilterSpecInput>,
+    is_shared: Option<bool>,
 }
 
 fn spawn_link_preview_fetch(

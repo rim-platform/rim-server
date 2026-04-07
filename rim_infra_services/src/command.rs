@@ -1,4 +1,5 @@
 mod builtin_executor;
+pub mod pipe_parser;
 mod registry;
 mod user_commands;
 
@@ -266,6 +267,59 @@ impl DefaultCommandService {
         })
     }
 
+    async fn execute_piped(
+        &self,
+        actor: Actor,
+        pipe_expression: &str,
+        context: Option<CommandContextDto>,
+        confirmed_dangerous: bool,
+    ) -> ServiceResult<CommandResultDto> {
+        let segments = pipe_parser::parse_pipe_expression(pipe_expression)?;
+
+        let mut previous_payload: Option<serde_json::Value> = None;
+        let mut all_results = serde_json::Map::new();
+
+        for (i, segment) in segments.iter().enumerate() {
+            let merged_args = merge_pipe_args(previous_payload.as_ref(), segment.args.as_ref());
+
+            let result = self
+                .execute_resolved_command_recursive(
+                    actor,
+                    &segment.command_id,
+                    merged_args,
+                    context.clone(),
+                    confirmed_dangerous,
+                    0,
+                )
+                .await
+                .map_err(|e| {
+                    ServiceError::Validation(format!(
+                        "pipe segment {} ('{}') failed: {}",
+                        i + 1,
+                        segment.command_id,
+                        e
+                    ))
+                })?;
+
+            previous_payload = result.payload.clone();
+            all_results.insert(
+                format!("step_{}", i + 1),
+                serde_json::json!({
+                    "command_id": segment.command_id,
+                    "status": format!("{:?}", result.status),
+                    "payload": result.payload,
+                }),
+            );
+        }
+
+        Ok(CommandResultDto {
+            status: CommandResultStatusDto::Success,
+            message: format!("piped {} commands successfully", segments.len()),
+            payload: Some(Value::Object(all_results)),
+            follow_up_commands: vec![],
+        })
+    }
+
     fn builtin_definition(command_id: &str) -> Option<CommandDefinitionDto> {
         Self::builtin_commands()
             .into_iter()
@@ -309,6 +363,29 @@ impl DefaultCommandService {
             depth,
         )
         .await
+    }
+}
+
+fn merge_pipe_args(
+    piped: Option<&serde_json::Value>,
+    explicit: Option<&serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (piped, explicit) {
+        (None, None) => None,
+        (Some(p), None) => Some(p.clone()),
+        (None, Some(e)) => Some(e.clone()),
+        (Some(p), Some(e)) => {
+            let mut merged = match p {
+                serde_json::Value::Object(m) => m.clone(),
+                _ => serde_json::Map::new(),
+            };
+            if let serde_json::Value::Object(explicit_map) = e {
+                for (k, v) in explicit_map {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            Some(serde_json::Value::Object(merged))
+        }
     }
 }
 
@@ -356,6 +433,17 @@ impl CommandService for DefaultCommandService {
     }
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
+        if cmd.command_id.contains('|') {
+            return self
+                .execute_piped(
+                    cmd.actor,
+                    &cmd.command_id,
+                    cmd.context,
+                    cmd.confirmed_dangerous,
+                )
+                .await;
+        }
+
         self.execute_resolved_command_recursive(
             cmd.actor,
             &cmd.command_id,

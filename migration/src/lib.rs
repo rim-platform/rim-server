@@ -40,6 +40,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260404_000001_create_link_preview::Migration),
             Box::new(m20260404_000002_create_custom_emoji::Migration),
             Box::new(m20260404_000003_create_macro::Migration),
+            Box::new(m20260407_000001_create_channel_lens::Migration),
+            Box::new(m20260407_000002_create_incident::Migration),
+            Box::new(m20260407_000003_create_user_skill_profile::Migration),
         ]
     }
 }
@@ -77,3 +80,6 @@ mod m20260404_000000_create_password_reset_token;
 mod m20260404_000001_create_link_preview;
 mod m20260404_000002_create_custom_emoji;
 mod m20260404_000003_create_macro;
+mod m20260407_000001_create_channel_lens;
+mod m20260407_000002_create_incident;
+mod m20260407_000003_create_user_skill_profile;
