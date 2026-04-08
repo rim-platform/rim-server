@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use sea_orm::DatabaseConnection;
 
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::incident::model::{
@@ -10,6 +11,8 @@ use rim_core::incident::model::{
 use rim_core::incident::repository::{
     IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
 };
+use rim_core::server_member::repository::ServerMemberRepository;
+use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::incident::command::{
     AdvancePhaseCmd, GeneratePostmortemCmd, GetActiveIncidentQuery, GetIncidentTimelineQuery,
     ResolveIncidentCmd, StartIncidentCmd, TagMessageCmd, UpdateIncidentStatusCmd,
@@ -20,29 +23,69 @@ use rim_services::incident::dto::{
 use rim_services::incident::service::IncidentService;
 use rim_services::{ServiceError, ServiceResult, map_repo_error};
 
+use crate::repos::AppRepos;
+use crate::util::{ensure_conversation_in_server, ensure_server_member};
+
 #[derive(Clone)]
 pub struct IncidentRepos {
     pub incident_repo: Arc<dyn IncidentRepository>,
     pub incident_phase_repo: Arc<dyn IncidentPhaseRepository>,
     pub incident_message_tag_repo: Arc<dyn IncidentMessageTagRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
 }
 
 pub struct DefaultIncidentService {
     repos: IncidentRepos,
+    db: Option<DatabaseConnection>,
 }
 
 impl DefaultIncidentService {
-    pub fn new(repos: IncidentRepos) -> Self {
-        Self { repos }
+    pub fn new(repos: IncidentRepos, db: Option<DatabaseConnection>) -> Self {
+        Self { repos, db }
+    }
+
+    async fn begin_write(&self) -> ServiceResult<(IncidentRepos, Option<TransactionScope>)> {
+        if let Some(db) = &self.db {
+            let scope = begin_transaction(db)
+                .await
+                .map_err(ServiceError::internal)?;
+            let repos = AppRepos::with_handle(&scope.handle()).for_incident();
+            Ok((repos, Some(scope)))
+        } else {
+            Ok((self.repos.clone(), None))
+        }
+    }
+
+    async fn commit_if_present(scope: Option<TransactionScope>) -> ServiceResult<()> {
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
 impl IncidentService for DefaultIncidentService {
     async fn start_incident(&self, cmd: StartIncidentCmd) -> ServiceResult<IncidentDto> {
+        // Auth: caller must be a server member
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
+        // Validate conversation belongs to this server
+        ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+
         // Validate title
-        if cmd.title.is_empty() || cmd.title.len() > 200 {
+        if cmd.title.is_empty() || cmd.title.chars().count() > 200 {
             return Err(ServiceError::Validation(
                 "incident title must be between 1 and 200 characters".into(),
             ));
@@ -73,9 +116,11 @@ impl IncidentService for DefaultIncidentService {
 
         let original_topic = conversation.topic.clone();
 
+        // Begin transaction for atomic create
+        let (repos, scope) = self.begin_write().await?;
+
         // Create the incident
-        let incident = self
-            .repos
+        let incident = repos
             .incident_repo
             .create(NewIncident {
                 server_id: cmd.server_id,
@@ -89,7 +134,7 @@ impl IncidentService for DefaultIncidentService {
             .map_err(map_repo_error)?;
 
         // Create initial "detection" phase
-        self.repos
+        repos
             .incident_phase_repo
             .create(incident.id, IncidentPhaseName::Detection, None)
             .await
@@ -97,11 +142,13 @@ impl IncidentService for DefaultIncidentService {
 
         // Update conversation topic to "[INCIDENT] {title}"
         let new_topic = format!("[INCIDENT] {}", cmd.title);
-        self.repos
+        repos
             .conversation_repo
             .update_topic(cmd.conversation_id, Some(new_topic))
             .await
             .map_err(map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
 
         Ok(IncidentDto::from(incident))
     }
@@ -117,6 +164,13 @@ impl IncidentService for DefaultIncidentService {
             .await
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
+
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
 
         // Validate status transition
         match (&incident.status, &cmd.status) {
@@ -161,35 +215,43 @@ impl IncidentService for DefaultIncidentService {
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
         if incident.status == IncidentStatus::Resolved {
             return Err(ServiceError::Validation(
                 "cannot advance phase on a resolved incident".into(),
             ));
         }
 
-        // End current phase
-        let current_phase = self
-            .repos
+        // Atomic: end current phase + create next phase
+        let (repos, scope) = self.begin_write().await?;
+
+        let current_phase = repos
             .incident_phase_repo
             .find_current_phase(cmd.incident_id)
             .await
             .map_err(map_repo_error)?;
 
         if let Some(current) = current_phase {
-            self.repos
+            repos
                 .incident_phase_repo
                 .end_phase(current.id)
                 .await
                 .map_err(map_repo_error)?;
         }
 
-        // Create next phase
-        let new_phase = self
-            .repos
+        let new_phase = repos
             .incident_phase_repo
             .create(cmd.incident_id, cmd.next_phase, cmd.note)
             .await
             .map_err(map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
 
         Ok(IncidentPhaseDto::from(new_phase))
     }
@@ -202,6 +264,13 @@ impl IncidentService for DefaultIncidentService {
             .await
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
+
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
 
         // Determine current phase
         let current_phase = self
@@ -236,6 +305,13 @@ impl IncidentService for DefaultIncidentService {
             .await
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
+
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
 
         let phases = self
             .repos
@@ -316,22 +392,31 @@ impl IncidentService for DefaultIncidentService {
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
         if incident.status == IncidentStatus::Resolved {
             return Err(ServiceError::Validation(
                 "incident is already resolved".into(),
             ));
         }
 
+        // Atomic: end phase + resolve + restore topic
+        let (repos, scope) = self.begin_write().await?;
+
         // End current phase if any
-        let current_phase = self
-            .repos
+        let current_phase = repos
             .incident_phase_repo
             .find_current_phase(incident.id)
             .await
             .map_err(map_repo_error)?;
 
         if let Some(current) = current_phase {
-            self.repos
+            repos
                 .incident_phase_repo
                 .end_phase(current.id)
                 .await
@@ -340,8 +425,7 @@ impl IncidentService for DefaultIncidentService {
 
         // Set status to resolved
         let now = Utc::now();
-        let updated = self
-            .repos
+        let updated = repos
             .incident_repo
             .update_status(
                 incident.id,
@@ -353,11 +437,13 @@ impl IncidentService for DefaultIncidentService {
             .map_err(map_repo_error)?;
 
         // Restore original conversation topic
-        self.repos
+        repos
             .conversation_repo
             .update_topic(incident.conversation_id, incident.original_topic.clone())
             .await
             .map_err(map_repo_error)?;
+
+        Self::commit_if_present(scope).await?;
 
         Ok(IncidentDto::from(updated))
     }
@@ -366,6 +452,21 @@ impl IncidentService for DefaultIncidentService {
         &self,
         query: GetActiveIncidentQuery,
     ) -> ServiceResult<Option<IncidentDto>> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        // Validate conversation belongs to this server
+        ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            query.conversation_id,
+            query.server_id,
+        )
+        .await?;
+
         let incident = self
             .repos
             .incident_repo
@@ -387,6 +488,13 @@ impl IncidentService for DefaultIncidentService {
             .await
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
+
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            incident.server_id,
+            query.actor.user_id,
+        )
+        .await?;
 
         let phases = self
             .repos

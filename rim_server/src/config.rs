@@ -1,8 +1,10 @@
+use std::fmt;
+
 use config::{Config, ConfigError, Environment};
 use dotenvy::dotenv;
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct RIMConfig {
     pub server_host: String,
@@ -25,6 +27,22 @@ pub struct RIMConfig {
     pub storage_s3_bucket: Option<String>,
     pub storage_s3_region: Option<String>,
     pub max_workspace_storage_bytes: Option<u64>,
+}
+
+impl fmt::Debug for RIMConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RIMConfig")
+            .field("server_host", &self.server_host)
+            .field("server_port", &self.server_port)
+            .field("database_url", &"[REDACTED]")
+            .field("bootstrap_secret", &self.bootstrap_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("session_ttl_days", &self.session_ttl_days)
+            .field("enable_graphiql", &self.enable_graphiql)
+            .field("cors_allowed_origin", &self.cors_allowed_origin)
+            .field("data_dir", &self.data_dir)
+            .field("storage_backend", &self.storage_backend)
+            .finish()
+    }
 }
 
 impl Default for RIMConfig {

@@ -12,7 +12,9 @@ pub enum SkillTier {
 }
 
 impl SkillTier {
-    pub fn from_str(s: &str) -> Self {
+    /// Parse a skill tier from a database string, defaulting to `Beginner`
+    /// for unknown values.
+    pub fn from_db_str(s: &str) -> Self {
         match s {
             "intermediate" => Self::Intermediate,
             "advanced" => Self::Advanced,

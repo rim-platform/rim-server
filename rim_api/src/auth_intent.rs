@@ -20,11 +20,11 @@ pub struct AuthIntentCtx {
 
 impl AuthIntentCtx {
     pub fn set(&self, intent: AuthIntent) {
-        *self.intent.lock().unwrap() = Some(intent);
+        *self.intent.lock().unwrap_or_else(|e| e.into_inner()) = Some(intent);
     }
 
     pub fn take(&self) -> Option<AuthIntent> {
-        self.intent.lock().unwrap().take()
+        self.intent.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 }
 

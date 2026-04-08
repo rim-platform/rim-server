@@ -169,7 +169,7 @@ impl Subscription {
         .map_err(crate::errors::map_service_error)?;
 
         let presence = ctx.data::<Arc<PresenceManager>>()?;
-        let broadcaster = ctx.data_unchecked::<InMemoryBroadcaster>();
+        let broadcaster = ctx.data::<InMemoryBroadcaster>()?;
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();
         let subscriber_user_id = actor.to_string();

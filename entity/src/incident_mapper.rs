@@ -8,7 +8,10 @@ impl From<incident::Model> for Incident {
             server_id: m.server_id.into(),
             conversation_id: m.conversation_id.into(),
             started_by: m.started_by.into(),
-            status: m.status.parse().unwrap_or(rim_core::incident::model::IncidentStatus::Active),
+            status: m.status.parse().unwrap_or_else(|_| {
+                tracing::warn!(incident_id = %m.id, status = %m.status, "unknown incident status, defaulting to Active");
+                rim_core::incident::model::IncidentStatus::Active
+            }),
             severity: m.severity.and_then(|s| s.parse().ok()),
             title: m.title,
             original_topic: m.original_topic,

@@ -1,9 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_graphql::dataloader::Loader;
-
-use std::collections::HashSet;
 
 use rim_core::message::model::MessageId;
 use rim_core::user::model::UserId;

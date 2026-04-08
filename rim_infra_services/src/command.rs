@@ -293,12 +293,19 @@ impl DefaultCommandService {
                 )
                 .await
                 .map_err(|e| {
-                    ServiceError::Validation(format!(
-                        "pipe segment {} ('{}') failed: {}",
+                    // Preserve the original error class; wrap the pipe context
+                    // in the message but keep the ServiceError variant.
+                    let context = format!(
+                        "pipe segment {} ('{}') failed: ",
                         i + 1,
                         segment.command_id,
-                        e
-                    ))
+                    );
+                    match e {
+                        ServiceError::Validation(msg) => ServiceError::Validation(format!("{context}{msg}")),
+                        ServiceError::Conflict(msg) => ServiceError::Conflict(format!("{context}{msg}")),
+                        // Preserve the original error variant for non-message types
+                        other => other,
+                    }
                 })?;
 
             previous_payload = result.payload.clone();

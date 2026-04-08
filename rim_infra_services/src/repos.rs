@@ -337,6 +337,7 @@ impl AppRepos {
             incident_phase_repo: Arc::clone(&self.incident_phase_repo),
             incident_message_tag_repo: Arc::clone(&self.incident_message_tag_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
 

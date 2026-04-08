@@ -40,7 +40,7 @@ impl DefaultCustomEmojiService {
 }
 
 fn validate_emoji_name(name: &str) -> ServiceResult<()> {
-    if name.is_empty() || name.len() > MAX_NAME_LENGTH {
+    if name.is_empty() || name.chars().count() > MAX_NAME_LENGTH {
         return Err(ServiceError::Validation(format!(
             "emoji name must be between 1 and {} characters",
             MAX_NAME_LENGTH

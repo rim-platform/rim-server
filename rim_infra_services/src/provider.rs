@@ -207,6 +207,7 @@ impl DefaultAppServiceProvider {
         let incident_service: Arc<dyn IncidentService> =
             Arc::new(crate::incident::DefaultIncidentService::new(
                 repos.for_incident(),
+                Some(db.clone()),
             ));
 
         Self {
