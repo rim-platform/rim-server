@@ -22,7 +22,7 @@ impl From<user_skill_profile::Model> for SkillProfile {
         Self {
             user_id: m.user_id.into(),
             features_used,
-            skill_tier: SkillTier::from_str(&m.skill_tier),
+            skill_tier: SkillTier::from_db_str(&m.skill_tier),
             updated_at: m.updated_at.into(),
         }
     }

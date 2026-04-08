@@ -50,7 +50,7 @@ impl DefaultChannelLensService {
 }
 
 fn validate_name(name: &str) -> ServiceResult<()> {
-    if name.is_empty() || name.len() > MAX_NAME_LENGTH {
+    if name.is_empty() || name.chars().count() > MAX_NAME_LENGTH {
         return Err(ServiceError::Validation(format!(
             "lens name must be between 1 and {} characters",
             MAX_NAME_LENGTH
@@ -214,6 +214,11 @@ impl ChannelLensService for DefaultChannelLensService {
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
 
+        // Verify the lens belongs to the server the caller claims
+        if lens.server_id != cmd.server_id {
+            return Err(ServiceError::NotFound);
+        }
+
         // Only the creator can update
         if lens.created_by != cmd.actor.user_id {
             return Err(ServiceError::PermissionDenied);
@@ -261,6 +266,11 @@ impl ChannelLensService for DefaultChannelLensService {
             .await
             .map_err(map_repo_error)?
             .ok_or(ServiceError::NotFound)?;
+
+        // Verify the lens belongs to the server the caller claims
+        if lens.server_id != cmd.server_id {
+            return Err(ServiceError::NotFound);
+        }
 
         // Only the creator can delete
         if lens.created_by != cmd.actor.user_id {

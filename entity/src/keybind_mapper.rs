@@ -10,7 +10,7 @@ impl From<keybind::Model> for Keybind {
             "workspace" => KeybindScope::Workspace,
             other => {
                 // DB column is free-text; fall back to User if an unexpected value appears.
-                eprintln!(
+                tracing::warn!(
                     "warning: unknown keybind scope in database: {other:?}, defaulting to User"
                 );
                 KeybindScope::User
@@ -26,7 +26,7 @@ impl From<keybind::Model> for Keybind {
             "command_palette" => KeybindContext::CommandPalette,
             other => {
                 // DB column is free-text; fall back to Global if an unexpected value appears.
-                eprintln!(
+                tracing::warn!(
                     "warning: unknown keybind context in database: {other:?}, defaulting to Global"
                 );
                 KeybindContext::Global
