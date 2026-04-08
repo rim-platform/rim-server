@@ -91,9 +91,11 @@ impl IncidentService for DefaultIncidentService {
             ));
         }
 
-        // Check no active incident on this conversation
-        let existing = self
-            .repos
+        // Begin transaction for atomic create (all checks + writes in same scope)
+        let (repos, scope) = self.begin_write().await?;
+
+        // Check no active incident on this conversation (inside txn to prevent TOCTOU)
+        let existing = repos
             .incident_repo
             .find_active_by_conversation(cmd.conversation_id)
             .await
@@ -106,8 +108,7 @@ impl IncidentService for DefaultIncidentService {
         }
 
         // Get current conversation topic to preserve for restoration
-        let conversation = self
-            .repos
+        let conversation = repos
             .conversation_repo
             .get_by_id(cmd.conversation_id)
             .await
@@ -115,9 +116,6 @@ impl IncidentService for DefaultIncidentService {
             .ok_or(ServiceError::NotFound)?;
 
         let original_topic = conversation.topic.clone();
-
-        // Begin transaction for atomic create
-        let (repos, scope) = self.begin_write().await?;
 
         // Create the incident
         let incident = repos

@@ -203,10 +203,25 @@ impl ServerMemberService for DefaultServerMemberService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
+        // Batch-fetch all users in a single query to avoid N+1
+        let user_ids: Vec<rim_core::user::model::UserId> =
+            members.iter().map(|m| m.user_id).collect();
+        let users = self
+            .repos
+            .user_repo
+            .get_by_ids(&user_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        let user_map: std::collections::HashMap<_, _> =
+            users.into_iter().map(|u| (u.id, u)).collect();
+
         let mut result = Vec::with_capacity(members.len());
         for member in members {
-            let user = self.resolve_user(member.user_id).await?;
-            result.push(Self::to_dto(member, &user));
+            let user = user_map
+                .get(&member.user_id)
+                .ok_or(ServiceError::NotFound)?;
+            result.push(Self::to_dto(member, user));
         }
 
         Ok(result)

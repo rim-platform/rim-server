@@ -3,14 +3,37 @@ use std::sync::Arc;
 use actix_multipart::Multipart;
 use actix_web::{HttpRequest, HttpResponse, web};
 use futures_util::StreamExt;
-use rim_core::conversation_member::repository::ConversationMemberRepository;
-use rim_core::message::repository::MessageRepository;
-use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::storage::StorageBackend;
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::storage::service::StorageService;
 
 use crate::graphql_support::{extract_actor_and_session_id, validate_csrf_header};
+
+/// Map a ServiceError to an HTTP response for REST endpoints.
+fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpResponse {
+    match err {
+        rim_services::ServiceError::NotFound => {
+            HttpResponse::NotFound().json(serde_json::json!({"error": "not found"}))
+        }
+        rim_services::ServiceError::PermissionDenied => {
+            HttpResponse::Forbidden().json(serde_json::json!({"error": "access denied"}))
+        }
+        rim_services::ServiceError::Unauthenticated => {
+            HttpResponse::Unauthorized().json(serde_json::json!({"error": "authentication required"}))
+        }
+        rim_services::ServiceError::Validation(msg) => {
+            HttpResponse::BadRequest().json(serde_json::json!({"error": msg}))
+        }
+        rim_services::ServiceError::Conflict(msg) => {
+            HttpResponse::Conflict().json(serde_json::json!({"error": msg}))
+        }
+        _ => {
+            tracing::error!(error = %err, "service error in file handler");
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "internal error"}))
+        }
+    }
+}
 
 /// Maximum upload size: 25 MB.
 const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
@@ -173,9 +196,7 @@ pub async fn handle_file_upload(
     req: HttpRequest,
     payload: Multipart,
     storage_service: web::Data<Arc<dyn StorageService>>,
-    attachment_repo: web::Data<
-        Arc<dyn rim_core::message_attachment::repository::MessageAttachmentRepository>,
-    >,
+    attachment_service: web::Data<Arc<dyn MessageAttachmentService>>,
 ) -> HttpResponse {
     if let Err(resp) = require_csrf(&req) {
         return resp;
@@ -196,7 +217,7 @@ pub async fn handle_file_upload(
             .json(serde_json::json!({"error": "file type not allowed"}));
     }
 
-    // Validate upload token against a pending attachment.
+    // Validate upload token is present.
     let upload_token = match upload.upload_token {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -225,50 +246,7 @@ pub async fn handle_file_upload(
         }
     };
 
-    let attachment = match attachment_repo.get_by_id(attachment_id).await {
-        Ok(Some(att)) => att,
-        Ok(None) => {
-            return HttpResponse::NotFound()
-                .json(serde_json::json!({"error": "upload token not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "attachment lookup failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "upload validation failed"}));
-        }
-    };
-
-    // Verify the attachment is in pending state with matching token.
-    let expected_storage_url = format!("pending://{}", upload_token);
-    if attachment.storage_url != expected_storage_url {
-        return HttpResponse::BadRequest()
-            .json(serde_json::json!({"error": "upload token already used or invalid"}));
-    }
-
-    // Check that attachment metadata shows pending_upload status.
-    if let Some(ref metadata) = attachment.metadata {
-        if metadata.get("status").and_then(|v| v.as_str()) != Some("pending_upload") {
-            return HttpResponse::BadRequest()
-                .json(serde_json::json!({"error": "attachment is not pending upload"}));
-        }
-    }
-
-    // Validate MIME type matches the declared content_type.
-    if !attachment.mime_type.is_empty()
-        && upload.content_type.to_lowercase() != attachment.mime_type.to_lowercase()
-    {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "file content type does not match declared type"
-        }));
-    }
-
-    // Validate file size matches the declared size.
-    if attachment.file_size > 0 && upload.data.len() as i64 != attachment.file_size {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "file size does not match declared size"
-        }));
-    }
-
+    // Store the file first.
     let unique_id = uuid::Uuid::now_v7();
     let storage_key = format!("uploads/{}/{}_{}", user_id, unique_id, upload.filename);
 
@@ -284,18 +262,16 @@ pub async fn handle_file_upload(
         }
     };
 
-    // Bug 2 fix: Update the attachment in DB after successful upload.
-    let uploaded_metadata = serde_json::json!({
-        "status": "uploaded",
-        "storage_filename": upload.filename,
-    });
-    if let Err(e) = attachment_repo
-        .update_attachment(attachment_id, stored.key.clone(), Some(uploaded_metadata))
-        .await
-    {
-        tracing::error!(error = %e, "failed to update attachment after upload");
-        return HttpResponse::InternalServerError()
-            .json(serde_json::json!({"error": "failed to update attachment record"}));
+    // Validate token + update attachment via the service layer (not repos directly).
+    let cmd = rim_services::message_attachment::command::CompleteUploadCmd {
+        attachment_id,
+        upload_token,
+        storage_key: stored.key.clone(),
+        uploaded_filename: upload.filename,
+    };
+    if let Err(e) = attachment_service.complete_upload(cmd).await {
+        tracing::error!(error = %e, "failed to complete upload via service");
+        return map_service_error_to_response(e);
     }
 
     HttpResponse::Ok().json(serde_json::json!({
@@ -364,14 +340,12 @@ pub async fn handle_file_download(
 /// GET /api/attachments/{attachment_id}/download
 ///
 /// Serves an attachment file after verifying that the requesting user is a member
-/// of the conversation the attachment belongs to. This replaces direct storage-path
-/// based access for uploaded files.
+/// of the conversation the attachment belongs to. Authorization is handled by the
+/// service layer.
 pub async fn handle_attachment_download(
     req: HttpRequest,
     path: web::Path<String>,
-    attachment_repo: web::Data<Arc<dyn MessageAttachmentRepository>>,
-    message_repo: web::Data<Arc<dyn MessageRepository>>,
-    conversation_member_repo: web::Data<Arc<dyn ConversationMemberRepository>>,
+    attachment_service: web::Data<Arc<dyn MessageAttachmentService>>,
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
 ) -> HttpResponse {
     let user_id = match require_auth(&req).await {
@@ -391,121 +365,29 @@ pub async fn handle_attachment_download(
         }
     };
 
-    // Look up the attachment.
-    let attachment = match attachment_repo.get_by_id(attachment_id).await {
-        Ok(Some(att)) => att,
-        Ok(None) => {
-            return HttpResponse::NotFound()
-                .json(serde_json::json!({"error": "attachment not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "attachment lookup failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "internal error"}));
-        }
+    // Authorize access and get attachment details via the service layer.
+    let attachment_dto = match attachment_service
+        .authorize_download(rim_services::message_attachment::command::AuthorizeDownloadQuery {
+            actor_user_id: user_id,
+            attachment_id,
+        })
+        .await
+    {
+        Ok(dto) => dto,
+        Err(e) => return map_service_error_to_response(e),
     };
 
-    // Look up the message to find the conversation.
-    let message = match message_repo.get_by_id(attachment.message_id).await {
-        Ok(Some(msg)) => msg,
-        Ok(None) => {
-            tracing::error!(
-                attachment_id = %attachment_id,
-                message_id = %attachment.message_id,
-                "attachment references missing message"
-            );
-            return HttpResponse::NotFound()
-                .json(serde_json::json!({"error": "attachment not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "message lookup failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "internal error"}));
-        }
-    };
-
-    // Verify the requesting user can access this conversation.
-    // Channels only require server membership (no conversation_member rows).
-    // DMs/Groups require explicit conversation membership.
-    let conversation_repo = req
-        .app_data::<web::Data<Arc<dyn rim_core::conversation::repository::ConversationRepository>>>(
-        )
-        .map(|d| Arc::clone(d.get_ref()));
-    let conversation_repo = match conversation_repo {
-        Some(r) => r,
+    // Check storage key is available.
+    let storage_key = match &attachment_dto.storage_key {
+        Some(key) => key.clone(),
         None => {
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "internal error"}));
-        }
-    };
-    let conversation = match conversation_repo.get_by_id(message.conversation_id).await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
             return HttpResponse::NotFound()
-                .json(serde_json::json!({"error": "conversation not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "conversation lookup failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "internal error"}));
+                .json(serde_json::json!({"error": "attachment not yet uploaded"}));
         }
     };
-
-    // Channels: require server membership
-    // DMs/Groups: must be explicit conversation member
-    if conversation.conversation_type == rim_core::conversation::model::ConversationType::Channel {
-        let server_member_repo = req
-            .app_data::<web::Data<Arc<dyn rim_core::server_member::repository::ServerMemberRepository>>>()
-            .map(|d| Arc::clone(d.get_ref()));
-        let server_member_repo = match server_member_repo {
-            Some(r) => r,
-            None => {
-                return HttpResponse::InternalServerError()
-                    .json(serde_json::json!({"error": "internal error"}));
-            }
-        };
-        match server_member_repo
-            .is_member(conversation.server_id, user_id)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                return HttpResponse::Forbidden()
-                    .json(serde_json::json!({"error": "access denied"}));
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "server membership check failed");
-                return HttpResponse::InternalServerError()
-                    .json(serde_json::json!({"error": "internal error"}));
-            }
-        }
-    } else {
-        match conversation_member_repo
-            .is_member(message.conversation_id, user_id)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                return HttpResponse::Forbidden()
-                    .json(serde_json::json!({"error": "access denied"}));
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "membership check failed");
-                return HttpResponse::InternalServerError()
-                    .json(serde_json::json!({"error": "internal error"}));
-            }
-        }
-    }
-
-    // Resolve the storage key from the attachment's storage_url.
-    let storage_key = &attachment.storage_url;
-    if storage_key.starts_with("pending://") || storage_key.is_empty() {
-        return HttpResponse::NotFound()
-            .json(serde_json::json!({"error": "attachment not yet uploaded"}));
-    }
 
     // Fetch the file from storage.
-    let data = match storage_backend.get(storage_key).await {
+    let data = match storage_backend.get(&storage_key).await {
         Ok(d) => d,
         Err(rim_core::storage::StorageError::NotFound(_)) => {
             return HttpResponse::NotFound().json(serde_json::json!({"error": "file not found"}));
@@ -517,20 +399,13 @@ pub async fn handle_attachment_download(
         }
     };
 
-    let content_type = if attachment.mime_type.is_empty() {
-        mime_guess::from_path(&attachment.file_name)
-            .first_or_octet_stream()
-            .to_string()
-    } else {
-        attachment.mime_type
-    };
-
-    let safe_name = attachment
-        .file_name
+    let content_type = &attachment_dto.content_type;
+    let safe_name = attachment_dto
+        .filename
         .replace(['\0', '"', '\\', '\r', '\n'], "");
 
     HttpResponse::Ok()
-        .content_type(content_type)
+        .content_type(content_type.as_str())
         .insert_header((
             "Content-Disposition",
             format!("attachment; filename=\"{}\"", safe_name),

@@ -50,11 +50,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let request_authenticator = runtime.request_authenticator;
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
-    let message_attachment_repo = runtime.message_attachment_repo;
-    let message_repo = runtime.message_repo;
-    let conversation_repo = runtime.conversation_repo;
-    let conversation_member_repo = runtime.conversation_member_repo;
-    let server_member_repo = runtime.server_member_repo;
+    let message_attachment_service = runtime.message_attachment_service;
 
     HttpServer::new(move || {
         let schema = schema.clone();
@@ -109,11 +105,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
-            .app_data(web::Data::new(Arc::clone(&message_attachment_repo)))
-            .app_data(web::Data::new(Arc::clone(&message_repo)))
-            .app_data(web::Data::new(Arc::clone(&conversation_repo)))
-            .app_data(web::Data::new(Arc::clone(&conversation_member_repo)))
-            .app_data(web::Data::new(Arc::clone(&server_member_repo)))
+            .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
             .app_data(web::Data::new(handler_cfg))
     })
     .bind(bind_host)?

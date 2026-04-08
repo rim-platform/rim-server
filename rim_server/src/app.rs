@@ -3,9 +3,6 @@ use std::sync::Arc;
 
 use rim_api::broadcast::InMemoryBroadcaster;
 use rim_api::{AppSchema, build_schema};
-use rim_core::conversation_member::repository::ConversationMemberRepository;
-use rim_core::message::repository::MessageRepository;
-use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::storage::StorageBackend;
 use rim_infra_services::file_storage::LocalFileStorage;
 use rim_services::events::{Broadcaster, Observers};
@@ -33,11 +30,7 @@ pub struct AppRuntime {
     pub request_authenticator: Arc<dyn RequestAuthenticator>,
     pub storage_backend: Arc<dyn StorageBackend>,
     pub storage_service: Arc<dyn StorageService>,
-    pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
-    pub message_repo: Arc<dyn MessageRepository>,
-    pub conversation_repo: Arc<dyn rim_core::conversation::repository::ConversationRepository>,
-    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
-    pub server_member_repo: Arc<dyn rim_core::server_member::repository::ServerMemberRepository>,
+    pub message_attachment_service: Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub shutdown_tx: watch::Sender<bool>,
 }
 
@@ -191,11 +184,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
-    let message_attachment_repo = Arc::clone(&repos.message_attachment_repo);
-    let message_repo = Arc::clone(&repos.message_repo);
-    let conversation_repo = Arc::clone(&repos.conversation_repo);
-    let conversation_member_repo = Arc::clone(&repos.conversation_member_repo);
-    let server_member_repo = Arc::clone(&server_member_repo);
+    let message_attachment_service = service_provider.message_attachment_service();
 
     let schema = build_schema(
         Arc::clone(&service_provider),
@@ -211,11 +200,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         request_authenticator,
         storage_backend,
         storage_service,
-        message_attachment_repo,
-        message_repo,
-        conversation_repo,
-        conversation_member_repo,
-        server_member_repo,
+        message_attachment_service,
         shutdown_tx,
     })
 }

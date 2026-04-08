@@ -41,3 +41,21 @@ pub struct GetAttachmentQuery {
     pub server_id: ServerId,
     pub attachment_id: MessageAttachmentId,
 }
+
+/// Completes a pending upload: validates the upload token, checks that the
+/// attachment is in pending state, and updates the storage key.
+#[derive(Debug, Clone)]
+pub struct CompleteUploadCmd {
+    pub attachment_id: MessageAttachmentId,
+    pub upload_token: String,
+    pub storage_key: String,
+    pub uploaded_filename: String,
+}
+
+/// Authorize a download: verify the requesting user has access to the
+/// attachment's conversation, and return the attachment details.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthorizeDownloadQuery {
+    pub actor_user_id: rim_core::user::model::UserId,
+    pub attachment_id: MessageAttachmentId,
+}
