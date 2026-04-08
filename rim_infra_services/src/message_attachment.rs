@@ -356,6 +356,99 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         Ok(())
     }
 
+    async fn complete_upload(
+        &self,
+        cmd: rim_services::message_attachment::command::CompleteUploadCmd,
+    ) -> ServiceResult<AttachmentDto> {
+        let attachment = self
+            .repos
+            .message_attachment_repo
+            .get_by_id(cmd.attachment_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        // Verify the attachment is pending with matching token
+        let expected_storage_url = format!("pending://{}", cmd.upload_token);
+        if attachment.storage_url != expected_storage_url {
+            return Err(ServiceError::Validation(
+                "upload token already used or invalid".to_string(),
+            ));
+        }
+
+        let current_status = Self::metadata_status(attachment.metadata.as_ref());
+        if current_status != AttachmentStatus::PendingUpload {
+            return Err(ServiceError::Validation(
+                "attachment is not pending upload".to_string(),
+            ));
+        }
+
+        let uploaded_metadata = json!({
+            "status": Self::UPLOADED_STATUS,
+            "storage_filename": cmd.uploaded_filename,
+        });
+
+        let updated = self
+            .repos
+            .message_attachment_repo
+            .update_attachment(cmd.attachment_id, cmd.storage_key, Some(uploaded_metadata))
+            .await
+            .map_err(rim_services::map_repo_error)?;
+
+        Ok(Self::attachment_dto(updated))
+    }
+
+    async fn authorize_download(
+        &self,
+        query: rim_services::message_attachment::command::AuthorizeDownloadQuery,
+    ) -> ServiceResult<AttachmentDto> {
+        let att = self
+            .repos
+            .message_attachment_repo
+            .get_by_id(query.attachment_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        // Look up the message to find the conversation
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(att.message_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        // Check conversation access using the shared helper
+        let conversation = self
+            .repos
+            .conversation_repo
+            .get_by_id(message.conversation_id)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .ok_or(ServiceError::NotFound)?;
+
+        // For channels: server membership suffices
+        // For DMs/groups: explicit conversation membership required
+        if conversation.conversation_type == rim_core::conversation::model::ConversationType::Channel {
+            ensure_server_member(
+                self.repos.server_member_repo.as_ref(),
+                conversation.server_id,
+                query.actor_user_id,
+            )
+            .await?;
+        } else {
+            ensure_conversation_access(
+                self.repos.conversation_member_repo.as_ref(),
+                &conversation,
+                query.actor_user_id,
+            )
+            .await?;
+        }
+
+        Ok(Self::attachment_dto(att))
+    }
+
     async fn cleanup_stale_attachments(&self, older_than_minutes: i64) -> ServiceResult<u64> {
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(older_than_minutes);
         let stale_ids = self

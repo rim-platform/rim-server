@@ -3,6 +3,9 @@ use rim_infra_db::TransactionScope;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
+/// Maximum number of items any paginated query can return in a single page.
+const MAX_PAGE_LIMIT: u32 = 200;
+
 use rim_core::message::model::NewMessage;
 use rim_core::repository::pagination::SortOrder;
 use rim_infra_db::begin_transaction;
@@ -776,7 +779,7 @@ impl MessageService for DefaultMessageService {
             .list_messages(rim_core::message::repository::ListMessagesParams {
                 conversation_id: query.conversation_id,
                 thread_id: None,
-                limit: query.limit,
+                limit: query.limit.min(MAX_PAGE_LIMIT).max(1),
                 dir: query.dir,
                 cursor: query.cursor.map(Into::into),
                 include_deleted: query.include_deleted,
@@ -832,7 +835,7 @@ impl MessageService for DefaultMessageService {
             .list_messages(rim_core::message::repository::ListMessagesParams {
                 conversation_id: query.conversation_id,
                 thread_id: Some(query.thread_id),
-                limit: query.limit,
+                limit: query.limit.min(MAX_PAGE_LIMIT).max(1),
                 dir: query.dir,
                 cursor: query.cursor.map(Into::into),
                 include_deleted: query.include_deleted,
@@ -888,9 +891,10 @@ impl MessageService for DefaultMessageService {
                 .await?;
 
                 // Security: always exclude deleted messages from search results.
+                let clamped_limit = query.limit.min(MAX_PAGE_LIMIT).max(1);
                 self.repos
                     .message_repo
-                    .search_messages(conversation_id, q, query.limit, false)
+                    .search_messages(conversation_id, q, clamped_limit, false)
                     .await
                     .map_err(rim_services::map_repo_error)?
             }
@@ -903,9 +907,10 @@ impl MessageService for DefaultMessageService {
                     .await
                     .map_err(rim_services::map_repo_error)?;
 
+                let clamped_limit = query.limit.min(MAX_PAGE_LIMIT).max(1);
                 self.repos
                     .message_repo
-                    .search_messages_across_conversations(&accessible_ids, q, query.limit)
+                    .search_messages_across_conversations(&accessible_ids, q, clamped_limit)
                     .await
                     .map_err(rim_services::map_repo_error)?
             }
@@ -1212,18 +1217,37 @@ impl MessageService for DefaultMessageService {
             .await
             .map_err(rim_services::map_repo_error)?;
 
-        let mut result = Vec::with_capacity(messages_map.len());
-        for msg in messages_map.into_values() {
-            let conv = self
-                .repos
-                .conversation_repo
-                .get_by_id(msg.conversation_id)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+        let messages: Vec<_> = messages_map.into_values().collect();
 
-            let server_id = conv
+        // Batch-fetch all conversations to avoid N+1
+        let conv_ids: Vec<_> = messages
+            .iter()
+            .map(|m| m.conversation_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let convs = self
+            .repos
+            .conversation_repo
+            .get_by_ids(&conv_ids)
+            .await
+            .map_err(rim_services::map_repo_error)?;
+        let conv_map: std::collections::HashMap<_, _> =
+            convs.into_iter().map(|c| (c.id, c)).collect();
+
+        let mut result = Vec::with_capacity(messages.len());
+        for msg in messages {
+            let server_id = conv_map
+                .get(&msg.conversation_id)
                 .map(|c| c.server_id)
-                .unwrap_or_else(rim_core::server::model::ServerId::new);
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        message_id = %msg.id,
+                        conversation_id = %msg.conversation_id,
+                        "message references non-existent conversation"
+                    );
+                    ServiceError::NotFound
+                })?;
 
             let dto = self.to_dto(msg, server_id).await?;
             result.push(dto);

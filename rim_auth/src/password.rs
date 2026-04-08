@@ -4,7 +4,14 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
 use crate::{AuthError, AuthResult};
 
+/// Minimum password length enforced at the hashing boundary.
+/// Any caller that bypasses this check would still fail here.
+const MIN_PASSWORD_LENGTH: usize = 8;
+
 pub fn hash_password(password: &str) -> AuthResult<String> {
+    if password.len() < MIN_PASSWORD_LENGTH {
+        return Err(AuthError::InvalidCredentials);
+    }
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let hash = argon2
@@ -35,14 +42,14 @@ mod tests {
 
     #[test]
     fn verify_password_returns_true_for_correct_password() {
-        let hash = hash_password("test123").unwrap();
-        assert!(verify_password("test123", &hash).unwrap());
+        let hash = hash_password("test1234").unwrap();
+        assert!(verify_password("test1234", &hash).unwrap());
     }
 
     #[test]
     fn verify_password_returns_false_for_wrong_password() {
-        let hash = hash_password("test123").unwrap();
-        assert!(!verify_password("wrong", &hash).unwrap());
+        let hash = hash_password("test1234").unwrap();
+        assert!(!verify_password("wrong_pw!", &hash).unwrap());
     }
 
     #[test]
@@ -76,8 +83,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_password_can_be_hashed_and_verified() {
-        let hash = hash_password("").unwrap();
-        assert!(verify_password("", &hash).unwrap());
+    fn empty_password_is_rejected() {
+        assert!(hash_password("").is_err());
+    }
+
+    #[test]
+    fn short_password_is_rejected() {
+        assert!(hash_password("1234567").is_err()); // 7 chars
+    }
+
+    #[test]
+    fn minimum_length_password_is_accepted() {
+        let hash = hash_password("12345678").unwrap(); // 8 chars
+        assert!(verify_password("12345678", &hash).unwrap());
     }
 }

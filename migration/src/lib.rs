@@ -43,6 +43,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260407_000001_create_channel_lens::Migration),
             Box::new(m20260407_000002_create_incident::Migration),
             Box::new(m20260407_000003_create_user_skill_profile::Migration),
+            Box::new(m20260408_122101_fix_fk_on_delete_policies::Migration),
         ]
     }
 }
@@ -83,3 +84,4 @@ mod m20260404_000003_create_macro;
 mod m20260407_000001_create_channel_lens;
 mod m20260407_000002_create_incident;
 mod m20260407_000003_create_user_skill_profile;
+mod m20260408_122101_fix_fk_on_delete_policies;

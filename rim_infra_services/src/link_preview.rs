@@ -66,7 +66,21 @@ fn is_private_ip(ip: &IpAddr) -> bool {
                 || v4.octets()[0] == 0
                 || v4.is_broadcast()
         }
-        IpAddr::V6(v6) => v6.is_loopback(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                // Unique local (fc00::/7)
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // Link-local (fe80::/10)
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                // IPv4-mapped (::ffff:x.x.x.x) — check the embedded IPv4
+                || v6.to_ipv4_mapped().is_some_and(|v4| {
+                    v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.octets()[0] == 0
+                        || v4.is_broadcast()
+                })
+        }
     }
 }
 
@@ -151,8 +165,10 @@ struct OgData {
 
 /// Extract URLs from message text using a simple regex.
 pub fn extract_urls(text: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap();
-    re.find_iter(text).map(|m| m.as_str().to_string()).collect()
+    use std::sync::LazyLock;
+    static URL_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap());
+    URL_RE.find_iter(text).map(|m| m.as_str().to_string()).collect()
 }
 
 #[async_trait]

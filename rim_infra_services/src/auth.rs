@@ -415,20 +415,6 @@ impl AuthService for DefaultAuthService {
             }
         }
 
-        // Ensure username not taken.
-        if self
-            .repos
-            .user_repo
-            .find_by_username(username)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .is_some()
-        {
-            return Err(ServiceError::Conflict(
-                "username already exists".to_string(),
-            ));
-        }
-
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
         // Run all writes inside a single transaction when DB is available.
@@ -446,6 +432,19 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
+        // Ensure username not taken (inside transaction to prevent TOCTOU race).
+        if repos
+            .user_repo
+            .find_by_username(username)
+            .await
+            .map_err(rim_services::map_repo_error)?
+            .is_some()
+        {
+            return Err(ServiceError::Conflict(
+                "username already exists".to_string(),
+            ));
+        }
+
         let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
@@ -453,6 +452,15 @@ impl AuthService for DefaultAuthService {
                 password: password_hash,
             })
             .await
+            .map_err(|e| {
+                // Catch unique constraint violation as a clean Conflict error
+                if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
+                    return rim_core::repository::error::RepoError::new(
+                        rim_core::repository::error::RepoErrorKind::Conflict,
+                    );
+                }
+                e
+            })
             .map_err(rim_services::map_repo_error)?;
 
         let _member = repos
