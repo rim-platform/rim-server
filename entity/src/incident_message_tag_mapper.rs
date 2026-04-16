@@ -6,7 +6,10 @@ impl From<incident_message_tag::Model> for IncidentMessageTag {
         Self {
             message_id: m.message_id.into(),
             incident_id: m.incident_id.into(),
-            phase: m.phase.parse().unwrap_or(rim_core::incident::model::IncidentPhaseName::Detection),
+            phase: m
+                .phase
+                .parse()
+                .unwrap_or(rim_core::incident::model::IncidentPhaseName::Detection),
             tag_type: m.tag_type.and_then(|s| s.parse().ok()),
         }
     }

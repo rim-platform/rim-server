@@ -4,7 +4,7 @@ use mockall::automock;
 
 use crate::conversation::model::ConversationId;
 use crate::incident::model::{
-    Incident, IncidentId, IncidentMessageTag, IncidentPhaseName, IncidentPhaseId,
+    Incident, IncidentId, IncidentMessageTag, IncidentPhaseId, IncidentPhaseName,
     IncidentPhaseRecord, IncidentStatus, NewIncident, NewIncidentMessageTag,
 };
 use crate::repository::error::RepoResult;
@@ -29,11 +29,7 @@ pub trait IncidentRepository: Send + Sync {
         resolved_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> RepoResult<Incident>;
 
-    async fn update_postmortem_draft(
-        &self,
-        id: IncidentId,
-        draft: String,
-    ) -> RepoResult<Incident>;
+    async fn update_postmortem_draft(&self, id: IncidentId, draft: String) -> RepoResult<Incident>;
 }
 
 #[async_trait]
@@ -46,10 +42,7 @@ pub trait IncidentPhaseRepository: Send + Sync {
         note: Option<String>,
     ) -> RepoResult<IncidentPhaseRecord>;
 
-    async fn end_phase(
-        &self,
-        phase_id: IncidentPhaseId,
-    ) -> RepoResult<IncidentPhaseRecord>;
+    async fn end_phase(&self, phase_id: IncidentPhaseId) -> RepoResult<IncidentPhaseRecord>;
 
     async fn find_current_phase(
         &self,

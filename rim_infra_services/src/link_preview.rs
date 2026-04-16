@@ -168,7 +168,10 @@ pub fn extract_urls(text: &str) -> Vec<String> {
     use std::sync::LazyLock;
     static URL_RE: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap());
-    URL_RE.find_iter(text).map(|m| m.as_str().to_string()).collect()
+    URL_RE
+        .find_iter(text)
+        .map(|m| m.as_str().to_string())
+        .collect()
 }
 
 #[async_trait]

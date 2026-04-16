@@ -9,6 +9,7 @@ use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::event::service::EventService;
+use rim_services::events::EventObserver;
 use rim_services::events::Observers;
 use rim_services::incident::service::IncidentService;
 use rim_services::integration::service::IntegrationService;
@@ -23,6 +24,7 @@ use rim_services::message_thread::service::ThreadService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::password_reset::service::PasswordResetService;
 use rim_services::pin::service::PinService;
+use rim_services::pipeline::service::PipelineService;
 use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
@@ -31,6 +33,7 @@ use rim_services::setting::service::SettingService;
 use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
+use rim_services::workspace_state::service::WorkspaceStateService;
 use sea_orm::DatabaseConnection;
 
 use crate::repos::AppRepos;
@@ -65,6 +68,8 @@ pub struct DefaultAppServiceProvider {
     storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
+    workspace_state_service: Arc<dyn WorkspaceStateService>,
+    pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
 }
 
@@ -115,6 +120,8 @@ impl DefaultAppServiceProvider {
         let pin_observers = observers.clone();
         let server_observers = observers.clone();
         let read_state_observers = observers.clone();
+        let ws_state_broadcaster = Arc::clone(observers.workspace.broadcaster());
+        let pipeline_broadcaster_clone = Arc::clone(observers.workspace.broadcaster());
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
@@ -159,6 +166,11 @@ impl DefaultAppServiceProvider {
             Arc::new(crate::thread::DefaultThreadService::new(repos.for_thread()));
         let user_service: Arc<dyn UserService> =
             Arc::new(crate::user::DefaultUserService::new(repos.for_user()));
+        let workspace_state_service: Arc<dyn WorkspaceStateService> =
+            Arc::new(crate::workspace_state::DefaultWorkspaceStateService::new(
+                repos.for_workspace_state(),
+                ws_state_broadcaster,
+            ));
         let command_service: Arc<dyn CommandService> =
             Arc::new(crate::command::DefaultCommandService::new(
                 repos.for_command(),
@@ -167,6 +179,7 @@ impl DefaultAppServiceProvider {
                     conversation_service: Arc::clone(&conversation_service),
                     message_service: Arc::clone(&message_service),
                     read_state_service: Arc::clone(&read_state_service),
+                    workspace_state_service: Arc::clone(&workspace_state_service),
                 },
             ));
         let keybind_service: Arc<dyn KeybindService> =
@@ -194,20 +207,24 @@ impl DefaultAppServiceProvider {
                     command_service: Arc::clone(&command_service),
                 },
             ));
-        let channel_lens_service: Arc<dyn ChannelLensService> =
-            Arc::new(crate::channel_lens::DefaultChannelLensService::new(
-                repos.for_channel_lens(),
-            ));
+        let channel_lens_service: Arc<dyn ChannelLensService> = Arc::new(
+            crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),
+        );
 
         let skill_profile_service: Arc<dyn SkillProfileService> =
             Arc::new(crate::skill_profile::DefaultSkillProfileService::new(
                 Arc::clone(&repos.skill_profile_repo),
             ));
 
-        let incident_service: Arc<dyn IncidentService> =
-            Arc::new(crate::incident::DefaultIncidentService::new(
-                repos.for_incident(),
-                Some(db.clone()),
+        let incident_service: Arc<dyn IncidentService> = Arc::new(
+            crate::incident::DefaultIncidentService::new(repos.for_incident(), Some(db.clone())),
+        );
+
+        let pipeline_service: Arc<dyn PipelineService> =
+            Arc::new(crate::pipeline::DefaultPipelineService::new(
+                repos.for_pipeline(),
+                Arc::clone(&command_service),
+                pipeline_broadcaster_clone,
             ));
 
         Self {
@@ -239,6 +256,8 @@ impl DefaultAppServiceProvider {
             storage_service,
             thread_service,
             user_service,
+            workspace_state_service,
+            pipeline_service,
             request_authenticator,
         }
     }
@@ -328,6 +347,12 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn user_service(&self) -> Arc<dyn UserService> {
         Arc::clone(&self.user_service)
+    }
+    fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService> {
+        Arc::clone(&self.workspace_state_service)
+    }
+    fn pipeline_service(&self) -> Arc<dyn PipelineService> {
+        Arc::clone(&self.pipeline_service)
     }
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator> {
         Arc::clone(&self.request_authenticator)

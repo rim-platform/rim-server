@@ -28,11 +28,12 @@ impl SeaOrmChannelLensRepository {
 impl ChannelLensRepository for SeaOrmChannelLensRepository {
     async fn create(&self, lens: NewChannelLens) -> RepoResult<ChannelLens> {
         let now = chrono::Utc::now();
-        let filter_spec_json = serde_json::to_value(&lens.filter_spec)
-            .map_err(|e| rim_core::repository::error::RepoError::with_source(
+        let filter_spec_json = serde_json::to_value(&lens.filter_spec).map_err(|e| {
+            rim_core::repository::error::RepoError::with_source(
                 rim_core::repository::error::RepoErrorKind::InvalidData,
                 e,
-            ))?;
+            )
+        })?;
 
         let active = channel_lens::ActiveModel {
             id: Set(ChannelLensId::new().into()),
@@ -60,11 +61,12 @@ impl ChannelLensRepository for SeaOrmChannelLensRepository {
     }
 
     async fn update(&self, lens: &ChannelLens) -> RepoResult<ChannelLens> {
-        let filter_spec_json = serde_json::to_value(&lens.filter_spec)
-            .map_err(|e| rim_core::repository::error::RepoError::with_source(
+        let filter_spec_json = serde_json::to_value(&lens.filter_spec).map_err(|e| {
+            rim_core::repository::error::RepoError::with_source(
                 rim_core::repository::error::RepoErrorKind::InvalidData,
                 e,
-            ))?;
+            )
+        })?;
 
         let active = channel_lens::ActiveModel {
             id: Set(lens.id.into()),

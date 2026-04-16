@@ -21,6 +21,7 @@ use crate::message_thread::service::ThreadService;
 use crate::notification_preference::service::NotificationPreferenceService;
 use crate::password_reset::service::PasswordResetService;
 use crate::pin::service::PinService;
+use crate::pipeline::service::PipelineService;
 use crate::read_state::service::ReadStateService;
 use crate::server::service::ServerService;
 use crate::server_member::service::ServerMemberService;
@@ -28,6 +29,7 @@ use crate::setting::service::SettingService;
 use crate::skill_profile::service::SkillProfileService;
 use crate::storage::service::StorageService;
 use crate::user::service::UserService;
+use crate::workspace_state::service::WorkspaceStateService;
 
 pub trait AppServiceProvider: Send + Sync {
     fn action_service(&self) -> Arc<dyn ActionService>;
@@ -58,5 +60,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn storage_service(&self) -> Arc<dyn StorageService>;
     fn thread_service(&self) -> Arc<dyn ThreadService>;
     fn user_service(&self) -> Arc<dyn UserService>;
+    fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService>;
+    fn pipeline_service(&self) -> Arc<dyn PipelineService>;
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator>;
 }

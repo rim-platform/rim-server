@@ -22,9 +22,7 @@ pub struct DefaultSkillProfileService {
 
 impl DefaultSkillProfileService {
     pub fn new(skill_profile_repo: Arc<dyn SkillProfileRepository>) -> Self {
-        Self {
-            skill_profile_repo,
-        }
+        Self { skill_profile_repo }
     }
 }
 
@@ -61,11 +59,10 @@ impl SkillProfileService for DefaultSkillProfileService {
             .map_err(map_repo_error)?;
 
         // Idempotent: only record first use
-        if !profile.features_used.contains_key(&cmd.feature_id) {
-            profile
-                .features_used
-                .insert(cmd.feature_id, chrono::Utc::now());
-        }
+        profile
+            .features_used
+            .entry(cmd.feature_id)
+            .or_insert_with(chrono::Utc::now);
 
         // Auto-promote based on feature count
         let new_tier = auto_tier(profile.features_used.len());

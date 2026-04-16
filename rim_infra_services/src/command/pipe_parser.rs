@@ -48,6 +48,13 @@ pub fn parse_pipe_expression(expr: &str) -> ServiceResult<Vec<PipeSegment>> {
             })?
             .to_string();
 
+        if command_id.len() > 256 {
+            return Err(ServiceError::Validation(format!(
+                "command ID in pipe segment {} exceeds maximum length of 256 characters",
+                i + 1
+            )));
+        }
+
         let mut args_map = serde_json::Map::new();
         for token in parts {
             if let Some((key, value)) = token.split_once('=') {
@@ -163,6 +170,15 @@ mod tests {
     fn parse_empty_expression_error() {
         let result = parse_pipe_expression("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_command_id_too_long() {
+        let long_id = "a".repeat(257);
+        let result = parse_pipe_expression(&long_id);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 
     #[test]

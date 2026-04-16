@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use entity::incident;
 use rim_core::conversation::model::ConversationId;
-use rim_core::incident::model::{
-    Incident, IncidentId, IncidentStatus, NewIncident,
-};
+use rim_core::incident::model::{Incident, IncidentId, IncidentStatus, NewIncident};
 use rim_core::incident::repository::IncidentRepository;
 use rim_core::repository::error::RepoResult;
 use sea_orm::prelude::Uuid;
@@ -99,11 +97,7 @@ impl IncidentRepository for SeaOrmIncidentRepository {
         Ok(updated.into())
     }
 
-    async fn update_postmortem_draft(
-        &self,
-        id: IncidentId,
-        draft: String,
-    ) -> RepoResult<Incident> {
+    async fn update_postmortem_draft(&self, id: IncidentId, draft: String) -> RepoResult<Incident> {
         let model = incident::Entity::find_by_id::<Uuid>(id.into())
             .one(&self.db)
             .await

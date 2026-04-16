@@ -197,13 +197,7 @@ pub struct ExecuteCommandInput {
     pub args: Option<async_graphql::Json<serde_json::Value>>,
     pub command_context: Option<CommandContextInput>,
     pub confirmed_dangerous: Option<bool>,
-}
-
-#[derive(InputObject)]
-pub struct ExecutePipedCommandsInput {
-    pub pipe_expression: String,
-    pub command_context: Option<CommandContextInput>,
-    pub confirmed_dangerous: Option<bool>,
+    pub is_pipe: Option<bool>,
 }
 
 #[derive(InputObject)]
@@ -770,28 +764,7 @@ impl Mutation {
                 args: input.args.map(|json| json.0),
                 context: input.command_context.map(TryInto::try_into).transpose()?,
                 confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        Ok(result.into())
-    }
-
-    async fn execute_piped_commands(
-        &self,
-        ctx: &Context<'_>,
-        input: ExecutePipedCommandsInput,
-    ) -> Result<CommandResult> {
-        let actor = require_actor(ctx)?;
-
-        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
-        let result = svc
-            .execute_command(ExecuteCommandCmd {
-                actor: Actor::new(actor),
-                command_id: input.pipe_expression,
-                args: None,
-                context: input.command_context.map(TryInto::try_into).transpose()?,
-                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+                is_pipe: input.is_pipe.unwrap_or(false),
             })
             .await
             .map_err(map_service_error)?;
@@ -1373,9 +1346,9 @@ impl Mutation {
         feature_id: String,
     ) -> Result<crate::types::SkillProfileGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::skill_profile::service::SkillProfileService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::skill_profile::service::SkillProfileService>>(
+            )?;
 
         let profile = svc
             .record_feature_usage(rim_services::skill_profile::dto::RecordFeatureUsageCmd {
@@ -1394,9 +1367,9 @@ impl Mutation {
         tier: crate::types::SkillTier,
     ) -> Result<crate::types::SkillProfileGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::skill_profile::service::SkillProfileService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::skill_profile::service::SkillProfileService>>(
+            )?;
 
         let profile = svc
             .override_skill_tier(rim_services::skill_profile::dto::OverrideSkillTierCmd {
@@ -1417,14 +1390,12 @@ impl Mutation {
         input: CreateChannelLensInput,
     ) -> Result<crate::types::ChannelLens> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::channel_lens::service::ChannelLensService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::channel_lens::service::ChannelLensService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
         let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
-                &input.conversation_id,
-            )?;
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
 
         let lens = svc
             .create_lens(rim_services::channel_lens::command::CreateLensCmd {
@@ -1447,9 +1418,9 @@ impl Mutation {
         input: UpdateChannelLensInput,
     ) -> Result<crate::types::ChannelLens> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::channel_lens::service::ChannelLensService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::channel_lens::service::ChannelLensService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
         let lens_id =
             parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&input.lens_id)?;
@@ -1476,12 +1447,11 @@ impl Mutation {
         lens_id: ID,
     ) -> Result<bool> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::channel_lens::service::ChannelLensService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::channel_lens::service::ChannelLensService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-        let lens_id =
-            parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&lens_id)?;
+        let lens_id = parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&lens_id)?;
 
         svc.delete_lens(rim_services::channel_lens::command::DeleteLensCmd {
             actor: Actor::new(actor),
@@ -1502,14 +1472,11 @@ impl Mutation {
         input: StartIncidentInput,
     ) -> Result<crate::types::IncidentGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
         let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(
-                &input.conversation_id,
-            )?;
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
 
         let incident = svc
             .start_incident(rim_services::incident::command::StartIncidentCmd {
@@ -1531,20 +1498,17 @@ impl Mutation {
         input: UpdateIncidentStatusInput,
     ) -> Result<crate::types::IncidentGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
         let incident_id =
             parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
 
         let incident = svc
-            .update_incident_status(
-                rim_services::incident::command::UpdateIncidentStatusCmd {
-                    actor: Actor::new(actor),
-                    incident_id,
-                    status: input.status.into(),
-                },
-            )
+            .update_incident_status(rim_services::incident::command::UpdateIncidentStatusCmd {
+                actor: Actor::new(actor),
+                incident_id,
+                status: input.status.into(),
+            })
             .await
             .map_err(map_service_error)?;
 
@@ -1557,9 +1521,8 @@ impl Mutation {
         input: AdvanceIncidentPhaseInput,
     ) -> Result<crate::types::IncidentPhaseGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
         let incident_id =
             parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
 
@@ -1582,13 +1545,11 @@ impl Mutation {
         input: TagIncidentMessageInput,
     ) -> Result<crate::types::IncidentMessageTagGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
         let incident_id =
             parse_uuid_id::<rim_core::incident::model::IncidentId>(&input.incident_id)?;
-        let message_id =
-            parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
 
         let tag = svc
             .tag_message(rim_services::incident::command::TagMessageCmd {
@@ -1609,11 +1570,9 @@ impl Mutation {
         incident_id: ID,
     ) -> Result<crate::types::IncidentGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
-        let incident_id =
-            parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let incident_id = parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
 
         let incident = svc
             .generate_postmortem(rim_services::incident::command::GeneratePostmortemCmd {
@@ -1632,11 +1591,9 @@ impl Mutation {
         incident_id: ID,
     ) -> Result<crate::types::IncidentGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
-        let incident_id =
-            parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let incident_id = parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
 
         let incident = svc
             .resolve_incident(rim_services::incident::command::ResolveIncidentCmd {
@@ -1648,6 +1605,263 @@ impl Mutation {
 
         Ok(incident.into())
     }
+
+    async fn set_workspace_state(
+        &self,
+        ctx: &Context<'_>,
+        input: crate::types::SetWorkspaceStateInput,
+    ) -> Result<crate::types::WorkspaceStateEntryGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::workspace_state::service::WorkspaceStateService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let entry = svc
+            .set(
+                rim_services::workspace_state::request::SetWorkspaceStateCmd {
+                    actor: Actor::new(actor),
+                    server_id,
+                    key: input.key,
+                    value: input.value.0,
+                    scope: input.scope.into(),
+                    ttl_seconds: input.ttl_seconds,
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(entry.into())
+    }
+
+    async fn delete_workspace_state(
+        &self,
+        ctx: &Context<'_>,
+        input: crate::types::DeleteWorkspaceStateInput,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::workspace_state::service::WorkspaceStateService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let deleted = svc
+            .delete(
+                rim_services::workspace_state::request::DeleteWorkspaceStateCmd {
+                    actor: Actor::new(actor),
+                    server_id,
+                    key: input.key,
+                    scope: input.scope.into(),
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(deleted)
+    }
+
+    async fn increment_workspace_state(
+        &self,
+        ctx: &Context<'_>,
+        input: crate::types::IncrementWorkspaceStateInput,
+    ) -> Result<crate::types::WorkspaceStateEntryGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::workspace_state::service::WorkspaceStateService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let entry = svc
+            .increment(
+                rim_services::workspace_state::request::IncrementWorkspaceStateCmd {
+                    actor: Actor::new(actor),
+                    server_id,
+                    key: input.key,
+                    scope: input.scope.into(),
+                    delta: input.delta,
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(entry.into())
+    }
+
+    async fn create_pipeline(
+        &self,
+        ctx: &Context<'_>,
+        input: crate::types::CreatePipelineInput,
+    ) -> Result<crate::types::PipelineGql> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let trigger = build_pipeline_trigger_dto(input.trigger)?;
+        let filter = input.filter.map(build_pipeline_filter_dto).transpose()?;
+        let actions = input
+            .actions
+            .into_iter()
+            .map(
+                |a| rim_services::pipeline::dto::PipelineActionDto::ExecuteCommand {
+                    command_id: a.command_id,
+                    args: a.args.map(|j| j.0),
+                },
+            )
+            .collect();
+
+        let pipeline = svc
+            .create(rim_services::pipeline::request::CreatePipelineCmd {
+                actor: Actor::new(actor),
+                server_id,
+                name: input.name,
+                description: input.description,
+                trigger,
+                filter,
+                actions,
+                cooldown_secs: input.cooldown_secs,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(pipeline.into())
+    }
+
+    async fn update_pipeline(
+        &self,
+        ctx: &Context<'_>,
+        input: crate::types::UpdatePipelineInput,
+    ) -> Result<crate::types::PipelineGql> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let pipeline_id =
+            parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&input.pipeline_id)?;
+
+        let trigger = build_pipeline_trigger_dto(input.trigger)?;
+        let filter = input.filter.map(build_pipeline_filter_dto).transpose()?;
+        let actions = input
+            .actions
+            .into_iter()
+            .map(
+                |a| rim_services::pipeline::dto::PipelineActionDto::ExecuteCommand {
+                    command_id: a.command_id,
+                    args: a.args.map(|j| j.0),
+                },
+            )
+            .collect();
+
+        let pipeline = svc
+            .update(rim_services::pipeline::request::UpdatePipelineCmd {
+                actor: Actor::new(actor),
+                pipeline_id,
+                name: input.name,
+                description: input.description,
+                trigger,
+                filter,
+                actions,
+                cooldown_secs: input.cooldown_secs,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(pipeline.into())
+    }
+
+    async fn delete_pipeline(
+        &self,
+        ctx: &Context<'_>,
+        pipeline_id: async_graphql::ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let pipeline_id = parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
+
+        svc.delete(rim_services::pipeline::request::DeletePipelineCmd {
+            actor: Actor::new(actor),
+            pipeline_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    async fn toggle_pipeline(
+        &self,
+        ctx: &Context<'_>,
+        pipeline_id: async_graphql::ID,
+        enabled: bool,
+    ) -> Result<crate::types::PipelineGql> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let pipeline_id = parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
+
+        let pipeline = svc
+            .toggle(rim_services::pipeline::request::TogglePipelineCmd {
+                actor: Actor::new(actor),
+                pipeline_id,
+                enabled,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(pipeline.into())
+    }
+}
+
+fn build_pipeline_trigger_dto(
+    input: crate::types::PipelineTriggerInput,
+) -> async_graphql::Result<rim_services::pipeline::dto::PipelineTriggerDto> {
+    let conversation_id = input
+        .conversation_id
+        .as_ref()
+        .map(parse_uuid_id::<rim_core::conversation::model::ConversationId>)
+        .transpose()?;
+    Ok(rim_services::pipeline::dto::PipelineTriggerDto {
+        kind: input.kind.into(),
+        conversation_id,
+    })
+}
+
+fn build_pipeline_filter_dto(
+    input: crate::types::PipelineFilterInput,
+) -> async_graphql::Result<rim_services::pipeline::dto::PipelineFilterDto> {
+    let mut conditions = Vec::new();
+    for c in input.conditions {
+        let cond = match c.condition_type.as_str() {
+            "MessageContains" => {
+                let pattern = c.pattern.ok_or_else(|| {
+                    async_graphql::Error::new("MessageContains requires a pattern")
+                })?;
+                rim_services::pipeline::dto::FilterConditionDto::MessageContains { pattern }
+            }
+            "MessageFromUser" => {
+                let uid_str = c.user_id.ok_or_else(|| {
+                    async_graphql::Error::new("MessageFromUser requires a user_id")
+                })?;
+                let user_id = parse_uuid_id::<rim_core::user::model::UserId>(&uid_str)?;
+                rim_services::pipeline::dto::FilterConditionDto::MessageFromUser { user_id }
+            }
+            "ConversationIs" => {
+                let conv_str = c.conversation_id.ok_or_else(|| {
+                    async_graphql::Error::new("ConversationIs requires a conversation_id")
+                })?;
+                let conversation_id =
+                    parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conv_str)?;
+                rim_services::pipeline::dto::FilterConditionDto::ConversationIs { conversation_id }
+            }
+            other => {
+                return Err(async_graphql::Error::new(format!(
+                    "unknown filter condition type: {other}"
+                )));
+            }
+        };
+        conditions.push(cond);
+    }
+    Ok(rim_services::pipeline::dto::PipelineFilterDto { conditions })
 }
 
 #[derive(InputObject)]

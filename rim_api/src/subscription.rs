@@ -7,6 +7,7 @@ use futures_util::Stream;
 use rim_core::user::model::UserId;
 use rim_infra_services::presence::PresenceManager;
 use rim_services::events::WorkspaceEvent;
+use rim_services::workspace_state::dto::WorkspaceStateScopeDto;
 
 use crate::broadcast::InMemoryBroadcaster;
 
@@ -139,6 +140,33 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 
         // LinkPreviewReady is visible to all workspace members
         WorkspaceEvent::LinkPreviewReady { .. } => true,
+
+        // WorkspaceStateChanged: server-scope visible to all, user-scope only to owning user
+        WorkspaceEvent::WorkspaceStateChanged {
+            scope,
+            user_id: event_user_id,
+            ..
+        } => match scope {
+            WorkspaceStateScopeDto::Server => true,
+            WorkspaceStateScopeDto::User => event_user_id
+                .as_ref()
+                .is_some_and(|uid| uid.to_string() == user_id),
+        },
+
+        // WorkspaceStateDeleted: server-scope visible to all, user-scope only to owning user
+        WorkspaceEvent::WorkspaceStateDeleted {
+            scope,
+            user_id: event_user_id,
+            ..
+        } => match scope {
+            WorkspaceStateScopeDto::Server => true,
+            WorkspaceStateScopeDto::User => event_user_id
+                .as_ref()
+                .is_some_and(|uid| uid.to_string() == user_id),
+        },
+
+        // Pipeline events are visible to all workspace members.
+        WorkspaceEvent::PipelineFired { .. } | WorkspaceEvent::PipelineSuspended { .. } => true,
     }
 }
 

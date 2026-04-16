@@ -24,6 +24,7 @@ pub struct ExecuteCommandCmd {
     pub args: Option<serde_json::Value>,
     pub context: Option<CommandContextDto>,
     pub confirmed_dangerous: bool,
+    pub is_pipe: bool,
 }
 
 #[derive(Debug, Clone)]

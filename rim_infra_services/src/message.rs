@@ -779,7 +779,7 @@ impl MessageService for DefaultMessageService {
             .list_messages(rim_core::message::repository::ListMessagesParams {
                 conversation_id: query.conversation_id,
                 thread_id: None,
-                limit: query.limit.min(MAX_PAGE_LIMIT).max(1),
+                limit: query.limit.clamp(1, MAX_PAGE_LIMIT),
                 dir: query.dir,
                 cursor: query.cursor.map(Into::into),
                 include_deleted: query.include_deleted,
@@ -835,7 +835,7 @@ impl MessageService for DefaultMessageService {
             .list_messages(rim_core::message::repository::ListMessagesParams {
                 conversation_id: query.conversation_id,
                 thread_id: Some(query.thread_id),
-                limit: query.limit.min(MAX_PAGE_LIMIT).max(1),
+                limit: query.limit.clamp(1, MAX_PAGE_LIMIT),
                 dir: query.dir,
                 cursor: query.cursor.map(Into::into),
                 include_deleted: query.include_deleted,
@@ -891,7 +891,7 @@ impl MessageService for DefaultMessageService {
                 .await?;
 
                 // Security: always exclude deleted messages from search results.
-                let clamped_limit = query.limit.min(MAX_PAGE_LIMIT).max(1);
+                let clamped_limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
                 self.repos
                     .message_repo
                     .search_messages(conversation_id, q, clamped_limit, false)
@@ -907,7 +907,7 @@ impl MessageService for DefaultMessageService {
                     .await
                     .map_err(rim_services::map_repo_error)?;
 
-                let clamped_limit = query.limit.min(MAX_PAGE_LIMIT).max(1);
+                let clamped_limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
                 self.repos
                     .message_repo
                     .search_messages_across_conversations(&accessible_ids, q, clamped_limit)

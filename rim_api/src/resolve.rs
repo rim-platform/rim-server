@@ -85,10 +85,7 @@ impl ResolveExt for Context<'_> {
             .collect())
     }
 
-    async fn load_reactions(
-        &self,
-        message_id: &async_graphql::ID,
-    ) -> Result<Vec<ReactionGroup>> {
+    async fn load_reactions(&self, message_id: &async_graphql::ID) -> Result<Vec<ReactionGroup>> {
         let loader = self.data::<async_graphql::dataloader::DataLoader<ReactionLoader>>()?;
         let actor_user_id = crate::auth_context::require_actor(self)?;
         let msg_id = crate::ids::parse_uuid_id::<MessageId>(message_id)?;
@@ -115,10 +112,7 @@ impl ResolveExt for Context<'_> {
         Ok(pinned)
     }
 
-    async fn load_mentioned_user_ids(
-        &self,
-        message_id: &async_graphql::ID,
-    ) -> Result<Vec<UserId>> {
+    async fn load_mentioned_user_ids(&self, message_id: &async_graphql::ID) -> Result<Vec<UserId>> {
         let loader = self.data::<async_graphql::dataloader::DataLoader<MentionLoader>>()?;
         let msg_id = crate::ids::parse_uuid_id::<MessageId>(message_id)?;
         let user_ids = loader
@@ -134,10 +128,7 @@ impl ResolveExt for Context<'_> {
         self.load_users(user_ids).await
     }
 
-    async fn load_link_previews(
-        &self,
-        message_id: &async_graphql::ID,
-    ) -> Result<Vec<LinkPreview>> {
+    async fn load_link_previews(&self, message_id: &async_graphql::ID) -> Result<Vec<LinkPreview>> {
         let loader = self.data::<async_graphql::dataloader::DataLoader<LinkPreviewLoader>>()?;
         let msg_id = crate::ids::parse_uuid_id::<MessageId>(message_id)?;
         let previews = loader

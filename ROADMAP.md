@@ -360,13 +360,15 @@ and session state.
 
 ## Where We Are Now
 
-Phase 0 through Phase 4 are largely implemented:
+Phase 0 through Phase 4 are largely implemented, with programmable runtime and power user
+UX features shipping:
 
 - **Phase 1 (Communication Core)**: Complete — channels, DMs, groups, threads,
   attachments, search, pagination, permissions, mentions, reactions, pinning, forwarding,
   typing indicators, read state, link previews, custom emoji.
 - **Phase 2 (Command System)**: Complete — built-in registry, command palette, user
-  commands, chained macros, execution context.
+  commands, chained macros, execution context, command piping with pre-validation and
+  per-stage results, macro name-to-ID resolution, 5 built-in workspace state commands.
 - **Phase 3 (Keybind System)**: Complete — 19 default keybinds, customizable, categories,
   context-aware, inline editing.
 - **Phase 4 (Plugin System)**: Complete — manifest, local host, install/enable/disable,
@@ -374,13 +376,31 @@ Phase 0 through Phase 4 are largely implemented:
 - **Phase 5 (Context Actions)**: Partially complete — AI agent with tool calling
   (send_message, pin_message, create_channel, add_reaction), context actions from plugins.
 
+Programmable runtime features shipped:
+- **Workspace State Machine**: Full-stack KV store with per-server/per-user scoping, JSONB
+  values, TTL support, atomic increment, quota enforcement, real-time events via WebSocket.
+- **Command Piping Hardening**: Pre-validation pass (dangerous + desktop-local rejection),
+  explicit `isPipe` flag, enhanced error messages with previous stage context.
+- **Macro Name Resolution**: GraphQL query to resolve macro by name, frontend async lookup.
+
+Power user UX shipped:
+- **Zen Mode**: `Ctrl+Shift+Z` strips UI to current conversation only, with animated
+  transitions.
+- **Compact Mode**: Three density levels (comfortable/compact/ultra-compact), `Ctrl+D`
+  toggle.
+- **COMPOSE/NAVIGATE Mode**: Vim-like mode model anchored to composer focus, with `j/k`
+  message navigation, single-key actions (`r` reply, `e` edit, `t` thread, `p` pin).
+- **Status Bar**: Glanceable bar showing mode indicator, density, connection status.
+- **Pipeline Result View**: Per-stage result rendering with status icons and collapsible
+  JSON payload.
+
 Infrastructure and quality:
 - CI/CD: GitHub Actions pipelines for both repos (lint, test, coverage, Docker build).
 - Docker: Production Dockerfiles for server and UI, docker-compose for local dev stack.
-- Testing: 309 backend tests (95% coverage gate), 663 frontend tests (Vitest).
+- Testing: 344 backend tests (95% coverage gate), 691 frontend tests (Vitest).
 - Security: HMAC-signed CSRF tokens bound to sessions, Stronghold passwords derived from
-  OS keychain, CSP headers, rate limiting, SSRF protection.
+  OS keychain, CSP headers, rate limiting, SSRF protection, server membership checks on
+  all workspace state operations.
 
-The next step is to expand the programmable runtime (command piping, state machine) and
-power user UX (zen mode, keyboard actions, compact mode) to solidify RIM's
-differentiation as a programmable workspace.
+The next step is reactive pipelines, AI macro builder, and inline command preview to
+deepen the programmable workspace experience.

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use entity::user_skill_profile;
+use rim_core::repository::error::RepoResult;
 use rim_core::skill_profile::model::{SkillProfile, SkillTier};
 use rim_core::skill_profile::repository::SkillProfileRepository;
-use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};

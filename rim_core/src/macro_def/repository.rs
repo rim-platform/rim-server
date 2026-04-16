@@ -11,6 +11,12 @@ use crate::user::model::UserId;
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MacroRepository: Send + Sync {
     async fn get_by_id(&self, id: MacroId) -> RepoResult<Option<MacroDef>>;
+    async fn find_by_name(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        name: &str,
+    ) -> RepoResult<Option<MacroDef>>;
     async fn list_for_user(
         &self,
         server_id: ServerId,

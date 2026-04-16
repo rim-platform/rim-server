@@ -93,11 +93,22 @@ pub enum CommandResultStatusDto {
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PipeStageResultDto {
+    pub stage_index: u32,
+    pub command_id: String,
+    pub status: CommandResultStatusDto,
+    pub message: String,
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommandResultDto {
     pub status: CommandResultStatusDto,
     pub message: String,
     pub payload: Option<serde_json::Value>,
     pub follow_up_commands: Vec<String>,
+    pub pipeline_stages: Option<Vec<PipeStageResultDto>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

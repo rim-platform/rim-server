@@ -20,6 +20,7 @@ pub mod message_reaction;
 pub mod notification_preference;
 pub mod password_reset;
 pub mod pin;
+pub mod pipeline;
 pub mod presence;
 pub mod provider;
 pub mod read_state;
@@ -33,6 +34,7 @@ pub mod storage;
 pub mod thread;
 pub mod typing;
 pub mod user;
+pub mod workspace_state;
 
 pub(crate) mod util;
 
@@ -68,9 +70,11 @@ pub use custom_emoji::CustomEmojiRepos;
 pub use incident::IncidentRepos;
 pub use macro_def::MacroRepos;
 pub use notification_preference::NotificationPreferenceRepos;
+pub use pipeline::PipelineRepos;
 pub use provider::DefaultAppServiceProvider;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,
     ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
 };
+pub use workspace_state::WorkspaceStateRepos;

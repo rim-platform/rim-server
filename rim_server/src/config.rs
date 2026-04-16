@@ -35,7 +35,10 @@ impl fmt::Debug for RIMConfig {
             .field("server_host", &self.server_host)
             .field("server_port", &self.server_port)
             .field("database_url", &"[REDACTED]")
-            .field("bootstrap_secret", &self.bootstrap_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "bootstrap_secret",
+                &self.bootstrap_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("session_ttl_days", &self.session_ttl_days)
             .field("enable_graphiql", &self.enable_graphiql)
             .field("cors_allowed_origin", &self.cors_allowed_origin)
