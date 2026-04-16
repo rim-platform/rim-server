@@ -22,6 +22,7 @@ pub mod message_reaction;
 pub mod message_thread;
 pub mod notification_preference;
 pub mod password_reset;
+pub mod pipeline;
 pub mod principal;
 pub mod repository;
 pub mod server;
@@ -31,6 +32,7 @@ pub mod skill_profile;
 pub mod storage;
 pub mod user;
 pub mod util;
+pub mod workspace_state;
 
 #[cfg(test)]
 mod tests;

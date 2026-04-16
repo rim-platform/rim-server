@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 
+use rim_core::conversation::model::ConversationId;
 use rim_core::incident::model::{
-    Incident, IncidentId, IncidentMessageTag, IncidentPhaseName, IncidentPhaseId,
+    Incident, IncidentId, IncidentMessageTag, IncidentPhaseId, IncidentPhaseName,
     IncidentPhaseRecord, IncidentSeverity, IncidentStatus, MessageTagType,
 };
-use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;

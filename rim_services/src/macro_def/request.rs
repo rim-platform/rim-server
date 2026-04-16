@@ -47,6 +47,14 @@ pub struct ListServerMacrosQuery {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GetMacroByNameQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExecuteMacroCmd {
     pub actor: Actor,
     pub macro_id: MacroId,

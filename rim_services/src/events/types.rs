@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
+use rim_core::pipeline::model::PipelineId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 use crate::message::dto::MessageDto;
+use crate::workspace_state::dto::WorkspaceStateScopeDto;
 
 /// Rich event types with full data for real-time updates.
 /// Clients receive these directly — no need to re-fetch.
@@ -135,6 +137,33 @@ pub enum WorkspaceEvent {
         conversation_id: ConversationId,
         message_id: MessageId,
     },
+    WorkspaceStateChanged {
+        workspace_id: ServerId,
+        key: String,
+        value: serde_json::Value,
+        scope: WorkspaceStateScopeDto,
+        user_id: Option<UserId>,
+        version: i64,
+    },
+    WorkspaceStateDeleted {
+        workspace_id: ServerId,
+        key: String,
+        scope: WorkspaceStateScopeDto,
+        user_id: Option<UserId>,
+    },
+    PipelineFired {
+        workspace_id: ServerId,
+        pipeline_id: PipelineId,
+        pipeline_name: String,
+        trigger_event: String,
+        actions_executed: usize,
+    },
+    PipelineSuspended {
+        workspace_id: ServerId,
+        pipeline_id: PipelineId,
+        pipeline_name: String,
+        reason: String,
+    },
 }
 
 /// Event payload for message-related events.
@@ -213,7 +242,11 @@ impl WorkspaceEvent {
             | Self::ReadStateUpdated { workspace_id, .. }
             | Self::PresenceChanged { workspace_id, .. }
             | Self::UserMentioned { workspace_id, .. }
-            | Self::LinkPreviewReady { workspace_id, .. } => workspace_id.to_string(),
+            | Self::LinkPreviewReady { workspace_id, .. }
+            | Self::WorkspaceStateChanged { workspace_id, .. }
+            | Self::WorkspaceStateDeleted { workspace_id, .. }
+            | Self::PipelineFired { workspace_id, .. }
+            | Self::PipelineSuspended { workspace_id, .. } => workspace_id.to_string(),
         }
     }
 
@@ -266,6 +299,20 @@ impl WorkspaceEvent {
             } => Some(mentioned_user_ids),
             // LinkPreviewReady is visible to all workspace members.
             Self::LinkPreviewReady { .. } => None,
+            // WorkspaceState events: server-scope visible to all, user-scope only to owning user.
+            Self::WorkspaceStateChanged { scope, user_id, .. }
+            | Self::WorkspaceStateDeleted { scope, user_id, .. } => match scope {
+                WorkspaceStateScopeDto::Server => None,
+                WorkspaceStateScopeDto::User => user_id.as_ref().map(std::slice::from_ref),
+            },
+            // Pipeline events are visible to all workspace members.
+            Self::PipelineFired { .. } | Self::PipelineSuspended { .. } => None,
         }
+    }
+
+    /// Returns `true` for events emitted by the pipeline evaluator itself.
+    /// Used to prevent infinite loops in the evaluator task.
+    pub fn is_pipeline_event(&self) -> bool {
+        matches!(self, Self::PipelineFired { .. } | Self::PipelineSuspended { .. })
     }
 }

@@ -6,7 +6,10 @@ impl From<incident_phase::Model> for IncidentPhaseRecord {
         Self {
             id: m.id.into(),
             incident_id: m.incident_id.into(),
-            phase: m.phase.parse().unwrap_or(rim_core::incident::model::IncidentPhaseName::Detection),
+            phase: m
+                .phase
+                .parse()
+                .unwrap_or(rim_core::incident::model::IncidentPhaseName::Detection),
             started_at: m.started_at.into(),
             ended_at: m.ended_at.map(Into::into),
             note: m.note,

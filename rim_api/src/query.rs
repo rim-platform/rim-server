@@ -5,11 +5,11 @@ use crate::pagination::PageDir;
 use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelLens, ChannelPage, Command,
     CommandContextInput, CommandSurface, Conversation, ConversationPage, ConversationTypeEnum,
-    CustomEmoji, DefaultKeybind, Event, InboxCursorInput, Integration, Invite, Keybind,
-    KeybindContext, KeybindLayers, KeybindScope, MacroDef, Message, MessageCursorInput, MessagePage,
-    MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember, Setting,
-    Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
-    IncidentGql, IncidentTimelineGql,
+    CustomEmoji, DefaultKeybind, Event, InboxCursorInput, IncidentGql, IncidentTimelineGql,
+    Integration, Invite, Keybind, KeybindContext, KeybindLayers, KeybindScope, MacroDef, Message,
+    MessageCursorInput, MessagePage, MessageReference, MutedConversation, SearchResultMessage,
+    Server, ServerMember, Setting, Thread, ThreadCursorInput, ThreadPage, UnreadCount, User,
+    UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -866,6 +866,29 @@ impl Query {
         Ok(macros.into_iter().map(Into::into).collect())
     }
 
+    async fn macro_by_name(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        name: String,
+    ) -> Result<Option<MacroDef>> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let macro_def = svc
+            .get_macro_by_name(rim_services::macro_def::request::GetMacroByNameQuery {
+                actor: Actor::new(actor),
+                server_id,
+                name,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(macro_def.map(Into::into))
+    }
+
     async fn server_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
         let actor = require_actor(ctx)?;
         let svc =
@@ -885,14 +908,11 @@ impl Query {
 
     // ── Skill Profile ──────────────────────────────────────────────────
 
-    async fn my_skill_profile(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<crate::types::SkillProfileGql> {
+    async fn my_skill_profile(&self, ctx: &Context<'_>) -> Result<crate::types::SkillProfileGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::skill_profile::service::SkillProfileService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::skill_profile::service::SkillProfileService>>(
+            )?;
 
         let profile = svc
             .get_skill_profile(Actor::new(actor))
@@ -911,9 +931,9 @@ impl Query {
         conversation_id: ID,
     ) -> Result<Vec<ChannelLens>> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::channel_lens::service::ChannelLensService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::channel_lens::service::ChannelLensService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -939,14 +959,13 @@ impl Query {
         #[graphql(default = 50)] limit: i32,
     ) -> Result<Vec<Message>> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::channel_lens::service::ChannelLensService,
-        >>()?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::channel_lens::service::ChannelLensService>>(
+            )?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
-        let lens_id =
-            parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&lens_id)?;
+        let lens_id = parse_uuid_id::<rim_core::channel_lens::model::ChannelLensId>(&lens_id)?;
 
         let messages = svc
             .apply_lens(rim_services::channel_lens::command::ApplyLensQuery {
@@ -971,9 +990,8 @@ impl Query {
         conversation_id: ID,
     ) -> Result<Option<IncidentGql>> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
@@ -996,11 +1014,9 @@ impl Query {
         incident_id: ID,
     ) -> Result<IncidentTimelineGql> {
         let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::incident::service::IncidentService,
-        >>()?;
-        let incident_id =
-            parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let incident_id = parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
 
         let timeline = svc
             .get_incident_timeline(rim_services::incident::command::GetIncidentTimelineQuery {
@@ -1011,5 +1027,105 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(timeline.into())
+    }
+
+    async fn workspace_state(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        key: String,
+        scope: crate::types::WorkspaceStateScopeGql,
+    ) -> Result<Option<crate::types::WorkspaceStateEntryGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::workspace_state::service::WorkspaceStateService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let entry = svc
+            .get(
+                rim_services::workspace_state::request::GetWorkspaceStateQuery {
+                    actor: Actor::new(actor),
+                    server_id,
+                    key,
+                    scope: scope.into(),
+                },
+            )
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(entry.map(Into::into))
+    }
+
+    async fn workspace_state_list(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        prefix: String,
+        scope: crate::types::WorkspaceStateScopeGql,
+        limit: Option<u64>,
+    ) -> Result<Vec<crate::types::WorkspaceStateEntryGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<
+            dyn rim_services::workspace_state::service::WorkspaceStateService,
+        >>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let entries = svc
+            .list(
+                rim_services::workspace_state::request::ListWorkspaceStateQuery {
+                    actor: Actor::new(actor),
+                    server_id,
+                    prefix,
+                    scope: scope.into(),
+                    limit,
+                },
+            )
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(entries.into_iter().map(Into::into).collect())
+    }
+
+    async fn pipeline(
+        &self,
+        ctx: &Context<'_>,
+        pipeline_id: async_graphql::ID,
+    ) -> Result<crate::types::PipelineGql> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let pipeline_id =
+            parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
+
+        let pipeline = svc
+            .get(Actor::new(actor), pipeline_id)
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(pipeline.into())
+    }
+
+    async fn pipelines(
+        &self,
+        ctx: &Context<'_>,
+        server_id: async_graphql::ID,
+        enabled: Option<bool>,
+    ) -> Result<Vec<crate::types::PipelineGql>> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let pipelines = svc
+            .list(rim_services::pipeline::request::ListPipelinesCmd {
+                actor: Actor::new(actor),
+                server_id,
+                enabled,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(pipelines.into_iter().map(Into::into).collect())
     }
 }

@@ -9,10 +9,8 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
 
         // message_pin.pinned_by → SET NULL (preserve pin, clear who pinned it)
-        db.execute_unprepared(
-            "ALTER TABLE message_pin ALTER COLUMN pinned_by DROP NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE message_pin ALTER COLUMN pinned_by DROP NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE message_pin DROP CONSTRAINT IF EXISTS fk_message_pin_user",
         )
@@ -35,10 +33,8 @@ impl MigrationTrait for Migration {
         .await?;
 
         // custom_emoji.uploaded_by → SET NULL (preserve emoji, clear uploader)
-        db.execute_unprepared(
-            "ALTER TABLE custom_emoji ALTER COLUMN uploaded_by DROP NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE custom_emoji ALTER COLUMN uploaded_by DROP NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE custom_emoji DROP CONSTRAINT IF EXISTS fk_custom_emoji_uploaded_by",
         )
@@ -50,10 +46,8 @@ impl MigrationTrait for Migration {
         .await?;
 
         // incident.started_by → SET NULL (preserve incident record, clear starter)
-        db.execute_unprepared(
-            "ALTER TABLE incident ALTER COLUMN started_by DROP NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE incident ALTER COLUMN started_by DROP NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE incident DROP CONSTRAINT IF EXISTS fk_incident_started_by",
         )
@@ -83,10 +77,8 @@ impl MigrationTrait for Migration {
 
         // Revert to original NO ACTION constraints
 
-        db.execute_unprepared(
-            "ALTER TABLE message_pin ALTER COLUMN pinned_by SET NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE message_pin ALTER COLUMN pinned_by SET NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE message_pin DROP CONSTRAINT IF EXISTS fk_message_pin_user",
         )
@@ -107,10 +99,8 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        db.execute_unprepared(
-            "ALTER TABLE custom_emoji ALTER COLUMN uploaded_by SET NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE custom_emoji ALTER COLUMN uploaded_by SET NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE custom_emoji DROP CONSTRAINT IF EXISTS fk_custom_emoji_uploaded_by",
         )
@@ -121,10 +111,8 @@ impl MigrationTrait for Migration {
         )
         .await?;
 
-        db.execute_unprepared(
-            "ALTER TABLE incident ALTER COLUMN started_by SET NOT NULL",
-        )
-        .await?;
+        db.execute_unprepared("ALTER TABLE incident ALTER COLUMN started_by SET NOT NULL")
+            .await?;
         db.execute_unprepared(
             "ALTER TABLE incident DROP CONSTRAINT IF EXISTS fk_incident_started_by",
         )

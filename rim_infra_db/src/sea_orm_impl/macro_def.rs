@@ -31,6 +31,22 @@ impl MacroRepository for SeaOrmMacroRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn find_by_name(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        name: &str,
+    ) -> RepoResult<Option<MacroDef>> {
+        let model = macro_def::Entity::find()
+            .filter(macro_def::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(macro_def::Column::UserId.eq::<Uuid>(user_id.into()))
+            .filter(macro_def::Column::Name.eq(name))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(model.map(Into::into))
+    }
+
     async fn list_for_user(
         &self,
         server_id: ServerId,

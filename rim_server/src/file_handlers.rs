@@ -19,9 +19,8 @@ fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpRespons
         rim_services::ServiceError::PermissionDenied => {
             HttpResponse::Forbidden().json(serde_json::json!({"error": "access denied"}))
         }
-        rim_services::ServiceError::Unauthenticated => {
-            HttpResponse::Unauthorized().json(serde_json::json!({"error": "authentication required"}))
-        }
+        rim_services::ServiceError::Unauthenticated => HttpResponse::Unauthorized()
+            .json(serde_json::json!({"error": "authentication required"})),
         rim_services::ServiceError::Validation(msg) => {
             HttpResponse::BadRequest().json(serde_json::json!({"error": msg}))
         }
@@ -367,10 +366,12 @@ pub async fn handle_attachment_download(
 
     // Authorize access and get attachment details via the service layer.
     let attachment_dto = match attachment_service
-        .authorize_download(rim_services::message_attachment::command::AuthorizeDownloadQuery {
-            actor_user_id: user_id,
-            attachment_id,
-        })
+        .authorize_download(
+            rim_services::message_attachment::command::AuthorizeDownloadQuery {
+                actor_user_id: user_id,
+                attachment_id,
+            },
+        )
         .await
     {
         Ok(dto) => dto,

@@ -20,6 +20,7 @@ pub mod message_thread;
 pub mod notification_preference;
 pub mod password_reset;
 pub mod pin;
+pub mod pipeline;
 pub mod plugin_host;
 pub mod presence;
 pub mod provider;
@@ -30,6 +31,7 @@ pub mod setting;
 pub mod skill_profile;
 pub mod storage;
 pub mod user;
+pub mod workspace_state;
 
 use rim_core::principal::model::Principal;
 use rim_core::repository::error::{RepoError, RepoErrorKind};

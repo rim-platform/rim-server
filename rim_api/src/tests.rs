@@ -36,6 +36,7 @@ mod tests {
     use rim_services::notification_preference::service::MockNotificationPreferenceService;
     use rim_services::password_reset::service::MockPasswordResetService;
     use rim_services::pin::service::MockPinService;
+    use rim_services::pipeline::service::MockPipelineService;
     use rim_services::provider::AppServiceProvider;
     use rim_services::read_state::service::MockReadStateService;
     use rim_services::server::service::MockServerService;
@@ -44,6 +45,7 @@ mod tests {
     use rim_services::skill_profile::service::MockSkillProfileService;
     use rim_services::storage::service::MockStorageService;
     use rim_services::user::service::MockUserService;
+    use rim_services::workspace_state::service::MockWorkspaceStateService;
 
     use crate::auth_context::AuthActorCtx;
     use crate::broadcast::InMemoryBroadcaster;
@@ -110,6 +112,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -153,6 +157,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -193,6 +199,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -337,6 +345,8 @@ mod tests {
         channel_lens: Arc<dyn rim_services::channel_lens::service::ChannelLensService>,
         incident: Arc<dyn rim_services::incident::service::IncidentService>,
         skill_profile: Arc<dyn rim_services::skill_profile::service::SkillProfileService>,
+        workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
+        pipeline: Arc<dyn rim_services::pipeline::service::PipelineService>,
     }
 
     impl AppServiceProvider for TestAppServiceProvider {
@@ -475,9 +485,7 @@ mod tests {
             Arc::clone(&self.channel_lens)
         }
 
-        fn incident_service(
-            &self,
-        ) -> Arc<dyn rim_services::incident::service::IncidentService> {
+        fn incident_service(&self) -> Arc<dyn rim_services::incident::service::IncidentService> {
             Arc::clone(&self.incident)
         }
 
@@ -485,6 +493,16 @@ mod tests {
             &self,
         ) -> Arc<dyn rim_services::skill_profile::service::SkillProfileService> {
             Arc::clone(&self.skill_profile)
+        }
+
+        fn workspace_state_service(
+            &self,
+        ) -> Arc<dyn rim_services::workspace_state::service::WorkspaceStateService> {
+            Arc::clone(&self.workspace_state)
+        }
+
+        fn pipeline_service(&self) -> Arc<dyn rim_services::pipeline::service::PipelineService> {
+            Arc::clone(&self.pipeline)
         }
     }
 
@@ -526,6 +544,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -572,6 +592,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -612,6 +634,8 @@ mod tests {
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -1011,6 +1035,7 @@ mod tests {
                     message: "ok".to_string(),
                     payload: Some(serde_json::json!({ "message_id": "abc" })),
                     follow_up_commands: vec![],
+                    pipeline_stages: None,
                 })
             })
         });

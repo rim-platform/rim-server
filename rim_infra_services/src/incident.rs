@@ -357,11 +357,7 @@ impl IncidentService for DefaultIncidentService {
             if !phase_tags.is_empty() {
                 md.push_str("### Tagged Messages\n\n");
                 for tag in phase_tags {
-                    let tag_label = tag
-                        .tag_type
-                        .as_ref()
-                        .map(|t| t.as_str())
-                        .unwrap_or("note");
+                    let tag_label = tag.tag_type.as_ref().map(|t| t.as_str()).unwrap_or("note");
                     md.push_str(&format!(
                         "- [{}] message_id: {}\n",
                         tag_label, tag.message_id

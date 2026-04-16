@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use entity::incident_message_tag;
-use rim_core::incident::model::{
-    IncidentId, IncidentMessageTag, NewIncidentMessageTag,
-};
+use rim_core::incident::model::{IncidentId, IncidentMessageTag, NewIncidentMessageTag};
 use rim_core::incident::repository::IncidentMessageTagRepository;
 use rim_core::repository::error::RepoResult;
 use sea_orm::prelude::Uuid;

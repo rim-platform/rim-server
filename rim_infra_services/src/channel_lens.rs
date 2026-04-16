@@ -342,7 +342,7 @@ impl ChannelLensService for DefaultChannelLensService {
         )
         .await?;
 
-        let limit = query.limit.min(DEFAULT_APPLY_LIMIT).max(1);
+        let limit = query.limit.clamp(1, DEFAULT_APPLY_LIMIT);
 
         // Fetch a batch of recent messages to filter.
         // We fetch a larger batch and then apply the filter in-memory.
@@ -403,10 +403,7 @@ impl ChannelLensService for DefaultChannelLensService {
 
 /// Convert a Message to a simple MessageDto without loading attachments/threads.
 /// For lens results we keep it lightweight.
-fn to_simple_dto(
-    msg: Message,
-    server_id: rim_core::server::model::ServerId,
-) -> MessageDto {
+fn to_simple_dto(msg: Message, server_id: rim_core::server::model::ServerId) -> MessageDto {
     MessageDto {
         id: msg.id,
         server_id,

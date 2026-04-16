@@ -4,13 +4,14 @@ use async_trait::async_trait;
 
 use rim_core::macro_def::model::{NewMacroDef, UpdateMacroDef};
 use rim_core::macro_def::repository::MacroRepository;
+use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::command::dto::{CommandResultDto, CommandResultStatusDto};
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
-    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, ListServerMacrosQuery, ListUserMacrosQuery,
-    UpdateMacroCmd,
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
+    ListUserMacrosQuery, UpdateMacroCmd,
 };
 use rim_services::macro_def::service::MacroService;
 use rim_services::{ServiceError, ServiceResult, map_repo_error};
@@ -21,6 +22,7 @@ const MAX_MACROS_PER_USER: u64 = 50;
 #[derive(Clone)]
 pub struct MacroRepos {
     pub macro_repo: Arc<dyn MacroRepository>,
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
 }
 
 #[derive(Clone)]
@@ -228,6 +230,33 @@ impl MacroService for DefaultMacroService {
             .map_err(map_repo_error)
     }
 
+    async fn get_macro_by_name(
+        &self,
+        query: GetMacroByNameQuery,
+    ) -> ServiceResult<Option<MacroDto>> {
+        crate::util::ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        if query.name.len() > 128 {
+            return Err(ServiceError::Validation(
+                "macro name exceeds maximum length of 128 characters".into(),
+            ));
+        }
+
+        let macro_def = self
+            .repos
+            .macro_repo
+            .find_by_name(query.server_id, query.actor.user_id, &query.name)
+            .await
+            .map_err(map_repo_error)?;
+
+        macro_def.map(Self::to_dto).transpose()
+    }
+
     async fn list_user_macros(&self, query: ListUserMacrosQuery) -> ServiceResult<Vec<MacroDto>> {
         let macros = self
             .repos
@@ -275,6 +304,7 @@ impl MacroService for DefaultMacroService {
                     args: step.args.clone(),
                     context: cmd.command_context.clone(),
                     confirmed_dangerous: cmd.confirmed_dangerous,
+                    is_pipe: false,
                 })
                 .await?;
 
@@ -288,6 +318,7 @@ impl MacroService for DefaultMacroService {
             message: format!("macro `{}` executed", macro_def.name),
             payload: Some(serde_json::Value::Object(payload)),
             follow_up_commands: vec![],
+            pipeline_stages: None,
         })
     }
 }
@@ -304,12 +335,40 @@ mod tests {
     use async_trait::async_trait;
     use rim_core::macro_def::repository::MacroRepository;
     use rim_core::repository::error::RepoResult;
+    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::repository::ServerMemberRepository;
+
+    mockall::mock! {
+        ServerMemberRepository {}
+        #[async_trait]
+        impl ServerMemberRepository for ServerMemberRepository {
+            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
+            async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
+            async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
+            async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;
+            async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
+            async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
+            async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+        }
+    }
+
+    fn make_member_repo() -> MockServerMemberRepository {
+        let mut repo = MockServerMemberRepository::new();
+        repo.expect_is_member().returning(|_, _| Ok(true));
+        repo
+    }
 
     mockall::mock! {
         MacroRepository {}
         #[async_trait]
         impl MacroRepository for MacroRepository {
             async fn get_by_id(&self, id: MacroId) -> RepoResult<Option<MacroDef>>;
+            async fn find_by_name(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+                name: &str,
+            ) -> RepoResult<Option<MacroDef>>;
             async fn list_for_user(
                 &self,
                 server_id: ServerId,
@@ -334,6 +393,7 @@ mod tests {
         DefaultMacroService::new(
             MacroRepos {
                 macro_repo: Arc::new(repo),
+                server_member_repo: Arc::new(make_member_repo()),
             },
             MacroServices {
                 command_service: Arc::new(command_service),
@@ -564,6 +624,7 @@ mod tests {
                     message: "ok".to_string(),
                     payload: None,
                     follow_up_commands: vec![],
+                    pipeline_stages: None,
                 })
             })
         });

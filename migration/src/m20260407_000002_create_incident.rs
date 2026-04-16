@@ -12,12 +12,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Incident::Table)
                     .if_not_exists()
-                    .col(
-                        ColumnDef::new(Incident::Id)
-                            .uuid()
-                            .not_null()
-                            .primary_key(),
-                    )
+                    .col(ColumnDef::new(Incident::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Incident::ServerId).uuid().not_null())
                     .col(ColumnDef::new(Incident::ConversationId).uuid().not_null())
                     .col(ColumnDef::new(Incident::StartedBy).uuid().not_null())
@@ -28,11 +23,7 @@ impl MigrationTrait for Migration {
                             .default("active"),
                     )
                     .col(ColumnDef::new(Incident::Severity).string_len(20))
-                    .col(
-                        ColumnDef::new(Incident::Title)
-                            .string_len(200)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Incident::Title).string_len(200).not_null())
                     .col(ColumnDef::new(Incident::OriginalTopic).text())
                     .col(
                         ColumnDef::new(Incident::StartedAt)
@@ -120,11 +111,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(IncidentPhase::IncidentId)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(IncidentPhase::IncidentId).uuid().not_null())
                     .col(
                         ColumnDef::new(IncidentPhase::Phase)
                             .string_len(50)
@@ -179,10 +166,7 @@ impl MigrationTrait for Migration {
                             .string_len(50)
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(IncidentMessageTag::TagType)
-                            .string_len(50),
-                    )
+                    .col(ColumnDef::new(IncidentMessageTag::TagType).string_len(50))
                     .primary_key(
                         Index::create()
                             .col(IncidentMessageTag::MessageId)

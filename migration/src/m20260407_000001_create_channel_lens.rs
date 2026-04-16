@@ -24,11 +24,7 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(ChannelLens::CreatedBy).uuid().not_null())
-                    .col(
-                        ColumnDef::new(ChannelLens::Name)
-                            .string_len(100)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(ChannelLens::Name).string_len(100).not_null())
                     .col(
                         ColumnDef::new(ChannelLens::FilterSpec)
                             .json_binary()

@@ -21,10 +21,12 @@ use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
+use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::skill_profile::repository::SkillProfileRepository;
 use rim_core::user::repository::UserRepository;
+use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_infra_db::DbHandle;
 
 #[derive(Clone)]
@@ -55,6 +57,8 @@ pub struct AppRepos {
     pub incident_phase_repo: Arc<dyn IncidentPhaseRepository>,
     pub incident_message_tag_repo: Arc<dyn IncidentMessageTagRepository>,
     pub skill_profile_repo: Arc<dyn SkillProfileRepository>,
+    pub workspace_state_repo: Arc<dyn WorkspaceStateRepository>,
+    pub pipeline_repo: Arc<dyn PipelineRepository>,
 }
 
 #[derive(Clone)]
@@ -205,6 +209,7 @@ impl AppRepos {
     pub fn for_macro(&self) -> crate::macro_def::MacroRepos {
         crate::macro_def::MacroRepos {
             macro_repo: Arc::clone(&self.macro_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
 
@@ -341,6 +346,20 @@ impl AppRepos {
         }
     }
 
+    pub fn for_workspace_state(&self) -> crate::workspace_state::WorkspaceStateRepos {
+        crate::workspace_state::WorkspaceStateRepos {
+            workspace_state_repo: Arc::clone(&self.workspace_state_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_pipeline(&self) -> crate::pipeline::PipelineRepos {
+        crate::pipeline::PipelineRepos {
+            pipeline_repo: Arc::clone(&self.pipeline_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
     pub fn for_request_auth(&self) -> RequestAuthRepos {
         RequestAuthRepos {
             session_repo: Arc::clone(&self.session_repo),
@@ -433,9 +452,9 @@ impl AppRepos {
             custom_emoji_repo: Arc::new(
                 sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(handle.clone()),
             ),
-            incident_repo: Arc::new(
-                sea_orm_impl::incident::SeaOrmIncidentRepository::new(handle.clone()),
-            ),
+            incident_repo: Arc::new(sea_orm_impl::incident::SeaOrmIncidentRepository::new(
+                handle.clone(),
+            )),
             incident_phase_repo: Arc::new(
                 sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(handle.clone()),
             ),
@@ -447,6 +466,12 @@ impl AppRepos {
             skill_profile_repo: Arc::new(
                 sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(handle.clone()),
             ),
+            workspace_state_repo: Arc::new(
+                sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(handle.clone()),
+            ),
+            pipeline_repo: Arc::new(sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(
+                handle.clone(),
+            )),
         }
     }
 }

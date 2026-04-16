@@ -30,7 +30,8 @@ pub struct AppRuntime {
     pub request_authenticator: Arc<dyn RequestAuthenticator>,
     pub storage_backend: Arc<dyn StorageBackend>,
     pub storage_service: Arc<dyn StorageService>,
-    pub message_attachment_service: Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
+    pub message_attachment_service:
+        Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub shutdown_tx: watch::Sender<bool>,
 }
 
@@ -109,20 +110,24 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         custom_emoji_repo: Arc::new(
             sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(db.clone()),
         ),
-        incident_repo: Arc::new(
-            sea_orm_impl::incident::SeaOrmIncidentRepository::new(db.clone()),
-        ),
+        incident_repo: Arc::new(sea_orm_impl::incident::SeaOrmIncidentRepository::new(
+            db.clone(),
+        )),
         incident_phase_repo: Arc::new(
             sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(db.clone()),
         ),
         incident_message_tag_repo: Arc::new(
-            sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(
-                db.clone(),
-            ),
+            sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(db.clone()),
         ),
         skill_profile_repo: Arc::new(
             sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(db.clone()),
         ),
+        workspace_state_repo: Arc::new(
+            sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(db.clone()),
+        ),
+        pipeline_repo: Arc::new(sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(
+            db.clone(),
+        )),
     };
 
     let broadcaster = InMemoryBroadcaster::new(1024);
@@ -177,6 +182,43 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                         tt.cleanup_stale();
                     }
                     _ = shutdown_rx.changed() => {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // Background task: pipeline evaluator — subscribes to broadcast events and runs pipelines.
+    {
+        let pipeline_service = service_provider.pipeline_service();
+        let mut event_rx = broadcaster.subscribe();
+        let mut shutdown_rx2 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = event_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                // Skip events emitted by the evaluator itself to prevent loops
+                                if event.is_pipeline_event() {
+                                    continue;
+                                }
+                                if let Err(e) = pipeline_service.evaluate_event(event).await {
+                                    tracing::error!(error = %e, "pipeline evaluator failed");
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(skipped = n, "pipeline evaluator lagged, some events dropped");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::info!("pipeline evaluator: broadcast channel closed, shutting down");
+                                break;
+                            }
+                        }
+                    }
+                    _ = shutdown_rx2.changed() => {
+                        tracing::info!("pipeline evaluator: shutdown signal received");
                         break;
                     }
                 }

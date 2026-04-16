@@ -23,7 +23,7 @@ scraper = "0.22"
 regex = "1"
 base64 = "0.22"
 
-rim_core = { path = "../rim_core" }
+rim_core = { path = "../rim_core", features = ["serde"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
 rim_auth = { path = "../rim_auth" }
 rim_infra_db = { path = "../rim_infra_db" }

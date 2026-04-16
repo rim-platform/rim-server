@@ -30,6 +30,8 @@ pub struct CommandServices {
     pub conversation_service: std::sync::Arc<dyn ConversationService>,
     pub message_service: std::sync::Arc<dyn MessageService>,
     pub read_state_service: std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>,
+    pub workspace_state_service:
+        std::sync::Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
 }
 
 #[derive(Clone)]
@@ -264,6 +266,7 @@ impl DefaultCommandService {
             message: format!("user command `{}` executed", user_command.command_key),
             payload: Some(Value::Object(payload)),
             follow_up_commands: vec![],
+            pipeline_stages: None,
         })
     }
 
@@ -274,13 +277,76 @@ impl DefaultCommandService {
         context: Option<CommandContextDto>,
         confirmed_dangerous: bool,
     ) -> ServiceResult<CommandResultDto> {
+        use rim_services::command::dto::PipeStageResultDto;
+
         let segments = pipe_parser::parse_pipe_expression(pipe_expression)?;
 
+        // ── Pre-validation: resolve all command definitions upfront ──
+        //
+        // SECURITY: Pre-validation currently checks `dangerous` and `execution_target` only.
+        // `required_capabilities` are NOT validated here because `CapabilityService` only
+        // exposes `list_capabilities` — there is no `check_capability(actor, cap)` method.
+        // Individual builtin commands enforce their own capability requirements internally
+        // during execution. Phase 2 should introduce a centralized `has_capability` check
+        // on `CapabilityService` and wire it into this loop so that all required capabilities
+        // across all pipe stages are validated before any stage executes.
+        let mut definitions = Vec::with_capacity(segments.len());
+        let mut dangerous_stages: Vec<(usize, String)> = Vec::new();
+
+        for (i, segment) in segments.iter().enumerate() {
+            let definition = self
+                .resolve_command_definition(actor, &segment.command_id)
+                .await?
+                .ok_or_else(|| {
+                    ServiceError::Validation(format!(
+                        "pipe stage {} ('{}') refers to an unknown command",
+                        i + 1,
+                        segment.command_id,
+                    ))
+                })?;
+
+            // Task 6: Reject desktop-local commands in pipes
+            if definition.execution_target == CommandExecutionTargetDto::DesktopLocal {
+                return Err(ServiceError::Validation(format!(
+                    "piped commands must all target the same execution runtime; \
+                     stage {} ('{}') is desktop-local",
+                    i + 1,
+                    segment.command_id,
+                )));
+            }
+
+            if definition.dangerous {
+                dangerous_stages.push((i + 1, segment.command_id.clone()));
+            }
+
+            definitions.push(definition);
+        }
+
+        // Task 5: Collect all dangerous stages and reject if not confirmed
+        if !dangerous_stages.is_empty() && !confirmed_dangerous {
+            let stage_list: Vec<String> = dangerous_stages
+                .iter()
+                .map(|(idx, cmd)| format!("stage {} ('{}')", idx, cmd))
+                .collect();
+            return Err(ServiceError::Validation(format!(
+                "dangerous command requires confirmation — dangerous stages: {}",
+                stage_list.join(", "),
+            )));
+        }
+
+        // ── Execute pipeline stages ──
         let mut previous_payload: Option<serde_json::Value> = None;
         let mut all_results = serde_json::Map::new();
+        let mut pipeline_stages: Vec<PipeStageResultDto> = Vec::with_capacity(segments.len());
 
         for (i, segment) in segments.iter().enumerate() {
             let merged_args = merge_pipe_args(previous_payload.as_ref(), segment.args.as_ref());
+
+            let prev_command_id = if i > 0 {
+                Some(segments[i - 1].command_id.as_str())
+            } else {
+                None
+            };
 
             let result = self
                 .execute_resolved_command_recursive(
@@ -291,32 +357,80 @@ impl DefaultCommandService {
                     confirmed_dangerous,
                     0,
                 )
-                .await
-                .map_err(|e| {
-                    // Preserve the original error class; wrap the pipe context
-                    // in the message but keep the ServiceError variant.
-                    let context = format!(
-                        "pipe segment {} ('{}') failed: ",
-                        i + 1,
-                        segment.command_id,
-                    );
-                    match e {
-                        ServiceError::Validation(msg) => ServiceError::Validation(format!("{context}{msg}")),
-                        ServiceError::Conflict(msg) => ServiceError::Conflict(format!("{context}{msg}")),
-                        // Preserve the original error variant for non-message types
-                        other => other,
-                    }
-                })?;
+                .await;
 
-            previous_payload = result.payload.clone();
-            all_results.insert(
-                format!("step_{}", i + 1),
-                serde_json::json!({
-                    "command_id": segment.command_id,
-                    "status": format!("{:?}", result.status),
-                    "payload": result.payload,
-                }),
-            );
+            match result {
+                Ok(result) => {
+                    pipeline_stages.push(PipeStageResultDto {
+                        stage_index: i as u32,
+                        command_id: segment.command_id.clone(),
+                        status: CommandResultStatusDto::Success,
+                        message: result.message.clone(),
+                        payload: result.payload.clone(),
+                    });
+
+                    previous_payload = result.payload.clone();
+                    all_results.insert(
+                        format!("step_{}", i + 1),
+                        serde_json::json!({
+                            "command_id": segment.command_id,
+                            "status": "Success",
+                            "payload": result.payload,
+                        }),
+                    );
+                }
+                Err(e) => {
+                    // Task 7: Enhanced error messages for piped context
+                    let error_message = match &e {
+                        ServiceError::Validation(msg) if msg.contains("missing string arg") => {
+                            let prev_keys = previous_payload
+                                .as_ref()
+                                .and_then(|p| p.as_object())
+                                .map(|obj| obj.keys().cloned().collect::<Vec<_>>().join(", "))
+                                .unwrap_or_else(|| "(none)".to_string());
+                            format!(
+                                "pipe stage {} ('{}') {} — the previous stage{} produced: {{{}}}",
+                                i + 1,
+                                segment.command_id,
+                                msg,
+                                prev_command_id
+                                    .map(|p| format!(" ('{}')", p))
+                                    .unwrap_or_default(),
+                                prev_keys,
+                            )
+                        }
+                        _ => {
+                            let context_prefix = format!(
+                                "pipe stage {} ('{}') failed: ",
+                                i + 1,
+                                segment.command_id,
+                            );
+                            match &e {
+                                ServiceError::Validation(msg) => format!("{context_prefix}{msg}"),
+                                ServiceError::Conflict(msg) => format!("{context_prefix}{msg}"),
+                                other => format!("{context_prefix}{other}"),
+                            }
+                        }
+                    };
+
+                    pipeline_stages.push(PipeStageResultDto {
+                        stage_index: i as u32,
+                        command_id: segment.command_id.clone(),
+                        status: CommandResultStatusDto::Error,
+                        message: error_message.clone(),
+                        payload: None,
+                    });
+
+                    // Task 7: Return partial results for completed stages
+                    return Ok(CommandResultDto {
+                        status: CommandResultStatusDto::Error,
+                        message: error_message,
+                        payload: Some(Value::Object(all_results)),
+                        follow_up_commands: vec![],
+                        pipeline_stages: Some(pipeline_stages),
+                    });
+                }
+            }
         }
 
         Ok(CommandResultDto {
@@ -324,6 +438,7 @@ impl DefaultCommandService {
             message: format!("piped {} commands successfully", segments.len()),
             payload: Some(Value::Object(all_results)),
             follow_up_commands: vec![],
+            pipeline_stages: Some(pipeline_stages),
         })
     }
 
@@ -373,6 +488,11 @@ impl DefaultCommandService {
     }
 }
 
+// SECURITY: All keys from the previous stage's output pass through to the next stage
+// without filtering. A crafted first stage could inject unexpected keys into downstream
+// commands. This is acceptable for Phase 1 because builtin commands extract only the
+// args they declare and ignore unknown keys. Phase 2 should introduce whitelist filtering
+// based on the receiving command's declared arguments so that only expected keys propagate.
 fn merge_pipe_args(
     piped: Option<&serde_json::Value>,
     explicit: Option<&serde_json::Value>,
@@ -440,7 +560,7 @@ impl CommandService for DefaultCommandService {
     }
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
-        if cmd.command_id.contains('|') {
+        if cmd.is_pipe {
             return self
                 .execute_piped(
                     cmd.actor,
@@ -449,6 +569,11 @@ impl CommandService for DefaultCommandService {
                     cmd.confirmed_dangerous,
                 )
                 .await;
+        }
+        if cmd.command_id.contains('|') {
+            return Err(ServiceError::Validation(
+                "command_id contains pipe character '|' but is_pipe was not set to true".into(),
+            ));
         }
 
         self.execute_resolved_command_recursive(
@@ -655,6 +780,9 @@ mod tests {
                 read_state_service: Arc::new(
                     rim_services::read_state::service::MockReadStateService::new(),
                 ),
+                workspace_state_service: Arc::new(
+                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
+                ),
             },
         )
     }
@@ -771,6 +899,7 @@ mod tests {
                 })),
                 context: None,
                 confirmed_dangerous: false,
+                is_pipe: false,
             })
             .await
             .unwrap();

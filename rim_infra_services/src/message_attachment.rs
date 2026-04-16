@@ -430,7 +430,9 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
 
         // For channels: server membership suffices
         // For DMs/groups: explicit conversation membership required
-        if conversation.conversation_type == rim_core::conversation::model::ConversationType::Channel {
+        if conversation.conversation_type
+            == rim_core::conversation::model::ConversationType::Channel
+        {
             ensure_server_member(
                 self.repos.server_member_repo.as_ref(),
                 conversation.server_id,

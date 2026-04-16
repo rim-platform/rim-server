@@ -145,12 +145,10 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         let mut status_cond = Condition::any();
         for s in &statuses {
             // Postgres JSON: metadata->>'status' = '<s>'
-            status_cond = status_cond.add(
-                sea_orm::sea_query::Expr::cust_with_values(
-                    "metadata->>'status' = $1",
-                    [sea_orm::Value::from(s.as_str())],
-                ),
-            );
+            status_cond = status_cond.add(sea_orm::sea_query::Expr::cust_with_values(
+                "metadata->>'status' = $1",
+                [sea_orm::Value::from(s.as_str())],
+            ));
         }
 
         let models = message_attachment::Entity::find()

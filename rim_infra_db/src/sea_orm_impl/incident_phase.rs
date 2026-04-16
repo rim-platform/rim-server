@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use entity::incident_phase;
 use rim_core::incident::model::{
-    IncidentId, IncidentPhaseName, IncidentPhaseId, IncidentPhaseRecord,
+    IncidentId, IncidentPhaseId, IncidentPhaseName, IncidentPhaseRecord,
 };
 use rim_core::incident::repository::IncidentPhaseRepository;
 use rim_core::repository::error::RepoResult;
@@ -45,10 +45,7 @@ impl IncidentPhaseRepository for SeaOrmIncidentPhaseRepository {
         Ok(inserted.into())
     }
 
-    async fn end_phase(
-        &self,
-        phase_id: IncidentPhaseId,
-    ) -> RepoResult<IncidentPhaseRecord> {
+    async fn end_phase(&self, phase_id: IncidentPhaseId) -> RepoResult<IncidentPhaseRecord> {
         let model = incident_phase::Entity::find_by_id::<Uuid>(phase_id.into())
             .one(&self.db)
             .await
