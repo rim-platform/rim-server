@@ -5,6 +5,7 @@ use rim_core::incident::model::{
     Incident, IncidentId, IncidentMessageTag, IncidentPhaseId, IncidentPhaseName,
     IncidentPhaseRecord, IncidentSeverity, IncidentStatus, MessageTagType,
 };
+use rim_core::incident::repository::IncidentListCursor;
 use rim_core::message::model::MessageId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -99,4 +100,33 @@ pub struct IncidentTimelineDto {
     pub incident: IncidentDto,
     pub phases: Vec<IncidentPhaseDto>,
     pub tagged_messages: Vec<IncidentMessageTagDto>,
+}
+
+/// Service-layer cursor for incident-list pagination.
+///
+/// Mirrors the repo cursor 1:1 — wrapped here so transport layers depend on
+/// `rim_services` rather than reaching into `rim_core::incident::repository`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct IncidentListPageCursor {
+    pub created_at: DateTime<Utc>,
+    pub incident_id: IncidentId,
+}
+
+impl From<IncidentListCursor> for IncidentListPageCursor {
+    fn from(value: IncidentListCursor) -> Self {
+        Self {
+            created_at: value.created_at,
+            incident_id: value.incident_id,
+        }
+    }
+}
+
+impl From<IncidentListPageCursor> for IncidentListCursor {
+    fn from(value: IncidentListPageCursor) -> Self {
+        Self {
+            created_at: value.created_at,
+            incident_id: value.incident_id,
+        }
+    }
 }

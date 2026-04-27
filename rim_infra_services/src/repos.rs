@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rim_core::auth::repository::{InviteRepository, SessionRepository};
+use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::channel_lens::repository::ChannelLensRepository;
 use rim_core::command::repository::UserCommandRepository;
 use rim_core::conversation::repository::ConversationRepository;
@@ -59,6 +60,7 @@ pub struct AppRepos {
     pub skill_profile_repo: Arc<dyn SkillProfileRepository>,
     pub workspace_state_repo: Arc<dyn WorkspaceStateRepository>,
     pub pipeline_repo: Arc<dyn PipelineRepository>,
+    pub capability_registry_repo: Arc<dyn CapabilityRegistryRepository>,
 }
 
 #[derive(Clone)]
@@ -126,6 +128,7 @@ pub struct AuthRepos {
 #[derive(Clone)]
 pub struct CommandRepos {
     pub user_command_repo: Arc<dyn UserCommandRepository>,
+    pub macro_repo: Arc<dyn MacroRepository>,
 }
 
 #[derive(Clone)]
@@ -266,6 +269,14 @@ impl AppRepos {
     pub fn for_command(&self) -> CommandRepos {
         CommandRepos {
             user_command_repo: Arc::clone(&self.user_command_repo),
+            macro_repo: Arc::clone(&self.macro_repo),
+        }
+    }
+
+    pub fn for_capability(&self) -> crate::capability::CapabilityRepos {
+        crate::capability::CapabilityRepos {
+            capability_registry_repo: Arc::clone(&self.capability_registry_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
 
@@ -472,6 +483,11 @@ impl AppRepos {
             pipeline_repo: Arc::new(sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(
                 handle.clone(),
             )),
+            capability_registry_repo: Arc::new(
+                sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(
+                    handle.clone(),
+                ),
+            ),
         }
     }
 }

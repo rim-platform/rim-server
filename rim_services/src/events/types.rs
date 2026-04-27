@@ -313,6 +313,9 @@ impl WorkspaceEvent {
     /// Returns `true` for events emitted by the pipeline evaluator itself.
     /// Used to prevent infinite loops in the evaluator task.
     pub fn is_pipeline_event(&self) -> bool {
-        matches!(self, Self::PipelineFired { .. } | Self::PipelineSuspended { .. })
+        matches!(
+            self,
+            Self::PipelineFired { .. } | Self::PipelineSuspended { .. }
+        )
     }
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use rim_services::ServiceResult;
-use rim_services::events::Observers;
+use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::read_state::dto::{
     MarkAllAsReadCmd, MarkAsReadCmd, UnreadCountDto, UnreadCountsQuery,
 };
@@ -10,7 +10,7 @@ use rim_services::read_state::service::ReadStateService;
 
 use crate::ReadStateRepos;
 use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -32,26 +32,15 @@ impl ReadStateService for DefaultReadStateService {
         let now = Utc::now();
         let read_at = cmd.read_at.min(now);
 
-        // Verify server membership.
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.workspace_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        // Verify conversation access.
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            cmd.workspace_id,
             cmd.conversation_id,
-            cmd.workspace_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            cmd.actor.user_id,
         )
         .await?;
 
@@ -59,16 +48,14 @@ impl ReadStateService for DefaultReadStateService {
         self.repos
             .read_state_repo
             .upsert(cmd.actor.user_id, cmd.conversation_id, read_at)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        // Emit event so the user's other sessions get notified.
-        self.observers.read_state.on_read_state_updated(
-            cmd.workspace_id,
-            cmd.conversation_id,
-            cmd.actor.user_id,
-            read_at,
-        );
+        self.observers.emit(WorkspaceEvent::ReadStateUpdated {
+            workspace_id: cmd.workspace_id,
+            conversation_id: cmd.conversation_id,
+            user_id: cmd.actor.user_id,
+            last_read_at: read_at,
+        });
 
         Ok(())
     }
@@ -89,8 +76,7 @@ impl ReadStateService for DefaultReadStateService {
             .repos
             .conversation_repo
             .list_accessible_conversation_ids(cmd.workspace_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if conversation_ids.is_empty() {
             return Ok(());
@@ -100,17 +86,15 @@ impl ReadStateService for DefaultReadStateService {
         self.repos
             .read_state_repo
             .mark_all_read(cmd.actor.user_id, &conversation_ids, now)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        // Emit events so the user's other sessions get notified.
         for conv_id in &conversation_ids {
-            self.observers.read_state.on_read_state_updated(
-                cmd.workspace_id,
-                *conv_id,
-                cmd.actor.user_id,
-                now,
-            );
+            self.observers.emit(WorkspaceEvent::ReadStateUpdated {
+                workspace_id: cmd.workspace_id,
+                conversation_id: *conv_id,
+                user_id: cmd.actor.user_id,
+                last_read_at: now,
+            });
         }
 
         Ok(())
@@ -133,8 +117,7 @@ impl ReadStateService for DefaultReadStateService {
             .repos
             .conversation_repo
             .list_accessible_conversation_ids(query.workspace_id, query.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if conversation_ids.is_empty() {
             return Ok(vec![]);
@@ -145,8 +128,7 @@ impl ReadStateService for DefaultReadStateService {
             .repos
             .read_state_repo
             .get_unread_counts(query.actor.user_id, &conversation_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(counts
             .into_iter()

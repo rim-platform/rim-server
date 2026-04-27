@@ -1,4 +1,6 @@
 use crate::command::dto::{CommandArgumentDto, CommandDefinitionDto};
+use crate::command::sensitivity::CommandSensitivityDto;
+use crate::command::verb::TypedVerb;
 use crate::keybind::dto::KeybindContextDto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,10 +20,26 @@ pub struct LocalPluginManifestCommandDto {
     pub required_context: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub arguments: Vec<CommandArgumentDto>,
+    /// Opt-in for AI agent exposure. Install-time F2 validation rejects
+    /// `ai_callable: true` commands whose `output_schema` would leak a
+    /// `plugin_install_id` before registration completes.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ai_callable: bool,
+    /// Optional JSON-Schema-shaped declaration of the command's output
+    /// envelope. Used by F2 to detect install-ID leakage into AI-callable
+    /// surfaces. `None` means "schema not declared" → F2 returns
+    /// `RequiresManualReview` for `ai_callable: true` commands so they
+    /// can't silently leak install IDs through opaque output shapes.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 impl LocalPluginManifestCommandDto {
     pub fn as_command_definition(&self, plugin_id: &str) -> CommandDefinitionDto {
+        // Phase 5: manifest `ai_callable` opt-in is projected through.
+        // Install-time F2 validation gates `ai_callable: true` commands before
+        // they can be registered, so only review-approved commands reach here.
+        let sensitivity = CommandSensitivityDto::from_dangerous_flag(self.dangerous);
         CommandDefinitionDto {
             id: format!("plugin.{plugin_id}.{}", self.id),
             title: self.title.clone(),
@@ -37,6 +55,12 @@ impl LocalPluginManifestCommandDto {
             keybind_capable: self.keybind_capable,
             dangerous: self.dangerous,
             user_command_id: None,
+            nl_description: None,
+            intent_samples: vec![],
+            ai_callable: self.ai_callable,
+            sensitivity,
+            typed_verb: TypedVerb::Other,
+            rate_limit_per_minute: None,
         }
     }
 }
@@ -131,6 +155,8 @@ mod tests {
             required_context: vec![],
             required_capabilities: vec!["local.process".to_string()],
             arguments: vec![],
+            ai_callable: false,
+            output_schema: None,
         };
 
         let definition = command.as_command_definition("dev.example.k8s-tools");

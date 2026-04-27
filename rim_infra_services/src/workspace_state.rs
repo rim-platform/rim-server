@@ -15,7 +15,7 @@ use rim_services::workspace_state::request::{
     ListWorkspaceStateQuery, SetWorkspaceStateCmd,
 };
 use rim_services::workspace_state::service::WorkspaceStateService;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 const MAX_SERVER_ENTRIES: u64 = 10_000;
 const MAX_USER_ENTRIES: u64 = 1_000;
@@ -141,8 +141,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .get_by_key(query.server_id, scope, user_id, &query.key)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
         Ok(entry.map(Into::into))
     }
 
@@ -163,8 +162,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .list_by_prefix(query.server_id, scope, user_id, &query.prefix, limit)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
         Ok(entries.into_iter().map(Into::into).collect())
     }
 
@@ -193,8 +191,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .count(cmd.server_id, scope, user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let max = match scope {
             WorkspaceStateScope::Server => MAX_SERVER_ENTRIES,
@@ -206,8 +203,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .get_by_key(cmd.server_id, scope, user_id, &cmd.key)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if existing.is_none() && count >= max {
             return Err(ServiceError::Validation(format!(
@@ -232,8 +228,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
                 created_by: cmd.actor.user_id,
                 expires_at,
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let dto: WorkspaceStateDto = entry.into();
         self.broadcast_changed(cmd.server_id, &dto);
@@ -247,8 +242,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .delete_by_key(cmd.server_id, scope, user_id, &cmd.key)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if deleted {
             self.broadcast_deleted(cmd.server_id, &cmd.key, cmd.scope, user_id);
@@ -273,8 +267,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
             .repos
             .workspace_state_repo
             .get_by_key(cmd.server_id, scope, user_id, &cmd.key)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if let Some(ref entry) = existing {
             if !entry.value.is_number() {
@@ -288,8 +281,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
                 .repos
                 .workspace_state_repo
                 .count(cmd.server_id, scope, user_id)
-                .await
-                .map_err(map_repo_error)?;
+                .await?;
 
             let max = match scope {
                 WorkspaceStateScope::Server => MAX_SERVER_ENTRIES,
@@ -316,8 +308,7 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
                 cmd.delta,
                 cmd.actor.user_id,
             )
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let dto: WorkspaceStateDto = entry.into();
         self.broadcast_changed(cmd.server_id, &dto);

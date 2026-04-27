@@ -10,7 +10,7 @@ use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::message::model::MessageId;
 use rim_services::link_preview::dto::LinkPreviewDto;
 use rim_services::link_preview::service::LinkPreviewService;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 /// Maximum number of link previews per message.
 const MAX_PREVIEWS_PER_MESSAGE: usize = 5;
@@ -163,17 +163,6 @@ struct OgData {
     site_name: Option<String>,
 }
 
-/// Extract URLs from message text using a simple regex.
-pub fn extract_urls(text: &str) -> Vec<String> {
-    use std::sync::LazyLock;
-    static URL_RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap());
-    URL_RE
-        .find_iter(text)
-        .map(|m| m.as_str().to_string())
-        .collect()
-}
-
 #[async_trait]
 impl LinkPreviewService for DefaultLinkPreviewService {
     async fn fetch_and_store(
@@ -226,11 +215,7 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         &self,
         message_id: MessageId,
     ) -> ServiceResult<Vec<LinkPreviewDto>> {
-        let previews = self
-            .link_preview_repo
-            .get_for_message(message_id)
-            .await
-            .map_err(map_repo_error)?;
+        let previews = self.link_preview_repo.get_for_message(message_id).await?;
 
         Ok(previews.into_iter().map(Into::into).collect())
     }
@@ -239,11 +224,7 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         &self,
         message_ids: &[MessageId],
     ) -> ServiceResult<HashMap<MessageId, Vec<LinkPreviewDto>>> {
-        let map = self
-            .link_preview_repo
-            .get_for_messages(message_ids)
-            .await
-            .map_err(map_repo_error)?;
+        let map = self.link_preview_repo.get_for_messages(message_ids).await?;
 
         Ok(map
             .into_iter()
@@ -286,7 +267,7 @@ mod tests {
     #[test]
     fn extract_urls_from_text() {
         let text = "Check out https://example.com and http://foo.bar/baz?q=1 for more info";
-        let urls = extract_urls(text);
+        let urls = rim_services::link_preview::extract_urls(text);
         assert_eq!(urls.len(), 2);
         assert_eq!(urls[0], "https://example.com");
         assert_eq!(urls[1], "http://foo.bar/baz?q=1");
@@ -294,7 +275,7 @@ mod tests {
 
     #[test]
     fn extract_urls_empty() {
-        assert!(extract_urls("no links here").is_empty());
+        assert!(rim_services::link_preview::extract_urls("no links here").is_empty());
     }
 
     #[test]
@@ -359,13 +340,13 @@ mod tests {
     #[test]
     fn extract_urls_ignores_non_http() {
         let text = "ftp://files.example.com and mailto:a@b.com";
-        assert!(extract_urls(text).is_empty());
+        assert!(rim_services::link_preview::extract_urls(text).is_empty());
     }
 
     #[test]
     fn extract_urls_handles_urls_in_brackets() {
         let text = "see <https://example.com> for details";
-        let urls = extract_urls(text);
+        let urls = rim_services::link_preview::extract_urls(text);
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "https://example.com");
     }
@@ -394,6 +375,6 @@ mod tests {
     #[test]
     fn extract_urls_multiple_same_line() {
         let text = "https://a.com https://b.com https://c.com";
-        assert_eq!(extract_urls(text).len(), 3);
+        assert_eq!(rim_services::link_preview::extract_urls(text).len(), 3);
     }
 }

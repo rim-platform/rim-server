@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use tracing::{info, instrument};
 
 use rim_core::message::model::MessageId;
-use rim_services::events::Observers;
+use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::message::dto::MessageDto;
 use rim_services::message::service::MessageService;
 use rim_services::pin::command::{ListPinnedMessagesQuery, PinMessageCmd, UnpinMessageCmd};
@@ -12,9 +12,7 @@ use rim_services::pin::service::PinService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::PinRepos;
-use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
-};
+use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
 
 const MAX_PINS_PER_CONVERSATION: u64 = 50;
 
@@ -47,24 +45,15 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn pin_message(&self, cmd: PinMessageCmd) -> ServiceResult<()> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            cmd.server_id,
             cmd.conversation_id,
-            cmd.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conversation,
-            cmd.actor.user_id,
         )
         .await?;
 
@@ -73,8 +62,7 @@ impl PinService for DefaultPinService {
             .repos
             .message_repo
             .get_by_id(cmd.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if message.conversation_id != cmd.conversation_id {
@@ -88,8 +76,7 @@ impl PinService for DefaultPinService {
             .repos
             .message_pin_repo
             .is_pinned(cmd.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         if already {
             return Err(ServiceError::Conflict(
                 "message is already pinned".to_string(),
@@ -101,8 +88,7 @@ impl PinService for DefaultPinService {
             .repos
             .message_pin_repo
             .count_pins(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         if count >= MAX_PINS_PER_CONVERSATION {
             return Err(ServiceError::Validation(format!(
                 "conversation already has the maximum of {} pinned messages",
@@ -113,8 +99,7 @@ impl PinService for DefaultPinService {
         self.repos
             .message_pin_repo
             .pin(cmd.message_id, cmd.conversation_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             message_id = %cmd.message_id,
@@ -126,16 +111,15 @@ impl PinService for DefaultPinService {
             .repos
             .conversation_member_repo
             .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        self.observers.workspace.on_message_pinned(
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.message_id,
-            cmd.actor.user_id,
-            member_ids,
-        );
+        self.observers.emit(WorkspaceEvent::MessagePinned {
+            workspace_id: cmd.server_id,
+            conversation_id: cmd.conversation_id,
+            message_id: cmd.message_id,
+            pinned_by: cmd.actor.user_id,
+            member_user_ids: member_ids,
+        });
 
         Ok(())
     }
@@ -146,32 +130,19 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn unpin_message(&self, cmd: UnpinMessageCmd) -> ServiceResult<()> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            cmd.server_id,
             cmd.conversation_id,
-            cmd.server_id,
         )
         .await?;
 
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conversation,
-            cmd.actor.user_id,
-        )
-        .await?;
-
-        self.repos
-            .message_pin_repo
-            .unpin(cmd.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        self.repos.message_pin_repo.unpin(cmd.message_id).await?;
 
         info!(
             message_id = %cmd.message_id,
@@ -183,15 +154,14 @@ impl PinService for DefaultPinService {
             .repos
             .conversation_member_repo
             .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        self.observers.workspace.on_message_unpinned(
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.message_id,
-            member_ids,
-        );
+        self.observers.emit(WorkspaceEvent::MessageUnpinned {
+            workspace_id: cmd.server_id,
+            conversation_id: cmd.conversation_id,
+            message_id: cmd.message_id,
+            member_user_ids: member_ids,
+        });
 
         Ok(())
     }
@@ -205,24 +175,15 @@ impl PinService for DefaultPinService {
         &self,
         query: ListPinnedMessagesQuery,
     ) -> ServiceResult<Vec<MessageDto>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            query.server_id,
             query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conversation,
-            query.actor.user_id,
         )
         .await?;
 
@@ -230,8 +191,7 @@ impl PinService for DefaultPinService {
             .repos
             .message_pin_repo
             .list_pinned(query.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let message_ids: Vec<MessageId> = pins.iter().map(|p| p.message_id).collect();
 
@@ -248,6 +208,6 @@ impl PinService for DefaultPinService {
             .message_pin_repo
             .is_pinned_batch(message_ids)
             .await
-            .map_err(rim_services::map_repo_error)
+            .map_err(ServiceError::from)
     }
 }

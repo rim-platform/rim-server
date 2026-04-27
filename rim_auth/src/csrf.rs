@@ -23,7 +23,14 @@ const SEPARATOR: char = '.';
 /// Generate a new CSRF token that is HMAC-bound to the given session token.
 pub fn generate_csrf_token(session_token: &str) -> String {
     let mut nonce = [0u8; 32];
-    fill(&mut nonce).expect("getrandom failed");
+    if let Err(e) = fill(&mut nonce) {
+        tracing::error!(
+            target = "audit",
+            error = %e,
+            "fatal: OS entropy source failed; cannot generate CSRF token"
+        );
+        panic!("getrandom failed: {e}");
+    }
     let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
 
     let sig = compute_hmac(session_token, &nonce);

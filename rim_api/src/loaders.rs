@@ -6,7 +6,7 @@ use async_graphql::dataloader::Loader;
 use rim_core::message::model::MessageId;
 use rim_core::user::model::UserId;
 use rim_services::Actor;
-use rim_services::link_preview::service::LinkPreviewService;
+use rim_services::link_preview::LinkPreviewService;
 use rim_services::mention::service::MentionService;
 use rim_services::message_reaction::command::GetReactionsForMessagesQuery;
 use rim_services::message_reaction::dto::ReactionGroupDto;

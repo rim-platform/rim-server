@@ -8,8 +8,10 @@ use rim_services::auth::command::{
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::dto::UserCommandStepDto;
+use rim_services::command::initiator::CommandInitiator as CommandInitiatorDto;
 use rim_services::command::request::{CreateUserCommandCmd, ExecuteCommandCmd};
 use rim_services::command::request::{DeleteUserCommandCmd, UpdateUserCommandCmd};
+use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::command::{CreateConversationCmd, UpdateConversationTopicCmd};
 use rim_services::conversation::service::ConversationService;
@@ -39,8 +41,9 @@ use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
-    Attachment, Command, CommandContextInput, CommandResult, Conversation, Keybind, KeybindContext,
-    KeybindScope, MacroDef, Message, PresenceStatus, ReactionGroup, Server, UploadTicket,
+    Attachment, Command, CommandContextInput, CommandInitiator, CommandResult, CommandSensitivity,
+    Conversation, Keybind, KeybindContext, KeybindScope, MacroDef, Message, PresenceStatus,
+    ReactionGroup, Server, UploadTicket,
 };
 
 pub struct Mutation;
@@ -196,8 +199,28 @@ pub struct ExecuteCommandInput {
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
     pub command_context: Option<CommandContextInput>,
+    /// **Deprecated** — use `confirmation` instead. Pre-Phase-1 callers
+    /// (the unmigrated frontend) set this to `true` after `window.confirm()`.
+    /// When `confirmation` is absent and this is `Some(true)`, the server
+    /// synthesizes a self-issued in-band proof so the H1 gate has a single
+    /// authoritative path. Removed in Phase 4 once the frontend modal lands.
     pub confirmed_dangerous: Option<bool>,
+    /// Server-issued, server-verified confirmation proof. Required when
+    /// re-submitting after a previous `executeCommand` returned
+    /// `status: CONFIRMATION_REQUIRED`. Closes H1 (TOCTOU) by binding the
+    /// proof to `(actor, commandId, args, context)` server-side.
+    pub confirmation: Option<crate::types::ConfirmationProofInput>,
     pub is_pipe: Option<bool>,
+    /// Who issued this command. Optional for back-compat — when omitted, the
+    /// backend defaults to `PALETTE` (the conservative human default). Phase
+    /// 4 frontend dispatcher will start sending the explicit value from every
+    /// call site (palette / agent / keybind / context-menu / macro). Until
+    /// then this field is opt-in.
+    ///
+    /// Per Fury v2 §3.11. The default is enforced server-side
+    /// (`CommandInitiator::default() == Palette`) so a client that submits
+    /// `null` is treated as a human action — never as agent action.
+    pub initiator: Option<CommandInitiator>,
 }
 
 #[derive(InputObject)]
@@ -757,14 +780,56 @@ impl Mutation {
         let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        // ── H1 back-compat bridge ──────────────────────────────────────
+        //
+        // The pre-reframe wire field `confirmed_dangerous: Option<bool>`
+        // is still on the input for back-compat with the unmigrated
+        // frontend. Resolution:
+        //
+        // 1. If the new `confirmation` field is populated, use it
+        //    (modern flow — frontend has the modal).
+        // 2. Else if `confirmed_dangerous: Some(true)` AND the new field
+        //    is absent, log a deprecation warning. The proof stays
+        //    `None` here; the service-layer gate will issue a fresh
+        //    challenge and return `CONFIRMATION_REQUIRED`. Pre-Phase-1
+        //    behavior (silent execute on bool=true) is intentionally
+        //    NOT preserved — passing a bool used to be the bypass; we
+        //    are closing it on purpose.
+        // 3. Both `None` ⇒ no proof; gate issues a challenge.
+        //
+        // Removed entirely in Phase 4 when the frontend modal lands.
+        let proof = match input.confirmation {
+            Some(c) => Some(c.into_proof()?),
+            None => {
+                if input.confirmed_dangerous == Some(true) {
+                    tracing::warn!(
+                        target = "audit",
+                        event = "deprecated_confirmed_dangerous_bool",
+                        command_id = %input.command_id,
+                        "client sent legacy confirmed_dangerous=true; ignoring (H1 closure). \
+                         Frontend must migrate to ConfirmationProof flow.",
+                    );
+                }
+                None
+            }
+        };
+
         let result = svc
             .execute_command(ExecuteCommandCmd {
                 actor: Actor::new(actor),
                 command_id: input.command_id,
                 args: input.args.map(|json| json.0),
                 context: input.command_context.map(TryInto::try_into).transpose()?,
-                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+                confirmation: proof,
                 is_pipe: input.is_pipe.unwrap_or(false),
+                // Default to Palette per Fury v2 §3.11 conservative-default
+                // rule. Until Phase 4's IPC proxy stamps the initiator from
+                // the webview origin, this is the only safe default.
+                initiator: input
+                    .initiator
+                    .map(CommandInitiatorDto::from)
+                    .unwrap_or_default(),
             })
             .await
             .map_err(map_service_error)?;
@@ -1060,7 +1125,7 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         let typing_tracker =
-            ctx.data::<std::sync::Arc<rim_infra_services::typing::TypingTracker>>()?;
+            ctx.data::<std::sync::Arc<dyn rim_services::typing::TypingService>>()?;
 
         if typing_tracker.should_broadcast(actor, conversation_id) {
             let conv_svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
@@ -1076,13 +1141,14 @@ impl Mutation {
             let member_user_ids = conversation.member_ids;
 
             let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
-            observers.workspace.on_typing_started(
-                server_id,
+            use rim_services::events::EventObserver;
+            observers.emit(rim_services::events::WorkspaceEvent::TypingStarted {
+                workspace_id: server_id,
                 conversation_id,
-                actor,
+                user_id: actor,
                 conversation_type,
                 member_user_ids,
-            );
+            });
         }
 
         Ok(true)
@@ -1115,7 +1181,7 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         let presence_mgr =
-            ctx.data::<std::sync::Arc<rim_infra_services::presence::PresenceManager>>()?;
+            ctx.data::<std::sync::Arc<dyn rim_services::presence::PresenceService>>()?;
         presence_mgr.heartbeat(actor, workspace_id, status);
 
         Ok(true)
@@ -1271,6 +1337,10 @@ impl Mutation {
                         args: s.args.map(|j| j.0),
                     })
                     .collect(),
+                ai_callable: input.ai_callable,
+                nl_description: input.nl_description,
+                intent_samples: input.intent_samples,
+                sensitivity: CommandSensitivityDto::from(input.sensitivity),
             })
             .await
             .map_err(map_service_error)?;
@@ -1296,6 +1366,10 @@ impl Mutation {
                         args: s.args.map(|j| j.0),
                     })
                     .collect(),
+                ai_callable: input.ai_callable,
+                nl_description: input.nl_description,
+                intent_samples: input.intent_samples,
+                sensitivity: CommandSensitivityDto::from(input.sensitivity),
             })
             .await
             .map_err(map_service_error)?;
@@ -1325,12 +1399,41 @@ impl Mutation {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
 
+        // Same H1 back-compat bridge as executeCommand. The legacy
+        // `confirmed_dangerous: true` is no longer self-confirming —
+        // the inner ExecuteCommandCmd's confirmation gate will issue a
+        // per-step challenge when it hits a dangerous step.
+        let proof = match input.confirmation {
+            Some(c) => Some(c.into_proof()?),
+            None => {
+                if input.confirmed_dangerous == Some(true) {
+                    tracing::warn!(
+                        target = "audit",
+                        event = "deprecated_confirmed_dangerous_bool",
+                        macro_id = %input.macro_id.as_str(),
+                        "client sent legacy confirmed_dangerous=true on executeMacro; ignoring (H1 closure).",
+                    );
+                }
+                None
+            }
+        };
+
         let result = svc
             .execute_macro(ExecuteMacroCmd {
                 actor: Actor::new(actor),
                 macro_id: parse_uuid_id(&input.macro_id)?,
                 command_context: input.command_context.map(TryInto::try_into).transpose()?,
-                confirmed_dangerous: input.confirmed_dangerous.unwrap_or(false),
+                confirmation: proof,
+                // Same back-compat default rule as `executeCommand` — `Macro`
+                // here means "the macro execution itself"; nested
+                // `ExecuteCommandCmd` calls produced by macro expansion will
+                // override to whatever the macro service decides per
+                // step (Phase 1: same value as the outer initiator,
+                // Phase 4: see propagation rule in CommandInitiator docs).
+                initiator: input
+                    .initiator
+                    .map(CommandInitiatorDto::from)
+                    .unwrap_or_default(),
             })
             .await
             .map_err(map_service_error)?;
@@ -1898,6 +2001,14 @@ struct CreateMacroInput {
     name: String,
     description: Option<String>,
     steps: Vec<MacroStepInput>,
+    #[graphql(default)]
+    ai_callable: bool,
+    #[graphql(default)]
+    nl_description: String,
+    #[graphql(default)]
+    intent_samples: Vec<String>,
+    #[graphql(default_with = "CommandSensitivity::Safe")]
+    sensitivity: CommandSensitivity,
 }
 
 #[derive(InputObject)]
@@ -1906,6 +2017,14 @@ struct UpdateMacroInput {
     name: String,
     description: Option<String>,
     steps: Vec<MacroStepInput>,
+    #[graphql(default)]
+    ai_callable: bool,
+    #[graphql(default)]
+    nl_description: String,
+    #[graphql(default)]
+    intent_samples: Vec<String>,
+    #[graphql(default_with = "CommandSensitivity::Safe")]
+    sensitivity: CommandSensitivity,
 }
 
 #[derive(InputObject)]
@@ -1918,7 +2037,19 @@ struct MacroStepInput {
 struct ExecuteMacroInput {
     macro_id: ID,
     command_context: Option<CommandContextInput>,
+    /// **Deprecated** — see `ExecuteCommandInput.confirmed_dangerous`.
+    /// Removed in Phase 4.
     confirmed_dangerous: Option<bool>,
+    /// Server-issued confirmation proof. Same shape and semantics as
+    /// `ExecuteCommandInput.confirmation`. Phase 1 note: macros are an
+    /// "all-or-nothing" confirmation surface — a single proof issued
+    /// at macro-execute time covers the whole expansion. Phase 4 may
+    /// add per-step proofs once the modal can render a step list.
+    confirmation: Option<crate::types::ConfirmationProofInput>,
+    /// Who triggered this macro. Same back-compat semantics as
+    /// `ExecuteCommandInput.initiator`: optional, server-defaults to
+    /// `PALETTE`.
+    initiator: Option<CommandInitiator>,
 }
 
 #[derive(InputObject)]
@@ -1966,13 +2097,12 @@ fn spawn_link_preview_fetch(
     conversation_id: rim_core::conversation::model::ConversationId,
     text: &str,
 ) -> Result<()> {
-    let urls = rim_infra_services::link_preview::extract_urls(text);
+    let urls = rim_services::link_preview::extract_urls(text);
     if urls.is_empty() {
         return Ok(());
     }
-
     let link_svc = ctx
-        .data::<std::sync::Arc<dyn rim_services::link_preview::service::LinkPreviewService>>()?
+        .data::<std::sync::Arc<dyn rim_services::link_preview::LinkPreviewService>>()?
         .clone();
     let observers = ctx
         .data::<std::sync::Arc<rim_services::events::Observers>>()?
@@ -1982,13 +2112,11 @@ fn spawn_link_preview_fetch(
         match link_svc.fetch_and_store(message_id, urls).await {
             Ok(previews) if !previews.is_empty() => {
                 use rim_services::events::EventObserver;
-                observers.workspace.notify(
-                    rim_services::events::WorkspaceEvent::LinkPreviewReady {
-                        workspace_id,
-                        conversation_id,
-                        message_id,
-                    },
-                );
+                observers.emit(rim_services::events::WorkspaceEvent::LinkPreviewReady {
+                    workspace_id,
+                    conversation_id,
+                    message_id,
+                });
             }
             Ok(_) => {}
             Err(e) => {

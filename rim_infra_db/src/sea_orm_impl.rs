@@ -1,3 +1,5 @@
+pub mod audit;
+pub mod capability_registry;
 pub mod channel_lens;
 pub mod conversation;
 pub mod conversation_member;

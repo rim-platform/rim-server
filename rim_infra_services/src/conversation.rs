@@ -14,11 +14,11 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 
-use rim_services::events::Observers;
+use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::ConversationRepos;
 use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -40,8 +40,7 @@ impl DefaultConversationService {
             .repos
             .conversation_member_repo
             .list_member_ids(conversation.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(ConversationDto {
             id: conversation.id,
@@ -134,8 +133,7 @@ impl ConversationService for DefaultConversationService {
                         .repos
                         .conversation_repo
                         .find_direct_between_users(cmd.server_id, cmd.actor.user_id, other_user_id)
-                        .await
-                        .map_err(rim_services::map_repo_error)?;
+                        .await?;
 
                     if let Some(existing) = existing {
                         return self.to_dto(existing).await;
@@ -180,8 +178,7 @@ impl ConversationService for DefaultConversationService {
                             .repos
                             .conversation_repo
                             .exists_channel_by_title(cmd.server_id, channel_title)
-                            .await
-                            .map_err(rim_services::map_repo_error)?;
+                            .await?;
 
                         if exists {
                             return Err(ServiceError::Conflict(
@@ -200,8 +197,7 @@ impl ConversationService for DefaultConversationService {
             .repos
             .conversation_repo
             .create_conversation_with_members(conv_type, cmd.server_id, title, &member_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             conversation_id = %conversation.id,
@@ -217,13 +213,13 @@ impl ConversationService for DefaultConversationService {
 
         let dto = self.to_dto(conversation).await?;
 
-        self.observers.workspace.on_conversation_created(
-            dto.server_id,
-            dto.id,
-            dto.title.as_deref(),
-            dto.conversation_type.as_str(),
-            dto.member_ids.clone(),
-        );
+        self.observers.emit(WorkspaceEvent::ConversationCreated {
+            workspace_id: dto.server_id,
+            conversation_id: dto.id,
+            title: dto.title.clone(),
+            conversation_type: dto.conversation_type.as_str().to_string(),
+            member_user_ids: dto.member_ids.clone(),
+        });
 
         Ok(dto)
     }
@@ -232,31 +228,17 @@ impl ConversationService for DefaultConversationService {
         &self,
         query: GetConversationQuery,
     ) -> ServiceResult<ConversationDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        let conversation = ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
             query.server_id,
+            query.conversation_id,
         )
         .await?;
-
-        // Membership in the conversation.
-        let is_member = self
-            .repos
-            .conversation_member_repo
-            .is_member(query.conversation_id, query.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-
-        if !is_member {
-            return Err(ServiceError::PermissionDenied);
-        }
 
         self.to_dto(conversation).await
     }
@@ -265,20 +247,14 @@ impl ConversationService for DefaultConversationService {
         &self,
         ids: &[rim_core::conversation::model::ConversationId],
     ) -> ServiceResult<Vec<ConversationDto>> {
-        let conversations = self
-            .repos
-            .conversation_repo
-            .get_by_ids(ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let conversations = self.repos.conversation_repo.get_by_ids(ids).await?;
 
         let conv_ids: Vec<_> = conversations.iter().map(|c| c.id).collect();
         let member_ids_by_conversation = self
             .repos
             .conversation_member_repo
             .list_member_ids_for_conversations(&conv_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(conversations
             .into_iter()
@@ -313,16 +289,14 @@ impl ConversationService for DefaultConversationService {
                 query.dir,
                 query.cursor.map(Into::into),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
         let member_ids_by_conversation = self
             .repos
             .conversation_member_repo
             .list_member_ids_for_conversations(&conversation_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let mut items = Vec::with_capacity(page.items.len());
         for conv in page.items {
@@ -361,16 +335,14 @@ impl ConversationService for DefaultConversationService {
                 query.dir,
                 query.cursor.map(Into::into),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
         let member_ids_by_conversation = self
             .repos
             .conversation_member_repo
             .list_member_ids_for_conversations(&conversation_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let mut items = Vec::with_capacity(page.items.len());
         for conv in page.items {
@@ -389,35 +361,29 @@ impl ConversationService for DefaultConversationService {
     }
 
     async fn add_member(&self, cmd: AddConversationMemberCmd) -> ServiceResult<ConversationDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
         // v0: allow any member to add members only for Group conversations.
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            cmd.conversation_id,
+        let conversation = ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            cmd.actor.user_id,
             cmd.server_id,
+            cmd.conversation_id,
         )
         .await?;
 
+        // SAFETY GATE: only Group conversations allow member-add in v0.
+        // If this guard is ever relaxed to allow channel adds, a separate
+        // owner/moderator-role check MUST be added here before proceeding —
+        // `ensure_conversation_member_access` channel-passthroughs on server
+        // membership alone, which would let any server member add anyone to
+        // any channel without additional authorization. See P7-FU-F6d.
         if conversation.conversation_type != CoreConversationType::Group {
             return Err(ServiceError::Validation(
                 "can only add members to group conversations".to_string(),
             ));
-        }
-
-        let is_member = self
-            .repos
-            .conversation_member_repo
-            .is_member(cmd.conversation_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-        if !is_member {
-            return Err(ServiceError::PermissionDenied);
         }
 
         // Check that the target user is a server member.
@@ -433,8 +399,7 @@ impl ConversationService for DefaultConversationService {
             .repos
             .conversation_member_repo
             .is_member(cmd.conversation_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         if already_member {
             return Err(ServiceError::Conflict(
                 "user is already a member of this conversation".to_string(),
@@ -444,17 +409,17 @@ impl ConversationService for DefaultConversationService {
         self.repos
             .conversation_member_repo
             .add_member(cmd.conversation_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let dto = self.to_dto(conversation).await?;
 
-        self.observers.workspace.on_member_added_to_conversation(
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.user_id,
-            dto.member_ids.clone(),
-        );
+        self.observers
+            .emit(WorkspaceEvent::MemberAddedToConversation {
+                workspace_id: cmd.server_id,
+                conversation_id: cmd.conversation_id,
+                user_id: cmd.user_id,
+                member_user_ids: dto.member_ids.clone(),
+            });
 
         Ok(dto)
     }
@@ -463,17 +428,15 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: RemoveConversationMemberCmd,
     ) -> ServiceResult<ConversationDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
+        let conversation = ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            cmd.conversation_id,
             cmd.server_id,
+            cmd.conversation_id,
         )
         .await?;
 
@@ -483,23 +446,12 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        let is_member = self
-            .repos
-            .conversation_member_repo
-            .is_member(cmd.conversation_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
-        if !is_member {
-            return Err(ServiceError::PermissionDenied);
-        }
-
         // Check that the target user is actually a member of the conversation.
         let target_is_member = self
             .repos
             .conversation_member_repo
             .is_member(cmd.conversation_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         if !target_is_member {
             return Err(ServiceError::NotFound);
         }
@@ -507,8 +459,7 @@ impl ConversationService for DefaultConversationService {
         self.repos
             .conversation_member_repo
             .remove_member(cmd.conversation_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let dto = self.to_dto(conversation).await?;
 
@@ -519,13 +470,12 @@ impl ConversationService for DefaultConversationService {
             notify_user_ids.push(cmd.user_id);
         }
         self.observers
-            .workspace
-            .on_member_removed_from_conversation(
-                cmd.server_id,
-                cmd.conversation_id,
-                cmd.user_id,
-                notify_user_ids,
-            );
+            .emit(WorkspaceEvent::MemberRemovedFromConversation {
+                workspace_id: cmd.server_id,
+                conversation_id: cmd.conversation_id,
+                user_id: cmd.user_id,
+                member_user_ids: notify_user_ids,
+            });
 
         Ok(dto)
     }
@@ -539,24 +489,15 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: UpdateConversationTopicCmd,
     ) -> ServiceResult<ConversationDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            cmd.server_id,
             cmd.conversation_id,
-            cmd.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conversation,
-            cmd.actor.user_id,
         )
         .await?;
 
@@ -586,8 +527,7 @@ impl ConversationService for DefaultConversationService {
             .repos
             .conversation_repo
             .update_topic(cmd.conversation_id, topic)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             conversation_id = %updated.id,
@@ -596,9 +536,10 @@ impl ConversationService for DefaultConversationService {
 
         let dto = self.to_dto(updated).await?;
 
-        self.observers
-            .workspace
-            .on_conversation_updated(dto.server_id, dto.id);
+        self.observers.emit(WorkspaceEvent::ConversationUpdated {
+            workspace_id: dto.server_id,
+            conversation_id: dto.id,
+        });
 
         Ok(dto)
     }

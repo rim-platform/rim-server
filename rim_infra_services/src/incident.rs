@@ -11,17 +11,20 @@ use rim_core::incident::model::{
 use rim_core::incident::repository::{
     IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
 };
+use rim_core::repository::pagination::Page;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::incident::command::{
     AdvancePhaseCmd, GeneratePostmortemCmd, GetActiveIncidentQuery, GetIncidentTimelineQuery,
-    ResolveIncidentCmd, StartIncidentCmd, TagMessageCmd, UpdateIncidentStatusCmd,
+    ListIncidentsQuery, ResolveIncidentCmd, StartIncidentCmd, TagMessageCmd,
+    UpdateIncidentStatusCmd,
 };
 use rim_services::incident::dto::{
-    IncidentDto, IncidentMessageTagDto, IncidentPhaseDto, IncidentTimelineDto,
+    IncidentDto, IncidentListPageCursor, IncidentMessageTagDto, IncidentPhaseDto,
+    IncidentTimelineDto,
 };
 use rim_services::incident::service::IncidentService;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::AppRepos;
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
@@ -98,8 +101,7 @@ impl IncidentService for DefaultIncidentService {
         let existing = repos
             .incident_repo
             .find_active_by_conversation(cmd.conversation_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if existing.is_some() {
             return Err(ServiceError::Conflict(
@@ -111,8 +113,7 @@ impl IncidentService for DefaultIncidentService {
         let conversation = repos
             .conversation_repo
             .get_by_id(cmd.conversation_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         let original_topic = conversation.topic.clone();
@@ -128,23 +129,20 @@ impl IncidentService for DefaultIncidentService {
                 title: cmd.title.clone(),
                 original_topic,
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         // Create initial "detection" phase
         repos
             .incident_phase_repo
             .create(incident.id, IncidentPhaseName::Detection, None)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         // Update conversation topic to "[INCIDENT] {title}"
         let new_topic = format!("[INCIDENT] {}", cmd.title);
         repos
             .conversation_repo
             .update_topic(cmd.conversation_id, Some(new_topic))
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Self::commit_if_present(scope).await?;
 
@@ -159,8 +157,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -198,8 +195,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .update_status(cmd.incident_id, cmd.status, mitigated_at, resolved_at)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(IncidentDto::from(updated))
     }
@@ -209,8 +205,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -232,22 +227,16 @@ impl IncidentService for DefaultIncidentService {
         let current_phase = repos
             .incident_phase_repo
             .find_current_phase(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if let Some(current) = current_phase {
-            repos
-                .incident_phase_repo
-                .end_phase(current.id)
-                .await
-                .map_err(map_repo_error)?;
+            repos.incident_phase_repo.end_phase(current.id).await?;
         }
 
         let new_phase = repos
             .incident_phase_repo
             .create(cmd.incident_id, cmd.next_phase, cmd.note)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Self::commit_if_present(scope).await?;
 
@@ -259,8 +248,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -275,8 +263,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_phase_repo
             .find_current_phase(incident.id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .map(|p| p.phase)
             .unwrap_or(IncidentPhaseName::Detection);
 
@@ -289,8 +276,7 @@ impl IncidentService for DefaultIncidentService {
                 phase: current_phase,
                 tag_type: cmd.tag_type,
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(IncidentMessageTagDto::from(tag))
     }
@@ -300,8 +286,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -315,15 +300,13 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_phase_repo
             .list_by_incident(incident.id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let tags = self
             .repos
             .incident_message_tag_repo
             .list_by_incident(incident.id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         // Build template-based postmortem markdown
         let mut md = String::new();
@@ -371,8 +354,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .update_postmortem_draft(incident.id, md)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(IncidentDto::from(updated))
     }
@@ -382,8 +364,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(cmd.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -406,15 +387,10 @@ impl IncidentService for DefaultIncidentService {
         let current_phase = repos
             .incident_phase_repo
             .find_current_phase(incident.id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if let Some(current) = current_phase {
-            repos
-                .incident_phase_repo
-                .end_phase(current.id)
-                .await
-                .map_err(map_repo_error)?;
+            repos.incident_phase_repo.end_phase(current.id).await?;
         }
 
         // Set status to resolved
@@ -427,15 +403,13 @@ impl IncidentService for DefaultIncidentService {
                 incident.mitigated_at,
                 Some(now),
             )
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         // Restore original conversation topic
         repos
             .conversation_repo
             .update_topic(incident.conversation_id, incident.original_topic.clone())
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Self::commit_if_present(scope).await?;
 
@@ -465,10 +439,43 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_active_by_conversation(query.conversation_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(incident.map(IncidentDto::from))
+    }
+
+    async fn list_incidents(
+        &self,
+        query: ListIncidentsQuery,
+    ) -> ServiceResult<Page<IncidentDto, IncidentListPageCursor>> {
+        ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        let status_filter = query.status_filter.as_deref();
+        let severity_filter = query.severity_filter.as_deref();
+
+        let page = self
+            .repos
+            .incident_repo
+            .list_incidents(
+                query.server_id,
+                status_filter,
+                severity_filter,
+                query.limit,
+                query.dir,
+                query.cursor.map(Into::into),
+            )
+            .await?;
+
+        Ok(Page::new(
+            page.items.into_iter().map(IncidentDto::from).collect(),
+            page.next.map(Into::into),
+            page.prev.map(Into::into),
+        ))
     }
 
     async fn get_incident_timeline(
@@ -479,8 +486,7 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_repo
             .find_by_id(query.incident_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_member(
@@ -494,15 +500,13 @@ impl IncidentService for DefaultIncidentService {
             .repos
             .incident_phase_repo
             .list_by_incident(incident.id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let tags = self
             .repos
             .incident_message_tag_repo
             .list_by_incident(incident.id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(IncidentTimelineDto {
             incident: IncidentDto::from(incident),

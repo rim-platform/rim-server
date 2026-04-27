@@ -2,6 +2,10 @@
 
 pub mod prelude;
 
+pub mod command_audit_log;
+
+pub mod capability_registry;
+mod capability_registry_mapper;
 pub mod channel_lens;
 mod channel_lens_mapper;
 pub mod conversation;

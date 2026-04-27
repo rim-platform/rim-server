@@ -17,7 +17,7 @@ use rim_services::channel_lens::command::{
 use rim_services::channel_lens::dto::ChannelLensDto;
 use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::message::dto::MessageDto;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::util::{ensure_conversation_in_server, ensure_server_member};
 
@@ -171,8 +171,7 @@ impl ChannelLensService for DefaultChannelLensService {
             .repos
             .channel_lens_repo
             .count_user_lenses(cmd.conversation_id, cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if count >= MAX_LENSES_PER_USER_PER_CONVERSATION {
             return Err(ServiceError::Validation(format!(
@@ -192,8 +191,7 @@ impl ChannelLensService for DefaultChannelLensService {
                 filter_spec,
                 is_shared: cmd.is_shared,
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(ChannelLensDto::from(lens))
     }
@@ -210,8 +208,7 @@ impl ChannelLensService for DefaultChannelLensService {
             .repos
             .channel_lens_repo
             .get_by_id(cmd.lens_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         // Verify the lens belongs to the server the caller claims
@@ -241,12 +238,7 @@ impl ChannelLensService for DefaultChannelLensService {
 
         lens.updated_at = chrono::Utc::now();
 
-        let updated = self
-            .repos
-            .channel_lens_repo
-            .update(&lens)
-            .await
-            .map_err(map_repo_error)?;
+        let updated = self.repos.channel_lens_repo.update(&lens).await?;
 
         Ok(ChannelLensDto::from(updated))
     }
@@ -263,8 +255,7 @@ impl ChannelLensService for DefaultChannelLensService {
             .repos
             .channel_lens_repo
             .get_by_id(cmd.lens_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         // Verify the lens belongs to the server the caller claims
@@ -277,11 +268,7 @@ impl ChannelLensService for DefaultChannelLensService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        self.repos
-            .channel_lens_repo
-            .delete(cmd.lens_id)
-            .await
-            .map_err(map_repo_error)?;
+        self.repos.channel_lens_repo.delete(cmd.lens_id).await?;
 
         Ok(())
     }
@@ -305,8 +292,7 @@ impl ChannelLensService for DefaultChannelLensService {
             .repos
             .channel_lens_repo
             .list_for_conversation(query.conversation_id, query.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(lenses.into_iter().map(Into::into).collect())
     }
@@ -323,8 +309,7 @@ impl ChannelLensService for DefaultChannelLensService {
             .repos
             .channel_lens_repo
             .get_by_id(query.lens_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         // Ensure the lens belongs to this conversation and is accessible
@@ -357,12 +342,7 @@ impl ChannelLensService for DefaultChannelLensService {
             order: rim_core::repository::pagination::SortOrder::Desc,
         };
 
-        let page = self
-            .repos
-            .message_repo
-            .list_messages(params)
-            .await
-            .map_err(map_repo_error)?;
+        let page = self.repos.message_repo.list_messages(params).await?;
 
         let messages = page.items;
 
@@ -379,8 +359,7 @@ impl ChannelLensService for DefaultChannelLensService {
                     .repos
                     .message_pin_repo
                     .list_pinned(query.conversation_id)
-                    .await
-                    .map_err(map_repo_error)?;
+                    .await?;
                 pins.into_iter().map(|p| p.message_id).collect()
             } else {
                 std::collections::HashSet::new()

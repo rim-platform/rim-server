@@ -1,20 +1,67 @@
-use rim_core::conversation::model::ConversationId;
+use std::sync::Arc;
+
+use rim_core::conversation::model::{Conversation, ConversationId};
+use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::user::model::UserId;
 use rim_services::{ServiceError, ServiceResult};
+
+/// Minimum repo set needed by [`ensure_conversation_member_access`].
+/// Every service that holds a `*Repos` struct already has these three fields.
+pub struct ConversationAccessRepos<'a> {
+    pub server_member_repo: &'a dyn ServerMemberRepository,
+    pub conversation_repo: &'a dyn ConversationRepository,
+    pub conversation_member_repo: &'a dyn ConversationMemberRepository,
+}
+
+impl<'a> ConversationAccessRepos<'a> {
+    pub fn from_arcs(
+        server_member_repo: &'a Arc<dyn ServerMemberRepository>,
+        conversation_repo: &'a Arc<dyn ConversationRepository>,
+        conversation_member_repo: &'a Arc<dyn ConversationMemberRepository>,
+    ) -> Self {
+        Self {
+            server_member_repo: server_member_repo.as_ref(),
+            conversation_repo: conversation_repo.as_ref(),
+            conversation_member_repo: conversation_member_repo.as_ref(),
+        }
+    }
+}
+
+/// Enforces the full three-step access gate in security-correct order:
+/// 1. Server membership (PermissionDenied on failure)
+/// 2. Conversation exists in that server (NotFound on failure)
+/// 3. Conversation-level access (PermissionDenied on failure for DM/group;
+///    channels pass with server membership alone)
+///
+/// Returns the loaded `Conversation` so callers avoid a second DB round-trip
+/// for `conversation_type` lookups.
+///
+/// Error-variant ordering is security-intentional: `NotFound` leaks no
+/// information about whether a conversation exists to non-server-members.
+pub async fn ensure_conversation_member_access(
+    repos: ConversationAccessRepos<'_>,
+    actor: UserId,
+    server_id: ServerId,
+    conversation_id: ConversationId,
+) -> ServiceResult<Conversation> {
+    ensure_server_member(repos.server_member_repo, server_id, actor).await?;
+    let conv =
+        ensure_conversation_in_server(repos.conversation_repo, conversation_id, server_id).await?;
+    ensure_conversation_access(repos.conversation_member_repo, &conv, actor).await?;
+    Ok(conv)
+}
 
 pub async fn ensure_server_member(
     server_member_repo: &dyn ServerMemberRepository,
     server_id: ServerId,
     user_id: rim_core::user::model::UserId,
 ) -> ServiceResult<()> {
-    let is_member = server_member_repo
-        .is_member(server_id, user_id)
-        .await
-        .map_err(rim_services::map_repo_error)?;
+    let is_member = server_member_repo.is_member(server_id, user_id).await?;
 
     if !is_member {
         return Err(ServiceError::PermissionDenied);
@@ -30,8 +77,7 @@ pub async fn ensure_server_owner(
 ) -> ServiceResult<()> {
     let member = server_member_repo
         .get_member(server_id, user_id)
-        .await
-        .map_err(rim_services::map_repo_error)?
+        .await?
         .ok_or(ServiceError::PermissionDenied)?;
 
     if member.member_role != ServerMemberRole::Owner {
@@ -47,8 +93,7 @@ pub async fn ensure_server_exists(
 ) -> ServiceResult<rim_core::server::model::Server> {
     let server = server_repo
         .get_by_id(server_id)
-        .await
-        .map_err(rim_services::map_repo_error)?
+        .await?
         .ok_or(ServiceError::NotFound)?;
 
     Ok(server)
@@ -61,8 +106,7 @@ pub async fn ensure_conversation_in_server(
 ) -> ServiceResult<rim_core::conversation::model::Conversation> {
     let conv = conversation_repo
         .get_by_id(conversation_id)
-        .await
-        .map_err(rim_services::map_repo_error)?
+        .await?
         .ok_or(ServiceError::NotFound)?;
 
     if conv.server_id != expected_server_id {
@@ -85,8 +129,7 @@ pub async fn ensure_conversation_access(
     }
     let is_member = conversation_member_repo
         .is_member(conversation.id, user_id)
-        .await
-        .map_err(rim_services::map_repo_error)?;
+        .await?;
     if !is_member {
         return Err(ServiceError::PermissionDenied);
     }
@@ -120,7 +163,7 @@ mod tests {
             member: None,
         };
         assert!(matches!(
-            rim_services::map_repo_error(
+            ServiceError::from(
                 member_repo
                     .add_member(server_id, user_id, ServerMemberRole::Guest)
                     .await
@@ -129,7 +172,7 @@ mod tests {
             ServiceError::Internal(_)
         ));
         assert!(matches!(
-            rim_services::map_repo_error(
+            ServiceError::from(
                 member_repo
                     .change_member_role(server_id, user_id, ServerMemberRole::Guest)
                     .await
@@ -138,7 +181,7 @@ mod tests {
             ServiceError::Internal(_)
         ));
         assert!(matches!(
-            rim_services::map_repo_error(
+            ServiceError::from(
                 member_repo
                     .remove_member(server_id, user_id)
                     .await
@@ -149,13 +192,13 @@ mod tests {
 
         let server_repo = FakeServerRepo { server: None };
         assert!(matches!(
-            rim_services::map_repo_error(server_repo.create_server("x").await.unwrap_err()),
+            ServiceError::from(server_repo.create_server("x").await.unwrap_err()),
             ServiceError::Internal(_)
         ));
 
         let conv_repo = FakeConversationRepo { conv: None };
         assert!(matches!(
-            rim_services::map_repo_error(
+            ServiceError::from(
                 conv_repo
                     .create_conversation(rim_core::conversation::model::NewConversation {
                         server_id,
@@ -431,5 +474,135 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    // ── Gate-ordering pinning tests for ensure_conversation_member_access ──
+    //
+    // These pin the security-intentional gate order:
+    //   1. server membership (PermissionDenied)
+    //   2. conversation exists in server (NotFound)
+    //   3. conversation-level access (PermissionDenied)
+    //
+    // A refactor that swaps steps 1 and 2 would let non-server-members probe
+    // whether a conversation ID exists — observable via PermissionDenied vs
+    // NotFound. These tests catch that regression.
+
+    struct FakeConversationMemberRepo {
+        is_member: bool,
+    }
+
+    #[async_trait]
+    impl rim_core::conversation_member::repository::ConversationMemberRepository
+        for FakeConversationMemberRepo
+    {
+        async fn get_by_id(
+            &self,
+            _id: rim_core::conversation_member::model::ConversationMemberId,
+        ) -> RepoResult<Option<rim_core::conversation_member::model::ConversationMember>> {
+            Ok(None)
+        }
+
+        async fn add_member(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<rim_core::conversation_member::model::ConversationMember> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn remove_member(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<()> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn get_members_for_conversation(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<Vec<rim_core::conversation_member::model::ConversationMember>> {
+            Ok(vec![])
+        }
+
+        async fn is_member(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<bool> {
+            Ok(self.is_member)
+        }
+
+        async fn list_member_ids(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<Vec<UserId>> {
+            Ok(vec![])
+        }
+
+        async fn list_member_ids_for_conversations(
+            &self,
+            _conversation_ids: &[ConversationId],
+        ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>> {
+            Ok(std::collections::HashMap::new())
+        }
+    }
+
+    /// Non-server-member gets `PermissionDenied` BEFORE the conversation is
+    /// looked up — even if the conversation doesn't exist. Pinning step 1 before
+    /// step 2: a swap would return `NotFound` here instead.
+    #[tokio::test]
+    async fn gate_order_non_server_member_denied_before_conv_lookup() {
+        let server_id = ServerId::new();
+        let actor = UserId::new();
+
+        let repos = ConversationAccessRepos {
+            server_member_repo: &FakeServerMemberRepo {
+                is_member: false,
+                member: None,
+            },
+            conversation_repo: &FakeConversationRepo { conv: None },
+            conversation_member_repo: &FakeConversationMemberRepo { is_member: false },
+        };
+
+        let err = ensure_conversation_member_access(repos, actor, server_id, ConversationId::new())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ServiceError::PermissionDenied),
+            "non-server-member must receive PermissionDenied (step 1), not {:?}",
+            err
+        );
+    }
+
+    /// Server-member querying a conversation that doesn't exist (or belongs to a
+    /// different server) gets `NotFound` — leaking no extra information about the
+    /// conversation beyond what a member is entitled to know. Pinning step 2 before
+    /// step 3: if step 3 ran first, an absent conversation_member row would return
+    /// `PermissionDenied` instead, masking the real lookup failure.
+    #[tokio::test]
+    async fn gate_order_missing_conversation_yields_not_found_for_server_member() {
+        let server_id = ServerId::new();
+        let actor = UserId::new();
+
+        let repos = ConversationAccessRepos {
+            server_member_repo: &FakeServerMemberRepo {
+                is_member: true,
+                member: None,
+            },
+            conversation_repo: &FakeConversationRepo { conv: None },
+            conversation_member_repo: &FakeConversationMemberRepo { is_member: false },
+        };
+
+        let err = ensure_conversation_member_access(repos, actor, server_id, ConversationId::new())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ServiceError::NotFound),
+            "missing conversation must yield NotFound (step 2) for a server-member, not {:?}",
+            err
+        );
     }
 }

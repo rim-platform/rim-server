@@ -8,7 +8,7 @@ use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
-use rim_services::events::Observers;
+use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
 use rim_services::server::dto::ServerDto;
 use rim_services::server::service::ServerService;
@@ -70,13 +70,13 @@ async fn create_default_channels(
                     channel = %channel_name,
                     "created default channel"
                 );
-                observers.workspace.on_conversation_created(
-                    server_id,
-                    conv.id,
-                    conv.title.as_deref(),
-                    conv.conversation_type.as_str(),
-                    vec![creator_id],
-                );
+                observers.emit(WorkspaceEvent::ConversationCreated {
+                    workspace_id: server_id,
+                    conversation_id: conv.id,
+                    title: conv.title.clone(),
+                    conversation_type: conv.conversation_type.as_str().to_string(),
+                    member_user_ids: vec![creator_id],
+                });
             }
             Err(err) => {
                 warn!(
@@ -121,18 +121,13 @@ impl ServerService for DefaultServerService {
             None => self.repos.clone(),
         };
 
-        let server = repos
-            .server_repo
-            .create_server(name)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let server = repos.server_repo.create_server(name).await?;
 
         // Creator becomes owner.
         let _ = repos
             .server_member_repo
             .add_member(server.id, cmd.actor.user_id, ServerMemberRole::Owner)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         // Create default channels inside the transaction (if available).
         create_default_channels(
@@ -169,8 +164,7 @@ impl ServerService for DefaultServerService {
             .repos
             .server_repo
             .get_servers_for_user(query.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(servers.into_iter().map(Self::to_dto).collect())
     }

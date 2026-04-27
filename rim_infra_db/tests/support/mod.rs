@@ -37,6 +37,23 @@ fn is_test_db_url(url: &str) -> bool {
         .any(|needle| db_name.contains(needle))
 }
 
+/// Redact the password from a DB URL for safe logging.
+/// Replaces `://user:password@host` with `://user:***@host`.
+fn redact_url(url: &str) -> String {
+    if let Some(at) = url.find('@') {
+        if let Some(scheme_end) = url.find("://") {
+            let credentials = &url[scheme_end + 3..at];
+            if let Some(colon) = credentials.find(':') {
+                let user = &credentials[..colon];
+                let host_and_rest = &url[at..];
+                let scheme = &url[..scheme_end + 3];
+                return format!("{scheme}{user}:***{host_and_rest}");
+            }
+        }
+    }
+    "<redacted>".to_string()
+}
+
 pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,
@@ -55,12 +72,14 @@ pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
         return None;
     }
 
-    let mut opts = ConnectOptions::new(url);
+    let mut opts = ConnectOptions::new(url.clone());
     opts.sqlx_logging(false);
 
     let conn = Database::connect(opts)
         .await
         .expect("failed to connect to DATABASE_URL");
+
+    eprintln!("db-tests: connected to {}", redact_url(&url));
 
     if MIGRATED.get().is_none() {
         migration::Migrator::up(&conn, None)
@@ -77,6 +96,9 @@ pub async fn reset_db(conn: &DatabaseConnection) {
     // CASCADE ensures FK-dependent rows are cleared.
     let sql = r#"
 TRUNCATE TABLE
+  incident_message_tag,
+  incident_phase,
+  incident,
   conversation_member,
   message_attachment,
   message,
@@ -162,6 +184,7 @@ impl TestCtx {
             conversation_id: conv_id,
             thread_id: None,
             parent_message_id: None,
+            forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
             attachments: vec![],
@@ -182,6 +205,7 @@ impl TestCtx {
             conversation_id: conv_id,
             thread_id: Some(thread_id),
             parent_message_id: None,
+            forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
             attachments: vec![],

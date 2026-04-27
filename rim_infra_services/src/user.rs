@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use rim_core::user::model::UpdateProfilePatch;
 use rim_services::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
@@ -48,8 +49,7 @@ impl UserService for DefaultUserService {
             .repos
             .user_repo
             .get_by_id(query.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         Ok(Self::convert_to_dto(user))
@@ -60,8 +60,7 @@ impl UserService for DefaultUserService {
             .repos
             .user_repo
             .get_by_id(query.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         Ok(Self::convert_to_dto(user))
@@ -71,12 +70,7 @@ impl UserService for DefaultUserService {
         &self,
         ids: &[rim_core::user::model::UserId],
     ) -> ServiceResult<Vec<UserDto>> {
-        let users = self
-            .repos
-            .user_repo
-            .get_by_ids(ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let users = self.repos.user_repo.get_by_ids(ids).await?;
 
         Ok(users.into_iter().map(Self::convert_to_dto).collect())
     }
@@ -139,13 +133,14 @@ impl UserService for DefaultUserService {
             .user_repo
             .update_profile(
                 cmd.actor.user_id,
-                display_name,
-                avatar_url,
-                status_text,
-                bio,
+                UpdateProfilePatch {
+                    display_name,
+                    avatar_url,
+                    status_text,
+                    bio,
+                },
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::convert_to_dto(user))
     }

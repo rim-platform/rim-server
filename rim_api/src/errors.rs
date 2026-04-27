@@ -26,6 +26,22 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::Unauthenticated => Error::new("unauthenticated").extend_with(|_, e| {
             e.set("code", Value::from("UNAUTHENTICATED"));
         }),
+        // H1: distinct codes so the frontend can decide whether to retry
+        // with a fresh challenge (`CONFIRMATION_STALE`) or surface a
+        // generic "confirmation failed" message (`CONFIRMATION_FAILED`).
+        ServiceError::ConfirmationStale => Error::new("confirmation expired or was already used")
+            .extend_with(|_, e| {
+                e.set("code", Value::from("CONFIRMATION_STALE"));
+            }),
+        ServiceError::ConfirmationFailed(msg) => Error::new(msg).extend_with(|_, e| {
+            e.set("code", Value::from("CONFIRMATION_FAILED"));
+        }),
+        ServiceError::RateLimited {
+            retry_after_seconds,
+        } => Error::new("rate limit exceeded").extend_with(|_, e| {
+            e.set("code", Value::from("RATE_LIMITED"));
+            e.set("retryAfterSeconds", Value::from(retry_after_seconds as i64));
+        }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),

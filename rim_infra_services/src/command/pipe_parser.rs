@@ -1,19 +1,45 @@
 use rim_services::{ServiceError, ServiceResult};
 use serde_json::Value;
 
+// SECURITY: All keys from the previous stage's output pass through to the next
+// stage without filtering. A crafted first stage could inject unexpected keys
+// into downstream commands. This is acceptable for Phase 1 because builtin
+// commands extract only the args they declare and ignore unknown keys. Phase 2
+// should introduce whitelist filtering based on the receiving command's declared
+// arguments so that only expected keys propagate.
+pub(super) fn merge_pipe_args(piped: Option<&Value>, explicit: Option<&Value>) -> Option<Value> {
+    match (piped, explicit) {
+        (None, None) => None,
+        (Some(p), None) => Some(p.clone()),
+        (None, Some(e)) => Some(e.clone()),
+        (Some(p), Some(e)) => {
+            let mut merged = match p {
+                Value::Object(m) => m.clone(),
+                _ => serde_json::Map::new(),
+            };
+            if let Value::Object(explicit_map) = e {
+                for (k, v) in explicit_map {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            Some(Value::Object(merged))
+        }
+    }
+}
+
 const MAX_PIPE_SEGMENTS: usize = 10;
 
 #[derive(Debug)]
-pub struct PipeSegment {
-    pub command_id: String,
-    pub args: Option<Value>,
+pub(super) struct PipeSegment {
+    pub(super) command_id: String,
+    pub(super) args: Option<Value>,
 }
 
 /// Parse a pipe expression like "cmd1 | cmd2 | cmd3" into segments.
 ///
 /// Each segment is a command_id optionally followed by key=value args.
 /// Returns error for empty segments, trailing pipes, or exceeding MAX_PIPE_SEGMENTS.
-pub fn parse_pipe_expression(expr: &str) -> ServiceResult<Vec<PipeSegment>> {
+pub(super) fn parse_pipe_expression(expr: &str) -> ServiceResult<Vec<PipeSegment>> {
     let raw_segments: Vec<&str> = expr.split('|').collect();
 
     if raw_segments.is_empty() {

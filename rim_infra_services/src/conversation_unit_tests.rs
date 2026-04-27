@@ -355,11 +355,16 @@ mod tests {
         c.conversation_type = ConversationType::Direct;
         let c_id = c.id;
 
-        let (mut conversation_repo, conversation_member_repo, mut server_member_repo) =
+        let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
             base_repos();
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+
+        // Actor is a member of the Direct conversation — test verifies type check fires anyway.
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
 
         let c_for_repo = c.clone();
         conversation_repo.expect_get_by_id().returning(move |_id| {

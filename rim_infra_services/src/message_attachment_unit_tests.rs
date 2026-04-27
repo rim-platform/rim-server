@@ -719,7 +719,7 @@ mod tests {
         let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_is_member()
-            .times(4)
+            .times(5)
             .returning(|_sid, _uid| Ok(true));
 
         let mut storage = MockStorageService::new();
@@ -781,5 +781,175 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn complete_upload_rejects_non_member() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+        let attachment_id = MessageAttachmentId::new();
+        let upload_token = "valid-token".to_string();
+
+        let mut att = attachment(attachment_id);
+        att.message_id = message_id;
+        att.storage_url = format!("pending://{upload_token}");
+        att.metadata = Some(serde_json::json!({ "status": "pending_upload" }));
+
+        let mut msg = message(message_id, conversation_id);
+        msg.sent_by = actor_id;
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id, conversation_id))));
+
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(att.clone())));
+
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(msg.clone())));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(false));
+
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
+
+        let err = svc
+            .complete_upload(
+                rim_services::message_attachment::command::CompleteUploadCmd {
+                    actor_user_id: actor_id,
+                    attachment_id,
+                    upload_token,
+                    storage_key: "uploads/f.txt".to_string(),
+                    uploaded_filename: "f.txt".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_rejects_wrong_owner() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+        let other_user = UserId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+        let attachment_id = MessageAttachmentId::new();
+        let upload_token = "valid-token".to_string();
+
+        let mut att = attachment(attachment_id);
+        att.message_id = message_id;
+        att.storage_url = format!("pending://{upload_token}");
+        att.metadata = Some(serde_json::json!({ "status": "pending_upload" }));
+
+        let mut msg = message(message_id, conversation_id);
+        msg.sent_by = other_user;
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id, conversation_id))));
+
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(att.clone())));
+
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(msg.clone())));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(move |_, _| Ok(true));
+
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            noop_storage(),
+        );
+
+        let err = svc
+            .complete_upload(
+                rim_services::message_attachment::command::CompleteUploadCmd {
+                    actor_user_id: actor_id,
+                    attachment_id,
+                    upload_token,
+                    storage_key: "uploads/f.txt".to_string(),
+                    uploaded_filename: "f.txt".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_rejects_invalid_token() {
+        let attachment_id = MessageAttachmentId::new();
+
+        let mut att = attachment(attachment_id);
+        att.storage_url = "pending://correct-token".to_string();
+
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(att.clone())));
+
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            },
+            noop_storage(),
+        );
+
+        let err = svc
+            .complete_upload(
+                rim_services::message_attachment::command::CompleteUploadCmd {
+                    actor_user_id: UserId::new(),
+                    attachment_id,
+                    upload_token: "wrong-token".to_string(),
+                    storage_key: "uploads/f.txt".to_string(),
+                    uploaded_filename: "f.txt".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 }

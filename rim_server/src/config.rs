@@ -84,7 +84,7 @@ impl RIMConfig {
     }
 }
 
-pub fn load_config() -> RIMConfig {
+pub fn load_config() -> Result<RIMConfig, ConfigError> {
     dotenv().ok();
-    RIMConfig::load().unwrap()
+    RIMConfig::load()
 }

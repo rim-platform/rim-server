@@ -13,7 +13,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::AttachmentRepos;
 use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -101,6 +101,17 @@ impl DefaultMessageAttachmentService {
         }
     }
 
+    fn access_repos(&self) -> ConversationAccessRepos<'_> {
+        ConversationAccessRepos::from_arcs(
+            &self.repos.server_member_repo,
+            &self.repos.conversation_repo,
+            &self.repos.conversation_member_repo,
+        )
+    }
+
+    /// Verifies the actor is a member of the conversation (via the full 3-step
+    /// gate: server membership → conversation in server → conversation access),
+    /// then returns the loaded message.
     async fn ensure_actor_can_access_message(
         &self,
         server_id: rim_core::server::model::ServerId,
@@ -111,23 +122,14 @@ impl DefaultMessageAttachmentService {
             .repos
             .message_repo
             .get_by_id(message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
-        let conversation = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            message.conversation_id,
-            server_id,
-        )
-        .await?;
-
-        // Use ensure_conversation_access which correctly handles channels
-        // (channels only require server membership, not conversation_member rows)
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conversation,
+        ensure_conversation_member_access(
+            self.access_repos(),
             actor_id,
+            server_id,
+            message.conversation_id,
         )
         .await?;
 
@@ -147,8 +149,7 @@ impl DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .get_by_id(attachment_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         let message = self
@@ -166,13 +167,6 @@ impl DefaultMessageAttachmentService {
 #[async_trait]
 impl MessageAttachmentService for DefaultMessageAttachmentService {
     async fn create_attachment(&self, cmd: CreateAttachmentCmd) -> ServiceResult<UploadTicketDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
         let Some(message_id) = cmd.message_id else {
             return Err(ServiceError::Validation(
                 "message_id is required in v0".to_string(),
@@ -231,14 +225,12 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .add_attachment(new_attachment)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         self.repos
             .message_repo
             .set_has_attachments(message_id, true)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(UploadTicketDto {
             attachment_id: attachment.id,
@@ -252,13 +244,6 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         &self,
         cmd: FinalizeAttachmentCmd,
     ) -> ServiceResult<AttachmentDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
         let (attachment, _message) = self
             .ensure_actor_can_manage_attachment(cmd.server_id, cmd.actor.user_id, cmd.attachment_id)
             .await?;
@@ -279,13 +264,13 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
                 attachment.storage_url.clone(),
                 Some(json!({ "status": Self::READY_STATUS })),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::attachment_dto(updated))
     }
 
     async fn get_attachment(&self, query: GetAttachmentQuery) -> ServiceResult<AttachmentDto> {
+        // Preflight: reject non-server-members before probing attachment existence.
         ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             query.server_id,
@@ -297,8 +282,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .get_by_id(query.attachment_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         let _message = self
@@ -309,13 +293,6 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
     }
 
     async fn delete_attachment(&self, cmd: DeleteAttachmentCmd) -> ServiceResult<()> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
         let (attachment, message) = self
             .ensure_actor_can_manage_attachment(cmd.server_id, cmd.actor.user_id, cmd.attachment_id)
             .await?;
@@ -337,21 +314,18 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         self.repos
             .message_attachment_repo
             .delete_attachment(attachment.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let remaining = self
             .repos
             .message_attachment_repo
             .get_attachments_for_message(message.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         self.repos
             .message_repo
             .set_has_attachments(message.id, !remaining.is_empty())
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(())
     }
@@ -364,11 +338,11 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .get_by_id(cmd.attachment_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
-        // Verify the attachment is pending with matching token
+        // Verify the attachment is pending with matching token before any auth work,
+        // so token probing leaks no information about attachment ownership.
         let expected_storage_url = format!("pending://{}", cmd.upload_token);
         if attachment.storage_url != expected_storage_url {
             return Err(ServiceError::Validation(
@@ -383,6 +357,35 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             ));
         }
 
+        // Derive server_id from message → conversation, then enforce full
+        // 3-step access gate (server membership + conv-in-server + conv access).
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(attachment.message_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+
+        let conversation = self
+            .repos
+            .conversation_repo
+            .get_by_id(message.conversation_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+
+        ensure_conversation_member_access(
+            self.access_repos(),
+            cmd.actor_user_id,
+            conversation.server_id,
+            conversation.id,
+        )
+        .await?;
+
+        // Only the message author may upload files on behalf of their message.
+        if message.sent_by != cmd.actor_user_id {
+            return Err(ServiceError::PermissionDenied);
+        }
+
         let uploaded_metadata = json!({
             "status": Self::UPLOADED_STATUS,
             "storage_filename": cmd.uploaded_filename,
@@ -392,8 +395,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .update_attachment(cmd.attachment_id, cmd.storage_key, Some(uploaded_metadata))
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::attachment_dto(updated))
     }
@@ -406,47 +408,30 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .repos
             .message_attachment_repo
             .get_by_id(query.attachment_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
-        // Look up the message to find the conversation
         let message = self
             .repos
             .message_repo
             .get_by_id(att.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
-        // Check conversation access using the shared helper
         let conversation = self
             .repos
             .conversation_repo
             .get_by_id(message.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
-        // For channels: server membership suffices
-        // For DMs/groups: explicit conversation membership required
-        if conversation.conversation_type
-            == rim_core::conversation::model::ConversationType::Channel
-        {
-            ensure_server_member(
-                self.repos.server_member_repo.as_ref(),
-                conversation.server_id,
-                query.actor_user_id,
-            )
-            .await?;
-        } else {
-            ensure_conversation_access(
-                self.repos.conversation_member_repo.as_ref(),
-                &conversation,
-                query.actor_user_id,
-            )
-            .await?;
-        }
+        ensure_conversation_member_access(
+            self.access_repos(),
+            query.actor_user_id,
+            conversation.server_id,
+            conversation.id,
+        )
+        .await?;
 
         Ok(Self::attachment_dto(att))
     }
@@ -463,17 +448,11 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
                 ],
                 cutoff,
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let count = stale_ids.len() as u64;
         for id in stale_ids {
-            let att = self
-                .repos
-                .message_attachment_repo
-                .get_by_id(id)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+            let att = self.repos.message_attachment_repo.get_by_id(id).await?;
 
             let Some(att) = att else { continue };
 
@@ -484,8 +463,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
                     att.storage_url,
                     Some(json!({ "status": Self::FAILED_STATUS })),
                 )
-                .await
-                .map_err(rim_services::map_repo_error)?;
+                .await?;
         }
 
         Ok(count)

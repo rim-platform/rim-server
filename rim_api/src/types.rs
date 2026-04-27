@@ -42,10 +42,127 @@ impl From<rim_services::command::dto::CommandExecutionTargetDto> for CommandExec
     }
 }
 
+/// GraphQL enum mirroring [`rim_services::command::sensitivity::CommandSensitivityDto`].
+///
+/// Must stay in sync with `CommandSensitivityDto` variants — the `From` impl
+/// below is the enforcement point. Adding a variant on the DTO without
+/// extending this enum + the match below is a compile error.
+///
+/// Wire contract: SCREAMING_SNAKE variants (`SAFE`, `SENSITIVE`, `MUTATING`,
+/// `RESTRICTED`) — async-graphql's `Enum` derive handles the conversion.
+/// The frontend codegen picks this up via `/api/sdl` and mirrors it as a
+/// TypeScript union.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandSensitivity {
+    /// Read-only, no user-visible side effects.
+    Safe,
+    /// Tracked in audit but low blast radius.
+    Sensitive,
+    /// Mutates durable state; counts against agent mutating-call cap.
+    Mutating,
+    /// High-blast-radius admin/destructive; always requires confirmation.
+    Restricted,
+}
+
+impl From<rim_services::command::sensitivity::CommandSensitivityDto> for CommandSensitivity {
+    fn from(value: rim_services::command::sensitivity::CommandSensitivityDto) -> Self {
+        use rim_services::command::sensitivity::CommandSensitivityDto as D;
+        match value {
+            D::Safe => Self::Safe,
+            D::Sensitive => Self::Sensitive,
+            D::Mutating => Self::Mutating,
+            D::Restricted => Self::Restricted,
+        }
+    }
+}
+
+impl From<CommandSensitivity> for rim_services::command::sensitivity::CommandSensitivityDto {
+    fn from(value: CommandSensitivity) -> Self {
+        match value {
+            CommandSensitivity::Safe => Self::Safe,
+            CommandSensitivity::Sensitive => Self::Sensitive,
+            CommandSensitivity::Mutating => Self::Mutating,
+            CommandSensitivity::Restricted => Self::Restricted,
+        }
+    }
+}
+
+/// GraphQL enum mirroring [`rim_services::command::initiator::CommandInitiator`].
+///
+/// Must stay in sync with the DTO variants — the `From` impl below is the
+/// enforcement point. Adding a variant on the DTO without extending this
+/// enum + the match below is a compile error.
+///
+/// Wire contract: SCREAMING_SNAKE variants (`PALETTE`, `AGENT`, `MACRO`,
+/// `KEYBIND`, `CONTEXT_MENU`, `PLUGIN`, `CLI`, `MCP`) — async-graphql's
+/// `Enum` derive handles the conversion. Auto-discovered by the schema
+/// because it's referenced from `ExecuteCommandInput.initiator` and
+/// `ExecuteMacroInput.initiator` — no explicit registration in `lib.rs`
+/// is required.
+///
+/// Per Fury v2 §3.11 (H4 part 1).
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandInitiator {
+    /// User typed/clicked in the command palette.
+    Palette,
+    /// AI agent issued the command via the dispatcher.
+    Agent,
+    /// Inside a macro / user command expansion.
+    Macro,
+    /// Keyboard shortcut bound to a command.
+    Keybind,
+    /// Context menu (right-click) on a chat element.
+    ContextMenu,
+    /// Plugin's own runtime invoked the command.
+    Plugin,
+    /// Out-of-process CLI client (rim-cli).
+    Cli,
+    /// MCP (Model Context Protocol) server.
+    Mcp,
+}
+
+impl From<rim_services::command::initiator::CommandInitiator> for CommandInitiator {
+    fn from(value: rim_services::command::initiator::CommandInitiator) -> Self {
+        use rim_services::command::initiator::CommandInitiator as D;
+        match value {
+            D::Palette => Self::Palette,
+            D::Agent => Self::Agent,
+            D::Macro => Self::Macro,
+            D::Keybind => Self::Keybind,
+            D::ContextMenu => Self::ContextMenu,
+            D::Plugin => Self::Plugin,
+            D::Cli => Self::Cli,
+            D::Mcp => Self::Mcp,
+        }
+    }
+}
+
+impl From<CommandInitiator> for rim_services::command::initiator::CommandInitiator {
+    fn from(value: CommandInitiator) -> Self {
+        use rim_services::command::initiator::CommandInitiator as D;
+        match value {
+            CommandInitiator::Palette => D::Palette,
+            CommandInitiator::Agent => D::Agent,
+            CommandInitiator::Macro => D::Macro,
+            CommandInitiator::Keybind => D::Keybind,
+            CommandInitiator::ContextMenu => D::ContextMenu,
+            CommandInitiator::Plugin => D::Plugin,
+            CommandInitiator::Cli => D::Cli,
+            CommandInitiator::Mcp => D::Mcp,
+        }
+    }
+}
+
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CommandResultStatus {
     Success,
     Error,
+    /// Command is `dangerous: true` and the caller did not submit a
+    /// matching [`ConfirmationProofInput`]. The accompanying
+    /// `confirmationRequired` field on the result carries the
+    /// server-issued challenge — present the modal, then re-submit with
+    /// `confirmation: { inBandToken: { token, argsHash } }`.
+    ConfirmationRequired,
 }
 
 impl From<rim_services::command::dto::CommandResultStatusDto> for CommandResultStatus {
@@ -54,6 +171,7 @@ impl From<rim_services::command::dto::CommandResultStatusDto> for CommandResultS
         match value {
             D::Success => Self::Success,
             D::Error => Self::Error,
+            D::ConfirmationRequired => Self::ConfirmationRequired,
         }
     }
 }
@@ -221,6 +339,81 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
     }
 }
 
+/// GraphQL enum mirroring [`rim_services::command::dto::CommandArgumentTypeDto`].
+///
+/// Drives the frontend AI tool-schema generator (Phase 3 §4.B) — each variant
+/// maps to a JSON-schema fragment for the `input_schema` field of an
+/// `AiToolDefinition`. Wire contract: SCREAMING_SNAKE (`STRING`, `WORKSPACE_ID`,
+/// `SELECTION_TEXT`, …) auto-generated by async-graphql's `Enum` derive.
+///
+/// Adding a variant on the DTO without extending this enum + the `From`
+/// match below is a compile error — that's the drift-prevention point.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum CommandArgumentType {
+    String,
+    Integer,
+    Float,
+    Boolean,
+    Enum,
+    UserId,
+    ConversationId,
+    MessageId,
+    ThreadId,
+    WorkspaceId,
+    SelectionText,
+}
+
+impl From<rim_services::command::dto::CommandArgumentTypeDto> for CommandArgumentType {
+    fn from(value: rim_services::command::dto::CommandArgumentTypeDto) -> Self {
+        use rim_services::command::dto::CommandArgumentTypeDto as D;
+        match value {
+            D::String => Self::String,
+            D::Integer => Self::Integer,
+            D::Float => Self::Float,
+            D::Boolean => Self::Boolean,
+            D::Enum => Self::Enum,
+            D::UserId => Self::UserId,
+            D::ConversationId => Self::ConversationId,
+            D::MessageId => Self::MessageId,
+            D::ThreadId => Self::ThreadId,
+            D::WorkspaceId => Self::WorkspaceId,
+            D::SelectionText => Self::SelectionText,
+        }
+    }
+}
+
+/// GraphQL projection of [`rim_services::command::dto::CommandArgumentDto`].
+///
+/// `default_value` and `allowed_values` carry the per-argument constraints
+/// the AI tool-schema generator needs to emit a usable `input_schema` (Phase
+/// 3 §4.B). `default_value` is wrapped in async-graphql's `Json` scalar
+/// because typed args span string/int/float/bool/JSON-object — a single
+/// scalar surface keeps the GraphQL schema flat.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CommandArgument {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub argument_type: CommandArgumentType,
+    pub required: bool,
+    pub default_value: Option<async_graphql::Json<serde_json::Value>>,
+    pub allowed_values: Option<Vec<String>>,
+}
+
+impl From<rim_services::command::dto::CommandArgumentDto> for CommandArgument {
+    fn from(value: rim_services::command::dto::CommandArgumentDto) -> Self {
+        Self {
+            name: value.name,
+            title: value.title,
+            description: value.description,
+            argument_type: value.argument_type.into(),
+            required: value.required,
+            default_value: value.default_value.map(async_graphql::Json),
+            allowed_values: value.allowed_values,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Command {
     pub id: String,
@@ -229,12 +422,31 @@ pub struct Command {
     pub category: String,
     pub source_kind: CommandSourceKind,
     pub execution_target: CommandExecutionTarget,
+    /// Typed argument schema driving palette form rendering AND the AI
+    /// tool-schema generator's `input_schema`. Populated from the backend
+    /// `CommandDefinitionDto.arguments` field at resolve time — frontend
+    /// hardcoded schemas are removed in Phase 3 §4.B.
+    pub arguments: Vec<CommandArgument>,
     pub required_context: Vec<String>,
     pub required_capabilities: Vec<String>,
     pub visible_in_palette: bool,
     pub visible_in_context_menus: bool,
     pub keybind_capable: bool,
     pub dangerous: bool,
+    /// AI-optimised natural-language description; falls back to `description`
+    /// when absent. Sanitized at registration time, so the frontend can trust
+    /// this field even when rendering inside a prompt template.
+    pub nl_description: Option<String>,
+    /// Example phrases a user might speak/type to invoke this command.
+    /// Individually sanitized at registration; bounded in count and length.
+    pub intent_samples: Vec<String>,
+    /// `true` iff the command is exposed to the AI Agent. Phase 1: always
+    /// `false` (no built-in opts in yet). Phase 4 starts flipping specific
+    /// commands on.
+    pub ai_callable: bool,
+    /// Classification tier driving audit verbosity, mutating-call caps, and
+    /// the UX confirm-modal placement.
+    pub sensitivity: CommandSensitivity,
 }
 
 impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
@@ -246,12 +458,17 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
             category: value.category,
             source_kind: value.source_kind.into(),
             execution_target: value.execution_target.into(),
+            arguments: value.arguments.into_iter().map(Into::into).collect(),
             required_context: value.required_context,
             required_capabilities: value.required_capabilities,
             visible_in_palette: value.visible_in_palette,
             visible_in_context_menus: value.visible_in_context_menus,
             keybind_capable: value.keybind_capable,
             dangerous: value.dangerous,
+            nl_description: value.nl_description,
+            intent_samples: value.intent_samples,
+            ai_callable: value.ai_callable,
+            sensitivity: value.sensitivity.into(),
         }
     }
 }
@@ -261,6 +478,7 @@ pub enum CommandSurface {
     Palette,
     ContextMenu,
     KeybindPicker,
+    Ai,
 }
 
 impl From<CommandSurface> for rim_services::command::dto::CommandSurfaceDto {
@@ -269,6 +487,7 @@ impl From<CommandSurface> for rim_services::command::dto::CommandSurfaceDto {
             CommandSurface::Palette => Self::Palette,
             CommandSurface::ContextMenu => Self::ContextMenu,
             CommandSurface::KeybindPicker => Self::KeybindPicker,
+            CommandSurface::Ai => Self::Ai,
         }
     }
 }
@@ -351,6 +570,11 @@ pub struct CommandResult {
     pub payload: Option<async_graphql::Json<serde_json::Value>>,
     pub follow_up_commands: Vec<String>,
     pub pipeline_stages: Option<Vec<PipeStageResult>>,
+    /// Populated **iff** `status == CONFIRMATION_REQUIRED`. Carries the
+    /// server-issued challenge (token + argsHash + expiresAt). The
+    /// frontend presents the modal, then re-issues the original
+    /// `executeCommand` mutation with `confirmation: { inBandToken: { ... } }`.
+    pub confirmation_required: Option<ConfirmationChallenge>,
 }
 
 impl From<rim_services::command::dto::CommandResultDto> for CommandResult {
@@ -363,6 +587,87 @@ impl From<rim_services::command::dto::CommandResultDto> for CommandResult {
             pipeline_stages: value
                 .pipeline_stages
                 .map(|stages| stages.into_iter().map(Into::into).collect()),
+            confirmation_required: value.confirmation_required.map(Into::into),
+        }
+    }
+}
+
+/// GraphQL projection of a server-issued
+/// [`rim_services::command::confirmation::ConfirmationChallengeDto`]. The
+/// frontend opens its confirm-modal with these fields, then submits a
+/// matching [`ConfirmationProofInput`].
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ConfirmationChallenge {
+    pub token: String,
+    pub args_hash: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::command::confirmation::ConfirmationChallengeDto> for ConfirmationChallenge {
+    fn from(value: rim_services::command::confirmation::ConfirmationChallengeDto) -> Self {
+        Self {
+            token: value.token,
+            args_hash: value.args_hash,
+            expires_at: value.expires_at,
+        }
+    }
+}
+
+/// GraphQL input for submitting a confirmation proof. Exactly one of
+/// `inBandToken` or `outOfBand` MUST be populated; submitting both or
+/// neither results in a `VALIDATION` error.
+///
+/// `outOfBand` is a Phase-1 placeholder for MCP-style consent flows
+/// (M5 / Phase 6); the server currently rejects it with
+/// `CONFIRMATION_FAILED { code: UNSUPPORTED }`.
+#[derive(InputObject, Clone, Debug)]
+pub struct ConfirmationProofInput {
+    pub in_band_token: Option<InBandTokenInput>,
+    pub out_of_band: Option<OutOfBandProofInput>,
+}
+
+#[derive(InputObject, Clone, Debug)]
+pub struct InBandTokenInput {
+    pub token: String,
+    pub args_hash: String,
+}
+
+#[derive(InputObject, Clone, Debug)]
+pub struct OutOfBandProofInput {
+    pub request_id: String,
+}
+
+impl ConfirmationProofInput {
+    /// Convert the GraphQL input into the service-layer
+    /// [`rim_services::command::confirmation::ConfirmationProof`].
+    ///
+    /// **Oneof discipline (Widow §W3 closure):** if a caller submits
+    /// `confirmation: { ... }` they MUST populate exactly one variant.
+    /// Both populated → `VALIDATION` error. Both `None` → also a
+    /// `VALIDATION` error (caller should omit the `confirmation` field
+    /// entirely if they have no proof to submit; an empty proof object
+    /// is treated as a malformed request, not as "no proof", so an
+    /// attacker stamping `confirmation: {}` cannot silently burn a
+    /// token slot per request).
+    pub fn into_proof(
+        self,
+    ) -> Result<rim_services::command::confirmation::ConfirmationProof, async_graphql::Error> {
+        use rim_services::command::confirmation::ConfirmationProof as P;
+        match (self.in_band_token, self.out_of_band) {
+            (Some(_), Some(_)) => Err(async_graphql::Error::new(
+                "ConfirmationProofInput must populate exactly one of inBandToken / outOfBand",
+            )),
+            (None, None) => Err(async_graphql::Error::new(
+                "ConfirmationProofInput must populate exactly one of inBandToken / outOfBand; \
+                 omit the field entirely if you have no proof to submit",
+            )),
+            (Some(t), None) => Ok(P::InBandToken {
+                token: t.token,
+                args_hash: t.args_hash,
+            }),
+            (None, Some(o)) => Ok(P::OutOfBand {
+                request_id: o.request_id,
+            }),
         }
     }
 }
@@ -1344,6 +1649,10 @@ pub struct MacroDef {
     pub name: String,
     pub description: Option<String>,
     pub steps: Vec<MacroStep>,
+    pub ai_callable: bool,
+    pub nl_description: String,
+    pub intent_samples: Vec<String>,
+    pub sensitivity: CommandSensitivity,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1363,6 +1672,10 @@ impl From<rim_services::macro_def::dto::MacroDto> for MacroDef {
                     args: s.args.map(async_graphql::Json),
                 })
                 .collect(),
+            ai_callable: value.ai_callable,
+            nl_description: value.nl_description,
+            intent_samples: value.intent_samples,
+            sensitivity: CommandSensitivity::from(value.sensitivity),
             created_at: value.created_at,
         }
     }
@@ -1828,6 +2141,63 @@ impl From<rim_services::incident::dto::IncidentTimelineDto> for IncidentTimeline
     }
 }
 
+#[derive(InputObject, Clone, Debug)]
+pub struct IncidentListCursorInput {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub incident_id: async_graphql::ID,
+}
+
+impl TryFrom<IncidentListCursorInput> for rim_services::incident::dto::IncidentListPageCursor {
+    type Error = async_graphql::Error;
+
+    fn try_from(value: IncidentListCursorInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            created_at: value.created_at,
+            incident_id: crate::ids::parse_uuid_id::<rim_core::incident::model::IncidentId>(
+                &value.incident_id,
+            )?,
+        })
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct IncidentListCursorOutput {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub incident_id: async_graphql::ID,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct IncidentPage {
+    pub items: Vec<IncidentGql>,
+    pub next: Option<IncidentListCursorOutput>,
+    pub prev: Option<IncidentListCursorOutput>,
+    pub page_info: PageInfo,
+}
+
+impl IncidentPage {
+    pub fn from_page(
+        page: Page<
+            rim_services::incident::dto::IncidentDto,
+            rim_services::incident::dto::IncidentListPageCursor,
+        >,
+    ) -> Self {
+        let has_next = page.next.is_some();
+        let has_prev = page.prev.is_some();
+        Self {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next: page.next.map(|c| IncidentListCursorOutput {
+                created_at: c.created_at,
+                incident_id: async_graphql::ID(c.incident_id.to_string()),
+            }),
+            prev: page.prev.map(|c| IncidentListCursorOutput {
+                created_at: c.created_at,
+                incident_id: async_graphql::ID(c.incident_id.to_string()),
+            }),
+            page_info: PageInfo { has_next, has_prev },
+        }
+    }
+}
+
 // ── Workspace State ──────────────────────────────────────────────────────
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -2118,4 +2488,158 @@ pub struct UpdatePipelineInput {
     pub filter: Option<PipelineFilterInput>,
     pub actions: Vec<PipelineActionInput>,
     pub cooldown_secs: Option<i32>,
+}
+
+// ── Audit log types (Phase 5 Task 1) ────────────────────────────────────────
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum TypedVerbGql {
+    Read,
+    Write,
+    Delete,
+    Send,
+    Open,
+    Close,
+    Toggle,
+    Navigate,
+    Execute,
+    Configure,
+    Other,
+}
+
+impl From<rim_services::command::verb::TypedVerb> for TypedVerbGql {
+    fn from(v: rim_services::command::verb::TypedVerb) -> Self {
+        use rim_services::command::verb::TypedVerb;
+        match v {
+            TypedVerb::Read => Self::Read,
+            TypedVerb::Write => Self::Write,
+            TypedVerb::Delete => Self::Delete,
+            TypedVerb::Send => Self::Send,
+            TypedVerb::Open => Self::Open,
+            TypedVerb::Close => Self::Close,
+            TypedVerb::Toggle => Self::Toggle,
+            TypedVerb::Navigate => Self::Navigate,
+            TypedVerb::Execute => Self::Execute,
+            TypedVerb::Configure => Self::Configure,
+            TypedVerb::Other => Self::Other,
+        }
+    }
+}
+
+impl From<TypedVerbGql> for rim_services::command::verb::TypedVerb {
+    fn from(v: TypedVerbGql) -> Self {
+        match v {
+            TypedVerbGql::Read => Self::Read,
+            TypedVerbGql::Write => Self::Write,
+            TypedVerbGql::Delete => Self::Delete,
+            TypedVerbGql::Send => Self::Send,
+            TypedVerbGql::Open => Self::Open,
+            TypedVerbGql::Close => Self::Close,
+            TypedVerbGql::Toggle => Self::Toggle,
+            TypedVerbGql::Navigate => Self::Navigate,
+            TypedVerbGql::Execute => Self::Execute,
+            TypedVerbGql::Configure => Self::Configure,
+            TypedVerbGql::Other => Self::Other,
+        }
+    }
+}
+
+/// GraphQL enum for audit log outcome — mirrors [`rim_services::audit::dto::AuditOutcome`].
+/// Rust variants → SCREAMING_SNAKE in GraphQL (e.g. `MacroPartialFailure` → `MACRO_PARTIAL_FAILURE`).
+#[derive(async_graphql::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditOutcomeGql {
+    Success,
+    Error,
+    ConfirmationRequired,
+    PermissionDenied,
+    RateLimited,
+    StepError,
+    MacroPartialFailure,
+}
+
+impl From<rim_services::audit::dto::AuditOutcome> for AuditOutcomeGql {
+    fn from(o: rim_services::audit::dto::AuditOutcome) -> Self {
+        use rim_services::audit::dto::AuditOutcome;
+        match o {
+            AuditOutcome::Success => Self::Success,
+            AuditOutcome::Error => Self::Error,
+            AuditOutcome::ConfirmationRequired => Self::ConfirmationRequired,
+            AuditOutcome::PermissionDenied => Self::PermissionDenied,
+            AuditOutcome::RateLimited => Self::RateLimited,
+            AuditOutcome::StepError => Self::StepError,
+            AuditOutcome::MacroPartialFailure => Self::MacroPartialFailure,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AuditLogEntry {
+    pub id: async_graphql::ID,
+    pub actor_user_id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub command_id: String,
+    pub initiator: String,
+    pub args_redacted: async_graphql::Json<serde_json::Value>,
+    pub sensitivity: String,
+    pub dangerous: bool,
+    pub confirmation_kind: String,
+    pub typed_verb: Option<TypedVerbGql>,
+    pub outcome: AuditOutcomeGql,
+    pub error_kind: Option<String>,
+    pub capability_check_outcome: Option<String>,
+    pub confirmation_outcome: Option<String>,
+    pub created_at: String,
+}
+
+impl From<rim_services::audit::dto::AuditLogEntryDto> for AuditLogEntry {
+    fn from(dto: rim_services::audit::dto::AuditLogEntryDto) -> Self {
+        Self {
+            id: dto.id.to_string().into(),
+            actor_user_id: dto.actor_user_id.to_string().into(),
+            server_id: dto.server_id.to_string().into(),
+            command_id: dto.command_id,
+            initiator: dto.initiator,
+            args_redacted: async_graphql::Json(dto.args_redacted),
+            sensitivity: dto.sensitivity,
+            dangerous: dto.dangerous,
+            confirmation_kind: dto.confirmation_kind,
+            typed_verb: dto.typed_verb.map(TypedVerbGql::from),
+            outcome: AuditOutcomeGql::from(dto.outcome),
+            error_kind: dto.error_kind,
+            capability_check_outcome: dto.capability_check_outcome,
+            confirmation_outcome: dto.confirmation_outcome,
+            created_at: dto.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AuditLogPageInfo {
+    pub has_next_page: bool,
+    pub has_prev_page: bool,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AuditLogPage {
+    pub items: Vec<AuditLogEntry>,
+    /// Opaque cursor pointing after the last item; pass to `after` on next query.
+    pub next_cursor: Option<String>,
+    pub page_info: AuditLogPageInfo,
+}
+
+#[derive(InputObject, Clone, Debug, Default)]
+pub struct AuditLogFilterInput {
+    pub actor_user_id: Option<async_graphql::ID>,
+    pub server_id: Option<async_graphql::ID>,
+    pub command_id: Option<String>,
+    pub typed_verb: Option<TypedVerbGql>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+}
+
+#[derive(InputObject, Clone, Debug, Default)]
+pub struct AuditLogPaginationInput {
+    /// Opaque cursor from the previous page's `nextCursor`.
+    pub after: Option<String>,
+    pub limit: Option<i32>,
 }

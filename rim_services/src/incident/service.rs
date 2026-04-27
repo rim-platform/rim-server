@@ -1,14 +1,17 @@
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
+use rim_core::repository::pagination::Page;
 
 use crate::ServiceResult;
 use crate::incident::command::{
     AdvancePhaseCmd, GeneratePostmortemCmd, GetActiveIncidentQuery, GetIncidentTimelineQuery,
-    ResolveIncidentCmd, StartIncidentCmd, TagMessageCmd, UpdateIncidentStatusCmd,
+    ListIncidentsQuery, ResolveIncidentCmd, StartIncidentCmd, TagMessageCmd,
+    UpdateIncidentStatusCmd,
 };
 use crate::incident::dto::{
-    IncidentDto, IncidentMessageTagDto, IncidentPhaseDto, IncidentTimelineDto,
+    IncidentDto, IncidentListPageCursor, IncidentMessageTagDto, IncidentPhaseDto,
+    IncidentTimelineDto,
 };
 
 #[async_trait]
@@ -38,4 +41,9 @@ pub trait IncidentService: Send + Sync {
         &self,
         query: GetIncidentTimelineQuery,
     ) -> ServiceResult<IncidentTimelineDto>;
+
+    async fn list_incidents(
+        &self,
+        query: ListIncidentsQuery,
+    ) -> ServiceResult<Page<IncidentDto, IncidentListPageCursor>>;
 }

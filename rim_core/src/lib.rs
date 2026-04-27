@@ -1,4 +1,5 @@
 pub mod action;
+pub mod audit;
 pub mod auth;
 pub mod capability;
 pub mod channel_lens;

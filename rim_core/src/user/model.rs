@@ -22,3 +22,11 @@ pub struct NewUser {
     pub username: String,
     pub password: String,
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct UpdateProfilePatch {
+    pub display_name: Option<Option<String>>,
+    pub avatar_url: Option<Option<String>>,
+    pub status_text: Option<Option<String>>,
+    pub bio: Option<Option<String>>,
+}

@@ -46,8 +46,7 @@ impl DefaultServerMemberService {
         self.repos
             .user_repo
             .get_by_id(user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)
     }
 }
@@ -74,8 +73,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .repos
             .server_member_repo
             .add_member(cmd.server_id, cmd.user_id, ServerMemberRole::Guest)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let user = self.resolve_user(member.user_id).await?;
 
@@ -109,8 +107,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .repos
             .server_member_repo
             .get_member(cmd.server_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if target.member_role == ServerMemberRole::Owner {
@@ -120,8 +117,7 @@ impl ServerMemberService for DefaultServerMemberService {
         self.repos
             .server_member_repo
             .remove_member(cmd.server_id, cmd.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             server_id = %cmd.server_id,
@@ -139,8 +135,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .repos
             .server_member_repo
             .get_member(cmd.server_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::PermissionDenied)?;
 
         if member.member_role == ServerMemberRole::Owner {
@@ -152,8 +147,7 @@ impl ServerMemberService for DefaultServerMemberService {
         self.repos
             .server_member_repo
             .remove_member(cmd.server_id, cmd.actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             server_id = %cmd.server_id,
@@ -176,8 +170,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .repos
             .server_member_repo
             .get_member(query.server_id, query.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         let user = self.resolve_user(member.user_id).await?;
@@ -200,18 +193,12 @@ impl ServerMemberService for DefaultServerMemberService {
             .repos
             .server_member_repo
             .get_members_for_server(query.server_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         // Batch-fetch all users in a single query to avoid N+1
         let user_ids: Vec<rim_core::user::model::UserId> =
             members.iter().map(|m| m.user_id).collect();
-        let users = self
-            .repos
-            .user_repo
-            .get_by_ids(&user_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let users = self.repos.user_repo.get_by_ids(&user_ids).await?;
 
         let user_map: std::collections::HashMap<_, _> =
             users.into_iter().map(|u| (u.id, u)).collect();

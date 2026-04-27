@@ -5,11 +5,11 @@ use crate::pagination::PageDir;
 use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelLens, ChannelPage, Command,
     CommandContextInput, CommandSurface, Conversation, ConversationPage, ConversationTypeEnum,
-    CustomEmoji, DefaultKeybind, Event, InboxCursorInput, IncidentGql, IncidentTimelineGql,
-    Integration, Invite, Keybind, KeybindContext, KeybindLayers, KeybindScope, MacroDef, Message,
-    MessageCursorInput, MessagePage, MessageReference, MutedConversation, SearchResultMessage,
-    Server, ServerMember, Setting, Thread, ThreadCursorInput, ThreadPage, UnreadCount, User,
-    UserPresenceGql,
+    CustomEmoji, DefaultKeybind, Event, InboxCursorInput, IncidentGql, IncidentListCursorInput,
+    IncidentPage, IncidentSeverityGql, IncidentStatusGql, IncidentTimelineGql, Integration, Invite,
+    Keybind, KeybindContext, KeybindLayers, KeybindScope, MacroDef, Message, MessageCursorInput,
+    MessagePage, MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember,
+    Setting, Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -69,6 +69,44 @@ impl Query {
                 context: command_context.map(TryInto::try_into).transpose()?,
                 surface: surface.unwrap_or(CommandSurface::Palette).into(),
             })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(commands.into_iter().map(Into::into).collect())
+    }
+
+    /// P5-A7 — AI Agent command-discovery meta-tool (v2 §5 R1 #3, M6).
+    ///
+    /// Returns the actor's accessible AI-callable command surface, optionally
+    /// ranked by `intent_phrase` relevance (literal substring + token-overlap
+    /// against `intent_samples`, `title`, `nl_description`), truncated to
+    /// `limit` (default 50, hard-capped at 100), and scoped to a workspace for
+    /// macro synthesis.
+    ///
+    /// Rate-limited: 5 calls / 60-second sliding window per actor (M6).
+    /// Returns `RATE_LIMITED` on overage.
+    async fn command_discover(
+        &self,
+        ctx: &Context<'_>,
+        intent_phrase: Option<String>,
+        limit: Option<i32>,
+        workspace_id: Option<ID>,
+    ) -> Result<Vec<Command>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        let ws_id = workspace_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::server::model::ServerId>)
+            .transpose()?;
+
+        let commands = svc
+            .command_discover(
+                &Actor::new(actor),
+                intent_phrase,
+                limit.map(|l| l.max(1) as u32),
+                ws_id,
+            )
             .await
             .map_err(crate::errors::map_service_error)?;
 
@@ -780,7 +818,7 @@ impl Query {
     ) -> Result<Vec<UserPresenceGql>> {
         let _actor = require_actor(ctx)?;
         let presence_mgr =
-            ctx.data::<std::sync::Arc<rim_infra_services::presence::PresenceManager>>()?;
+            ctx.data::<std::sync::Arc<dyn rim_services::presence::PresenceService>>()?;
         let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&workspace_id)?;
 
         let entries = presence_mgr.get_workspace_presence(workspace_id);
@@ -1029,6 +1067,40 @@ impl Query {
         Ok(timeline.into())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn list_incidents(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        status_filter: Option<Vec<IncidentStatusGql>>,
+        severity_filter: Option<Vec<IncidentSeverityGql>>,
+        dir: PageDir,
+        cursor: Option<IncidentListCursorInput>,
+        #[graphql(default = 20)] limit: i32,
+    ) -> Result<IncidentPage> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let page = svc
+            .list_incidents(rim_services::incident::command::ListIncidentsQuery {
+                actor: Actor::new(actor),
+                server_id,
+                status_filter: status_filter
+                    .map(|v| v.into_iter().map(Into::into).collect::<Vec<_>>()),
+                severity_filter: severity_filter
+                    .map(|v| v.into_iter().map(Into::into).collect::<Vec<_>>()),
+                dir: dir.into(),
+                cursor: cursor.map(TryFrom::try_from).transpose()?,
+                limit: (limit.max(1) as u32).min(100),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(IncidentPage::from_page(page))
+    }
+
     async fn workspace_state(
         &self,
         ctx: &Context<'_>,
@@ -1095,8 +1167,7 @@ impl Query {
         let actor = require_actor(ctx)?;
         let svc =
             ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
-        let pipeline_id =
-            parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
+        let pipeline_id = parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
 
         let pipeline = svc
             .get(Actor::new(actor), pipeline_id)
@@ -1128,4 +1199,102 @@ impl Query {
 
         Ok(pipelines.into_iter().map(Into::into).collect())
     }
+
+    /// Query the command audit log. Requires `audit.read` capability.
+    async fn list_audit_log(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<crate::types::AuditLogFilterInput>,
+        pagination: Option<crate::types::AuditLogPaginationInput>,
+    ) -> Result<crate::types::AuditLogPage> {
+        use rim_services::audit::dto::ListAuditLogQuery;
+        use rim_services::audit::service::AuditLogService;
+
+        let caller_id = require_actor(ctx)?;
+        let caller = rim_services::Actor::new(caller_id);
+        let svc = ctx.data::<std::sync::Arc<dyn AuditLogService>>()?;
+
+        let filter = filter.unwrap_or_default();
+        let pagination = pagination.unwrap_or_default();
+
+        // P6-H2: pass actor_user_id as None when the filter doesn't specify it.
+        // The service layer now enforces the full access-control matrix on
+        // (actor_user_id, server_id) — defaulting to caller_id here would
+        // hide the unscoped-workspace cases and prevent workspace-audit reads
+        // (actor_user_id=None, server_id=Some(W)) from reaching the service.
+        let actor_user_id = filter
+            .actor_user_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::user::model::UserId>)
+            .transpose()?
+            .map(|id| id.into());
+
+        let server_id = filter
+            .server_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::server::model::ServerId>)
+            .transpose()?
+            .map(|id| id.into());
+
+        let cursor = pagination
+            .after
+            .as_ref()
+            .and_then(|s| decode_audit_cursor(s));
+
+        let limit = pagination.limit.unwrap_or(50).clamp(1, 200) as u32;
+
+        let query = ListAuditLogQuery {
+            actor_user_id,
+            server_id,
+            command_id: filter.command_id,
+            typed_verb: filter.typed_verb.map(|v| {
+                rim_services::command::verb::TypedVerb::from(v)
+                    .as_str()
+                    .to_string()
+            }),
+            since: filter.since.as_deref().and_then(parse_datetime),
+            until: filter.until.as_deref().and_then(parse_datetime),
+            cursor,
+            limit,
+        };
+
+        let page = svc
+            .list_entries(caller, query)
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(crate::types::AuditLogPage {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor.map(|(dt, id)| encode_audit_cursor(dt, id)),
+            page_info: crate::types::AuditLogPageInfo {
+                has_next_page: page.page_info.has_next_page,
+                has_prev_page: page.page_info.has_prev_page,
+            },
+        })
+    }
+}
+
+fn encode_audit_cursor(dt: chrono::DateTime<chrono::Utc>, id: uuid::Uuid) -> String {
+    use base64::Engine;
+    let raw = format!("{}:{}", dt.timestamp_micros(), id);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes())
+}
+
+fn decode_audit_cursor(s: &str) -> Option<(chrono::DateTime<chrono::Utc>, uuid::Uuid)> {
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()?;
+    let s = std::str::from_utf8(&decoded).ok()?;
+    let (ts_part, id_part) = s.split_once(':')?;
+    let ts_micros: i64 = ts_part.parse().ok()?;
+    let dt = chrono::DateTime::from_timestamp_micros(ts_micros)?;
+    let id = uuid::Uuid::parse_str(id_part).ok()?;
+    Some((dt, id))
+}
+
+fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }

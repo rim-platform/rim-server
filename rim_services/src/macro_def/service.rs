@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use mockall::automock;
 
 use crate::ServiceResult;
-use crate::command::dto::CommandResultDto;
+use crate::command::dto::{CommandDefinitionDto, CommandResultDto};
 use crate::macro_def::dto::MacroDto;
 use crate::macro_def::request::{
     CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
-    ListUserMacrosQuery, UpdateMacroCmd,
+    ListUserMacrosQuery, SynthesizeMacroCommandsQuery, UpdateMacroCmd,
 };
 
 #[async_trait]
@@ -26,4 +26,11 @@ pub trait MacroService: Send + Sync {
         query: ListServerMacrosQuery,
     ) -> ServiceResult<Vec<MacroDto>>;
     async fn execute_macro(&self, cmd: ExecuteMacroCmd) -> ServiceResult<CommandResultDto>;
+    /// Return `CommandDefinitionDto` representations of all AI-callable macros
+    /// owned by the actor in the given server. Used by the command discovery
+    /// surface to expose user macros to the AI agent tool list.
+    async fn synthesize_command_definitions(
+        &self,
+        query: SynthesizeMacroCommandsQuery,
+    ) -> ServiceResult<Vec<CommandDefinitionDto>>;
 }

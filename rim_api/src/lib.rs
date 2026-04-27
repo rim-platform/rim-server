@@ -31,8 +31,8 @@ mod tests;
 pub fn build_schema(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
-    presence_manager: Arc<rim_infra_services::presence::PresenceManager>,
-    typing_tracker: Arc<rim_infra_services::typing::TypingTracker>,
+    presence_manager: Arc<dyn rim_services::presence::PresenceService>,
+    typing_tracker: Arc<dyn rim_services::typing::TypingService>,
     observers: Arc<rim_services::events::Observers>,
 ) -> AppSchema {
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
@@ -67,6 +67,7 @@ pub fn build_schema(
         .data(broadcaster)
         .data(Arc::clone(&service_provider))
         .data(service_provider.action_service())
+        .data(service_provider.audit_log_service())
         .data(service_provider.auth_service())
         .data(service_provider.capability_service())
         .data(service_provider.command_service())
@@ -114,8 +115,8 @@ pub fn build_schema(
 pub fn export_sdl(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
-    presence_manager: Arc<rim_infra_services::presence::PresenceManager>,
-    typing_tracker: Arc<rim_infra_services::typing::TypingTracker>,
+    presence_manager: Arc<dyn rim_services::presence::PresenceService>,
+    typing_tracker: Arc<dyn rim_services::typing::TypingService>,
     observers: Arc<rim_services::events::Observers>,
 ) -> String {
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
@@ -147,6 +148,7 @@ pub fn export_sdl(
         .data(broadcaster)
         .data(Arc::clone(&service_provider))
         .data(service_provider.action_service())
+        .data(service_provider.audit_log_service())
         .data(service_provider.auth_service())
         .data(service_provider.capability_service())
         .data(service_provider.command_service())
