@@ -81,6 +81,8 @@ impl MacroRepository for SeaOrmMacroRepository {
     }
 
     async fn create(&self, new_macro: NewMacroDef) -> RepoResult<MacroDef> {
+        let intent_samples = serde_json::to_value(&new_macro.intent_samples)
+            .unwrap_or(serde_json::Value::Array(vec![]));
         let model = macro_def::ActiveModel {
             id: Set(MacroId::new().into()),
             server_id: Set(new_macro.server_id.into()),
@@ -88,6 +90,10 @@ impl MacroRepository for SeaOrmMacroRepository {
             name: Set(new_macro.name),
             description: Set(new_macro.description),
             steps: Set(new_macro.steps_json),
+            ai_callable: Set(new_macro.ai_callable),
+            nl_description: Set(new_macro.nl_description),
+            intent_samples: Set(intent_samples),
+            sensitivity: Set(new_macro.sensitivity),
             ..Default::default()
         };
 
@@ -105,10 +111,16 @@ impl MacroRepository for SeaOrmMacroRepository {
             .map_err(map_db_err)?
             .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
 
+        let intent_samples = serde_json::to_value(&update.intent_samples)
+            .unwrap_or(serde_json::Value::Array(vec![]));
         let mut active: macro_def::ActiveModel = model.into();
         active.name = Set(update.name);
         active.description = Set(update.description);
         active.steps = Set(update.steps_json);
+        active.ai_callable = Set(update.ai_callable);
+        active.nl_description = Set(update.nl_description);
+        active.intent_samples = Set(intent_samples);
+        active.sensitivity = Set(update.sensitivity);
         active.updated_at = Set(chrono::Utc::now().into());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;

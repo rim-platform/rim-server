@@ -4,6 +4,8 @@ use rim_core::user::model::UserId;
 
 use chrono::{DateTime, Utc};
 
+use crate::command::sensitivity::CommandSensitivityDto;
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MacroStepDto {
@@ -20,5 +22,9 @@ pub struct MacroDto {
     pub name: String,
     pub description: Option<String>,
     pub steps: Vec<MacroStepDto>,
+    pub ai_callable: bool,
+    pub nl_description: String,
+    pub intent_samples: Vec<String>,
+    pub sensitivity: CommandSensitivityDto,
     pub created_at: DateTime<Utc>,
 }

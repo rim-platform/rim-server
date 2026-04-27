@@ -1,19 +1,19 @@
 #[cfg(test)]
-mod map_repo_error {
-    use crate::{ServiceError, map_repo_error};
+mod repo_error_from {
+    use crate::ServiceError;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
 
     #[test]
     fn maps_not_found() {
         let err = RepoError::new(RepoErrorKind::NotFound);
-        assert!(matches!(map_repo_error(err), ServiceError::NotFound));
+        assert!(matches!(ServiceError::from(err), ServiceError::NotFound));
     }
 
     #[test]
     fn maps_conflict_to_conflict_with_message() {
         let err = RepoError::with_message(RepoErrorKind::Conflict, "duplicate");
         assert!(matches!(
-            map_repo_error(err),
+            ServiceError::from(err),
             ServiceError::Conflict(m) if m == "duplicate"
         ));
     }
@@ -21,13 +21,13 @@ mod map_repo_error {
     #[test]
     fn maps_timeout() {
         let err = RepoError::new(RepoErrorKind::Timeout);
-        assert!(matches!(map_repo_error(err), ServiceError::Timeout));
+        assert!(matches!(ServiceError::from(err), ServiceError::Timeout));
     }
 
     #[test]
     fn maps_unavailable() {
         let err = RepoError::new(RepoErrorKind::Unavailable);
-        assert!(matches!(map_repo_error(err), ServiceError::Unavailable));
+        assert!(matches!(ServiceError::from(err), ServiceError::Unavailable));
     }
 
     #[test]
@@ -39,7 +39,7 @@ mod map_repo_error {
             RepoErrorKind::Canceled,
         ] {
             let err = RepoError::new(kind);
-            assert!(matches!(map_repo_error(err), ServiceError::Internal(_)));
+            assert!(matches!(ServiceError::from(err), ServiceError::Internal(_)));
         }
     }
 
@@ -47,7 +47,7 @@ mod map_repo_error {
     fn maps_conflict_without_message_uses_fallback() {
         let err = RepoError::new(RepoErrorKind::Conflict);
         assert!(matches!(
-            map_repo_error(err),
+            ServiceError::from(err),
             ServiceError::Conflict(m) if m == "conflict"
         ));
     }
@@ -56,7 +56,7 @@ mod map_repo_error {
     fn maps_precondition_failed_to_conflict() {
         let err = RepoError::new(RepoErrorKind::PreconditionFailed);
         assert!(matches!(
-            map_repo_error(err),
+            ServiceError::from(err),
             ServiceError::Conflict(m) if m == "precondition failed"
         ));
     }

@@ -11,7 +11,7 @@ use rim_services::custom_emoji::command::{
 use rim_services::custom_emoji::dto::CustomEmojiDto;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::storage::service::StorageService;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 /// Maximum image data size: 256 KB.
 const MAX_IMAGE_SIZE: usize = 256 * 1024;
@@ -61,8 +61,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
         self.repos
             .server_member_repo
             .get_member(cmd.server_id, cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::PermissionDenied)?;
 
         validate_emoji_name(&cmd.name)?;
@@ -96,8 +95,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
                 image_url: stored.key,
                 uploaded_by: cmd.actor.user_id,
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(CustomEmojiDto::from(emoji))
     }
@@ -107,8 +105,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
             .repos
             .custom_emoji_repo
             .find_by_id(cmd.emoji_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         // Check that actor is a member of the server
@@ -116,8 +113,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
             .repos
             .server_member_repo
             .get_member(emoji.server_id, cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::PermissionDenied)?;
 
         // Only owner or the uploader can delete
@@ -130,11 +126,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
         // Delete the stored image
         let _ = self.storage_service.delete_file(&emoji.image_url).await;
 
-        self.repos
-            .custom_emoji_repo
-            .delete(cmd.emoji_id)
-            .await
-            .map_err(map_repo_error)?;
+        self.repos.custom_emoji_repo.delete(cmd.emoji_id).await?;
 
         Ok(())
     }
@@ -144,16 +136,14 @@ impl CustomEmojiService for DefaultCustomEmojiService {
         self.repos
             .server_member_repo
             .get_member(query.server_id, query.actor.user_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::PermissionDenied)?;
 
         let emojis = self
             .repos
             .custom_emoji_repo
             .list_by_server(query.server_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(emojis.into_iter().map(Into::into).collect())
     }

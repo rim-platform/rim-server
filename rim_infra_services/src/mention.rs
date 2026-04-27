@@ -9,7 +9,7 @@ use rim_services::mention::command::MyMentionsQuery;
 use rim_services::mention::service::MentionService;
 use rim_services::message::dto::MessageDto;
 use rim_services::message::service::MessageService;
-use rim_services::{ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::MentionRepos;
 use crate::util::ensure_server_member;
@@ -74,15 +74,13 @@ impl MentionService for DefaultMentionService {
             .repos
             .conversation_repo
             .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let message_ids = self
             .repos
             .message_mention_repo
             .get_messages_mentioning_user(query.actor.user_id, &conversation_ids, query.limit)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if message_ids.is_empty() {
             return Ok(Vec::new());
@@ -99,7 +97,7 @@ impl MentionService for DefaultMentionService {
             .message_mention_repo
             .get_mentions_for_messages(message_ids)
             .await
-            .map_err(map_repo_error)
+            .map_err(ServiceError::from)
     }
 }
 

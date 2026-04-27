@@ -33,8 +33,7 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             .repos
             .session_repo
             .get_by_token_hash(&token_hash)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let Some(session) = session else {
             return Ok(RequestAuthResultDto::default());

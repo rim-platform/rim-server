@@ -5,19 +5,19 @@ use std::task::{Context as TaskContext, Poll};
 use async_graphql::*;
 use futures_util::Stream;
 use rim_core::user::model::UserId;
-use rim_infra_services::presence::PresenceManager;
 use rim_services::events::WorkspaceEvent;
+use rim_services::presence::PresenceService;
 use rim_services::workspace_state::dto::WorkspaceStateScopeDto;
 
 use crate::broadcast::InMemoryBroadcaster;
 
 pub struct Subscription;
 
-/// Wrapper stream that calls `PresenceManager::mark_offline` when dropped
+/// Wrapper stream that calls `PresenceService::mark_offline` when dropped
 /// (i.e. when the WebSocket disconnects and the subscription stream ends).
 struct DisconnectGuardStream<S> {
     inner: Pin<Box<S>>,
-    presence: Arc<PresenceManager>,
+    presence: Arc<dyn PresenceService>,
     user_id: UserId,
 }
 
@@ -196,7 +196,7 @@ impl Subscription {
         .await
         .map_err(crate::errors::map_service_error)?;
 
-        let presence = ctx.data::<Arc<PresenceManager>>()?;
+        let presence = ctx.data::<Arc<dyn PresenceService>>()?;
         let broadcaster = ctx.data::<InMemoryBroadcaster>()?;
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();

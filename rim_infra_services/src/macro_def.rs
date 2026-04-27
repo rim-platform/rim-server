@@ -5,16 +5,26 @@ use async_trait::async_trait;
 use rim_core::macro_def::model::{NewMacroDef, UpdateMacroDef};
 use rim_core::macro_def::repository::MacroRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_services::command::dto::{CommandResultDto, CommandResultStatusDto};
-use rim_services::command::request::ExecuteCommandCmd;
+use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
+use rim_services::audit::service::AuditLogService;
+use rim_services::command::confirmation::{
+    ConfirmationProof, ConfirmationStore, issue_in_band, verify_in_band,
+};
+use rim_services::command::dto::{
+    CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto, CommandResultStatusDto,
+    CommandSourceKindDto,
+};
+use rim_services::command::request::{ExecuteCommandCmd, GetCommandQuery};
+use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
+use rim_services::command::verb::TypedVerb;
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
     CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
-    ListUserMacrosQuery, UpdateMacroCmd,
+    ListUserMacrosQuery, SynthesizeMacroCommandsQuery, UpdateMacroCmd,
 };
 use rim_services::macro_def::service::MacroService;
-use rim_services::{ServiceError, ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 const MAX_STEPS: usize = 20;
 const MAX_MACROS_PER_USER: u64 = 50;
@@ -28,6 +38,11 @@ pub struct MacroRepos {
 #[derive(Clone)]
 pub struct MacroServices {
     pub command_service: Arc<dyn CommandService>,
+    pub audit_log_service: Option<Arc<dyn AuditLogService>>,
+    /// Shared confirmation token store for verifying macro-level proofs (BLOCK 5).
+    /// Same store instance as `DefaultCommandService` in production.
+    /// `None` in tests that don't exercise the confirmation gate.
+    pub confirmation_store: Option<Arc<dyn ConfirmationStore>>,
 }
 
 #[derive(Clone)]
@@ -65,6 +80,7 @@ impl DefaultMacroService {
 
     fn to_dto(m: rim_core::macro_def::model::MacroDef) -> ServiceResult<MacroDto> {
         let steps = Self::parse_steps(&m.steps_json)?;
+        let sensitivity = CommandSensitivityDto::from(m.sensitivity.as_str());
         Ok(MacroDto {
             id: m.id,
             server_id: m.server_id,
@@ -72,6 +88,10 @@ impl DefaultMacroService {
             name: m.name,
             description: m.description,
             steps,
+            ai_callable: m.ai_callable,
+            nl_description: m.nl_description,
+            intent_samples: m.intent_samples,
+            sensitivity,
             created_at: m.created_at,
         })
     }
@@ -138,8 +158,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .count_for_user(cmd.server_id, cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
         if count >= MAX_MACROS_PER_USER {
             return Err(ServiceError::Validation(format!(
                 "user may have at most {MAX_MACROS_PER_USER} macros per server"
@@ -157,9 +176,12 @@ impl MacroService for DefaultMacroService {
                 name,
                 description: cmd.description,
                 steps_json,
+                ai_callable: cmd.ai_callable,
+                nl_description: cmd.nl_description,
+                intent_samples: cmd.intent_samples,
+                sensitivity: cmd.sensitivity.as_str().to_string(),
             })
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Self::to_dto(created)
     }
@@ -169,8 +191,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .get_by_id(cmd.macro_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if existing.user_id != cmd.actor.user_id {
@@ -202,10 +223,13 @@ impl MacroService for DefaultMacroService {
                     name,
                     description: cmd.description,
                     steps_json,
+                    ai_callable: cmd.ai_callable,
+                    nl_description: cmd.nl_description,
+                    intent_samples: cmd.intent_samples,
+                    sensitivity: cmd.sensitivity.as_str().to_string(),
                 },
             )
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Self::to_dto(updated)
     }
@@ -215,8 +239,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .get_by_id(cmd.macro_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if existing.user_id != cmd.actor.user_id {
@@ -227,7 +250,7 @@ impl MacroService for DefaultMacroService {
             .macro_repo
             .delete(cmd.macro_id)
             .await
-            .map_err(map_repo_error)
+            .map_err(ServiceError::from)
     }
 
     async fn get_macro_by_name(
@@ -251,8 +274,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .find_by_name(query.server_id, query.actor.user_id, &query.name)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         macro_def.map(Self::to_dto).transpose()
     }
@@ -262,8 +284,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .list_for_user(query.server_id, query.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         macros.into_iter().map(Self::to_dto).collect()
     }
@@ -276,8 +297,7 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .list_for_server(query.server_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         macros.into_iter().map(Self::to_dto).collect()
     }
@@ -287,14 +307,145 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .get_by_id(cmd.macro_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
+
+        if cmd.initiator.is_agentic() && !macro_def.ai_callable {
+            return Err(ServiceError::PermissionDenied);
+        }
 
         let steps = Self::parse_steps(&macro_def.steps_json)?;
 
+        // ── BLOCK 4: resolve each step's declared sensitivity via the command
+        // service, then compute effective sensitivity as max(macro_tier, step_tiers).
+        // Prevents a Safe-declared macro from silently wrapping a Restricted step.
+        let macro_sensitivity = CommandSensitivityDto::from(macro_def.sensitivity.as_str());
+        let mut step_sensitivities: Vec<CommandSensitivityDto> = Vec::with_capacity(steps.len());
+        for step in &steps {
+            if let Ok(Some(def)) = self
+                .services
+                .command_service
+                .get_command(GetCommandQuery {
+                    actor: cmd.actor,
+                    command_id: step.command_id.clone(),
+                })
+                .await
+            {
+                step_sensitivities.push(def.sensitivity);
+            }
+            // Unknown step command: skip sensitivity — dispatch will error at runtime.
+        }
+        let effective_sensitivity =
+            CommandSensitivityDto::effective(macro_sensitivity, &step_sensitivities);
+
+        // ── H1 fix: verify outer confirmation proof and issue per-step tokens.
+        //
+        // Bug 1: returning ConfirmationRequired with confirmation_required: None
+        //        means the client has no token to re-submit — issue one.
+        // Bug 2: passing confirmation: None to each step lets dangerous steps
+        //        silently skip their inner gate — issue per-step tokens derived
+        //        from the verified outer proof.
+        // Bug 3: inner ConfirmationRequired from a step must be a hard failure,
+        //        not silently treated as Ok (handled in step loop below).
+        let macro_cmd_id = format!("macro.{}", macro_def.id);
+        // outer_proof_verified is true when the outer proof was verified against
+        // the store (or when there is no store — test context).
+        let outer_proof_verified = if effective_sensitivity.requires_confirmation_by_tier() {
+            match &cmd.confirmation {
+                None => {
+                    // Issue a token so the client can re-submit with a proof.
+                    let challenge =
+                        self.services.confirmation_store.as_deref().map(|store| {
+                            issue_in_band(store, &cmd.actor, &macro_cmd_id, &None, &None)
+                        });
+                    return Ok(CommandResultDto {
+                        status: CommandResultStatusDto::ConfirmationRequired,
+                        message: "macro requires confirmation due to sensitivity tier".to_string(),
+                        payload: None,
+                        follow_up_commands: vec![],
+                        pipeline_stages: None,
+                        confirmation_required: challenge,
+                    });
+                }
+                Some(proof) => {
+                    if let Some(store) = &self.services.confirmation_store {
+                        // Proof is bound to (macro_cmd_id, no args, no context).
+                        // Using macro_cmd_id prevents cross-macro replay.
+                        verify_in_band(
+                            store.as_ref(),
+                            proof,
+                            &cmd.actor,
+                            &macro_cmd_id,
+                            &None,
+                            &None,
+                        )
+                        .map_err(|e| {
+                            if e.is_stale() {
+                                ServiceError::ConfirmationStale
+                            } else {
+                                ServiceError::PermissionDenied
+                            }
+                        })?;
+                        true
+                    } else {
+                        // No store wired — proof cannot be verified. In
+                        // production this should never happen (provider always
+                        // wires the store); in test contexts it surfaces when
+                        // a test supplies a proof without configuring a store.
+                        tracing::warn!(
+                            event = "macro_confirmation_store_missing",
+                            macro_id = %macro_def.id,
+                            "macro confirmation proof supplied but no confirmation_store wired; per-step verification will be skipped — production misconfiguration suspected"
+                        );
+                        false
+                    }
+                }
+            }
+        } else {
+            false
+        };
+
+        let parent_audit_id = uuid::Uuid::now_v7();
+        let server_id_for_audit: uuid::Uuid = macro_def.server_id.into();
+        let initiator_str = cmd.initiator.as_audit_str();
+        let sensitivity_str = effective_sensitivity.as_str();
+        let confirmation_kind = if cmd.confirmation.is_some() {
+            "in_band"
+        } else {
+            "none"
+        };
+        let dangerous = effective_sensitivity.is_mutating();
+
         let mut payload = serde_json::Map::new();
-        for step in steps {
+        let mut failed_at_step: Option<u32> = None;
+
+        for (step_index, step) in steps.iter().enumerate() {
+            // Bug 2 fix: when the outer proof was verified, issue a per-step
+            // in-band token bound to this exact (command_id, args, context) so
+            // the inner confirmation gate has a valid proof to consume.
+            // Without this, a dangerous step's inner gate returns
+            // ConfirmationRequired and execution silently skips it.
+            let (step_confirmation, step_had_token) = if outer_proof_verified {
+                match self.services.confirmation_store.as_deref().map(|store| {
+                    let challenge = issue_in_band(
+                        store,
+                        &cmd.actor,
+                        &step.command_id,
+                        &step.args,
+                        &cmd.command_context,
+                    );
+                    ConfirmationProof::InBandToken {
+                        token: challenge.token,
+                        args_hash: challenge.args_hash,
+                    }
+                }) {
+                    Some(proof) => (Some(proof), true),
+                    None => (None, false),
+                }
+            } else {
+                (None, false)
+            };
+
             let result = self
                 .services
                 .command_service
@@ -303,14 +454,129 @@ impl MacroService for DefaultMacroService {
                     command_id: step.command_id.clone(),
                     args: step.args.clone(),
                     context: cmd.command_context.clone(),
-                    confirmed_dangerous: cmd.confirmed_dangerous,
+                    confirmation: step_confirmation,
                     is_pipe: false,
+                    // Propagate outer initiator — Agent-triggered macros keep Agent
+                    // on every nested call (Fury v2 §3.11).
+                    initiator: cmd.initiator,
                 })
-                .await?;
+                .await;
 
-            if let Some(step_payload) = result.payload {
-                payload.insert(step.command_id, step_payload);
+            // Bug 3 fix: inner ConfirmationRequired is a hard failure — the step
+            // did not execute. Treat it as MacroPartialFailure rather than Ok.
+            let result = result.and_then(|r| {
+                if r.status == CommandResultStatusDto::ConfirmationRequired {
+                    Err(ServiceError::Internal(Some(anyhow::anyhow!(
+                        "step returned ConfirmationRequired despite outer proof"
+                    ))))
+                } else {
+                    Ok(r)
+                }
+            });
+
+            // ── BLOCK 2: emit per-step child audit row carrying parent_audit_id.
+            if let Some(audit_svc) = &self.services.audit_log_service {
+                let child_entry = AuditLogEntryDto {
+                    id: uuid::Uuid::now_v7(),
+                    actor_user_id: cmd.actor.user_id.into(),
+                    server_id: server_id_for_audit,
+                    command_id: step.command_id.clone(),
+                    initiator: initiator_str.to_string(),
+                    args_redacted: serde_json::Value::Null,
+                    sensitivity: step_sensitivities
+                        .get(step_index)
+                        .map(|s| s.as_str())
+                        .unwrap_or("safe")
+                        .to_string(),
+                    dangerous,
+                    confirmation_kind: if step_had_token { "in_band" } else { "none" }.to_string(),
+                    typed_verb: None,
+                    outcome: if result.is_ok() {
+                        AuditOutcome::Success
+                    } else {
+                        AuditOutcome::StepError
+                    },
+                    error_kind: if result.is_err() {
+                        Some(AuditOutcome::StepError.as_str().to_string())
+                    } else {
+                        None
+                    },
+                    capability_check_outcome: None,
+                    confirmation_outcome: None,
+                    parent_audit_id: Some(parent_audit_id),
+                    created_at: chrono::Utc::now(),
+                };
+                if let Err(e) = audit_svc.write_entry(child_entry).await {
+                    tracing::warn!(
+                        event = "macro_step_audit_write_failed",
+                        step = step_index,
+                        error = %e,
+                        "macro step audit row write failed"
+                    );
+                }
             }
+
+            match result {
+                Ok(r) => {
+                    if let Some(sp) = r.payload {
+                        payload.insert(step.command_id.clone(), sp);
+                    }
+                }
+                Err(_) => {
+                    failed_at_step = Some(step_index as u32);
+                    break;
+                }
+            }
+        }
+
+        let (outcome, final_status) = if failed_at_step.is_some() {
+            (
+                AuditOutcome::MacroPartialFailure,
+                CommandResultStatusDto::Error,
+            )
+        } else {
+            (AuditOutcome::Success, CommandResultStatusDto::Success)
+        };
+
+        // Parent audit row written after all child rows so audit-log consumers
+        // joining on parent_audit_id find the children already present.
+        if let Some(audit_svc) = &self.services.audit_log_service {
+            let parent_entry = AuditLogEntryDto {
+                id: parent_audit_id,
+                actor_user_id: cmd.actor.user_id.into(),
+                server_id: server_id_for_audit,
+                command_id: format!("macro.{}", macro_def.id),
+                initiator: initiator_str.to_string(),
+                args_redacted: serde_json::Value::Null,
+                sensitivity: sensitivity_str.to_string(),
+                dangerous,
+                confirmation_kind: confirmation_kind.to_string(),
+                typed_verb: None,
+                outcome,
+                error_kind: failed_at_step.map(|i| format!("step_error_at_{i}")),
+                capability_check_outcome: None,
+                confirmation_outcome: None,
+                parent_audit_id: None,
+                created_at: chrono::Utc::now(),
+            };
+            if let Err(e) = audit_svc.write_entry(parent_entry).await {
+                tracing::warn!(
+                    event = "macro_audit_write_failed",
+                    error = %e,
+                    "macro parent audit row write failed"
+                );
+            }
+        }
+
+        if failed_at_step.is_some() {
+            return Ok(CommandResultDto {
+                status: final_status,
+                message: format!("macro `{}` failed on a step", macro_def.name),
+                payload: Some(serde_json::Value::Object(payload)),
+                follow_up_commands: vec![],
+                pipeline_stages: None,
+                confirmation_required: None,
+            });
         }
 
         Ok(CommandResultDto {
@@ -319,7 +585,57 @@ impl MacroService for DefaultMacroService {
             payload: Some(serde_json::Value::Object(payload)),
             follow_up_commands: vec![],
             pipeline_stages: None,
+            confirmation_required: None,
         })
+    }
+
+    async fn synthesize_command_definitions(
+        &self,
+        query: SynthesizeMacroCommandsQuery,
+    ) -> ServiceResult<Vec<CommandDefinitionDto>> {
+        let macros = self
+            .repos
+            .macro_repo
+            .list_for_user(query.server_id, query.actor.user_id)
+            .await?;
+
+        let defs = macros
+            .into_iter()
+            .filter(|m| m.ai_callable)
+            .map(|m| {
+                let sensitivity = CommandSensitivityDto::from(m.sensitivity.as_str());
+                let nl_desc = if m.nl_description.is_empty() {
+                    m.description.clone().unwrap_or_default()
+                } else {
+                    m.nl_description.clone()
+                };
+                let intent_samples: Vec<String> = m.intent_samples.clone();
+                CommandDefinitionDto {
+                    id: format!("macro.{}", m.id),
+                    title: m.name.clone(),
+                    description: m.description.clone().unwrap_or_default(),
+                    category: "Macro".to_string(),
+                    source_kind: CommandSourceKindDto::User,
+                    execution_target: CommandExecutionTargetDto::Backend,
+                    arguments: vec![],
+                    required_context: vec![],
+                    required_capabilities: vec![],
+                    visible_in_palette: false,
+                    visible_in_context_menus: false,
+                    keybind_capable: false,
+                    dangerous: false,
+                    user_command_id: None,
+                    nl_description: Some(nl_desc),
+                    intent_samples,
+                    ai_callable: true,
+                    sensitivity,
+                    typed_verb: TypedVerb::Other,
+                    rate_limit_per_minute: None,
+                }
+            })
+            .collect();
+
+        Ok(defs)
     }
 }
 
@@ -330,6 +646,7 @@ mod tests {
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::Actor;
+    use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::MockCommandService;
 
     use async_trait::async_trait;
@@ -397,6 +714,8 @@ mod tests {
             },
             MacroServices {
                 command_service: Arc::new(command_service),
+                audit_log_service: None,
+                confirmation_store: None,
             },
         )
     }
@@ -418,6 +737,10 @@ mod tests {
                     command_id: "chat.post_message".to_string(),
                     args: None,
                 }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap_err();
@@ -439,6 +762,10 @@ mod tests {
                 name: "Test".to_string(),
                 description: None,
                 steps: vec![],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap_err();
@@ -463,6 +790,10 @@ mod tests {
                     command_id: "macro.other".to_string(),
                     args: None,
                 }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap_err();
@@ -491,6 +822,10 @@ mod tests {
                 name: "Too many".to_string(),
                 description: None,
                 steps,
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap_err();
@@ -516,6 +851,10 @@ mod tests {
                     command_id: "chat.post_message".to_string(),
                     args: None,
                 }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap_err();
@@ -535,6 +874,10 @@ mod tests {
                 name: new_macro.name,
                 description: new_macro.description,
                 steps_json: new_macro.steps_json,
+                ai_callable: new_macro.ai_callable,
+                nl_description: new_macro.nl_description,
+                intent_samples: new_macro.intent_samples,
+                sensitivity: new_macro.sensitivity,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             })
@@ -553,6 +896,10 @@ mod tests {
                     command_id: "chat.post_message".to_string(),
                     args: None,
                 }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
             })
             .await
             .unwrap();
@@ -576,6 +923,10 @@ mod tests {
                 name: "test".to_string(),
                 description: None,
                 steps_json: serde_json::json!([]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             }))
@@ -611,12 +962,20 @@ mod tests {
                     { "commandId": "chat.post_message", "args": { "text": "hello" } },
                     { "commandId": "chat.post_message", "args": { "text": "world" } }
                 ]),
+                ai_callable: true,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             }))
         });
 
         let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(None) }));
         cmd_svc.expect_execute_command().times(2).returning(|_| {
             Box::pin(async {
                 Ok(CommandResultDto {
@@ -625,6 +984,7 @@ mod tests {
                     payload: None,
                     follow_up_commands: vec![],
                     pipeline_stages: None,
+                    confirmation_required: None,
                 })
             })
         });
@@ -636,11 +996,537 @@ mod tests {
                 actor: Actor::new(owner),
                 macro_id,
                 command_context: None,
-                confirmed_dangerous: false,
+                confirmation: None,
+                // Explicit Palette (not Default::default()) so Phase 4
+                // reviewers can grep for the human-path test coverage.
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
             })
             .await
             .unwrap();
 
         assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    #[tokio::test]
+    async fn execute_macro_denies_agent_when_not_ai_callable() {
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "test".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "hello" } }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let cmd_svc = MockCommandService::new();
+        let svc = service(repo, cmd_svc);
+
+        let err = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Agent,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn execute_macro_allows_agent_when_ai_callable() {
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "test".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "hello" } }
+                ]),
+                ai_callable: true,
+                nl_description: "Post a message in chat".to_string(),
+                intent_samples: vec!["send a message".to_string()],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        cmd_svc.expect_execute_command().times(1).returning(|_| {
+            Box::pin(async {
+                Ok(CommandResultDto {
+                    status: CommandResultStatusDto::Success,
+                    message: "ok".to_string(),
+                    payload: None,
+                    follow_up_commands: vec![],
+                    pipeline_stages: None,
+                    confirmation_required: None,
+                })
+            })
+        });
+
+        let svc = service(repo, cmd_svc);
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Agent,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    #[test]
+    fn sensitivity_dto_roundtrip_via_str() {
+        for (s, expected) in [
+            ("safe", CommandSensitivityDto::Safe),
+            ("sensitive", CommandSensitivityDto::Sensitive),
+            ("mutating", CommandSensitivityDto::Mutating),
+            ("restricted", CommandSensitivityDto::Restricted),
+        ] {
+            let parsed = CommandSensitivityDto::from(s);
+            assert_eq!(parsed, expected, "from({s:?}) should be {expected:?}");
+            assert_eq!(parsed.as_str(), s, "as_str() roundtrip for {s:?}");
+        }
+        let unknown = CommandSensitivityDto::from("unknown_tier");
+        assert_eq!(
+            unknown,
+            CommandSensitivityDto::Safe,
+            "unknown str falls back to Safe"
+        );
+    }
+
+    // ── P6-H1 fix tests ──────────────────────────────────────────────────────
+
+    /// P6-H1 test 1: macro with Restricted sensitivity but no proof must return
+    /// ConfirmationRequired with a non-None challenge.
+    /// Pre-fix: confirmation_required was always None, so the client could not
+    /// re-submit.
+    #[tokio::test]
+    async fn execute_macro_restricted_no_proof_returns_challenge() {
+        use rim_services::command::confirmation::shared_in_memory_store;
+
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "dangerous macro".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "admin.nuke", "args": null }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "restricted".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let store = shared_in_memory_store();
+        let svc = DefaultMacroService::new(
+            MacroRepos {
+                macro_repo: Arc::new(repo),
+                server_member_repo: Arc::new(make_member_repo()),
+            },
+            MacroServices {
+                command_service: Arc::new(cmd_svc),
+                audit_log_service: None,
+                confirmation_store: Some(Arc::clone(&store)),
+            },
+        );
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            CommandResultStatusDto::ConfirmationRequired,
+            "restricted macro without proof must return ConfirmationRequired"
+        );
+        assert!(
+            result.confirmation_required.is_some(),
+            "confirmation_required must be non-None — client needs the token to re-submit"
+        );
+    }
+
+    /// P6-H1 test 2: macro with valid outer proof executes all steps and emits
+    /// 3 audit rows (2 child + 1 parent).
+    #[tokio::test]
+    async fn execute_macro_valid_proof_executes_all_steps() {
+        use rim_services::audit::service::MockAuditLogService;
+        use rim_services::command::confirmation::{
+            ConfirmationProof, issue_in_band, shared_in_memory_store,
+        };
+
+        let owner = UserId::new();
+        let actor = Actor::new(owner);
+        let macro_id = MacroId::new();
+        let server_id = ServerId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id,
+                user_id: owner,
+                name: "my macro".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "cmd.alpha", "args": null },
+                    { "commandId": "cmd.beta", "args": null }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "restricted".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        // Sensitivity lookups for 2 steps
+        cmd_svc
+            .expect_get_command()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        // Both steps execute successfully
+        cmd_svc.expect_execute_command().times(2).returning(|_| {
+            Box::pin(async {
+                Ok(CommandResultDto {
+                    status: CommandResultStatusDto::Success,
+                    message: "ok".to_string(),
+                    payload: None,
+                    follow_up_commands: vec![],
+                    pipeline_stages: None,
+                    confirmation_required: None,
+                })
+            })
+        });
+
+        // 2 child rows + 1 parent row = 3 writes
+        let mut audit_svc = MockAuditLogService::new();
+        audit_svc
+            .expect_write_entry()
+            .times(3)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let store = shared_in_memory_store();
+        let macro_cmd_id = format!("macro.{macro_id}");
+        let challenge = issue_in_band(store.as_ref(), &actor, &macro_cmd_id, &None, &None);
+        let proof = ConfirmationProof::InBandToken {
+            token: challenge.token,
+            args_hash: challenge.args_hash,
+        };
+
+        let svc = DefaultMacroService::new(
+            MacroRepos {
+                macro_repo: Arc::new(repo),
+                server_member_repo: Arc::new(make_member_repo()),
+            },
+            MacroServices {
+                command_service: Arc::new(cmd_svc),
+                audit_log_service: Some(Arc::new(audit_svc)),
+                confirmation_store: Some(Arc::clone(&store)),
+            },
+        );
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor,
+                macro_id,
+                command_context: None,
+                confirmation: Some(proof),
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            CommandResultStatusDto::Success,
+            "valid outer proof must let all steps execute: {result:?}"
+        );
+    }
+
+    // ── P6-FU3 regression tests — initiator propagation through macro dispatch ─
+    //
+    // Hawkeye BLOCK finding: prove that the outer `CommandInitiator` is
+    // preserved on every inner `execute_command` call that the macro step loop
+    // issues. The `.withf` predicate on the mock expectation makes mockall panic
+    // if the wrong initiator reaches the inner service — covering the scenario
+    // where a future refactor silently resets the initiator to Palette before
+    // calling `execute_command`.
+
+    /// P6-FU3 test A: outer initiator=Agent must propagate to every inner
+    /// `execute_command` call. The `.withf` predicate proves the inner call
+    /// carries `CommandInitiator::Agent`, not a defaulted Palette.
+    #[tokio::test]
+    async fn execute_macro_agent_initiator_propagates_to_inner_steps() {
+        use rim_services::command::initiator::CommandInitiator;
+
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "agent macro".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "step1" } },
+                    { "commandId": "chat.post_message", "args": { "text": "step2" } }
+                ]),
+                ai_callable: true,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        // withf proves initiator=Agent reaches the inner service on every step.
+        // If the macro loop reset initiator to Palette, mockall would panic here.
+        cmd_svc
+            .expect_execute_command()
+            .withf(|cmd| cmd.initiator == CommandInitiator::Agent)
+            .times(2)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(CommandResultDto {
+                        status: CommandResultStatusDto::Success,
+                        message: "ok".to_string(),
+                        payload: None,
+                        follow_up_commands: vec![],
+                        pipeline_stages: None,
+                        confirmation_required: None,
+                    })
+                })
+            });
+
+        let svc = service(repo, cmd_svc);
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: CommandInitiator::Agent,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            CommandResultStatusDto::Success,
+            "macro must succeed — withf failure means wrong initiator reached inner step"
+        );
+    }
+
+    /// P6-FU3 test B: outer initiator=Palette must propagate to inner steps
+    /// and must NOT trigger the agentic confirmation gate (no over-gating).
+    #[tokio::test]
+    async fn execute_macro_palette_initiator_propagates_to_inner_steps() {
+        use rim_services::command::initiator::CommandInitiator;
+
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "human macro".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "step1" } }
+                ]),
+                ai_callable: true,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        // withf proves initiator=Palette (not Agent) reaches the inner service.
+        cmd_svc
+            .expect_execute_command()
+            .withf(|cmd| cmd.initiator == CommandInitiator::Palette)
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(CommandResultDto {
+                        status: CommandResultStatusDto::Success,
+                        message: "ok".to_string(),
+                        payload: None,
+                        follow_up_commands: vec![],
+                        pipeline_stages: None,
+                        confirmation_required: None,
+                    })
+                })
+            });
+
+        let svc = service(repo, cmd_svc);
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: CommandInitiator::Palette,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            CommandResultStatusDto::Success,
+            "Palette macro must execute without confirmation challenge"
+        );
+    }
+
+    /// P6-H1 test 3: inner step returning ConfirmationRequired must become
+    /// MacroPartialFailure (Error), NOT Success.
+    /// Pre-fix: the Ok(r) arm matched any Ok, so ConfirmationRequired silently
+    /// claimed success.
+    #[tokio::test]
+    async fn execute_macro_inner_confirmation_required_is_partial_failure() {
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "test macro".to_string(),
+                description: None,
+                // Safe sensitivity so no outer confirmation is required;
+                // outer_proof_verified stays false and step_confirmation is None.
+                // This simulates a step that returns ConfirmationRequired due to
+                // the inner service gating on a dangerous flag we can't intercept.
+                steps_json: serde_json::json!([
+                    { "commandId": "cmd.gated", "args": null }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        // The inner step returns ConfirmationRequired
+        cmd_svc.expect_execute_command().times(1).returning(|_| {
+            Box::pin(async {
+                Ok(CommandResultDto {
+                    status: CommandResultStatusDto::ConfirmationRequired,
+                    message: "confirm me".to_string(),
+                    payload: None,
+                    follow_up_commands: vec![],
+                    pipeline_stages: None,
+                    confirmation_required: None,
+                })
+            })
+        });
+
+        let svc = service(repo, cmd_svc);
+
+        let result = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(owner),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.status,
+            CommandResultStatusDto::Error,
+            "inner step returning ConfirmationRequired must be Error (MacroPartialFailure), not Success"
+        );
     }
 }

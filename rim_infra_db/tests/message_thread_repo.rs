@@ -103,6 +103,7 @@ async fn set_first_message_conflict_and_not_found() {
             sent_by: user.id,
             text: Some("t".to_string()),
             attachments: vec![],
+            forwarded_from_message_id: None,
         })
         .await
         .unwrap();

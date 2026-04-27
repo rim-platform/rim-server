@@ -21,7 +21,7 @@ use rim_services::auth::dto::{
 use rim_services::auth::service::AuthService;
 use rim_services::{ServiceError, ServiceResult};
 
-use rim_services::events::Observers;
+use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
 use crate::repos::AppRepos;
@@ -125,20 +125,14 @@ impl DefaultAuthService {
                 user_agent,
                 ip,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let csrf = Self::new_csrf_token(&raw_token);
         Ok((sess, raw_token, csrf))
     }
 
     async fn ensure_no_users_exist(&self) -> ServiceResult<()> {
-        let exists = self
-            .repos
-            .user_repo
-            .any_users_exist()
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let exists = self.repos.user_repo.any_users_exist().await?;
         if exists {
             return Err(ServiceError::PermissionDenied);
         }
@@ -204,7 +198,7 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, kind = ?e.kind(), "create_user failed");
-                rim_services::map_repo_error(e)
+                ServiceError::from(e)
             })?;
 
         info!(username = %username, "add server");
@@ -214,15 +208,14 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, kind = ?e.kind(), "create_server failed");
-                rim_services::map_repo_error(e)
+                ServiceError::from(e)
             })?;
 
         info!(username = %username, "add member");
         let _member = repos
             .server_member_repo
             .add_member(server.id, user.id, ServerMemberRole::Owner)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         // Create default #general and #random channels.
         for channel_name in &["general", "random"] {
@@ -268,8 +261,7 @@ impl AuthService for DefaultAuthService {
                 user_agent: None,
                 ip: None,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
@@ -296,8 +288,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .user_repo
             .find_by_username(username)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::Unauthenticated)?;
 
         let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
@@ -322,19 +313,14 @@ impl AuthService for DefaultAuthService {
             .repos
             .session_repo
             .get_by_id(session_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if sess.user_id != actor.user_id {
             return Err(ServiceError::PermissionDenied);
         }
 
-        self.repos
-            .session_repo
-            .revoke_session(session_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        self.repos.session_repo.revoke_session(session_id).await?;
 
         Ok(())
     }
@@ -376,8 +362,7 @@ impl AuthService for DefaultAuthService {
                 expires_at,
                 max_uses,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(CreateInviteResultDto {
             invite: Self::to_invite_dto(inv),
@@ -402,8 +387,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .invite_repo
             .get_by_token_hash(&token_hash)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if inv.revoked_at.is_some() {
@@ -433,13 +417,7 @@ impl AuthService for DefaultAuthService {
         };
 
         // Ensure username not taken (inside transaction to prevent TOCTOU race).
-        if repos
-            .user_repo
-            .find_by_username(username)
-            .await
-            .map_err(rim_services::map_repo_error)?
-            .is_some()
-        {
+        if repos.user_repo.find_by_username(username).await?.is_some() {
             return Err(ServiceError::Conflict(
                 "username already exists".to_string(),
             ));
@@ -460,20 +438,14 @@ impl AuthService for DefaultAuthService {
                     );
                 }
                 e
-            })
-            .map_err(rim_services::map_repo_error)?;
+            })?;
 
         let _member = repos
             .server_member_repo
             .add_member(inv.server_id, user.id, ServerMemberRole::Guest)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        let consumed = repos
-            .invite_repo
-            .try_consume(inv.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let consumed = repos.invite_repo.try_consume(inv.id).await?;
         if !consumed {
             // Don't leak whether it's exhausted vs missing.
             // Transaction is dropped → rolled back automatically.
@@ -492,16 +464,17 @@ impl AuthService for DefaultAuthService {
                 user_agent: None,
                 ip: None,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        self.observers
-            .workspace
-            .on_member_joined(inv.server_id, user.id, username);
+        self.observers.emit(WorkspaceEvent::MemberJoined {
+            workspace_id: inv.server_id,
+            user_id: user.id,
+            username: username.to_string(),
+        });
 
         let csrf = Self::new_csrf_token(&raw_token);
 
@@ -529,8 +502,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .invite_repo
             .get_by_token_hash(&token_hash)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if inv.revoked_at.is_some() {
@@ -547,8 +519,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .server_member_repo
             .is_member(inv.server_id, actor.user_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         if already_member {
             return Err(ServiceError::Conflict(
                 "already a member of this server".to_string(),
@@ -570,11 +541,7 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
-        let consumed = repos
-            .invite_repo
-            .try_consume(inv.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let consumed = repos.invite_repo.try_consume(inv.id).await?;
         if !consumed {
             return Err(ServiceError::PermissionDenied);
         }
@@ -582,8 +549,7 @@ impl AuthService for DefaultAuthService {
         let _member = repos
             .server_member_repo
             .add_member(inv.server_id, actor.user_id, ServerMemberRole::Guest)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
@@ -595,11 +561,13 @@ impl AuthService for DefaultAuthService {
             .user_repo
             .get_by_id(actor.user_id)
             .await
-            .map_err(rim_services::map_repo_error)
+            .map_err(ServiceError::from)
         {
-            self.observers
-                .workspace
-                .on_member_joined(inv.server_id, actor.user_id, &user.username);
+            self.observers.emit(WorkspaceEvent::MemberJoined {
+                workspace_id: inv.server_id,
+                user_id: actor.user_id,
+                username: user.username.clone(),
+            });
         }
 
         info!(user_id = %actor.user_id, server_id = %inv.server_id, "user joined server via invite");
@@ -622,8 +590,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .invite_repo
             .list_active_by_server(query.server_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(invites.into_iter().map(Self::to_invite_dto).collect())
     }
@@ -634,8 +601,7 @@ impl AuthService for DefaultAuthService {
             .repos
             .invite_repo
             .get_by_id(cmd.invite_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         ensure_server_owner(
@@ -645,11 +611,7 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
 
-        self.repos
-            .invite_repo
-            .revoke_invite(cmd.invite_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        self.repos.invite_repo.revoke_invite(cmd.invite_id).await?;
 
         info!(invite_id = %cmd.invite_id, "invite revoked");
         Ok(())

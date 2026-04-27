@@ -46,12 +46,7 @@ impl DefaultPasswordResetService {
 impl PasswordResetService for DefaultPasswordResetService {
     #[instrument(name = "password_reset.request", skip_all, fields(username = %cmd.username))]
     async fn request_reset(&self, cmd: RequestPasswordResetCmd) -> ServiceResult<()> {
-        let user = self
-            .repos
-            .user_repo
-            .find_by_username(&cmd.username)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let user = self.repos.user_repo.find_by_username(&cmd.username).await?;
 
         let Some(user) = user else {
             // Don't reveal whether user exists — silently succeed.
@@ -70,8 +65,7 @@ impl PasswordResetService for DefaultPasswordResetService {
                 token_hash,
                 expires_at,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if let Err(e) = self
             .email_sender
@@ -92,8 +86,7 @@ impl PasswordResetService for DefaultPasswordResetService {
             .repos
             .password_reset_token_repo
             .get_by_token_hash(&token_hash)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if record.used_at.is_some() {
@@ -116,14 +109,12 @@ impl PasswordResetService for DefaultPasswordResetService {
         self.repos
             .user_repo
             .update_password(record.user_id, password_hash)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         self.repos
             .password_reset_token_repo
             .mark_used(record.id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(user_id = %record.user_id, "password reset completed");
         Ok(())

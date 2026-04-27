@@ -95,15 +95,17 @@ struct MultipartUpload {
     content_type: String,
     data: Vec<u8>,
     upload_token: Option<String>,
+    attachment_id: Option<String>,
 }
 
 /// Read fields from a multipart upload, enforcing size limits.
-/// Extracts an optional `upload_token` text field and exactly one file field.
+/// Extracts `upload_token`, `attachment_id` text fields and exactly one file field.
 async fn read_multipart_fields(
     mut payload: Multipart,
     max_bytes: u64,
 ) -> Result<MultipartUpload, HttpResponse> {
     let mut upload_token: Option<String> = None;
+    let mut attachment_id: Option<String> = None;
     let mut file_result: Option<(String, String, Vec<u8>)> = None;
 
     while let Some(field) = payload.next().await {
@@ -123,7 +125,8 @@ async fn read_multipart_fields(
 
         if !is_file {
             // Text field — read value.
-            if field_name.as_deref() == Some("upload_token") {
+            let name = field_name.as_deref();
+            if name == Some("upload_token") || name == Some("attachment_id") {
                 let mut buf = Vec::new();
                 while let Some(chunk) = field.next().await {
                     let chunk = chunk.map_err(|e| {
@@ -133,10 +136,15 @@ async fn read_multipart_fields(
                     buf.extend_from_slice(&chunk);
                     if buf.len() > 256 {
                         return Err(HttpResponse::BadRequest()
-                            .json(serde_json::json!({"error": "upload_token too long"})));
+                            .json(serde_json::json!({"error": "field value too long"})));
                     }
                 }
-                upload_token = Some(String::from_utf8_lossy(&buf).trim().to_string());
+                let value = String::from_utf8_lossy(&buf).trim().to_string();
+                if name == Some("upload_token") {
+                    upload_token = Some(value);
+                } else {
+                    attachment_id = Some(value);
+                }
             }
             continue;
         }
@@ -187,6 +195,7 @@ async fn read_multipart_fields(
         content_type,
         data,
         upload_token,
+        attachment_id,
     })
 }
 
@@ -216,7 +225,6 @@ pub async fn handle_file_upload(
             .json(serde_json::json!({"error": "file type not allowed"}));
     }
 
-    // Validate upload token is present.
     let upload_token = match upload.upload_token {
         Some(t) if !t.is_empty() => t,
         _ => {
@@ -225,12 +233,11 @@ pub async fn handle_file_upload(
         }
     };
 
-    // Token format: "upload-{attachment_id}"
-    let attachment_id_str = match upload_token.strip_prefix("upload-") {
-        Some(id) => id,
-        None => {
+    let attachment_id_str = match upload.attachment_id {
+        Some(id) if !id.is_empty() => id,
+        _ => {
             return HttpResponse::BadRequest()
-                .json(serde_json::json!({"error": "invalid upload token format"}));
+                .json(serde_json::json!({"error": "attachment_id is required"}));
         }
     };
 
@@ -241,7 +248,7 @@ pub async fn handle_file_upload(
         Ok(id) => id,
         Err(_) => {
             return HttpResponse::BadRequest()
-                .json(serde_json::json!({"error": "invalid upload token"}));
+                .json(serde_json::json!({"error": "invalid attachment_id"}));
         }
     };
 
@@ -261,8 +268,8 @@ pub async fn handle_file_upload(
         }
     };
 
-    // Validate token + update attachment via the service layer (not repos directly).
     let cmd = rim_services::message_attachment::command::CompleteUploadCmd {
+        actor_user_id: user_id,
         attachment_id,
         upload_token,
         storage_key: stored.key.clone(),

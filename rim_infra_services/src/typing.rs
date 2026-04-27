@@ -3,6 +3,7 @@ use std::time::Instant;
 use dashmap::DashMap;
 use rim_core::conversation::model::ConversationId;
 use rim_core::user::model::UserId;
+use rim_services::typing::TypingService;
 
 /// Minimum interval between accepted typing broadcasts for the same user
 /// in the same conversation (3 seconds).
@@ -50,6 +51,12 @@ impl TypingTracker {
         let now = Instant::now();
         self.last_typing
             .retain(|_key, last| now.duration_since(*last).as_secs() < STALE_ENTRY_SECS);
+    }
+}
+
+impl TypingService for TypingTracker {
+    fn should_broadcast(&self, user_id: UserId, conversation_id: ConversationId) -> bool {
+        self.should_broadcast(user_id, conversation_id)
     }
 }
 

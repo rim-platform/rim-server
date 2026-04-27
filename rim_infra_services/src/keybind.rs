@@ -325,8 +325,7 @@ impl DefaultKeybindService {
             .repos
             .keybind_repo
             .list_for_subject(KeybindSubject::User(query.actor.user_id))
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
         Self::sort_keybinds(&mut user_keybinds);
         for keybind in user_keybinds
             .into_iter()
@@ -350,8 +349,7 @@ impl DefaultKeybindService {
                 .repos
                 .keybind_repo
                 .list_for_subject(KeybindSubject::Workspace(workspace_id))
-                .await
-                .map_err(rim_services::map_repo_error)?;
+                .await?;
             Self::sort_keybinds(&mut workspace_keybinds);
             for keybind in workspace_keybinds
                 .into_iter()
@@ -387,8 +385,7 @@ impl DefaultKeybindService {
                 context.into(),
                 keystroke,
             )
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .filter(|keybind| keybind.is_enabled)
             .map(Self::to_dto);
 
@@ -408,8 +405,7 @@ impl DefaultKeybindService {
                     context.into(),
                     keystroke,
                 )
-                .await
-                .map_err(rim_services::map_repo_error)?
+                .await?
                 .filter(|keybind| keybind.is_enabled)
                 .map(Self::to_dto)
         } else {
@@ -493,12 +489,7 @@ impl KeybindService for DefaultKeybindService {
             }
         }
 
-        let mut keybinds = self
-            .repos
-            .keybind_repo
-            .list_for_subject(subject)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let mut keybinds = self.repos.keybind_repo.list_for_subject(subject).await?;
         Self::sort_keybinds(&mut keybinds);
         Ok(keybinds.into_iter().map(Self::to_dto).collect())
     }
@@ -554,8 +545,7 @@ impl KeybindService for DefaultKeybindService {
             .repos
             .keybind_repo
             .list_for_subject(subject)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .len();
         let limit = match subject {
             KeybindSubject::User(_) => Self::MAX_USER_KEYBINDS,
@@ -576,8 +566,7 @@ impl KeybindService for DefaultKeybindService {
                 cmd.context.into(),
                 cmd.keystroke.trim(),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .is_some()
         {
             return Err(ServiceError::Conflict(
@@ -597,8 +586,7 @@ impl KeybindService for DefaultKeybindService {
                 preset_args: cmd.preset_args,
                 is_enabled: true,
             })
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::to_dto(created))
     }
@@ -608,8 +596,7 @@ impl KeybindService for DefaultKeybindService {
             .repos
             .keybind_repo
             .get_by_id(cmd.keybind_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
         self.ensure_scope_access(cmd.actor, existing.subject)
             .await?;
@@ -627,8 +614,7 @@ impl KeybindService for DefaultKeybindService {
                 cmd.context.into(),
                 cmd.keystroke.trim(),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
         {
             if other.id != existing.id {
                 return Err(ServiceError::Conflict(
@@ -650,8 +636,7 @@ impl KeybindService for DefaultKeybindService {
                     is_enabled: cmd.is_enabled,
                 },
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::to_dto(updated))
     }
@@ -661,8 +646,7 @@ impl KeybindService for DefaultKeybindService {
             .repos
             .keybind_repo
             .get_by_id(cmd.keybind_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
         self.ensure_scope_access(cmd.actor, existing.subject)
             .await?;
@@ -671,7 +655,7 @@ impl KeybindService for DefaultKeybindService {
             .keybind_repo
             .delete_keybind(existing.id)
             .await
-            .map_err(rim_services::map_repo_error)
+            .map_err(ServiceError::from)
     }
 }
 
@@ -687,6 +671,7 @@ mod tests {
     use rim_services::command::dto::{
         CommandDefinitionDto, CommandExecutionTargetDto, CommandSourceKindDto,
     };
+    use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::MockCommandService;
     use rim_services::keybind::dto::{KeybindContextDto, KeybindScopeDto};
     use rim_services::keybind::request::InspectKeybindLayersQuery;
@@ -850,6 +835,12 @@ mod tests {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
+            nl_description: None,
+            intent_samples: vec![],
+            ai_callable: false,
+            sensitivity: CommandSensitivityDto::Safe,
+            typed_verb: rim_services::command::verb::TypedVerb::Other,
+            rate_limit_per_minute: None,
         }
     }
 

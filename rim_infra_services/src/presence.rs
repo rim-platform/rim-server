@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
-use rim_services::presence::{PresenceStatus, UserPresence};
+use rim_services::presence::{PresenceService, PresenceStatus, UserPresence};
 
 struct PresenceEntry {
     status: PresenceStatus,
@@ -177,13 +177,25 @@ impl PresenceManager {
         status: PresenceStatus,
         workspace_id: ServerId,
     ) {
-        self.observers
-            .workspace
-            .notify(WorkspaceEvent::PresenceChanged {
-                workspace_id,
-                user_id,
-                status: status.as_str().to_string(),
-            });
+        self.observers.emit(WorkspaceEvent::PresenceChanged {
+            workspace_id,
+            user_id,
+            status: status.as_str().to_string(),
+        });
+    }
+}
+
+impl PresenceService for PresenceManager {
+    fn heartbeat(&self, user_id: UserId, workspace_id: ServerId, status: PresenceStatus) {
+        self.heartbeat(user_id, workspace_id, status);
+    }
+
+    fn get_workspace_presence(&self, workspace_id: ServerId) -> Vec<UserPresence> {
+        self.get_workspace_presence(workspace_id)
+    }
+
+    fn mark_offline(&self, user_id: UserId) {
+        self.mark_offline(user_id);
     }
 }
 

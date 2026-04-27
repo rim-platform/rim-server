@@ -5,7 +5,17 @@ use sha2::{Digest, Sha256};
 
 pub fn generate_session_token() -> String {
     let mut bytes = [0u8; 32];
-    fill(&mut bytes).expect("getrandom failed");
+    if let Err(e) = fill(&mut bytes) {
+        // getrandom failure is an OS-level fault (entropy source unavailable).
+        // Log to the audit channel before unwinding so the failure is visible
+        // in forensics even if the logging worker guard drops during panic.
+        tracing::error!(
+            target = "audit",
+            error = %e,
+            "fatal: OS entropy source failed; cannot generate session token"
+        );
+        panic!("getrandom failed: {e}");
+    }
     let token = URL_SAFE_NO_PAD.encode(bytes);
     format!("rim_sess_{token}")
 }

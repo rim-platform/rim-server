@@ -6,7 +6,9 @@ use rim_api::{AppSchema, build_schema};
 use rim_core::storage::StorageBackend;
 use rim_infra_services::file_storage::LocalFileStorage;
 use rim_services::events::{Broadcaster, Observers};
+use rim_services::presence::PresenceService;
 use rim_services::storage::service::StorageService;
+use rim_services::typing::TypingService;
 use sea_orm::Database;
 use tokio::sync::watch;
 
@@ -128,7 +130,28 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         pipeline_repo: Arc::new(sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(
             db.clone(),
         )),
+        capability_registry_repo: Arc::new(
+            sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(db.clone()),
+        ),
     };
+
+    // Phase 1 §3.3 — closes Black Widow C1. Seed builtin capabilities into
+    // the registry SYNCHRONOUSLY before the HTTP listener binds, so the
+    // capability gate cannot deny a legitimate first-request `chat.write`
+    // due to a registry-seeding race. Idempotent: re-runs are no-ops past
+    // the first deploy.
+    seed_builtin_capabilities(repos.capability_registry_repo.as_ref())
+        .await
+        .map_err(|e| std::io::Error::other(format!("failed to seed builtin capabilities: {e}")))?;
+
+    // Phase 1 §3.4 — F1 closure (Ant-Man / Widow). Audit-emit the
+    // AI-callable command inventory at boot so operators have a stable,
+    // grep-able record of which commands the LLM surface can reach. Phase 1
+    // builtins are all `ai_callable: false`; the emission still runs (with
+    // count=0) so a deploy that accidentally promotes a builtin to AI-
+    // callable surfaces the change in the audit log immediately, not after
+    // a real exploit.
+    rim_infra_services::command::emit_ai_callable_inventory_audit();
 
     let broadcaster = InMemoryBroadcaster::new(1024);
     let broadcaster_arc: Arc<dyn Broadcaster> = Arc::new(broadcaster.clone());
@@ -231,8 +254,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let schema = build_schema(
         Arc::clone(&service_provider),
         broadcaster,
-        Arc::clone(&presence_manager),
-        typing_tracker,
+        Arc::clone(&presence_manager) as Arc<dyn PresenceService>,
+        typing_tracker as Arc<dyn TypingService>,
         observers_for_schema,
     );
     let request_authenticator = service_provider.request_authenticator();
@@ -245,4 +268,38 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_attachment_service,
         shutdown_tx,
     })
+}
+
+/// Idempotent startup seeding for the capability registry.
+///
+/// Runs synchronously before the HTTP listener binds — see the
+/// `build_app_runtime` call site for the rationale (Black Widow C1
+/// registry-seeding race closure). Also emits the F1 `ai_callable_inventory`
+/// audit line so operators can confirm at boot which caps the gate
+/// recognises.
+async fn seed_builtin_capabilities(
+    repo: &dyn rim_core::capability::repository::CapabilityRegistryRepository,
+) -> Result<(), String> {
+    let specs = rim_infra_services::capability::builtin_capabilities();
+    for spec in specs {
+        // Use the insert-only seed entrypoint so a builtin that has been
+        // soft-retired by an operator (e.g. company-wide `audit.read`
+        // disable) is NOT silently re-activated on the next deploy
+        // (Gate 4 M3).
+        repo.upsert_if_missing(
+            spec.id,
+            rim_core::capability::model::CapabilitySourceKind::Builtin,
+            None,
+            spec.is_self_scoped,
+        )
+        .await
+        .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
+    }
+    tracing::info!(
+        target = "audit",
+        event = "capability_registry_seeded",
+        count = specs.len(),
+        "seeded builtin capabilities into registry (Phase 1 §3.3)"
+    );
+    Ok(())
 }

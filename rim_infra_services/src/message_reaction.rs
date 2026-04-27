@@ -7,7 +7,7 @@ use rim_core::message::model::MessageId;
 use rim_core::message_reaction::model::NewMessageReaction;
 use rim_infra_db::TransactionScope;
 use rim_infra_db::begin_transaction;
-use rim_services::events::{Observers, ReactionGroupData};
+use rim_services::events::{EventObserver, Observers, ReactionGroupData, WorkspaceEvent};
 use rim_services::message_reaction::command::{
     GetMessageReactionsQuery, GetReactionsForMessagesQuery, ToggleReactionCmd,
 };
@@ -18,7 +18,7 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::ReactionRepos;
 use crate::repos::AppRepos;
 use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
 };
 
 #[derive(Clone)]
@@ -99,24 +99,15 @@ impl DefaultMessageReactionService {
         message_id: rim_core::message::model::MessageId,
         actor_user_id: rim_core::user::model::UserId,
     ) -> ServiceResult<()> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             actor_user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            server_id,
             conversation_id,
-            server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            actor_user_id,
         )
         .await?;
 
@@ -124,8 +115,7 @@ impl DefaultMessageReactionService {
             .repos
             .message_repo
             .get_by_id(message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if message.conversation_id != conversation_id {
@@ -172,15 +162,13 @@ impl MessageReactionService for DefaultMessageReactionService {
         let existing = repos
             .message_reaction_repo
             .find_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         if existing.is_some() {
             repos
                 .message_reaction_repo
                 .remove_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
-                .await
-                .map_err(rim_services::map_repo_error)?;
+                .await?;
         } else {
             repos
                 .message_reaction_repo
@@ -189,15 +177,13 @@ impl MessageReactionService for DefaultMessageReactionService {
                     user_id: cmd.actor.user_id,
                     emoji,
                 })
-                .await
-                .map_err(rim_services::map_repo_error)?;
+                .await?;
         }
 
         let all = repos
             .message_reaction_repo
             .get_reactions_for_message(cmd.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Self::commit_if_present(scope).await?;
 
@@ -214,16 +200,15 @@ impl MessageReactionService for DefaultMessageReactionService {
             .repos
             .conversation_member_repo
             .list_member_ids(cmd.conversation_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
-        self.observers.reaction.on_reactions_changed(
-            cmd.server_id,
-            cmd.conversation_id,
-            conv.conversation_type.as_str(),
+        self.observers.emit(WorkspaceEvent::ReactionsUpdated {
+            workspace_id: cmd.server_id,
+            conversation_id: cmd.conversation_id,
+            conversation_type: conv.conversation_type.as_str().to_string(),
             member_user_ids,
-            cmd.message_id,
-            groups
+            message_id: cmd.message_id,
+            reactions: groups
                 .iter()
                 .map(|g| ReactionGroupData {
                     emoji: g.emoji.clone(),
@@ -231,7 +216,7 @@ impl MessageReactionService for DefaultMessageReactionService {
                     user_ids: g.user_ids.clone(),
                 })
                 .collect(),
-        );
+        });
 
         Ok(groups)
     }
@@ -240,24 +225,15 @@ impl MessageReactionService for DefaultMessageReactionService {
         &self,
         query: GetMessageReactionsQuery,
     ) -> ServiceResult<Vec<ReactionGroupDto>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            query.server_id,
             query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            query.actor.user_id,
         )
         .await?;
 
@@ -265,8 +241,7 @@ impl MessageReactionService for DefaultMessageReactionService {
             .repos
             .message_repo
             .get_by_id(query.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if message.conversation_id != query.conversation_id {
@@ -277,8 +252,7 @@ impl MessageReactionService for DefaultMessageReactionService {
             .repos
             .message_reaction_repo
             .get_reactions_for_message(query.message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         Ok(Self::group_reactions(all, query.actor.user_id))
     }
@@ -295,8 +269,7 @@ impl MessageReactionService for DefaultMessageReactionService {
             .repos
             .message_reaction_repo
             .get_reactions_for_messages(&query.message_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         let grouped = raw
             .into_iter()

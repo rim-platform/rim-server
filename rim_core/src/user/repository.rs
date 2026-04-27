@@ -1,5 +1,5 @@
 use crate::repository::error::RepoResult;
-use crate::user::model::{NewUser, User, UserId};
+use crate::user::model::{NewUser, UpdateProfilePatch, User, UserId};
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
@@ -18,14 +18,7 @@ pub trait UserRepository: Send + Sync {
 
     async fn any_users_exist(&self) -> RepoResult<bool>;
 
-    async fn update_profile(
-        &self,
-        id: UserId,
-        display_name: Option<Option<String>>,
-        avatar_url: Option<Option<String>>,
-        status_text: Option<Option<String>>,
-        bio: Option<Option<String>>,
-    ) -> RepoResult<User>;
+    async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;
 
     async fn update_password(&self, id: UserId, password_hash: String) -> RepoResult<()>;
 }

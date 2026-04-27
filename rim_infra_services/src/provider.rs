@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::Duration;
 use rim_services::action::service::ActionService;
+use rim_services::audit::service::AuditLogService;
 use rim_services::auth::service::{AuthService, RequestAuthenticator};
 use rim_services::capability::service::CapabilityService;
 use rim_services::channel_lens::service::ChannelLensService;
@@ -41,6 +42,7 @@ use crate::repos::AppRepos;
 #[derive(Clone)]
 pub struct DefaultAppServiceProvider {
     action_service: Arc<dyn ActionService>,
+    audit_log_service: Arc<dyn AuditLogService>,
     auth_service: Arc<dyn AuthService>,
     capability_service: Arc<dyn CapabilityService>,
     channel_lens_service: Arc<dyn ChannelLensService>,
@@ -90,8 +92,9 @@ impl DefaultAppServiceProvider {
             session_ttl,
             observers.clone(),
         ));
-        let capability_service: Arc<dyn CapabilityService> =
-            Arc::new(crate::capability::DefaultCapabilityService);
+        let capability_service: Arc<dyn CapabilityService> = Arc::new(
+            crate::capability::DefaultCapabilityService::new(repos.for_capability()),
+        );
         let conversation_service: Arc<dyn ConversationService> =
             Arc::new(crate::conversation::DefaultConversationService::new(
                 repos.for_conversation(),
@@ -120,8 +123,8 @@ impl DefaultAppServiceProvider {
         let pin_observers = observers.clone();
         let server_observers = observers.clone();
         let read_state_observers = observers.clone();
-        let ws_state_broadcaster = Arc::clone(observers.workspace.broadcaster());
-        let pipeline_broadcaster_clone = Arc::clone(observers.workspace.broadcaster());
+        let ws_state_broadcaster = Arc::clone(observers.broadcaster());
+        let pipeline_broadcaster_clone = Arc::clone(observers.broadcaster());
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
@@ -171,22 +174,59 @@ impl DefaultAppServiceProvider {
                 repos.for_workspace_state(),
                 ws_state_broadcaster,
             ));
-        let command_service: Arc<dyn CommandService> =
-            Arc::new(crate::command::DefaultCommandService::new(
-                repos.for_command(),
-                crate::command::CommandServices {
-                    auth_service: Arc::clone(&auth_service),
-                    conversation_service: Arc::clone(&conversation_service),
-                    message_service: Arc::clone(&message_service),
-                    read_state_service: Arc::clone(&read_state_service),
-                    workspace_state_service: Arc::clone(&workspace_state_service),
-                },
+        let audit_log_repo: Arc<dyn rim_core::audit::repository::AuditLogRepository> = Arc::new(
+            rim_infra_db::sea_orm_impl::audit::SeaOrmAuditLogRepository::new(
+                rim_infra_db::DbHandle::from(db.clone()),
+            ),
+        );
+        let audit_log_service: Arc<dyn rim_services::audit::service::AuditLogService> =
+            Arc::new(crate::audit::DefaultAuditLogService::new(
+                Arc::clone(&audit_log_repo),
+                Arc::clone(&capability_service),
             ));
+        // Shared confirmation store — same instance used by command_service and
+        // macro_service so that a proof issued by command_service can be verified
+        // by macro_service (and vice versa, once macro-level challenge issuance lands).
+        let confirmation_store: std::sync::Arc<
+            dyn rim_services::command::confirmation::ConfirmationStore,
+        > = rim_services::command::confirmation::shared_in_memory_store();
+
+        // Two-phase construction to break command↔macro circular init dependency:
+        //
+        // Phase 1: command_service without macro_service (macro injection skipped).
+        //          Used by all services that depend on CommandService but are built
+        //          before macro_service is ready (keybind, pipeline, etc.).
+        //
+        // Phase 2: macro_service constructed using phase-1 command_service.
+        //          Then command_service is rebuilt with macro_service wired in.
+        //          Services that only depend on CommandService via the provider
+        //          (not via a direct Arc clone) get the full phase-2 instance.
+        let command_services_args = || crate::command::CommandServices {
+            auth_service: Arc::clone(&auth_service),
+            capability_service: Arc::clone(&capability_service),
+            conversation_service: Arc::clone(&conversation_service),
+            message_service: Arc::clone(&message_service),
+            message_reaction_service: Arc::clone(&message_reaction_service),
+            pin_service: Arc::clone(&pin_service),
+            read_state_service: Arc::clone(&read_state_service),
+            server_member_service: Arc::clone(&server_member_service),
+            user_service: Arc::clone(&user_service),
+            workspace_state_service: Arc::clone(&workspace_state_service),
+            audit_log_service: Some(Arc::clone(&audit_log_service)),
+            macro_service: None,
+        };
+        let command_service_phase1: Arc<dyn CommandService> = Arc::new(
+            crate::command::DefaultCommandService::with_confirmation_store(
+                repos.for_command(),
+                command_services_args(),
+                Arc::clone(&confirmation_store),
+            ),
+        );
         let keybind_service: Arc<dyn KeybindService> =
             Arc::new(crate::keybind::DefaultKeybindService::new(
                 repos.for_keybind(),
                 crate::keybind::KeybindServices {
-                    command_service: Arc::clone(&command_service),
+                    command_service: Arc::clone(&command_service_phase1),
                 },
             ));
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
@@ -204,9 +244,29 @@ impl DefaultAppServiceProvider {
             Arc::new(crate::macro_def::DefaultMacroService::new(
                 repos.for_macro(),
                 crate::macro_def::MacroServices {
-                    command_service: Arc::clone(&command_service),
+                    command_service: Arc::clone(&command_service_phase1),
+                    audit_log_service: Some(Arc::clone(&audit_log_service)),
+                    confirmation_store: Some(Arc::clone(&confirmation_store)),
                 },
             ));
+
+        // Phase 2: rebuild command_service with macro_service wired in.
+        // This is the instance stored in the provider and returned by
+        // AppServiceProvider::command_service(). The phase-1 instance remains
+        // alive inside keybind_service and pipeline_service — those paths
+        // never call list_commands(Surface::Ai) so the missing macro_service
+        // there is harmless. Only the provider-vended command_service needs it.
+        let command_service: Arc<dyn CommandService> = Arc::new(
+            crate::command::DefaultCommandService::with_confirmation_store(
+                repos.for_command(),
+                {
+                    let mut svc_args = command_services_args();
+                    svc_args.macro_service = Some(Arc::clone(&macro_service));
+                    svc_args
+                },
+                Arc::clone(&confirmation_store),
+            ),
+        );
         let channel_lens_service: Arc<dyn ChannelLensService> = Arc::new(
             crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),
         );
@@ -229,6 +289,7 @@ impl DefaultAppServiceProvider {
 
         Self {
             action_service,
+            audit_log_service,
             auth_service,
             capability_service,
             channel_lens_service,
@@ -266,6 +327,9 @@ impl DefaultAppServiceProvider {
 impl AppServiceProvider for DefaultAppServiceProvider {
     fn action_service(&self) -> Arc<dyn ActionService> {
         Arc::clone(&self.action_service)
+    }
+    fn audit_log_service(&self) -> Arc<dyn AuditLogService> {
+        Arc::clone(&self.audit_log_service)
     }
     fn auth_service(&self) -> Arc<dyn AuthService> {
         Arc::clone(&self.auth_service)

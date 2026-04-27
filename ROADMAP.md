@@ -1,5 +1,20 @@
 # Roadmap
 
+## Strategic Notes
+
+**Falcon strategic recon (2026-04-22)**: RIM is accidentally MCP-shaped. AI agents + MCP
+became table stakes industry-wide. Thesis (programmable, keyboard-first, power-user comms)
+is more right than ever. Surface needs to absorb MCP and reframe AI as programmability
+primitive, not chatbot.
+
+Top 3 priority headlines:
+- **P1: AI Agent reframe** — Agent speaks the command registry; no parallel tool list.
+  Slack/Teams/Notion are converging on this shape, RIM gets there first.
+- **P2: Skill Macros + intent routing** — User-owned alternative to Slack's "AI Skills";
+  macros become NL-routable units of work.
+- **P3: RIM CLI v1** — Pure whitespace, zero competitors; doubles as a live validator of
+  the GraphQL contract.
+
 RIM is a programmable communication workspace — not another chat app.
 
 Chat is the communication medium, but the product is defined by how customizable and
@@ -179,6 +194,8 @@ See also: `docs/plugin_model.md` and `docs/local_plugin_host.md`.
 
 ## Phase 6: Real-Time Collaboration
 
+_DEFERRED indefinitely (2026-04-22) — see Deferred / Killed section._
+
 - Voice channels.
 - Video calls.
 - Screen sharing.
@@ -306,7 +323,7 @@ Features that make RIM the natural home for engineering teams.
   RIM gets interactive, queryable git context.
 
 - **Embedded Terminal Sessions** (XL): Shared terminal panels in channels. Pair debugging
-  without screen share.
+  without screen share. _(KILLED 2026-04-22 — see Deferred / Killed section.)_
 
 ### Structural Innovation
 
@@ -360,8 +377,13 @@ and session state.
 
 ## Where We Are Now
 
-Phase 0 through Phase 4 are largely implemented, with programmable runtime and power user
-UX features shipping:
+_Last updated: 2026-04-25_
+
+Phase 0 through Phase 4 are largely implemented, with the **AI Agent Reframe** (P1
+strategic priority) actively in flight: Phase 4 (frontend deletion of parallel tool
+registry, Tauri IPC proxy, audit-log enrichment) is **shipped**; Phase 5 (audit DB,
+typed_verb, Skill Macros AI exposure, plugin AI consent, keyring Option B, rate limits,
+command.discover ship gate) is **mid-execution**.
 
 - **Phase 1 (Communication Core)**: Complete — channels, DMs, groups, threads,
   attachments, search, pagination, permissions, mentions, reactions, pinning, forwarding,
@@ -376,12 +398,80 @@ UX features shipping:
 - **Phase 5 (Context Actions)**: Partially complete — AI agent with tool calling
   (send_message, pin_message, create_channel, add_reaction), context actions from plugins.
 
+### AI Agent Reframe — multi-phase (P1 strategic priority)
+
+Authoritative design: `docs/design/ai-agent-reframe-design-2026-04-22-v2.md`. Black Widow
+GREEN security verdict at `docs/security/ai-reframe-review-2026-04-22.md`.
+
+**Reframe Phase 1 — Backend foundation (SHIPPED 2026-04-22):**
+- `CommandDefinitionDto` extended with `nl_description`, `intent_samples`, `ai_callable`,
+  `sensitivity` (`Safe | Notable | Standard | Mutating | Dangerous`).
+- `sanitize_nl_text` module — input sanitization at registration + DTO serialization.
+- `CapabilityService::check()` real implementation with `capability_registry` SeaORM
+  table; **strict default-deny on unknown caps** (closes Widow C1).
+- `ConfirmationProof { InBandToken | OutOfBand }` — 5s TTL, server-recomputed args_hash,
+  single-use, cross-command replay blocked (closes Widow H1).
+- `CommandInitiator` enum on `ExecuteCommandCmd` (`Palette | Agent | Macro | Keybind |
+  ContextMenu | Plugin | Cli | Mcp`) — closes Widow H4 part 1.
+- Plugin manifest install validators (N1 capability key + F2 install-ID leak walker).
+- F1 startup `ai_callable` enumeration audit line.
+- `rim_services/src/command/sensitivity.rs` with `SENSITIVE_ARG_NAME_RE` + value-shape
+  detectors (eliminates Widow N4 drift risk).
+- C1 regression test gate at `rim_infra_services/tests/capability_gate_test.rs`.
+
+**Reframe Phase 4 — Frontend deletion + IPC (SHIPPED 2026-04-24):**
+- 13 hardcoded TS tools in `rim-ui/src/features/agent/tools/builtins/` deleted; agent
+  routes through unified `commandDispatcher.execute(...)`.
+- Tauri IPC `agent_chat_completion` proxy with CSP webview-origin block (closes Widow C2).
+- `tracing::info!(target = "audit", ...)` line + dedicated `audit.log` sink.
+- `Zeroizing<String>` compile-time bound on API keys with `ZeroizeOnDrop` trait assertion.
+- `OnceLock<Client>` shared sidecar `reqwest::Client` (15s timeout) for validate/list IPCs.
+- `ValidationOutcome { Valid | Invalid | NetworkError }` tagged-enum disambiguation
+  (replaces `Ok(bool)`).
+- `keyStore` load-per-request `withKey` thunk pattern with `ProviderKeyMissingError`.
+- 902/902 frontend tests green; 12/12 `agent_proxy` tests; 103/103 full Rust suite.
+
+**Reframe Phase 5 — IN FLIGHT (started 2026-04-24):**
+Plan: `~/.claude/plans/phase5-dispatch.md`. Eleven tasks tracked in `rim-avengers` team.
+
+| Task | Status | Notes |
+|---|---|---|
+| #1 Audit log DB foundation | At Hawkeye gate | Variant A retention (90d/365d), typed_verb column included, dual-path write |
+| #2 typed_verb audit enrichment (BE) | Pending — blocked by #1 | ~3h |
+| #3 typed_verb (FE) | Pending — blocked by #2 | ~1h, codegen + telemetry surface |
+| #4 Skill Macros AI exposure | Pending — blocked by #1 | Effort revised 1.5d→2-2.5d per Falcon recon (dispatcher routing not wired, per-step `ai_callable` enforcement required, sensitivity rollup) |
+| #5 Plugin AI consent (REFRAMED) | Pending — blocked by #11 | Architectural reframe: plugins are Tauri-client per Phase 1 §3.1, not server-side; owner Strange→Pete; 1.5d (Pending Kuba ratification) |
+| #6 Plugin consent UI | Pending — blocked by #5 | Clones existing `PluginCapabilityPrompt`; ~0.5d |
+| #7 Keyring Option B (BE+Tauri) | At Hawkeye gate | JS-driven migration, capability file likely-skip, audit via GraphQL with local-log fallback |
+| #8 Keyring FE + verification gate | Pending — blocked by #7 | 4-step DevTools verification gate (Network/Heap/Sources/Stronghold) |
+| #9 Per-(actor, command_id) rate limits | Pending — blocked by #1 | Token bucket tiered by sensitivity; ~1d |
+| #10 `command.discover` (SHIP GATE) | Pending — blocked by #1, #2, #4, #5, #9 | v2 R2 mandate: literal substring + token-overlap, embeddings DEFERRED; 1d |
+| #11 F2 manifest validators wire-in | At Hawkeye gate | Phase 1 regression — validators were dead code; mirrored into rim-ui/src-tauri/ with sync-comment + 1:1 test corpus |
+
+**Outstanding product decisions (queued for Kuba):**
+1. Plugin reframe to client-side architecture (#5) — CTO call: yes, awaiting ratification
+2. Audit retention policy — Variant A (90d/365d) default vs Variant B (365/365) — Gate 1
+3. Audit destination for Tauri events (#7) — GraphQL→server (recommended) vs local-log only
+4. Audit row retention for `command.discover` Safe-tier reads (#10) — Widow gate question
+
 Programmable runtime features shipped:
 - **Workspace State Machine**: Full-stack KV store with per-server/per-user scoping, JSONB
   values, TTL support, atomic increment, quota enforcement, real-time events via WebSocket.
+  Frontend Settings → State tab now provides full browser/editor with prefix search, scope
+  toggle, JSON validation, and TTL input.
 - **Command Piping Hardening**: Pre-validation pass (dangerous + desktop-local rejection),
   explicit `isPipe` flag, enhanced error messages with previous stage context.
 - **Macro Name Resolution**: GraphQL query to resolve macro by name, frontend async lookup.
+- **Macro Autocomplete**: Inline composer suggestions with name + arg preview, dangerous
+  command confirmation modal before execution.
+- **Channel Lenses**: Filtered views per channel (HAS_LINKS, FROM_USER, UNRESOLVED, etc.),
+  inline create/edit/delete, scope (USER vs CHANNEL).
+- **Incident Mode**: Phase tracking (Detection → Triage → Mitigation → Resolution →
+  Postmortem), inline phase notes, severity (SEV_1 – SEV_4), action items, AI postmortem
+  draft from transcript.
+- **Backend `listIncidents` query** (SHIPPED 2026-04-22): GraphQL query for incident
+  history with status/severity filters and cursor pagination. Powers the upcoming
+  Incident History/Archive view.
 
 Power user UX shipped:
 - **Zen Mode**: `Ctrl+Shift+Z` strips UI to current conversation only, with animated
@@ -393,14 +483,67 @@ Power user UX shipped:
 - **Status Bar**: Glanceable bar showing mode indicator, density, connection status.
 - **Pipeline Result View**: Per-stage result rendering with status icons and collapsible
   JSON payload.
+- **Emoji Picker**: emoji-mart v5 — full Unicode set, categories, skin tones (parity with
+  Messenger / WhatsApp / Slack).
+- **Terminal Font Reactivity**: Font size changes in Settings propagate live to running
+  terminals (Zustand subscribe).
+- **About Page**: Version, build info, attribution.
 
 Infrastructure and quality:
 - CI/CD: GitHub Actions pipelines for both repos (lint, test, coverage, Docker build).
 - Docker: Production Dockerfiles for server and UI, docker-compose for local dev stack.
-- Testing: 344 backend tests (95% coverage gate), 691 frontend tests (Vitest).
+- Testing: **353 backend tests** + 12 `agent_proxy` Tauri Rust tests (95% coverage gate).
+  Frontend: **902 passing tests, all green** post-Phase-4 reframe deletion.
 - Security: HMAC-signed CSRF tokens bound to sessions, Stronghold passwords derived from
   OS keychain, CSP headers, rate limiting, SSRF protection, server membership checks on
   all workspace state operations.
+- **WebSocket Reconnection**: keepalive ping/pong (15s/5s timeout), interruptible backoff
+  driven by `online` and `visibilitychange` events. Worst-case reconnect time reduced from
+  ~35s to ~6s.
 
-The next step is reactive pipelines, AI macro builder, and inline command preview to
-deepen the programmable workspace experience.
+## Next Up
+
+Priority order driven by Falcon's strategic recon (2026-04-22), updated 2026-04-25 with
+Reframe progress.
+
+**Immediate (Phase 5 critical path — 2026-04-25 → ~2026-05-02):**
+
+1. Land Reframe Phase 5 to ship gate (`command.discover` integration test green): see
+   ledger above. Strange + Pete in flight; Hawkeye batching reviews. Three tasks at gate
+   (#1, #7, #11), then cascade unblocks everything else.
+2. After Phase 5 ships: Reframe Phase 6 spec (post-ship-gate primitives — typed_verb
+   consumers in plugins, MCP forward-compat OutOfBand confirmation, audit retention SLA
+   tuning, embedding-based discover ranking).
+
+**Strategic queue (post-Reframe):**
+
+1. **P2: Skill Macros + intent routing** (M effort, ICE 18) — Phase 5 lands the synthesis
+   primitive (#4); Phase 6+ wires the intent-router UX so the AI can dispatch macros by
+   natural-language intent rather than explicit `executeCommand("macro.<id>")` calls.
+2. **P3: RIM CLI v1** (M effort, ICE 18) — Already in roadmap (see CLI Client section).
+   Pure whitespace, zero competitors. Doubles as a live validator of the GraphQL
+   contracts.
+3. **P4: MCP host/server bridge** (L effort, ICE 15) — Make RIM a first-class MCP host
+   (any MCP server installs as a plugin) AND server (Claude Desktop / Cursor can drive
+   RIM). Phase 5's `OutOfBand` ConfirmationProof variant is forward-compat scaffolding.
+4. **P5: Reactive Pipelines GA** (L effort, ICE 11) — Build on macros + workspace state.
+   Slack Workflow Builder is broken (no branching, no JSON); enterprise unmet need.
+5. **P6: Plugin Marketplace v0 (git-backed)** (M effort, ICE 14) — Curated JSON manifest
+   of git URLs, signed. `rim plugin install github:user/plugin`.
+
+**Tech debt filed during Phase 5 (parked, non-blocking):**
+- Extract plugin manifest validators to shared `rim_plugin_validation` crate (currently
+  duplicated in `rim-ui/src-tauri/` per #11 Option B; mirror sync-comment + 1:1 test
+  corpus is the drift detector). Phase 6+.
+- 22 clippy errors in `plugin_host/*` (filed #64 during Phase 4).
+- `AgentSettingsPanel` stale-key gate NIT (filed #65 during Phase 4 — Ant-Man/Fury UX).
+- Multi-node confirmation token store (in-memory today; Redis/DB for prod).
+- `command.discover` embedding-based ranking (Phase 6+ when scale demands; v1 ships
+  literal substring + token-overlap per v2 R2).
+
+## Deferred / Killed
+
+- **Embedded Terminal Sessions** — KILLED. Warp owns this category. XL effort, low
+  strategic return.
+- **Voice/Video (Phase 6)** — DEFERRED indefinitely. Not on-thesis. Consider a Jitsi
+  embed via plugin instead if demand materializes.

@@ -1,4 +1,5 @@
 pub mod action;
+pub mod audit;
 pub mod auth;
 pub mod capability;
 pub mod channel_lens;
@@ -30,6 +31,7 @@ pub mod server_member;
 pub mod setting;
 pub mod skill_profile;
 pub mod storage;
+pub mod typing;
 pub mod user;
 pub mod workspace_state;
 
@@ -81,6 +83,28 @@ pub enum ServiceError {
     #[error("unauthenticated")]
     Unauthenticated,
 
+    /// The submitted [`crate::command::confirmation::ConfirmationProof`]
+    /// was unknown, expired, single-use-consumed, or args-mismatched.
+    /// Caller should re-issue the dangerous command (server will return
+    /// a fresh challenge), present the modal again, and retry. Used by
+    /// the H1 (TOCTOU) gate.
+    #[error("confirmation proof is stale; please re-confirm")]
+    ConfirmationStale,
+
+    /// The submitted [`crate::command::confirmation::ConfirmationProof`]
+    /// failed verification in a way that indicates misuse (wrong command
+    /// id, wrong context, wrong actor) or an unsupported proof variant.
+    /// The detail string is non-actionable for the user; surface a
+    /// generic "confirmation failed" message.
+    #[error("confirmation failed: {0}")]
+    ConfirmationFailed(String),
+
+    /// The caller has exceeded the per-(actor, command_id) rate limit.
+    /// `retry_after_seconds` is how long to wait before the oldest token
+    /// in the window expires and one slot opens up again.
+    #[error("rate limit exceeded; retry after {retry_after_seconds}s")]
+    RateLimited { retry_after_seconds: u64 },
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }
@@ -96,22 +120,32 @@ impl ServiceError {
     }
 }
 
-pub fn map_repo_error(err: RepoError) -> ServiceError {
-    match err.kind() {
-        RepoErrorKind::NotFound => ServiceError::NotFound,
-        RepoErrorKind::Conflict => {
-            ServiceError::Conflict(err.message().unwrap_or("conflict").to_string())
+impl From<RepoError> for ServiceError {
+    fn from(err: RepoError) -> Self {
+        match err.kind() {
+            RepoErrorKind::NotFound => ServiceError::NotFound,
+            RepoErrorKind::Conflict => {
+                ServiceError::Conflict(err.message().unwrap_or("conflict").to_string())
+            }
+            RepoErrorKind::Timeout => ServiceError::Timeout,
+            RepoErrorKind::Unavailable => ServiceError::Unavailable,
+            RepoErrorKind::InvalidData | RepoErrorKind::Internal => ServiceError::internal(err),
+            RepoErrorKind::Unsupported => ServiceError::internal(err),
+            RepoErrorKind::Canceled => ServiceError::internal(err),
+            RepoErrorKind::PreconditionFailed => {
+                ServiceError::Conflict("precondition failed".to_string())
+            }
+            _ => ServiceError::internal(err),
         }
-        RepoErrorKind::Timeout => ServiceError::Timeout,
-        RepoErrorKind::Unavailable => ServiceError::Unavailable,
-        RepoErrorKind::InvalidData | RepoErrorKind::Internal => ServiceError::internal(err),
-        RepoErrorKind::Unsupported => ServiceError::internal(err),
-        RepoErrorKind::Canceled => ServiceError::internal(err),
-        RepoErrorKind::PreconditionFailed => {
-            ServiceError::Conflict("precondition failed".to_string())
-        }
-        _ => ServiceError::internal(err),
     }
+}
+
+#[deprecated(
+    since = "0.0.0",
+    note = "use `?` with From<RepoError> for ServiceError instead"
+)]
+pub fn map_repo_error(err: RepoError) -> ServiceError {
+    ServiceError::from(err)
 }
 
 #[cfg(test)]

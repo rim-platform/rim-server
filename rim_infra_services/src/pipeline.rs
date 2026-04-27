@@ -13,17 +13,16 @@ use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_services::command::dto::CommandContextDto;
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
-use rim_services::pipeline::dto::{
-    PipelineDto, PipelineFiredResult, PipelineTriggerDto,
-};
+use rim_services::pipeline::dto::{PipelineDto, PipelineFiredResult, PipelineTriggerDto};
 use rim_services::pipeline::request::{
     CreatePipelineCmd, DeletePipelineCmd, ListPipelinesCmd, TogglePipelineCmd, UpdatePipelineCmd,
 };
 use rim_services::pipeline::service::PipelineService;
-use rim_services::{Actor, ServiceError, ServiceResult, map_repo_error};
+use rim_services::{Actor, ServiceError, ServiceResult};
 
 const MAX_PIPELINES_PER_USER_PER_SERVER: u64 = 50;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -259,8 +258,7 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .count_for_user(cmd.server_id, cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         if count >= MAX_PIPELINES_PER_USER_PER_SERVER {
             return Err(ServiceError::Validation(format!(
@@ -292,11 +290,7 @@ impl PipelineService for DefaultPipelineService {
             updated_at: now,
         };
 
-        self.repos
-            .pipeline_repo
-            .create(&pipeline)
-            .await
-            .map_err(map_repo_error)?;
+        self.repos.pipeline_repo.create(&pipeline).await?;
 
         Ok(pipeline.into())
     }
@@ -306,8 +300,7 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .get_by_id(pipeline_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_member(pipeline.server_id, actor.user_id)
@@ -319,28 +312,27 @@ impl PipelineService for DefaultPipelineService {
         self.ensure_member(cmd.server_id, cmd.actor.user_id).await?;
 
         let pipelines = match cmd.enabled {
-            Some(true) => self
-                .repos
-                .pipeline_repo
-                .list_enabled_for_server(cmd.server_id)
-                .await
-                .map_err(map_repo_error)?,
+            Some(true) => {
+                self.repos
+                    .pipeline_repo
+                    .list_enabled_for_server(cmd.server_id)
+                    .await?
+            }
             Some(false) => {
                 // List all, then filter disabled
                 let all = self
                     .repos
                     .pipeline_repo
                     .list_for_server(cmd.server_id)
-                    .await
-                    .map_err(map_repo_error)?;
+                    .await?;
                 all.into_iter().filter(|p| !p.enabled).collect()
             }
-            None => self
-                .repos
-                .pipeline_repo
-                .list_for_server(cmd.server_id)
-                .await
-                .map_err(map_repo_error)?,
+            None => {
+                self.repos
+                    .pipeline_repo
+                    .list_for_server(cmd.server_id)
+                    .await?
+            }
         };
 
         Ok(pipelines.into_iter().map(Into::into).collect())
@@ -351,8 +343,7 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .get_by_id(cmd.pipeline_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_member(existing.server_id, cmd.actor.user_id)
@@ -382,11 +373,7 @@ impl PipelineService for DefaultPipelineService {
             updated_at: chrono::Utc::now(),
         };
 
-        self.repos
-            .pipeline_repo
-            .update(&updated)
-            .await
-            .map_err(map_repo_error)?;
+        self.repos.pipeline_repo.update(&updated).await?;
 
         Ok(updated.into())
     }
@@ -396,18 +383,13 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .get_by_id(cmd.pipeline_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_member(existing.server_id, cmd.actor.user_id)
             .await?;
 
-        self.repos
-            .pipeline_repo
-            .delete(cmd.pipeline_id)
-            .await
-            .map_err(map_repo_error)?;
+        self.repos.pipeline_repo.delete(cmd.pipeline_id).await?;
 
         // Evict in-memory tracking entries to prevent memory leaks
         self.cooldowns.remove(&cmd.pipeline_id);
@@ -421,8 +403,7 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .get_by_id(cmd.pipeline_id)
-            .await
-            .map_err(map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_member(existing.server_id, cmd.actor.user_id)
@@ -431,8 +412,7 @@ impl PipelineService for DefaultPipelineService {
         self.repos
             .pipeline_repo
             .set_enabled(cmd.pipeline_id, cmd.enabled)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let updated = Pipeline {
             enabled: cmd.enabled,
@@ -458,8 +438,7 @@ impl PipelineService for DefaultPipelineService {
             .repos
             .pipeline_repo
             .list_enabled_for_server(server_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let mut results = Vec::new();
 
@@ -557,14 +536,64 @@ impl PipelineService for DefaultPipelineService {
                                 command_id: command_id.clone(),
                                 args: args.clone(),
                                 context: context.clone(),
-                                confirmed_dangerous: false,
+                                // Pipelines never auto-confirm dangerous
+                                // commands. If a pipeline action targets a
+                                // dangerous command the new gate returns
+                                // `ConfirmationRequired` — the result is
+                                // surfaced as an error in the pipeline log.
+                                // (Pipelines run server-side without a user
+                                // present to OK the modal.) Phase 5 may add
+                                // a "pre-authorized pipeline action" flow
+                                // requiring an admin-issued out-of-band
+                                // proof; tracked under §8.4.
+                                confirmation: None,
                                 is_pipe: false,
+                                // Pipelines fire in response to backend
+                                // events the user did not explicitly
+                                // initiate (e.g. webhook trigger). Tag as
+                                // `Plugin` because pipelines are config-
+                                // driven non-human automation — same
+                                // agentic-rate-limit class as agent and
+                                // MCP per `is_agentic()`. See Fury-handoff
+                                // note in docs/security/ai-reframe-review
+                                // §8.4: if Fury adds a dedicated `Pipeline`
+                                // variant in Phase 2, update this site.
+                                initiator: CommandInitiator::Plugin,
                             })
                             .await;
 
                         match result {
-                            Ok(_) => {
-                                actions_executed += 1;
+                            Ok(res) => {
+                                use rim_services::command::dto::CommandResultStatusDto;
+                                match res.status {
+                                    CommandResultStatusDto::Success => {
+                                        actions_executed += 1;
+                                    }
+                                    CommandResultStatusDto::ConfirmationRequired => {
+                                        // H1: pipeline-driven invocation hit
+                                        // a dangerous command. Server-side
+                                        // pipelines have no user present to
+                                        // OK the modal, so the issued
+                                        // challenge is unusable. Drop the
+                                        // (unspent) token will TTL-expire.
+                                        // See §8.4 follow-up for an
+                                        // admin-issued out-of-band proof
+                                        // flow tracked for Phase 5.
+                                        tracing::warn!(
+                                            pipeline_id = %pipeline.id,
+                                            command_id = %command_id,
+                                            "pipeline action targets a dangerous command but server-side pipelines cannot satisfy the confirmation gate; action skipped",
+                                        );
+                                    }
+                                    CommandResultStatusDto::Error => {
+                                        tracing::warn!(
+                                            pipeline_id = %pipeline.id,
+                                            command_id = %command_id,
+                                            message = %res.message,
+                                            "pipeline action returned error status",
+                                        );
+                                    }
+                                }
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -880,6 +909,7 @@ mod tests {
                     payload: None,
                     follow_up_commands: vec![],
                     pipeline_stages: None,
+                    confirmation_required: None,
                 })
             })
         });
@@ -926,6 +956,7 @@ mod tests {
                     payload: None,
                     follow_up_commands: vec![],
                     pipeline_stages: None,
+                    confirmation_required: None,
                 })
             })
         });

@@ -10,6 +10,10 @@ pub struct Model {
     pub name: String,
     pub description: Option<String>,
     pub steps: Json,
+    pub ai_callable: bool,
+    pub nl_description: String,
+    pub intent_samples: Json,
+    pub sensitivity: String,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

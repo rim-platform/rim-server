@@ -11,9 +11,7 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 
 use crate::ThreadRepos;
-use crate::util::{
-    ensure_conversation_access, ensure_conversation_in_server, ensure_server_member,
-};
+use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
 
 #[derive(Clone)]
 pub struct DefaultThreadService {
@@ -38,13 +36,7 @@ impl DefaultThreadService {
         let mut root_text = None;
 
         if let Some(root_message_id) = thread.first_message_id {
-            if let Some(root) = self
-                .repos
-                .message_repo
-                .get_by_id(root_message_id)
-                .await
-                .map_err(rim_services::map_repo_error)?
-            {
+            if let Some(root) = self.repos.message_repo.get_by_id(root_message_id).await? {
                 root_author_id = Some(root.sent_by);
                 root_text = root.text;
             }
@@ -84,24 +76,15 @@ impl DefaultThreadService {
 #[async_trait]
 impl ThreadService for DefaultThreadService {
     async fn create_thread(&self, cmd: CreateThreadCmd) -> ServiceResult<ThreadDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             cmd.actor.user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            cmd.server_id,
             cmd.conversation_id,
-            cmd.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            cmd.actor.user_id,
         )
         .await?;
 
@@ -109,8 +92,7 @@ impl ThreadService for DefaultThreadService {
             .repos
             .message_repo
             .get_by_id(cmd.root_message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if root_message.conversation_id != cmd.conversation_id || root_message.thread_id.is_some() {
@@ -121,8 +103,7 @@ impl ThreadService for DefaultThreadService {
             .repos
             .message_thread_repo
             .get_by_root_message(cmd.root_message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
         {
             return self.to_dto(existing, cmd.server_id).await;
         }
@@ -143,13 +124,12 @@ impl ThreadService for DefaultThreadService {
                 self.repos
                     .message_thread_repo
                     .get_by_root_message(cmd.root_message_id)
-                    .await
-                    .map_err(rim_services::map_repo_error)?
+                    .await?
                     .ok_or(ServiceError::Conflict(
                         "thread already exists for message".to_string(),
                     ))?
             }
-            Err(err) => return Err(rim_services::map_repo_error(err)),
+            Err(err) => return Err(ServiceError::from(err)),
         };
 
         info!(thread_id = %thread.id, root_message_id = %cmd.root_message_id, "created thread from message");
@@ -161,24 +141,15 @@ impl ThreadService for DefaultThreadService {
         &self,
         query: GetThreadByRootMessageQuery,
     ) -> ServiceResult<Option<ThreadDto>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            query.server_id,
             query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            query.actor.user_id,
         )
         .await?;
 
@@ -186,8 +157,7 @@ impl ThreadService for DefaultThreadService {
             .repos
             .message_repo
             .get_by_id(query.root_message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if root_message.conversation_id != query.conversation_id || root_message.thread_id.is_some()
@@ -199,8 +169,7 @@ impl ThreadService for DefaultThreadService {
             .repos
             .message_thread_repo
             .get_by_root_message(query.root_message_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
         else {
             return Ok(None);
         };
@@ -209,24 +178,15 @@ impl ThreadService for DefaultThreadService {
     }
 
     async fn get_thread(&self, query: GetThreadQuery) -> ServiceResult<ThreadDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            query.server_id,
             query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            query.actor.user_id,
         )
         .await?;
 
@@ -234,8 +194,7 @@ impl ThreadService for DefaultThreadService {
             .repos
             .message_thread_repo
             .get_by_id(query.thread_id)
-            .await
-            .map_err(rim_services::map_repo_error)?
+            .await?
             .ok_or(ServiceError::NotFound)?;
 
         if thread.conversation_id != query.conversation_id {
@@ -249,24 +208,15 @@ impl ThreadService for DefaultThreadService {
         &self,
         query: ListThreadsQuery,
     ) -> ServiceResult<Page<ThreadDto, ThreadPageCursor>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
             query.actor.user_id,
-        )
-        .await?;
-
-        let conv = ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
+            query.server_id,
             query.conversation_id,
-            query.server_id,
-        )
-        .await?;
-
-        ensure_conversation_access(
-            self.repos.conversation_member_repo.as_ref(),
-            &conv,
-            query.actor.user_id,
         )
         .await?;
 
@@ -279,8 +229,7 @@ impl ThreadService for DefaultThreadService {
                 query.dir,
                 query.cursor.map(Into::into),
             )
-            .await
-            .map_err(rim_services::map_repo_error)?;
+            .await?;
 
         info!(
             conversation_id = %query.conversation_id,
@@ -293,12 +242,7 @@ impl ThreadService for DefaultThreadService {
             .iter()
             .filter_map(|t| t.first_message_id)
             .collect::<Vec<_>>();
-        let roots = self
-            .repos
-            .message_repo
-            .get_by_ids(&root_ids)
-            .await
-            .map_err(rim_services::map_repo_error)?;
+        let roots = self.repos.message_repo.get_by_ids(&root_ids).await?;
 
         let mut items = Vec::with_capacity(page.items.len());
         for thread in page.items {

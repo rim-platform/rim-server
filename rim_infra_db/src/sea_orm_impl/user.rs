@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use entity::user;
 use rim_core::repository::error::RepoResult;
-use rim_core::user::model::{NewUser, User, UserId};
+use rim_core::user::model::{NewUser, UpdateProfilePatch, User, UserId};
 use rim_core::user::repository::UserRepository;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 
@@ -91,14 +91,7 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(model.is_some())
     }
 
-    async fn update_profile(
-        &self,
-        id: UserId,
-        display_name: Option<Option<String>>,
-        avatar_url: Option<Option<String>>,
-        status_text: Option<Option<String>>,
-        bio: Option<Option<String>>,
-    ) -> RepoResult<User> {
+    async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User> {
         let model = user::Entity::find_by_id(id)
             .one(&self.db)
             .await
@@ -107,16 +100,16 @@ impl UserRepository for SeaOrmUserRepository {
 
         let mut active = model.into_active_model();
 
-        if let Some(val) = display_name {
+        if let Some(val) = patch.display_name {
             active.display_name = Set(val);
         }
-        if let Some(val) = avatar_url {
+        if let Some(val) = patch.avatar_url {
             active.avatar_url = Set(val);
         }
-        if let Some(val) = status_text {
+        if let Some(val) = patch.status_text {
             active.status_text = Set(val);
         }
-        if let Some(val) = bio {
+        if let Some(val) = patch.bio {
             active.bio = Set(val);
         }
 

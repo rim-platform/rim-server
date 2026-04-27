@@ -1,40 +1,41 @@
-pub mod action;
-pub mod auth;
+pub(crate) mod action;
+pub(crate) mod audit;
+pub(crate) mod auth;
 pub mod capability;
-pub mod channel_lens;
+pub(crate) mod channel_lens;
 pub mod command;
-pub mod conversation;
-pub mod custom_emoji;
-pub mod email;
-pub mod event;
+pub(crate) mod conversation;
+pub(crate) mod custom_emoji;
+pub(crate) mod email;
+pub(crate) mod event;
 pub mod file_storage;
-pub mod incident;
-pub mod integration;
-pub mod keybind;
-pub mod link_preview;
+pub(crate) mod incident;
+pub(crate) mod integration;
+pub(crate) mod keybind;
+pub(crate) mod link_preview;
 pub mod macro_def;
-pub mod mention;
-pub mod message;
-pub mod message_attachment;
-pub mod message_reaction;
-pub mod notification_preference;
-pub mod password_reset;
-pub mod pin;
-pub mod pipeline;
+pub(crate) mod mention;
+pub(crate) mod message;
+pub(crate) mod message_attachment;
+pub(crate) mod message_reaction;
+pub(crate) mod notification_preference;
+pub(crate) mod password_reset;
+pub(crate) mod pin;
+pub(crate) mod pipeline;
 pub mod presence;
-pub mod provider;
-pub mod read_state;
-pub mod repos;
-pub mod request_auth;
-pub mod server;
-pub mod server_member;
-pub mod setting;
-pub mod skill_profile;
+pub(crate) mod provider;
+pub(crate) mod read_state;
+pub(crate) mod repos;
+pub(crate) mod request_auth;
+pub(crate) mod server;
+pub(crate) mod server_member;
+pub(crate) mod setting;
+pub(crate) mod skill_profile;
 pub mod storage;
-pub mod thread;
+pub(crate) mod thread;
 pub mod typing;
-pub mod user;
-pub mod workspace_state;
+pub(crate) mod user;
+pub(crate) mod workspace_state;
 
 pub(crate) mod util;
 
@@ -64,6 +65,12 @@ mod server_member_unit_tests;
 
 #[cfg(test)]
 mod user_unit_tests;
+
+#[cfg(test)]
+mod incident_unit_tests;
+
+#[cfg(test)]
+mod command_tests;
 
 pub use channel_lens::ChannelLensRepos;
 pub use custom_emoji::CustomEmojiRepos;

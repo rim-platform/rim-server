@@ -8,7 +8,7 @@ use rim_services::skill_profile::dto::{
     OverrideSkillTierCmd, RecordFeatureUsageCmd, SkillProfileDto,
 };
 use rim_services::skill_profile::service::SkillProfileService;
-use rim_services::{Actor, ServiceResult, map_repo_error};
+use rim_services::{Actor, ServiceResult};
 
 /// Number of distinct features required to auto-promote to intermediate.
 const INTERMEDIATE_THRESHOLD: usize = 5;
@@ -39,11 +39,7 @@ fn auto_tier(feature_count: usize) -> SkillTier {
 #[async_trait]
 impl SkillProfileService for DefaultSkillProfileService {
     async fn get_skill_profile(&self, actor: Actor) -> ServiceResult<SkillProfileDto> {
-        let profile = self
-            .skill_profile_repo
-            .get_or_create(actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+        let profile = self.skill_profile_repo.get_or_create(actor.user_id).await?;
 
         Ok(SkillProfileDto::from(profile))
     }
@@ -55,8 +51,7 @@ impl SkillProfileService for DefaultSkillProfileService {
         let mut profile = self
             .skill_profile_repo
             .get_or_create(cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         // Idempotent: only record first use
         profile
@@ -70,8 +65,7 @@ impl SkillProfileService for DefaultSkillProfileService {
         let updated = self
             .skill_profile_repo
             .update(cmd.actor.user_id, &profile.features_used, new_tier)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(SkillProfileDto::from(updated))
     }
@@ -83,14 +77,12 @@ impl SkillProfileService for DefaultSkillProfileService {
         let profile = self
             .skill_profile_repo
             .get_or_create(cmd.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         let updated = self
             .skill_profile_repo
             .update(cmd.actor.user_id, &profile.features_used, cmd.tier)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(SkillProfileDto::from(updated))
     }

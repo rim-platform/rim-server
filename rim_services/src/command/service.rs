@@ -2,6 +2,9 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
+use rim_core::server::model::ServerId;
+
+use crate::Actor;
 use crate::ServiceResult;
 use crate::command::dto::{CommandDefinitionDto, CommandResultDto, UserCommandDto};
 use crate::command::request::{
@@ -26,4 +29,46 @@ pub trait CommandService: Send + Sync {
     async fn update_user_command(&self, cmd: UpdateUserCommandCmd)
     -> ServiceResult<UserCommandDto>;
     async fn delete_user_command(&self, cmd: DeleteUserCommandCmd) -> ServiceResult<()>;
+
+    /// P5-A7 — AI Agent command-discovery meta-tool (v2 §5 R1 #3, M6).
+    ///
+    /// Returns the actor's accessible AI-callable command surface, optionally
+    /// ranked by relevance to an `intent_phrase`, truncated to `limit`, and
+    /// scoped to a workspace for macro synthesis.
+    ///
+    /// **Filtering pipeline (in order):**
+    ///   1. `ai_callable: true` — non-AI commands are excluded.
+    ///   2. Actor capability gate — commands whose `required_capabilities` the
+    ///      actor does not hold are silently dropped (same gate as `Surface::Ai`
+    ///      in `list_commands`).
+    ///   3. Macro inclusion — when `workspace_id` is `Some`, synthesized macro
+    ///      definitions are merged before the capability gate runs.
+    ///
+    /// **Intent ranking** (R2 — literal substring + token-overlap; embeddings
+    /// deferred per ROADMAP §5 R2):
+    ///   - When `intent_phrase` is `Some`, commands are ranked descending by a
+    ///     score computed from substring + token-overlap matches against
+    ///     `intent_samples`, `title`, and `nl_description`.
+    ///   - Tie-break: `command_id` ascending (deterministic for agents).
+    ///   - When `intent_phrase` is `None`, output is sorted by `command_id`
+    ///     ascending (same stable order as `list_commands`).
+    ///
+    /// **Result cap:** truncated to `limit.unwrap_or(50).min(100)`.
+    ///
+    /// **Rate limit (M6 mitigation):** 5 invocations per 60-second sliding
+    /// window per actor. Returns `ServiceError::RateLimited` on overage.
+    /// The design spec says "per session"; the implementation approximates this
+    /// with the same per-minute sliding window used by `execute_command` rate
+    /// limits (single-node). Per-session tracking requires session-aware
+    /// infrastructure and is deferred to Phase 6.
+    ///
+    /// Plugin consent gating: plugins are desktop-local at Phase 5; no backend
+    /// consent store exists. Deferred to Phase 6 per ROADMAP.
+    async fn command_discover(
+        &self,
+        actor: &Actor,
+        intent_phrase: Option<String>,
+        limit: Option<u32>,
+        workspace_id: Option<ServerId>,
+    ) -> ServiceResult<Vec<CommandDefinitionDto>>;
 }

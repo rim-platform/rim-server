@@ -147,6 +147,12 @@ mod tests {
                     keybind_capable: true,
                     dangerous: false,
                     user_command_id: None,
+                    nl_description: None,
+                    intent_samples: vec![],
+                    ai_callable: false,
+                    sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
+                    typed_verb: rim_services::command::verb::TypedVerb::Other,
+                    rate_limit_per_minute: None,
                 })
             } else {
                 None

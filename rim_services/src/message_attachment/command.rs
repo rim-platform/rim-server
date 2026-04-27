@@ -46,6 +46,7 @@ pub struct GetAttachmentQuery {
 /// attachment is in pending state, and updates the storage key.
 #[derive(Debug, Clone)]
 pub struct CompleteUploadCmd {
+    pub actor_user_id: rim_core::user::model::UserId,
     pub attachment_id: MessageAttachmentId,
     pub upload_token: String,
     pub storage_key: String,

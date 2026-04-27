@@ -2,7 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use rim_core::user::model::{User, UserId};
+    use rim_core::user::model::{UpdateProfilePatch, User, UserId};
     use rim_core::user::repository::MockUserRepository;
     use rim_services::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
     use rim_services::user::service::UserService;
@@ -75,16 +75,16 @@ mod tests {
         let mut user_repo = MockUserRepository::new();
         user_repo
             .expect_update_profile()
-            .returning(move |uid, dn, _av, st, bio| {
+            .returning(move |uid, patch: UpdateProfilePatch| {
                 assert_eq!(uid, id);
                 let mut u = user(id);
-                if let Some(v) = dn {
+                if let Some(v) = patch.display_name {
                     u.display_name = v;
                 }
-                if let Some(v) = st {
+                if let Some(v) = patch.status_text {
                     u.status_text = v;
                 }
-                if let Some(v) = bio {
+                if let Some(v) = patch.bio {
                     u.bio = v;
                 }
                 Ok(u)
@@ -153,10 +153,10 @@ mod tests {
         let mut user_repo = MockUserRepository::new();
         user_repo
             .expect_update_profile()
-            .returning(move |_uid, dn, _av, _st, _bio| {
+            .returning(move |_uid, patch: UpdateProfilePatch| {
                 // Control chars should be stripped
                 let mut u = user(id);
-                if let Some(v) = dn {
+                if let Some(v) = patch.display_name {
                     u.display_name = v;
                 }
                 Ok(u)

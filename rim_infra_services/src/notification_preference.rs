@@ -10,7 +10,7 @@ use rim_services::notification_preference::command::{
 };
 use rim_services::notification_preference::dto::MutedConversationDto;
 use rim_services::notification_preference::service::NotificationPreferenceService;
-use rim_services::{ServiceResult, map_repo_error};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::util::ensure_server_member;
 
@@ -44,8 +44,7 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
         self.repos
             .notification_preference_repo
             .set_mute(cmd.actor.user_id, cmd.conversation_id, cmd.muted_until)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(true)
     }
@@ -62,8 +61,7 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
         self.repos
             .notification_preference_repo
             .remove_mute(cmd.actor.user_id, cmd.conversation_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(true)
     }
@@ -73,7 +71,7 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
             .notification_preference_repo
             .is_muted(query.actor.user_id, query.conversation_id)
             .await
-            .map_err(map_repo_error)
+            .map_err(ServiceError::from)
     }
 
     #[instrument(name = "notification.list_muted", skip_all, fields(actor_id = %query.actor.user_id, server_id = %query.server_id))]
@@ -92,8 +90,7 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
             .repos
             .notification_preference_repo
             .get_muted_conversations(query.actor.user_id)
-            .await
-            .map_err(map_repo_error)?;
+            .await?;
 
         Ok(prefs
             .into_iter()
