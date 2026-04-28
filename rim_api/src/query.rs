@@ -1311,7 +1311,12 @@ impl Query {
         ctx: &Context<'_>,
         token: String,
     ) -> Result<InviteTokenPreviewGql> {
-        // Fail-closed: preview rate limiter MUST be wired into context (§4.7 boot invariant).
+        // Marker token: the rate limiter is internal to `DefaultAuthService` and is
+        // always present — "missing limiter" is a state the type system makes
+        // unrepresentable (spec §4.7 R2). This context lookup is kept as a
+        // proof-of-wiring artifact; the marker is wired at schema-build time in
+        // `RegistrationContext`. Nit1 hardening: comment updated — limiter is
+        // internal; context just carries this marker token.
         let _ = ctx
             .data::<std::sync::Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>>()
             .map_err(|_| {

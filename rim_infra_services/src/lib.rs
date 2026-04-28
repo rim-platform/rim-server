@@ -80,9 +80,7 @@ pub use macro_def::MacroRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use pipeline::PipelineRepos;
 pub use provider::DefaultAppServiceProvider;
-pub use registration_rate_limiter::{
-    PreviewInviteRateLimiter, RegistrationRateLimiter, SignupRateLimiter,
-};
+pub use registration_rate_limiter::RegistrationRateLimiter;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,

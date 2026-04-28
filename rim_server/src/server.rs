@@ -26,6 +26,12 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct HandlerConfig {
     session_ttl_days: u32,
+    /// Whether to read `X-Forwarded-For` for real-IP resolution.
+    /// Only `true` when `RIM_TRUST_FORWARDED_HEADERS=true`.
+    trust_forwarded_headers: bool,
+    /// Whether to unconditionally set `Secure` on all cookies.
+    /// Only `true` when `RIM_FORCE_SECURE_COOKIES=true`.
+    force_secure_cookies: bool,
 }
 
 pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
@@ -43,6 +49,8 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let cors_allowed_origin = config.cors_allowed_origin.clone();
     let handler_config = HandlerConfig {
         session_ttl_days: config.session_ttl_days,
+        trust_forwarded_headers: config.trust_forwarded_headers(),
+        force_secure_cookies: config.force_secure_cookies(),
     };
 
     let runtime = build_app_runtime(config).await?;
@@ -167,12 +175,25 @@ async fn graphql_handler(
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
         // Extract the remote IP for rate-limiting resolvers (e.g. previewInviteToken).
-        let remote_ip = rim_api::auth_context::RemoteIp::new(
+        //
+        // H1 hardening: trust X-Forwarded-For only when the operator has explicitly
+        // set RIM_TRUST_FORWARDED_HEADERS=true, indicating a trusted reverse proxy
+        // is the sole entry point. Without a proxy, clients can forge the header and
+        // spoof their IP, defeating the per-IP rate limits.
+        //
+        // Default: use the TCP peer address (reliable, un-spoofable).
+        // With trust: use realip_remote_addr() which reads X-Forwarded-For / Forwarded.
+        let remote_ip_str = if handler_cfg.trust_forwarded_headers {
             req.connection_info()
                 .realip_remote_addr()
                 .unwrap_or("unknown")
-                .to_string(),
-        );
+                .to_string()
+        } else {
+            req.peer_addr()
+                .map(|a| a.ip().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        };
+        let remote_ip = rim_api::auth_context::RemoteIp::new(remote_ip_str);
 
         // Inject auth context and auth intent into each request in the batch.
         // Auth intent is shared across the batch so cookies are set once.
@@ -189,7 +210,14 @@ async fn graphql_handler(
         let resp = annotate_batch_request_id(resp, &request_id);
 
         let gql_resp = GraphQLResponse::from(resp);
-        apply_auth_cookies(gql_resp, auth_intent.as_ref(), &req, handler_cfg.session_ttl_days)
+        apply_auth_cookies(
+            gql_resp,
+            auth_intent.as_ref(),
+            &req,
+            handler_cfg.session_ttl_days,
+            handler_cfg.trust_forwarded_headers,
+            handler_cfg.force_secure_cookies,
+        )
     }
     .instrument(span)
     .await

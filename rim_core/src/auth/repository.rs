@@ -64,14 +64,24 @@ pub trait BootstrapTokenRepository: Send + Sync {
     /// Returns a repository error on DB failure.
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<BootstrapToken>>;
 
-    /// Mark a token as used, setting `used_at = now()` and recording the
-    /// consuming user's id.
+    /// Atomically mark a bootstrap token as used.
     ///
-    /// No-op if the row does not exist. Callers should verify existence first.
+    /// Sets `used_at = now()` and `consumed_by_user_id` in a single
+    /// `UPDATE … WHERE id = $1 AND used_at IS NULL AND revoked_at IS NULL`
+    /// statement, eliminating the check-then-update race present in a
+    /// two-step read + write.
+    ///
+    /// Returns `true` if the row was updated (token was still unused and
+    /// not revoked), `false` if another concurrent consumer already claimed
+    /// it or if the row does not exist.
     ///
     /// # Errors
     /// Returns a repository error on DB failure.
-    async fn mark_used(&self, id: BootstrapTokenId, consumed_by_user_id: UserId) -> RepoResult<()>;
+    async fn try_mark_used(
+        &self,
+        id: BootstrapTokenId,
+        consumed_by_user_id: UserId,
+    ) -> RepoResult<bool>;
 
     /// Revoke a token by setting `revoked_at = now()`.
     ///

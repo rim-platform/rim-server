@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::instance_invite;
+use sea_orm::Value;
 use sea_orm::prelude::{Expr, Uuid};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, QueryFilter, Set};
 
@@ -92,8 +93,14 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
 
     /// Atomically consume one use slot.
     ///
-    /// Increments `use_count` only when `use_count < max_uses`.
-    /// Returns `true` on success, `false` when exhausted or missing.
+    /// Increments `use_count` only when all of the following hold (M4 hardening):
+    /// - `use_count < max_uses` (capacity available)
+    /// - `revoked_at IS NULL` (not revoked — guards against concurrent admin revoke)
+    /// - `expires_at > now()` (not expired)
+    ///
+    /// Returns `true` on success, `false` when any condition fails or the row
+    /// is missing. All conditions are evaluated inside a single UPDATE statement,
+    /// so there is no TOCTOU window between the pre-check and the increment.
     ///
     /// # Errors
     /// Returns a repository error on database failure.
@@ -101,16 +108,25 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     /// # Examples
     /// ```ignore
     /// let consumed = repo.try_consume(invite.id).await?;
+    /// if !consumed {
+    ///     return Err(ServiceError::InvalidToken);
+    /// }
     /// ```
     async fn try_consume(&self, id: InstanceInviteId) -> RepoResult<bool> {
+        let now = Utc::now();
         let res = instance_invite::Entity::update_many()
             .filter(instance_invite::Column::Id.eq::<Uuid>(id.into()))
+            // capacity check
             .filter(
                 sea_orm::Condition::all().add(
                     Expr::col(instance_invite::Column::UseCount)
                         .lt(Expr::col(instance_invite::Column::MaxUses)),
                 ),
             )
+            // M4: must not be revoked (guards concurrent admin revoke)
+            .filter(instance_invite::Column::RevokedAt.is_null())
+            // M4: must not be expired
+            .filter(instance_invite::Column::ExpiresAt.gt(Value::ChronoDateTimeUtc(Some(now))))
             .col_expr(
                 instance_invite::Column::UseCount,
                 Expr::col(instance_invite::Column::UseCount).add(1),

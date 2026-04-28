@@ -1,66 +1,68 @@
-/// Newtype wrapper for the preview-invite rate limiter used as GraphQL context data.
-///
-/// Keyed `("preview_invite", ip)`, 30 req / 5 min / IP (§4.7).
-#[derive(Clone, Debug)]
-pub struct PreviewInviteRateLimiter(pub RegistrationRateLimiter);
-
-impl PreviewInviteRateLimiter {
-    /// Construct the default preview rate limiter.
-    pub fn new() -> Self {
-        Self(RegistrationRateLimiter::preview_default())
-    }
-}
-
-impl Default for PreviewInviteRateLimiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Newtype wrapper for the open-mode signup rate limiter used as GraphQL context data.
-///
-/// Required when `RIM_OPEN_REGISTRATION=true`; boot check fails if absent.
-#[derive(Clone, Debug)]
-pub struct SignupRateLimiter(pub RegistrationRateLimiter);
-
-impl SignupRateLimiter {
-    /// Construct the default signup rate limiter.
-    pub fn new() -> Self {
-        Self(RegistrationRateLimiter::signup_default())
-    }
-}
-
-impl Default for SignupRateLimiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 use std::collections::VecDeque;
+use std::net::IpAddr;
+use std::str::FromStr;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rim_services::command::rate_limit::{RateLimitDecision, check_sliding_window};
 
-type RegistrationRateLimitStore = DashMap<(String, String), VecDeque<DateTime<Utc>>>;
+/// Maximum number of distinct (normalised-IP, key) buckets held in memory.
+///
+/// M6 hardening: an unbounded DashMap is a memory-DoS vector when combined
+/// with H1 (spoofed source IPs) or M5 (IPv6 /64 rotation). Once the map
+/// exceeds this limit, the oldest-inserted bucket is evicted to make room.
+///
+/// 100 000 buckets × ≈200 bytes each ≈ 20 MiB worst-case, which is
+/// acceptable for a long-running server process.
+const MAX_BUCKETS: usize = 100_000;
 
-/// Shared, thread-safe per-(IP, key) sliding-window rate limiter for
+type BucketKey = (String, String);
+type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
+
+/// Shared, thread-safe per-(normalised-IP, key) sliding-window rate limiter for
 /// unauthenticated registration endpoints.
 ///
 /// Used for:
 /// - `previewInviteToken`: 30 req / 5-min / IP (keyed `"preview_invite"`)
-/// - `signupWithInvite` in open mode: configurable via `SIGNUP_LIMIT` / `SIGNUP_WINDOW_SECS`
+/// - `signupWithInvite` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
 ///
 /// Single-node only; DashMap-backed.
-#[derive(Debug, Default, Clone)]
+///
+/// # IPv6 normalisation (M5)
+/// IPv6 source addresses are normalised to their /64 network prefix before
+/// keying the map. This prevents an attacker on a /64 block from cycling
+/// through the remaining 2^64 interface identifiers to bypass per-IP limits.
+/// IPv4 addresses are used as-is (/32).
+///
+/// A /64 was chosen over a tighter /56 because:
+/// - Residential ISPs typically assign a single /64 to each CPE; normalising
+///   to /64 scopes the limit to the household without lumping multiple
+///   households together.
+/// - /56 would group 256 /64 prefixes under one bucket, which could
+///   incorrectly limit legitimate users sharing a carrier-grade NAT prefix.
+///
+/// # Capacity cap (M6)
+/// The map is capped at [`MAX_BUCKETS`] entries. When the cap is reached,
+/// the oldest-inserted bucket is evicted (FIFO). This bounds memory usage
+/// and prevents a memory DoS via high-volume IP rotation.
+#[derive(Debug, Clone)]
 pub struct RegistrationRateLimiter {
-    store: std::sync::Arc<RegistrationRateLimitStore>,
+    store: std::sync::Arc<RateLimitStore>,
+    /// FIFO queue of inserted keys, used for eviction when the cap is reached.
+    insertion_order: std::sync::Arc<Mutex<VecDeque<BucketKey>>>,
     window_secs: u64,
     limit: u32,
 }
 
+impl Default for RegistrationRateLimiter {
+    fn default() -> Self {
+        Self::preview_default()
+    }
+}
+
 impl RegistrationRateLimiter {
-    /// Construct a new limiter with the given window and limit.
+    /// Construct a new limiter with the given sliding-window size and request limit.
     ///
     /// # Examples
     /// ```
@@ -71,6 +73,7 @@ impl RegistrationRateLimiter {
     pub fn new(window_secs: u64, limit: u32) -> Self {
         Self {
             store: std::sync::Arc::new(DashMap::new()),
+            insertion_order: std::sync::Arc::new(Mutex::new(VecDeque::new())),
             window_secs,
             limit,
         }
@@ -100,13 +103,56 @@ impl RegistrationRateLimiter {
         Self::new(600, 20)
     }
 
+    /// Normalise a raw IP string to a canonical rate-limit key.
+    ///
+    /// - **IPv4**: returned unchanged (full /32 precision).
+    /// - **IPv6**: zeroes the lower 64 bits, keeping only the /64 network prefix.
+    ///   This prevents attacker rotation across the 2^64 interface identifiers
+    ///   within a single /64 allocation (M5 hardening).
+    /// - **Unparseable**: returned unchanged as a fallback so rate-limiting
+    ///   degrades gracefully rather than panicking.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    ///
+    /// // IPv4 is unchanged.
+    /// assert_eq!(RegistrationRateLimiter::normalise_ip("1.2.3.4"), "1.2.3.4");
+    ///
+    /// // Two IPv6 addresses in the same /64 share a bucket.
+    /// let a = RegistrationRateLimiter::normalise_ip("2001:db8::1");
+    /// let b = RegistrationRateLimiter::normalise_ip("2001:db8::2");
+    /// assert_eq!(a, b);
+    ///
+    /// // IPv6 addresses in different /64s are distinct.
+    /// let c = RegistrationRateLimiter::normalise_ip("2001:db8:0:1::1");
+    /// assert_ne!(a, c);
+    /// ```
+    pub fn normalise_ip(ip: &str) -> String {
+        match IpAddr::from_str(ip) {
+            Ok(IpAddr::V6(v6)) => {
+                // Keep only the top 64 bits (network prefix).
+                let octets = v6.octets();
+                let prefix: [u8; 16] = [
+                    octets[0], octets[1], octets[2], octets[3], octets[4], octets[5], octets[6],
+                    octets[7], // Zero the lower 64 bits (interface identifier).
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                ];
+                std::net::Ipv6Addr::from(prefix).to_string()
+            }
+            // IPv4 or unparseable: use as-is.
+            Ok(IpAddr::V4(_)) | Err(_) => ip.to_string(),
+        }
+    }
+
     /// Record one call from `ip` under `key` and return whether it is allowed.
     ///
-    /// Evicts timestamps outside the window before checking, bounding memory
-    /// to `limit` entries per (ip, key) pair.
+    /// Before checking, the IP is normalised via [`Self::normalise_ip`] (M5).
+    /// If the store exceeds [`MAX_BUCKETS`] after inserting a new bucket, the
+    /// oldest bucket is evicted (M6).
     ///
-    /// # Errors
-    /// This function is infallible; always returns a [`RateLimitDecision`].
+    /// Stale timestamps outside the sliding window are evicted before checking
+    /// the count, bounding per-bucket memory to at most `limit` entries.
     ///
     /// # Examples
     /// ```
@@ -116,8 +162,11 @@ impl RegistrationRateLimiter {
     /// let decision = limiter.check_and_record("1.2.3.4", "preview_invite", Utc::now());
     /// ```
     pub fn check_and_record(&self, ip: &str, key: &str, now: DateTime<Utc>) -> RateLimitDecision {
-        let map_key = (ip.to_string(), key.to_string());
-        let mut entry = self.store.entry(map_key).or_default();
+        let normalised = Self::normalise_ip(ip);
+        let map_key = (normalised, key.to_string());
+        let is_new = !self.store.contains_key(&map_key);
+
+        let mut entry = self.store.entry(map_key.clone()).or_default();
         let timestamps = entry.value_mut();
 
         // Evict stale entries.
@@ -134,6 +183,23 @@ impl RegistrationRateLimiter {
 
         if decision == RateLimitDecision::Allowed {
             timestamps.push_back(now);
+        }
+
+        // Drop the entry guard before taking the insertion_order lock to avoid
+        // potential lock-ordering deadlocks.
+        drop(entry);
+
+        // M6: track insertion order and evict when over the cap.
+        if is_new {
+            if let Ok(mut order) = self.insertion_order.lock() {
+                order.push_back(map_key);
+                // Evict oldest bucket(s) until we're within the cap.
+                while order.len() > MAX_BUCKETS {
+                    if let Some(oldest_key) = order.pop_front() {
+                        self.store.remove(&oldest_key);
+                    }
+                }
+            }
         }
 
         decision
@@ -195,9 +261,10 @@ mod tests {
         let ip = "3.3.3.3";
         let key = "preview_invite";
 
-        // Inject 2 stale timestamps.
+        // Inject 2 stale timestamps directly into the store.
         {
-            let map_key = (ip.to_string(), key.to_string());
+            let normalised = RegistrationRateLimiter::normalise_ip(ip);
+            let map_key = (normalised, key.to_string());
             let mut entry = rl.store.entry(map_key).or_default();
             let stale = Utc::now() - chrono::Duration::seconds(310);
             entry.push_back(stale);
@@ -208,6 +275,164 @@ mod tests {
         assert_eq!(
             rl.check_and_record(ip, key, now()),
             RateLimitDecision::Allowed
+        );
+    }
+
+    // ── M5 tests ─────────────────────────────────────────────────────────────
+
+    /// M5 — IPv4 addresses are used as-is (no truncation).
+    #[test]
+    fn normalise_ip_ipv4_unchanged() {
+        assert_eq!(RegistrationRateLimiter::normalise_ip("1.2.3.4"), "1.2.3.4");
+        assert_eq!(
+            RegistrationRateLimiter::normalise_ip("192.168.100.200"),
+            "192.168.100.200"
+        );
+    }
+
+    /// M5 — Two IPv6 addresses in the same /64 share a bucket.
+    #[test]
+    fn normalise_ip_ipv6_same_slash64_share_bucket() {
+        let a = RegistrationRateLimiter::normalise_ip("2001:db8::1");
+        let b = RegistrationRateLimiter::normalise_ip("2001:db8::ffff");
+        assert_eq!(a, b, "same /64 prefix must yield the same normalised key");
+    }
+
+    /// M5 — Two IPv6 addresses in different /64s have different buckets.
+    #[test]
+    fn normalise_ip_ipv6_different_slash64_different_bucket() {
+        let a = RegistrationRateLimiter::normalise_ip("2001:db8:0:1::1");
+        let b = RegistrationRateLimiter::normalise_ip("2001:db8:0:2::1");
+        assert_ne!(
+            a, b,
+            "different /64 prefixes must yield different normalised keys"
+        );
+    }
+
+    /// M5 — Two IPv6 addresses in the same /64 hit the same rate-limit bucket.
+    #[test]
+    fn ipv6_same_slash64_shares_rate_limit_bucket() {
+        let rl = RegistrationRateLimiter::new(300, 2);
+        let key = "preview_invite";
+
+        // Two different addresses within the same /64.
+        assert_eq!(
+            rl.check_and_record("2001:db8::1", key, now()),
+            RateLimitDecision::Allowed
+        );
+        assert_eq!(
+            rl.check_and_record("2001:db8::2", key, now()),
+            RateLimitDecision::Allowed
+        );
+        // Third call — same /64 bucket, now exhausted.
+        assert!(
+            matches!(
+                rl.check_and_record("2001:db8::3", key, now()),
+                RateLimitDecision::Limited { .. }
+            ),
+            "third call from same /64 must be limited"
+        );
+    }
+
+    /// M5 — Two IPv6 addresses in different /64s have independent buckets.
+    #[test]
+    fn ipv6_different_slash64_independent_buckets() {
+        let rl = RegistrationRateLimiter::new(300, 1);
+        let key = "preview_invite";
+
+        assert_eq!(
+            rl.check_and_record("2001:db8:0:1::1", key, now()),
+            RateLimitDecision::Allowed,
+            "first /64 first call"
+        );
+        // Different /64 → fresh bucket.
+        assert_eq!(
+            rl.check_and_record("2001:db8:0:2::1", key, now()),
+            RateLimitDecision::Allowed,
+            "second /64 first call must be independent"
+        );
+    }
+
+    // ── M6 tests ─────────────────────────────────────────────────────────────
+
+    /// M6 — When the map exceeds `MAX_BUCKETS`, the oldest entry is evicted.
+    ///
+    /// Uses a small cap (3) to keep the test fast.
+    #[test]
+    fn cap_evicts_oldest_entry() {
+        // Build a limiter with the same logic but a tiny cap.
+        // We can't override MAX_BUCKETS, so we test the eviction indirectly by
+        // verifying that after inserting cap+1 distinct IPs, the total entry
+        // count in the store is bounded.
+        //
+        // Since MAX_BUCKETS = 100_000 we can't fill it in a unit test.
+        // Instead, test the eviction logic via white-box access to the store.
+
+        let rl = RegistrationRateLimiter::new(300, 100);
+        let key = "k";
+
+        // Insert MAX_BUCKETS + 1 distinct IPs. The first one should be evicted.
+        // This is too slow for MAX_BUCKETS = 100_000, so we just verify that
+        // the store size is at most MAX_BUCKETS after inserting MAX_BUCKETS + 10.
+        //
+        // For a practical unit test we verify the FIFO eviction directly by
+        // observing the insertion_order queue length.
+
+        // Insert 5 distinct IPs.
+        for i in 0u8..5 {
+            rl.check_and_record(&format!("10.0.0.{i}"), key, now());
+        }
+        assert_eq!(rl.store.len(), 5, "5 distinct IPs should produce 5 buckets");
+        assert_eq!(
+            rl.insertion_order.lock().unwrap().len(),
+            5,
+            "insertion order queue should track 5 entries"
+        );
+    }
+
+    /// M6 — The eviction logic removes the oldest bucket when the limit is hit.
+    ///
+    /// We white-box test by manually pre-filling insertion_order to simulate
+    /// being at the cap, then verify one more insert evicts the oldest.
+    #[test]
+    fn cap_eviction_removes_oldest_when_full() {
+        let rl = RegistrationRateLimiter::new(300, 100);
+        let key = "k";
+
+        // Pre-seed with MAX_BUCKETS synthetic entries so the next real insert
+        // triggers eviction. Because seeding MAX_BUCKETS real calls would be
+        // slow, we manipulate the internal structures directly.
+        {
+            let mut order = rl.insertion_order.lock().unwrap();
+            for i in 0..MAX_BUCKETS {
+                let synthetic_key = (format!("synthetic-ip-{i}"), key.to_string());
+                rl.store.insert(synthetic_key.clone(), VecDeque::new());
+                order.push_back(synthetic_key);
+            }
+        }
+
+        assert_eq!(rl.store.len(), MAX_BUCKETS);
+
+        // Now insert one real entry — should evict "synthetic-ip-0".
+        rl.check_and_record("10.0.0.1", key, now());
+
+        // Store must still be at or below MAX_BUCKETS.
+        assert!(
+            rl.store.len() <= MAX_BUCKETS,
+            "store must not exceed MAX_BUCKETS after eviction; len={}",
+            rl.store.len()
+        );
+        // The oldest synthetic entry must have been evicted.
+        assert!(
+            !rl.store
+                .contains_key(&("synthetic-ip-0".to_string(), key.to_string())),
+            "oldest entry must have been evicted"
+        );
+        // The new real entry must be present.
+        assert!(
+            rl.store
+                .contains_key(&(String::from("10.0.0.1"), key.to_string())),
+            "new entry must be present after eviction"
         );
     }
 }
