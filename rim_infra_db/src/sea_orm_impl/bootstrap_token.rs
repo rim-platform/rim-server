@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use entity::bootstrap_token;
+use sea_orm::Value;
+use sea_orm::prelude::{Expr, Uuid};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 
 use crate::DbHandle;
@@ -88,32 +90,50 @@ impl BootstrapTokenRepository for SeaOrmBootstrapTokenRepository {
         Ok(model.map(Into::into))
     }
 
-    /// Mark a bootstrap token as used, recording the consuming user.
+    /// Atomically mark a bootstrap token as used, recording the consuming user.
     ///
-    /// Sets `used_at = now()` and `consumed_by_user_id`. No-op if the row
-    /// no longer exists.
+    /// Executes a single `UPDATE … WHERE id = $1 AND used_at IS NULL AND
+    /// revoked_at IS NULL` statement, eliminating the check-then-update race
+    /// present in a two-step read + write (C1 hardening).
+    ///
+    /// Returns `true` when the row was updated (the token was still available),
+    /// `false` when another concurrent consumer already claimed it, the row
+    /// does not exist, or the token is revoked.
     ///
     /// # Errors
     /// Returns a repository error on database failure.
     ///
     /// # Examples
     /// ```ignore
-    /// repo.mark_used(token.id, user.id).await?;
+    /// let claimed = repo.try_mark_used(token.id, user.id).await?;
+    /// if !claimed {
+    ///     return Err(ServiceError::InvalidToken);
+    /// }
     /// ```
-    async fn mark_used(&self, id: BootstrapTokenId, consumed_by_user_id: UserId) -> RepoResult<()> {
-        let Some(model) = bootstrap_token::Entity::find_by_id(id)
-            .one(&self.db)
+    async fn try_mark_used(
+        &self,
+        id: BootstrapTokenId,
+        consumed_by_user_id: UserId,
+    ) -> RepoResult<bool> {
+        let now = Utc::now();
+        let user_uuid: Uuid = consumed_by_user_id.into();
+        let res = bootstrap_token::Entity::update_many()
+            .filter(bootstrap_token::Column::Id.eq::<Uuid>(id.into()))
+            .filter(bootstrap_token::Column::UsedAt.is_null())
+            .filter(bootstrap_token::Column::RevokedAt.is_null())
+            .col_expr(
+                bootstrap_token::Column::UsedAt,
+                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+            )
+            .col_expr(
+                bootstrap_token::Column::ConsumedByUserId,
+                Expr::value(Value::Uuid(Some(user_uuid))),
+            )
+            .exec(&self.db)
             .await
-            .map_err(map_db_err)?
-        else {
-            return Ok(());
-        };
+            .map_err(map_db_err)?;
 
-        let mut active = model.into_active_model();
-        active.used_at = Set(Some(Utc::now().into()));
-        active.consumed_by_user_id = Set(Some(consumed_by_user_id.into()));
-        active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+        Ok(res.rows_affected == 1)
     }
 
     /// Revoke a bootstrap token by setting `revoked_at = now()`.

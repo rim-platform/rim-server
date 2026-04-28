@@ -34,6 +34,23 @@ pub struct RIMConfig {
 
     /// Set `RIM_OPEN_REGISTRATION=true` to enable open signup.
     pub open_registration: Option<bool>,
+
+    /// When `true`, the server reads `X-Forwarded-For` / `Forwarded` headers
+    /// to determine the real client IP for rate-limiting. Only enable this
+    /// when a trusted reverse proxy (Nginx, Caddy, Traefik, …) is the sole
+    /// entry point; enabling it without a proxy lets attackers spoof their IP
+    /// and defeat the rate limiters (H1 hardening).
+    ///
+    /// Controlled by `RIM_TRUST_FORWARDED_HEADERS=true`.
+    pub trust_forwarded_headers: Option<bool>,
+
+    /// When `true`, all session and CSRF cookies are issued with `Secure=true`
+    /// regardless of the incoming request scheme or `X-Forwarded-Proto` header.
+    /// Use this for direct-HTTPS deployments where the reverse proxy does not
+    /// forward the `X-Forwarded-Proto` header (H3 hardening).
+    ///
+    /// Controlled by `RIM_FORCE_SECURE_COOKIES=true`.
+    pub force_secure_cookies: Option<bool>,
 }
 
 /// The registration mode resolved from environment at boot.
@@ -60,6 +77,14 @@ impl fmt::Debug for RIMConfig {
             .field("cors_allowed_origin", &self.cors_allowed_origin)
             .field("data_dir", &self.data_dir)
             .field("storage_backend", &self.storage_backend)
+            .field(
+                "trust_forwarded_headers",
+                &self.trust_forwarded_headers.unwrap_or(false),
+            )
+            .field(
+                "force_secure_cookies",
+                &self.force_secure_cookies.unwrap_or(false),
+            )
             .finish()
     }
 }
@@ -82,6 +107,8 @@ impl Default for RIMConfig {
             max_workspace_storage_bytes: Some(1_073_741_824), // 1 GB default
             bootstrap_token_ttl_seconds: None,
             open_registration: None,
+            trust_forwarded_headers: None,
+            force_secure_cookies: None,
         }
     }
 }
@@ -125,6 +152,41 @@ impl RIMConfig {
         } else {
             RegistrationMode::InviteOnly
         }
+    }
+
+    /// Whether the server should trust `X-Forwarded-For` / `Forwarded` headers
+    /// for real-IP resolution.
+    ///
+    /// Returns `true` only when `RIM_TRUST_FORWARDED_HEADERS=true` is set.
+    /// **Operator requirement:** only enable when a trusted reverse proxy is
+    /// the sole entry point. Enabling without a proxy lets clients spoof their
+    /// IP and defeat per-IP rate limits (H1 hardening).
+    ///
+    /// # Examples
+    /// ```ignore
+    /// if config.trust_forwarded_headers() {
+    ///     // read X-Forwarded-For
+    /// }
+    /// ```
+    pub fn trust_forwarded_headers(&self) -> bool {
+        self.trust_forwarded_headers.unwrap_or(false)
+    }
+
+    /// Whether to unconditionally set the `Secure` cookie flag.
+    ///
+    /// Returns `true` when `RIM_FORCE_SECURE_COOKIES=true` is set.
+    /// Use this for direct-HTTPS deployments (Tauri WebView, Caddy/Traefik
+    /// without `X-Forwarded-Proto`) where the scheme cannot be inferred from
+    /// headers (H3 hardening).
+    ///
+    /// # Examples
+    /// ```ignore
+    /// if config.force_secure_cookies() {
+    ///     // always set Secure flag
+    /// }
+    /// ```
+    pub fn force_secure_cookies(&self) -> bool {
+        self.force_secure_cookies.unwrap_or(false)
     }
 }
 

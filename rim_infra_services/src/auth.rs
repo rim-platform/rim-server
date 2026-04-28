@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use sea_orm::DatabaseConnection;
 use std::sync::OnceLock;
+use subtle::ConstantTimeEq;
 use tracing::{info, instrument, warn};
 
 use rim_auth::csrf::generate_csrf_token;
@@ -295,6 +296,15 @@ impl DefaultAuthService {
         }
 
         if repos.user_repo.find_by_email(email).await?.is_some() {
+            // H4 audit: log email-taken attempts so operators can detect
+            // enumeration attacks or signup bot activity.
+            tracing::info!(
+                target = "audit",
+                event = "email_taken_attempt",
+                email = %email,
+                username = %username,
+                "signup rejected: email already in use"
+            );
             return Err(ServiceError::EmailTaken);
         }
 
@@ -384,7 +394,10 @@ impl AuthService for DefaultAuthService {
             .bootstrap_secret
             .as_deref()
             .ok_or(ServiceError::PermissionDenied)?;
-        if secret != expected {
+        // M3 hardening: constant-time comparison prevents timing side-channel
+        // that would allow an attacker to brute-force the bootstrap secret
+        // byte-by-byte via response-time differences.
+        if secret.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 0 {
             return Err(ServiceError::PermissionDenied);
         }
 
@@ -517,14 +530,43 @@ impl AuthService for DefaultAuthService {
             .user_repo
             .find_by_username(username)
             .await?
-            .ok_or(ServiceError::Unauthenticated)?;
+            .ok_or_else(|| {
+                // H4 audit: log failed login (user not found) — same branch as
+                // wrong-password to preserve timing indistinguishability.
+                tracing::info!(
+                    target = "audit",
+                    event = "login_failure",
+                    username = %username,
+                    reason = "user_not_found",
+                    "login attempt failed: user not found"
+                );
+                ServiceError::Unauthenticated
+            })?;
 
         let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
         if !ok {
+            // H4 audit: wrong password.
+            tracing::info!(
+                target = "audit",
+                event = "login_failure",
+                user_id = %user.id,
+                username = %username,
+                reason = "wrong_password",
+                "login attempt failed: wrong password"
+            );
             return Err(ServiceError::Unauthenticated);
         }
 
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
+
+        // H4 audit: successful login.
+        tracing::info!(
+            target = "audit",
+            event = "login_success",
+            user_id = %user.id,
+            session_id = %sess.id,
+            "login succeeded"
+        );
 
         Ok(LoginResultDto {
             user_id: user.id,
@@ -709,6 +751,16 @@ impl AuthService for DefaultAuthService {
             username: username.to_string(),
         });
 
+        // H4 audit: workspace-invite signup success.
+        tracing::info!(
+            target = "audit",
+            event = "accept_invite_success",
+            user_id = %user.id,
+            invite_id = %inv.id,
+            server_id = %inv.server_id,
+            "user created via workspace invite"
+        );
+
         let csrf = Self::new_csrf_token(&raw_token);
 
         Ok(AcceptInviteResultDto {
@@ -846,6 +898,14 @@ impl AuthService for DefaultAuthService {
 
         self.repos.invite_repo.revoke_invite(cmd.invite_id).await?;
 
+        // H4 audit: workspace invite revocation.
+        tracing::info!(
+            target = "audit",
+            event = "invite_revoked",
+            invite_id = %cmd.invite_id,
+            actor_user_id = %cmd.actor.user_id,
+            "workspace invite revoked"
+        );
         info!(invite_id = %cmd.invite_id, "invite revoked");
         Ok(())
     }
@@ -911,10 +971,24 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
 
-        txn_repos
+        // Atomic try-mark: eliminates the double-spend race (C1 hardening).
+        // If another concurrent request already consumed the token between our
+        // pre-check and this UPDATE, rows_affected == 0 → return InvalidToken
+        // and roll back the transaction.
+        let claimed = txn_repos
             .bootstrap_token_repo
-            .mark_used(token.id, user.id)
+            .try_mark_used(token.id, user.id)
             .await?;
+        if !claimed {
+            // Rollback is automatic when `scope` is dropped without commit.
+            tracing::info!(
+                target = "audit",
+                event = "bootstrap_token_double_spend_rejected",
+                bootstrap_token_id = %token.id,
+                "bootstrap token already consumed by concurrent request"
+            );
+            return Err(ServiceError::InvalidToken);
+        }
 
         let (sess, raw_sess_token, csrf) =
             self.create_session_for_user(user.id, None, None).await?;
@@ -1056,6 +1130,14 @@ impl AuthService for DefaultAuthService {
             retry_after_seconds,
         } = decision
         {
+            // H4 audit: rate-limited signup attempts for operator visibility.
+            tracing::info!(
+                target = "audit",
+                event = "signup_rate_limited",
+                remote_ip = %remote_ip,
+                retry_after_seconds = %retry_after_seconds,
+                "open-mode signup rate limited"
+            );
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });
@@ -1098,6 +1180,14 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        // H4 audit: log successful open-mode signup.
+        tracing::info!(
+            target = "audit",
+            event = "signup_open_success",
+            user_id = %user.id,
+            remote_ip = %remote_ip,
+            "user created via open signup"
+        );
         info!(user_id = %user.id, "user created via open signup");
 
         Ok(SignupResultDto {
@@ -1184,6 +1274,14 @@ impl AuthService for DefaultAuthService {
             .revoke(cmd.invite_id)
             .await?;
 
+        // H4 audit: instance invite revocation.
+        tracing::info!(
+            target = "audit",
+            event = "instance_invite_revoked",
+            invite_id = %cmd.invite_id,
+            actor_user_id = %cmd.actor.user_id,
+            "instance invite revoked"
+        );
         info!(invite_id = %cmd.invite_id, "instance invite revoked");
         Ok(())
     }

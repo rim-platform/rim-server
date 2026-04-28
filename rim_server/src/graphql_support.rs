@@ -180,18 +180,53 @@ pub fn internal_graphql_error_response(message: &str) -> GraphQLResponse {
     GraphQLResponse::from(response)
 }
 
+/// Determine whether the `Secure` cookie attribute should be set.
+///
+/// H3 hardening — priority order:
+///
+/// 1. `force_secure_cookies = true` → always `Secure`. Use for direct-HTTPS
+///    deployments (Tauri WebView, Caddy/Traefik without `X-Forwarded-Proto`).
+/// 2. `trust_forwarded_headers = true` and actix connection scheme is `"https"`
+///    → `Secure`. When a trusted reverse proxy is configured, actix derives the
+///    scheme from `X-Forwarded-Proto` or `Forwarded` headers.
+/// 3. Otherwise `false` (plain HTTP or no explicit trust configured).
+///
+/// **Why not read `X-Forwarded-Proto` without trust?** actix-web's
+/// `connection_info().scheme()` already reads that header. Gating the entire
+/// scheme check on `trust_forwarded_headers` ensures an attacker on a plain-HTTP
+/// connection cannot forge the header to influence the `Secure` flag unless the
+/// operator has explicitly configured a trusted proxy (H1/H3 alignment).
+pub(crate) fn resolve_secure_flag(
+    req: &HttpRequest,
+    trust_forwarded_headers: bool,
+    force_secure_cookies: bool,
+) -> bool {
+    // Priority 1: operator override — unconditional.
+    if force_secure_cookies {
+        return true;
+    }
+    // Priority 2: scheme-based detection, only when a trusted proxy is configured.
+    // actix derives the scheme from X-Forwarded-Proto / Forwarded when present,
+    // so we must gate this on trust to prevent header spoofing on bare HTTP.
+    if trust_forwarded_headers && req.connection_info().scheme() == "https" {
+        return true;
+    }
+    false
+}
+
+/// Apply session / CSRF cookies from the resolved [`AuthIntent`] onto the response.
+///
+/// Uses [`resolve_secure_flag`] to determine the `Secure` attribute so that the
+/// flag is set correctly for both direct-TLS and proxied deployments (H3 hardening).
 pub fn apply_auth_cookies(
     gql_resp: GraphQLResponse,
     intent_ctx: &AuthIntentCtx,
     req: &HttpRequest,
     session_ttl_days: u32,
+    trust_forwarded_headers: bool,
+    force_secure_cookies: bool,
 ) -> GraphQLResponse {
-    let secure = req
-        .headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("https"))
-        .unwrap_or(false);
+    let secure = resolve_secure_flag(req, trust_forwarded_headers, force_secure_cookies);
 
     let mut resp = gql_resp;
     let Some(intent) = intent_ctx.take() else {
@@ -363,5 +398,51 @@ mod tests {
                 .and_then(|ext| ext.get("code")),
             Some(&async_graphql::Value::from("INTERNAL"))
         );
+    }
+
+    // ── H1 / H3 tests ───────────────────────────────────────────────────────
+
+    /// H3 — `force_secure_cookies = true` always returns `true`, regardless of
+    /// any headers or scheme.
+    #[test]
+    fn resolve_secure_flag_force_override_always_true() {
+        let req = TestRequest::default().to_http_request();
+        assert!(resolve_secure_flag(&req, false, true));
+        assert!(resolve_secure_flag(&req, true, true));
+    }
+
+    /// H3 — Plain HTTP connection without force or X-Forwarded-Proto returns `false`.
+    #[test]
+    fn resolve_secure_flag_plain_http_no_trust_returns_false() {
+        let req = TestRequest::default().to_http_request();
+        assert!(!resolve_secure_flag(&req, false, false));
+    }
+
+    /// H1/H3 — X-Forwarded-Proto header is ignored when trust is disabled.
+    #[test]
+    fn resolve_secure_flag_xff_proto_ignored_without_trust() {
+        let req = TestRequest::default()
+            .insert_header(("x-forwarded-proto", "https"))
+            .to_http_request();
+        // Even though the header says https, trust=false means we ignore it.
+        assert!(!resolve_secure_flag(&req, false, false));
+    }
+
+    /// H1/H3 — X-Forwarded-Proto header is honoured when trust is enabled.
+    #[test]
+    fn resolve_secure_flag_xff_proto_honoured_with_trust() {
+        let req = TestRequest::default()
+            .insert_header(("x-forwarded-proto", "https"))
+            .to_http_request();
+        assert!(resolve_secure_flag(&req, true, false));
+    }
+
+    /// H1/H3 — X-Forwarded-Proto: http with trust=true returns false.
+    #[test]
+    fn resolve_secure_flag_xff_proto_http_with_trust_returns_false() {
+        let req = TestRequest::default()
+            .insert_header(("x-forwarded-proto", "http"))
+            .to_http_request();
+        assert!(!resolve_secure_flag(&req, true, false));
     }
 }

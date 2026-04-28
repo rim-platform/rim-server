@@ -804,7 +804,9 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(|_, _| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1287,7 +1289,9 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(|_, _| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo
@@ -1397,7 +1401,7 @@ mod tests {
         invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(inv.clone())));
-        // try_consume / mark_used must NOT be called (read-only).
+        // try_consume / try_mark_used must NOT be called (read-only).
         invite_repo.expect_try_consume().never();
 
         let mut server_repo = MockServerRepository::new();
@@ -1505,8 +1509,8 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        // mark_used must NOT be called.
-        bootstrap_repo.expect_mark_used().never();
+        // try_mark_used must NOT be called (read-only).
+        bootstrap_repo.expect_try_mark_used().never();
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
         let svc = svc_with_registration(
@@ -1744,7 +1748,9 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(|_, _| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1823,8 +1829,8 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        // mark_used must NOT be called when signup fails.
-        bootstrap_repo.expect_mark_used().never();
+        // try_mark_used must NOT be called when signup fails.
+        bootstrap_repo.expect_try_mark_used().never();
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1932,7 +1938,9 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(|_, _| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -2004,7 +2012,9 @@ mod tests {
         bootstrap_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(|_, _| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -2101,6 +2111,100 @@ mod tests {
         assert!(
             matches!(err, ServiceError::Validation(ref m) if m.contains("display name")),
             "got: {err:?}"
+        );
+    }
+
+    // ── C1 hardening ────────────────────────────────────────────────────────
+    /// Simulate the double-spend race at the mock layer.
+    ///
+    /// `try_mark_used` returns `true` on the first call (token claimed) and
+    /// `false` on all subsequent calls (already consumed). Two concurrent
+    /// `signup_with_bootstrap` calls with the same raw token: exactly one must
+    /// succeed and the other must fail with `InvalidToken`.
+    ///
+    /// Note: this is a mock-layer test because the race itself happens inside
+    /// the DB (via the atomic UPDATE WHERE); the mock simulates the DB
+    /// serialisation outcome. The real concurrent-DB test requires the `db-tests`
+    /// feature and a live Postgres.
+    #[tokio::test]
+    async fn bootstrap_token_double_spend_rejected_by_atomic_mark_used() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+
+        // Counter shared across calls: first call gets true, subsequent get false.
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        let bt_for_hash = bt.clone();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt_for_hash.clone())));
+        bootstrap_repo
+            .expect_try_mark_used()
+            .returning(move |_, _| {
+                // First invocation wins the race; subsequent ones lose.
+                let prev = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok(prev == 0)
+            });
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_create_user()
+            .returning(move |new| Ok(make_user(user_id, &new.username)));
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(move |new| Ok(make_session(session_id, new.user_id)));
+
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = Arc::new(svc_with_registration(
+            user_repo,
+            sr,
+            smr,
+            session_repo,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        ));
+
+        let cmd = || SignupWithBootstrapCmd {
+            bootstrap_token: "raw_token".to_string(),
+            username: "alice".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            email: "alice@example.com".to_string(),
+            display_name: None,
+        };
+
+        let svc1 = Arc::clone(&svc);
+        let svc2 = Arc::clone(&svc);
+        let (r1, r2) = tokio::join!(
+            svc1.signup_with_bootstrap(cmd()),
+            svc2.signup_with_bootstrap(cmd()),
+        );
+
+        // Exactly one must succeed, the other must return InvalidToken.
+        let successes = [r1.is_ok(), r2.is_ok()].iter().filter(|&&ok| ok).count();
+        let invalid_token_failures = [&r1, &r2]
+            .iter()
+            .filter(|r| matches!(r, Err(ServiceError::InvalidToken)))
+            .count();
+
+        assert_eq!(
+            successes, 1,
+            "exactly one signup must succeed; got r1={r1:?} r2={r2:?}"
+        );
+        assert_eq!(
+            invalid_token_failures, 1,
+            "exactly one signup must fail with InvalidToken; got r1={r1:?} r2={r2:?}"
         );
     }
 }
