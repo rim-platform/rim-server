@@ -16,6 +16,7 @@ pub struct Model {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
+    pub email: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

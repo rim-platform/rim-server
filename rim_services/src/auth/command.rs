@@ -64,6 +64,12 @@ pub struct SignupWithBootstrapCmd {
     pub bootstrap_token: String,
     pub username: String,
     pub password: String,
+    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
+    /// the service also validates before insert as defence in depth.
+    pub email: String,
+    /// Optional display name (raw input). The service normalises and falls back
+    /// to `username` when absent or blank after trim.
+    pub display_name: Option<String>,
 }
 
 /// Command for signing up with an instance invite token.
@@ -72,6 +78,12 @@ pub struct SignupWithInstanceInviteCmd {
     pub instance_invite_token: String,
     pub username: String,
     pub password: String,
+    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
+    /// the service also validates before insert as defence in depth.
+    pub email: String,
+    /// Optional display name (raw input). The service normalises and falls back
+    /// to `username` when absent or blank after trim.
+    pub display_name: Option<String>,
 }
 
 /// Command for open-mode signup (no token required).
@@ -84,6 +96,12 @@ pub struct SignupOpenCmd {
     /// The service checks the signup rate limiter against this IP before
     /// creating the user, returning `RateLimited` if the limit is exceeded.
     pub remote_ip: String,
+    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
+    /// the service also validates before insert as defence in depth.
+    pub email: String,
+    /// Optional display name (raw input). The service normalises and falls back
+    /// to `username` when absent or blank after trim.
+    pub display_name: Option<String>,
 }
 
 /// Command for an admin to create a new instance invite.

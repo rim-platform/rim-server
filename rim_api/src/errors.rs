@@ -48,6 +48,10 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::ExpiredToken => Error::new("token has expired").extend_with(|_, e| {
             e.set("code", Value::from("EXPIRED_TOKEN"));
         }),
+        // Distinct from generic CONFLICT so the frontend can highlight the email field (§13.5).
+        ServiceError::EmailTaken => Error::new("email already in use").extend_with(|_, e| {
+            e.set("code", Value::from("EMAIL_TAKEN"));
+        }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),

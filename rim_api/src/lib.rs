@@ -32,9 +32,15 @@ mod tests;
 pub struct RegistrationContext {
     /// The registration mode (invite-only vs open).
     pub registration_mode: Arc<rim_services::auth::dto::RegistrationMode>,
-    /// Rate limiter for `previewInviteToken` (always required).
+    /// Typed marker for the `previewInviteToken` rate limiter.
+    ///
+    /// The real limiter lives inside `DefaultAuthService`; this marker is
+    /// carried here for future-extensibility. See spec §4.7 R2.
     pub preview_rate_limiter: Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>,
-    /// Rate limiter for open-mode signup (required when mode is `Open`).
+    /// Typed marker for the open-mode signup rate limiter.
+    ///
+    /// The real limiter lives inside `DefaultAuthService`; this marker is
+    /// carried here for future-extensibility. See spec §6.3 R2.
     pub signup_rate_limiter: Arc<rim_services::auth::dto::SignupRateLimiterToken>,
 }
 

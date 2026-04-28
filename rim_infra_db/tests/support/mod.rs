@@ -140,6 +140,8 @@ impl TestCtx {
         repo.create_user(rim_core::user::model::NewUser {
             username: username.to_string(),
             password: "test_hash".to_string(),
+            email: format!("{}@test.example.com", username.to_lowercase()),
+            display_name: None,
         })
         .await
         .unwrap()
