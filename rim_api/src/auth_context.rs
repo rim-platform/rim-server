@@ -1,5 +1,27 @@
 use async_graphql::{Context, Error, ErrorExtensions, Value};
 
+/// Per-request remote IP address, injected by the Actix handler.
+///
+/// Resolvers that need the caller's IP (e.g. `previewInviteToken` rate-limiter)
+/// read this from context. Falls back to `"unknown"` if the HTTP handler did
+/// not inject it — that case is a configuration/wiring mistake, not an attack
+/// surface, because rate-limit keys on `"unknown"` still work (they just bucket
+/// all unknown IPs together).
+#[derive(Debug, Clone, Default)]
+pub struct RemoteIp(pub String);
+
+impl RemoteIp {
+    /// Create a new `RemoteIp` from the given string.
+    pub fn new(ip: impl Into<String>) -> Self {
+        Self(ip.into())
+    }
+
+    /// Return the contained IP string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct AuthActorCtx {
     actor: Option<rim_core::user::model::UserId>,

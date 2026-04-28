@@ -166,10 +166,21 @@ async fn graphql_handler(
         let actor_ctx = AuthActorCtx::new(actor, session_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
+        // Extract the remote IP for rate-limiting resolvers (e.g. previewInviteToken).
+        let remote_ip = rim_api::auth_context::RemoteIp::new(
+            req.connection_info()
+                .realip_remote_addr()
+                .unwrap_or("unknown")
+                .to_string(),
+        );
+
         // Inject auth context and auth intent into each request in the batch.
         // Auth intent is shared across the batch so cookies are set once.
         let auth_intent = Arc::new(AuthIntentCtx::default());
-        let batch = batch.data(actor_ctx).data(Arc::clone(&auth_intent));
+        let batch = batch
+            .data(actor_ctx)
+            .data(Arc::clone(&auth_intent))
+            .data(remote_ip);
 
         let resp = schema.execute_batch(batch).await;
 

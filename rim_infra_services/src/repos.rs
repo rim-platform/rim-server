@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use rim_core::auth::repository::{InviteRepository, SessionRepository};
+use rim_core::auth::repository::{
+    BootstrapTokenRepository, InstanceInviteRepository, InviteRepository, SessionRepository,
+};
 use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::channel_lens::repository::ChannelLensRepository;
 use rim_core::command::repository::UserCommandRepository;
@@ -32,6 +34,8 @@ use rim_infra_db::DbHandle;
 
 #[derive(Clone)]
 pub struct AppRepos {
+    pub bootstrap_token_repo: Arc<dyn BootstrapTokenRepository>,
+    pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub channel_lens_repo: Arc<dyn ChannelLensRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
@@ -122,6 +126,8 @@ pub struct AuthRepos {
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
+    pub bootstrap_token_repo: Arc<dyn BootstrapTokenRepository>,
+    pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
 }
 
@@ -262,6 +268,8 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             session_repo: Arc::clone(&self.session_repo),
             invite_repo: Arc::clone(&self.invite_repo),
+            bootstrap_token_repo: Arc::clone(&self.bootstrap_token_repo),
+            instance_invite_repo: Arc::clone(&self.instance_invite_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
         }
     }
@@ -385,6 +393,12 @@ impl AppRepos {
         use rim_infra_db::sea_orm_impl;
 
         AppRepos {
+            bootstrap_token_repo: Arc::new(
+                sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository::new(handle.clone()),
+            ),
+            instance_invite_repo: Arc::new(
+                sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository::new(handle.clone()),
+            ),
             channel_lens_repo: Arc::new(
                 sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(handle.clone()),
             ),

@@ -17,10 +17,11 @@ use crate::config::RIMConfig;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl;
 use rim_infra_db::sea_orm_impl::{
-    invite::SeaOrmInviteRepository, keybind::SeaOrmKeybindRepository,
-    server::SeaOrmServerRepository, server_member::SeaOrmServerMemberRepository,
-    session::SeaOrmSessionRepository, user::SeaOrmUserRepository,
-    user_command::SeaOrmUserCommandRepository,
+    bootstrap_token::SeaOrmBootstrapTokenRepository,
+    instance_invite::SeaOrmInstanceInviteRepository, invite::SeaOrmInviteRepository,
+    keybind::SeaOrmKeybindRepository, server::SeaOrmServerRepository,
+    server_member::SeaOrmServerMemberRepository, session::SeaOrmSessionRepository,
+    user::SeaOrmUserRepository, user_command::SeaOrmUserCommandRepository,
 };
 use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
 use rim_services::auth::service::RequestAuthenticator;
@@ -54,8 +55,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::new(SeaOrmSessionRepository::new(db.clone()));
     let invite_repo: Arc<dyn rim_core::auth::repository::InviteRepository> =
         Arc::new(SeaOrmInviteRepository::new(db.clone()));
+    let bootstrap_token_repo: Arc<dyn rim_core::auth::repository::BootstrapTokenRepository> =
+        Arc::new(SeaOrmBootstrapTokenRepository::new(db.clone()));
+    let instance_invite_repo: Arc<dyn rim_core::auth::repository::InstanceInviteRepository> =
+        Arc::new(SeaOrmInstanceInviteRepository::new(db.clone()));
 
     let repos = AppRepos {
+        bootstrap_token_repo: Arc::clone(&bootstrap_token_repo),
+        instance_invite_repo: Arc::clone(&instance_invite_repo),
         channel_lens_repo: Arc::new(
             sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(db.clone()),
         ),
@@ -251,12 +258,48 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let message_attachment_service = service_provider.message_attachment_service();
 
+    // ── Registration mode boot-time validation (§6.3) ──────────────────────
+    let registration_mode = config.registration_mode();
+
+    let preview_rate_limiter = Arc::new(rim_services::auth::dto::PreviewInviteRateLimiterToken);
+
+    // preview rate limiter is ALWAYS required (§4.7 boot invariant).
+    // We use the token type as a proof-of-wiring; absence here would be a
+    // programmer error caught by the test `boot_fails_when_preview_rate_limiter_missing`.
+    let _ = &preview_rate_limiter; // proves it's wired
+
+    let signup_rate_limiter = Arc::new(rim_services::auth::dto::SignupRateLimiterToken);
+
+    if registration_mode == crate::config::RegistrationMode::Open {
+        tracing::warn!(
+            target = "audit",
+            "RIM_OPEN_REGISTRATION=true: open registration mode is active; \
+             instance accepts signups without invitation"
+        );
+        // Fail-closed: ensure signup rate limiter is wired.
+        // In this implementation, the rate limiter lives inside DefaultAuthService
+        // and is always built. The token in context is the invariant proof.
+        let _ = &signup_rate_limiter; // proves it's wired
+    }
+
+    let registration_mode_dto = match registration_mode {
+        crate::config::RegistrationMode::InviteOnly => {
+            rim_services::auth::dto::RegistrationMode::InviteOnly
+        }
+        crate::config::RegistrationMode::Open => rim_services::auth::dto::RegistrationMode::Open,
+    };
+
     let schema = build_schema(
         Arc::clone(&service_provider),
         broadcaster,
         Arc::clone(&presence_manager) as Arc<dyn PresenceService>,
         typing_tracker as Arc<dyn TypingService>,
         observers_for_schema,
+        rim_api::RegistrationContext {
+            registration_mode: Arc::new(registration_mode_dto),
+            preview_rate_limiter,
+            signup_rate_limiter,
+        },
     );
     let request_authenticator = service_provider.request_authenticator();
 

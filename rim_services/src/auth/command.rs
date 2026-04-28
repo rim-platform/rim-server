@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 
+use rim_core::auth::model::InstanceInviteId;
 use rim_core::server::model::ServerId;
 
 use crate::Actor;
@@ -55,4 +56,54 @@ pub struct ListInvitesQuery {
 pub struct RevokeInviteCmd {
     pub actor: Actor,
     pub invite_id: rim_core::auth::model::InviteId,
+}
+
+/// Command for signing up with a bootstrap token.
+#[derive(Debug, Clone)]
+pub struct SignupWithBootstrapCmd {
+    pub bootstrap_token: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// Command for signing up with an instance invite token.
+#[derive(Debug, Clone)]
+pub struct SignupWithInstanceInviteCmd {
+    pub instance_invite_token: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// Command for open-mode signup (no token required).
+#[derive(Debug, Clone)]
+pub struct SignupOpenCmd {
+    pub username: String,
+    pub password: String,
+    /// Caller's remote IP for rate-limit enforcement.
+    ///
+    /// The service checks the signup rate limiter against this IP before
+    /// creating the user, returning `RateLimited` if the limit is exceeded.
+    pub remote_ip: String,
+}
+
+/// Command for an admin to create a new instance invite.
+#[derive(Debug, Clone)]
+pub struct CreateInstanceInviteCmd {
+    pub actor: Actor,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_uses: Option<i32>,
+}
+
+/// Command for an admin to revoke an existing instance invite.
+#[derive(Debug, Clone)]
+pub struct RevokeInstanceInviteCmd {
+    pub actor: Actor,
+    pub invite_id: InstanceInviteId,
+}
+
+/// Query to preview a registration token (bootstrap, instance, or workspace).
+#[derive(Debug, Clone)]
+pub struct PreviewInviteTokenQuery {
+    pub token: String,
+    pub remote_ip: String,
 }

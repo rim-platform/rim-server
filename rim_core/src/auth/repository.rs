@@ -2,7 +2,10 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::auth::model::{Invite, InviteId, NewInvite, NewSession, Session, SessionId};
+use crate::auth::model::{
+    BootstrapToken, BootstrapTokenId, InstanceInvite, InstanceInviteId, Invite, InviteId,
+    NewBootstrapToken, NewInstanceInvite, NewInvite, NewSession, Session, SessionId,
+};
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
@@ -33,4 +36,98 @@ pub trait InviteRepository: Send + Sync {
         &self,
         server_id: crate::server::model::ServerId,
     ) -> RepoResult<Vec<Invite>>;
+}
+
+/// Repository for bootstrap tokens — one-shot CLI-issued tokens for cold-start signup.
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+#[async_trait]
+pub trait BootstrapTokenRepository: Send + Sync {
+    /// Create a new bootstrap token row with the given fields.
+    ///
+    /// # Errors
+    /// Returns [`RepoErrorKind::Conflict`] if `token_hash` already exists.
+    async fn create(&self, token: NewBootstrapToken) -> RepoResult<BootstrapToken>;
+
+    /// Look up a bootstrap token by its primary key.
+    ///
+    /// Returns `None` if no row with the given id exists.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn get_by_id(&self, id: BootstrapTokenId) -> RepoResult<Option<BootstrapToken>>;
+
+    /// Look up a token by its SHA-256 hash.
+    ///
+    /// Returns `None` if no row with the given hash exists.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<BootstrapToken>>;
+
+    /// Mark a token as used, setting `used_at = now()` and recording the
+    /// consuming user's id.
+    ///
+    /// No-op if the row does not exist. Callers should verify existence first.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn mark_used(&self, id: BootstrapTokenId, consumed_by_user_id: UserId) -> RepoResult<()>;
+
+    /// Revoke a token by setting `revoked_at = now()`.
+    ///
+    /// No-op if the row does not exist.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn revoke(&self, id: BootstrapTokenId) -> RepoResult<()>;
+}
+
+/// Repository for instance invites — admin-issued multi-use tokens for account creation.
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+#[async_trait]
+pub trait InstanceInviteRepository: Send + Sync {
+    /// Create a new instance invite.
+    ///
+    /// # Errors
+    /// Returns [`RepoErrorKind::Conflict`] if `token_hash` already exists.
+    async fn create(&self, invite: NewInstanceInvite) -> RepoResult<InstanceInvite>;
+
+    /// Look up an invite by its primary key.
+    ///
+    /// Returns `None` if no row with the given id exists.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn get_by_id(&self, id: InstanceInviteId) -> RepoResult<Option<InstanceInvite>>;
+
+    /// Look up an invite by its SHA-256 hash.
+    ///
+    /// Returns `None` if no row exists with the given hash.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<InstanceInvite>>;
+
+    /// Atomically consume one use slot.
+    ///
+    /// Increments `use_count` only when `use_count < max_uses`.
+    /// Returns `true` on success, `false` when exhausted or missing.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn try_consume(&self, id: InstanceInviteId) -> RepoResult<bool>;
+
+    /// Revoke an instance invite.
+    ///
+    /// No-op if the row does not exist.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn revoke(&self, id: InstanceInviteId) -> RepoResult<()>;
+
+    /// List all non-revoked instance invites.
+    ///
+    /// # Errors
+    /// Returns a repository error on DB failure.
+    async fn list_active(&self) -> RepoResult<Vec<InstanceInvite>>;
 }

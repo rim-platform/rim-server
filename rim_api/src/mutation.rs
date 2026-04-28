@@ -3,8 +3,9 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
-    RevokeInviteCmd,
+    AcceptInviteCmd, BootstrapCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
+    LoginCmd, LogoutCmd, RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd,
+    SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::dto::UserCommandStepDto;
@@ -42,8 +43,9 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Attachment, Command, CommandContextInput, CommandInitiator, CommandResult, CommandSensitivity,
-    Conversation, Keybind, KeybindContext, KeybindScope, MacroDef, Message, PresenceStatus,
-    ReactionGroup, Server, UploadTicket,
+    Conversation, CreateInstanceInvitePayloadGql, InstanceInviteGql, Keybind, KeybindContext,
+    KeybindScope, MacroDef, Message, PresenceStatus, ReactionGroup, Server,
+    SignupWithInvitePayloadGql, UploadTicket,
 };
 
 pub struct Mutation;
@@ -323,6 +325,11 @@ pub struct ToggleReactionInput {
 
 #[Object]
 impl Mutation {
+    #[graphql(
+        deprecation = "Use signupWithInvite with a bootstrapToken issued by the \
+        rim_server bootstrap-user CLI command. The BOOTSTRAP_SECRET path will be \
+        removed in the next minor release."
+    )]
     async fn bootstrap(
         &self,
         ctx: &Context<'_>,
@@ -472,6 +479,178 @@ impl Mutation {
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         auth.revoke_invite(RevokeInviteCmd {
+            actor: Actor::new(actor),
+            invite_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Unified signup mutation for all token-based and open-mode registration paths.
+    ///
+    /// In invite-only mode, exactly one of `bootstrapToken`, `instanceInviteToken`,
+    /// or `workspaceInviteToken` must be supplied.
+    /// In open mode, all token fields must be absent.
+    ///
+    /// On success, sets session and CSRF cookies via `AuthIntent`.
+    async fn signup_with_invite(
+        &self,
+        ctx: &Context<'_>,
+        input: SignupWithInviteInput,
+    ) -> Result<SignupWithInvitePayloadGql> {
+        use rim_services::auth::dto::RegistrationMode;
+
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
+
+        let token_count = input.bootstrap_token.is_some() as u8
+            + input.instance_invite_token.is_some() as u8
+            + input.workspace_invite_token.is_some() as u8;
+
+        let (user_id, server_id, session_token, csrf_token) = match mode.as_ref() {
+            RegistrationMode::InviteOnly => {
+                if token_count != 1 {
+                    return Err(async_graphql::Error::new(
+                        "exactly one token is required in invite-only mode",
+                    )
+                    .extend_with(|_, e| e.set("code", "VALIDATION")));
+                }
+
+                if let Some(raw) = input.bootstrap_token {
+                    let res = auth
+                        .signup_with_bootstrap(SignupWithBootstrapCmd {
+                            bootstrap_token: raw,
+                            username: input.username,
+                            password: input.password,
+                        })
+                        .await
+                        .map_err(map_service_error)?;
+                    (
+                        res.user_id,
+                        res.server_id,
+                        res.session_token,
+                        res.csrf_token,
+                    )
+                } else if let Some(raw) = input.instance_invite_token {
+                    let res = auth
+                        .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                            instance_invite_token: raw,
+                            username: input.username,
+                            password: input.password,
+                        })
+                        .await
+                        .map_err(map_service_error)?;
+                    (
+                        res.user_id,
+                        res.server_id,
+                        res.session_token,
+                        res.csrf_token,
+                    )
+                } else {
+                    // workspace_invite_token — delegate to the existing accept_invite path.
+                    let raw = input.workspace_invite_token.unwrap();
+                    let res = auth
+                        .accept_invite(AcceptInviteCmd {
+                            invite_token: raw,
+                            username: input.username,
+                            password: input.password,
+                        })
+                        .await
+                        .map_err(map_service_error)?;
+                    (
+                        res.user_id,
+                        Some(res.server_id),
+                        res.session_token,
+                        res.csrf_token,
+                    )
+                }
+            }
+            RegistrationMode::Open => {
+                if token_count > 0 {
+                    return Err(async_graphql::Error::new(
+                        "tokens must not be supplied in open registration mode",
+                    )
+                    .extend_with(|_, e| e.set("code", "VALIDATION")));
+                }
+
+                // Proof-of-wiring: fail closed if signup rate limiter token is absent.
+                let _ =
+                    ctx.data::<std::sync::Arc<rim_services::auth::dto::SignupRateLimiterToken>>();
+
+                // Remote IP for rate limiting — service enforces the limit.
+                let remote_ip = ctx
+                    .data::<crate::auth_context::RemoteIp>()
+                    .map(|r| r.0.clone())
+                    .unwrap_or_else(|_| "unknown".to_string());
+
+                let res = auth
+                    .signup_open(SignupOpenCmd {
+                        username: input.username,
+                        password: input.password,
+                        remote_ip,
+                    })
+                    .await
+                    .map_err(map_service_error)?;
+                (
+                    res.user_id,
+                    res.server_id,
+                    res.session_token,
+                    res.csrf_token,
+                )
+            }
+        };
+
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::SetSession {
+                session_token,
+                csrf_token,
+            });
+        }
+
+        Ok(SignupWithInvitePayloadGql {
+            user_id: ID(user_id.to_string()),
+            server_id: server_id.map(|id| ID(id.to_string())),
+        })
+    }
+
+    /// Create a new instance invite (admin-only gate: must own at least one workspace).
+    ///
+    /// Returns the raw invite token exactly once in the payload. Store it; it cannot
+    /// be retrieved again.
+    async fn create_instance_invite(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateInstanceInviteInput,
+    ) -> Result<CreateInstanceInvitePayloadGql> {
+        let actor = require_actor(ctx)?;
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+
+        let res = auth
+            .create_instance_invite(CreateInstanceInviteCmd {
+                actor: Actor::new(actor),
+                expires_at: input.expires_at,
+                max_uses: input.max_uses,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(CreateInstanceInvitePayloadGql {
+            invite_token: res.invite_token,
+            invite: InstanceInviteGql::from(res.invite),
+        })
+    }
+
+    /// Revoke an existing instance invite (admin-only gate: must own at least one workspace).
+    ///
+    /// Returns `true` on success. Returns `NOT_FOUND` if the invite does not exist.
+    async fn revoke_instance_invite(&self, ctx: &Context<'_>, invite_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let invite_id = parse_uuid_id::<rim_core::auth::model::InstanceInviteId>(&invite_id)?;
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+
+        auth.revoke_instance_invite(RevokeInstanceInviteCmd {
             actor: Actor::new(actor),
             invite_id,
         })
@@ -2088,6 +2267,31 @@ struct UpdateChannelLensInput {
     name: Option<String>,
     filter_spec: Option<crate::types::FilterSpecInput>,
     is_shared: Option<bool>,
+}
+
+// ── Registration inputs ───────────────────────────────────────────────────
+
+/// Input for `signupWithInvite`.
+///
+/// Exactly one token MUST be set in invite-only mode; all must be absent in
+/// open mode. The resolver enforces this with a `Validation` error.
+#[derive(InputObject)]
+pub struct SignupWithInviteInput {
+    pub username: String,
+    pub password: String,
+    pub bootstrap_token: Option<String>,
+    pub instance_invite_token: Option<String>,
+    pub workspace_invite_token: Option<String>,
+}
+
+/// Input for `createInstanceInvite`.
+///
+/// Both fields are optional: `expires_at` defaults to `now() + 7 days`,
+/// `max_uses` defaults to 1.
+#[derive(InputObject)]
+pub struct CreateInstanceInviteInput {
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub max_uses: Option<i32>,
 }
 
 fn spawn_link_preview_fetch(

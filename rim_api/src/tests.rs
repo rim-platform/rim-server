@@ -70,6 +70,14 @@ mod tests {
         Arc::new(rim_services::events::Observers::new(broadcaster))
     }
 
+    fn test_registration_context() -> crate::RegistrationContext {
+        crate::RegistrationContext {
+            registration_mode: Arc::new(rim_services::auth::dto::RegistrationMode::InviteOnly),
+            preview_rate_limiter: Arc::new(rim_services::auth::dto::PreviewInviteRateLimiterToken),
+            signup_rate_limiter: Arc::new(rim_services::auth::dto::SignupRateLimiterToken),
+        }
+    }
+
     // ── Test helpers ──────────────────────────────────────────────────────
 
     fn authed_request(query: &str, actor: UserId) -> Request {
@@ -120,6 +128,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -166,6 +175,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -209,6 +219,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -558,6 +569,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -607,6 +619,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -650,6 +663,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 
@@ -2656,6 +2670,7 @@ mod tests {
             test_presence_manager(),
             test_typing_tracker(),
             test_observers(),
+            test_registration_context(),
         )
     }
 

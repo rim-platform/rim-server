@@ -2,6 +2,7 @@ use crate::server::start_server;
 use rim_logging::{LoggingHandle, init_tracing_json};
 
 mod app;
+mod bootstrap_cmd;
 pub(crate) mod config;
 mod file_handlers;
 mod graphql_support;
@@ -25,6 +26,14 @@ async fn main() {
     // remain alive until after any error is printed so the final log
     // lines are flushed before the process exits.
     let _logging_handle = initialize();
+
+    let mut args = std::env::args().skip(1);
+    if let Some(subcmd) = args.next() {
+        if subcmd == "bootstrap-user" {
+            let exit_code = bootstrap_cmd::run(args).await;
+            std::process::exit(exit_code);
+        }
+    }
 
     let config = match config::load_config() {
         Ok(c) => c,
