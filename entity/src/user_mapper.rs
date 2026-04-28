@@ -14,6 +14,7 @@ impl From<user::Model> for User {
             avatar_url: m.avatar_url,
             status_text: m.status_text,
             bio: m.bio,
+            email: m.email,
         }
     }
 }

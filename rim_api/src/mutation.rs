@@ -518,12 +518,18 @@ impl Mutation {
                     .extend_with(|_, e| e.set("code", "VALIDATION")));
                 }
 
+                // Normalise email at the resolver boundary (trim + lowercase) as
+                // defence in depth; the service also validates on the way in.
+                let normalised_email = input.email.trim().to_lowercase();
+
                 if let Some(raw) = input.bootstrap_token {
                     let res = auth
                         .signup_with_bootstrap(SignupWithBootstrapCmd {
                             bootstrap_token: raw,
                             username: input.username,
                             password: input.password,
+                            email: normalised_email,
+                            display_name: input.display_name,
                         })
                         .await
                         .map_err(map_service_error)?;
@@ -539,6 +545,8 @@ impl Mutation {
                             instance_invite_token: raw,
                             username: input.username,
                             password: input.password,
+                            email: normalised_email,
+                            display_name: input.display_name,
                         })
                         .await
                         .map_err(map_service_error)?;
@@ -585,11 +593,14 @@ impl Mutation {
                     .map(|r| r.0.clone())
                     .unwrap_or_else(|_| "unknown".to_string());
 
+                let normalised_email_open = input.email.trim().to_lowercase();
                 let res = auth
                     .signup_open(SignupOpenCmd {
                         username: input.username,
                         password: input.password,
                         remote_ip,
+                        email: normalised_email_open,
+                        display_name: input.display_name,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -2275,9 +2286,18 @@ struct UpdateChannelLensInput {
 ///
 /// Exactly one token MUST be set in invite-only mode; all must be absent in
 /// open mode. The resolver enforces this with a `Validation` error.
+///
+/// `email` is required (max 254 chars, server trims + lowercases, case-insensitive unique).
+/// `displayName` is optional; falls back to `username` server-side if absent or blank.
 #[derive(InputObject)]
 pub struct SignupWithInviteInput {
     pub username: String,
+    /// Required. The user's email address. Trimmed and lowercased before storage.
+    /// Must match the pragmatic email regex from spec §13.3.
+    pub email: String,
+    /// Optional display name (1–80 chars when present). Falls back to `username`
+    /// when absent or blank after trim.
+    pub display_name: Option<String>,
     pub password: String,
     pub bootstrap_token: Option<String>,
     pub instance_invite_token: Option<String>,

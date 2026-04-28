@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use regex::Regex;
 use sea_orm::DatabaseConnection;
+use std::sync::OnceLock;
 use tracing::{info, instrument, warn};
 
 use rim_auth::csrf::generate_csrf_token;
@@ -137,6 +139,80 @@ impl DefaultAuthService {
         Ok(())
     }
 
+    /// Validate and normalise an email address.
+    ///
+    /// Trims outer whitespace, lowercases, checks the pragmatic regex from spec
+    /// §13.3, and enforces a 1–254 character length. Returns the normalised
+    /// (trimmed + lowercased) email on success so callers can use the returned
+    /// value directly for both the uniqueness check and the insert.
+    ///
+    /// # Errors
+    /// - `ServiceError::Validation("invalid email")` if the format is wrong or
+    ///   the length is outside `1..=254` after trimming.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let email = DefaultAuthService::validate_email("  Foo@Bar.COM  ")?;
+    /// assert_eq!(email, "foo@bar.com");
+    /// ```
+    pub(crate) fn validate_email(email: &str) -> ServiceResult<String> {
+        static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
+        let re = EMAIL_RE.get_or_init(|| {
+            Regex::new(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+                .expect("email regex is valid")
+        });
+
+        let trimmed = email.trim();
+        let len = trimmed.len();
+        if len == 0 || len > 254 {
+            return Err(ServiceError::Validation("invalid email".to_string()));
+        }
+        if !re.is_match(trimmed) {
+            return Err(ServiceError::Validation("invalid email".to_string()));
+        }
+        Ok(trimmed.to_lowercase())
+    }
+
+    /// Normalise an optional display name, falling back to `username` when
+    /// absent or blank after trim.
+    ///
+    /// Length of a non-empty (post-trim) value is capped at 80 characters per
+    /// spec §13.3. An 81-character value returns a `Validation` error.
+    ///
+    /// # Errors
+    /// - `ServiceError::Validation("display name length")` if the trimmed value
+    ///   is non-empty and its length exceeds 80 characters.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let name = DefaultAuthService::normalize_display_name(None, "alice")?;
+    /// assert_eq!(name, "alice");
+    ///
+    /// let name = DefaultAuthService::normalize_display_name(Some("   "), "alice")?;
+    /// assert_eq!(name, "alice");
+    ///
+    /// let name = DefaultAuthService::normalize_display_name(Some("Alice Smith"), "alice")?;
+    /// assert_eq!(name, "Alice Smith");
+    /// ```
+    pub(crate) fn normalize_display_name(
+        input: Option<&str>,
+        username: &str,
+    ) -> ServiceResult<String> {
+        match input {
+            None => Ok(username.to_string()),
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Ok(username.to_string());
+                }
+                if trimmed.len() > 80 {
+                    return Err(ServiceError::Validation("display name length".to_string()));
+                }
+                Ok(trimmed.to_string())
+            }
+        }
+    }
+
     fn new_csrf_token(session_token: &str) -> String {
         generate_csrf_token(session_token)
     }
@@ -194,13 +270,23 @@ impl DefaultAuthService {
         Ok(())
     }
 
-    /// Create a new user inside an open transaction — checks for username conflicts first.
+    /// Create a new user inside an open transaction.
     ///
-    /// Returns [`ServiceError::Conflict`] if the username is already taken.
+    /// Checks username uniqueness, then email uniqueness (case-insensitive),
+    /// before inserting. The `email` must already be normalised (lowercased,
+    /// trimmed) by the caller. `display_name` is stored as-is (the fallback to
+    /// username must be resolved before this call).
+    ///
+    /// # Errors
+    /// - `ServiceError::Conflict` — username already taken.
+    /// - `ServiceError::EmailTaken` — email already in use (case-insensitive).
+    /// - Propagates any underlying storage error.
     async fn create_user_in_txn(
         repos: &AuthRepos,
         username: &str,
         password_hash: String,
+        email: &str,
+        display_name: Option<String>,
     ) -> ServiceResult<rim_core::user::model::User> {
         if repos.user_repo.find_by_username(username).await?.is_some() {
             return Err(ServiceError::Conflict(
@@ -208,15 +294,22 @@ impl DefaultAuthService {
             ));
         }
 
+        if repos.user_repo.find_by_email(email).await?.is_some() {
+            return Err(ServiceError::EmailTaken);
+        }
+
         let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
                 password: password_hash,
+                email: email.to_string(),
+                display_name,
             })
             .await
             .map_err(|e| {
-                if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
+                let msg = e.to_string();
+                if msg.contains("unique") || msg.contains("duplicate") {
                     return rim_core::repository::error::RepoError::new(
                         rim_core::repository::error::RepoErrorKind::Conflict,
                     );
@@ -319,11 +412,16 @@ impl AuthService for DefaultAuthService {
         };
 
         info!(username = %username, "add user");
+        // Bootstrap (BOOTSTRAP_SECRET path) predates the email requirement. Supply
+        // a synthetic placeholder so the NOT NULL constraint is satisfied. The operator
+        // must update their email via the profile-edit mutation.
         let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
                 password: password_hash,
+                email: format!("{}@local.invalid", username.to_lowercase()),
+                display_name: None,
             })
             .await
             .map_err(|e| {
@@ -553,11 +651,16 @@ impl AuthService for DefaultAuthService {
             ));
         }
 
+        // `accept_invite` predates the email requirement (Q2 scope decision: email
+        // is added only to signupWithInvite, not acceptInvite). Supply a synthetic
+        // placeholder. The user must update their email via profile-edit.
         let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
                 password: password_hash,
+                email: format!("{}@local.invalid", username.to_lowercase()),
+                display_name: None,
             })
             .await
             .map_err(|e| {
@@ -756,11 +859,16 @@ impl AuthService for DefaultAuthService {
             bootstrap_token: raw_token,
             username,
             password,
+            email,
+            display_name,
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
         Self::validate_username(username)?;
         Self::validate_password(password)?;
+        let email = Self::validate_email(&email)?;
+        let resolved_display_name =
+            Self::normalize_display_name(display_name.as_deref(), username)?;
 
         let token_hash = hash_token(&raw_token);
         let token = self
@@ -794,7 +902,14 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
-        let user = Self::create_user_in_txn(&txn_repos, username, password_hash).await?;
+        let user = Self::create_user_in_txn(
+            &txn_repos,
+            username,
+            password_hash,
+            &email,
+            Some(resolved_display_name),
+        )
+        .await?;
 
         txn_repos
             .bootstrap_token_repo
@@ -836,11 +951,16 @@ impl AuthService for DefaultAuthService {
             instance_invite_token: raw_token,
             username,
             password,
+            email,
+            display_name,
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
         Self::validate_username(username)?;
         Self::validate_password(password)?;
+        let email = Self::validate_email(&email)?;
+        let resolved_display_name =
+            Self::normalize_display_name(display_name.as_deref(), username)?;
 
         let token_hash = hash_token(&raw_token);
         let invite = self
@@ -873,7 +993,14 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
-        let user = Self::create_user_in_txn(&txn_repos, username, password_hash).await?;
+        let user = Self::create_user_in_txn(
+            &txn_repos,
+            username,
+            password_hash,
+            &email,
+            Some(resolved_display_name),
+        )
+        .await?;
 
         let consumed = txn_repos
             .instance_invite_repo
@@ -916,6 +1043,8 @@ impl AuthService for DefaultAuthService {
             username,
             password,
             remote_ip,
+            email,
+            display_name,
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
@@ -934,6 +1063,9 @@ impl AuthService for DefaultAuthService {
 
         Self::validate_username(username)?;
         Self::validate_password(password)?;
+        let email = Self::validate_email(&email)?;
+        let resolved_display_name =
+            Self::normalize_display_name(display_name.as_deref(), username)?;
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
@@ -951,7 +1083,14 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
-        let user = Self::create_user_in_txn(&txn_repos, username, password_hash).await?;
+        let user = Self::create_user_in_txn(
+            &txn_repos,
+            username,
+            password_hash,
+            &email,
+            Some(resolved_display_name),
+        )
+        .await?;
         let (sess, raw_sess_token, csrf) =
             self.create_session_for_user(user.id, None, None).await?;
 

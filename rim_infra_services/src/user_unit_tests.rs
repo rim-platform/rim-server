@@ -24,6 +24,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
+            email: "u@local.invalid".to_string(),
         }
     }
 

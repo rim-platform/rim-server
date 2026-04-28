@@ -261,13 +261,12 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // ── Registration mode boot-time validation (§6.3) ──────────────────────
     let registration_mode = config.registration_mode();
 
+    // marker: see spec §4.7 R2 — limiter lives inside DefaultAuthService;
+    // this token is a typed marker carried through RegistrationContext for
+    // future-extensibility (e.g. swapping in a Redis-backed limiter).
     let preview_rate_limiter = Arc::new(rim_services::auth::dto::PreviewInviteRateLimiterToken);
 
-    // preview rate limiter is ALWAYS required (§4.7 boot invariant).
-    // We use the token type as a proof-of-wiring; absence here would be a
-    // programmer error caught by the test `boot_fails_when_preview_rate_limiter_missing`.
-    let _ = &preview_rate_limiter; // proves it's wired
-
+    // marker: see spec §6.3 R2 — same rationale as preview_rate_limiter above.
     let signup_rate_limiter = Arc::new(rim_services::auth::dto::SignupRateLimiterToken);
 
     if registration_mode == crate::config::RegistrationMode::Open {
@@ -276,10 +275,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             "RIM_OPEN_REGISTRATION=true: open registration mode is active; \
              instance accepts signups without invitation"
         );
-        // Fail-closed: ensure signup rate limiter is wired.
-        // In this implementation, the rate limiter lives inside DefaultAuthService
-        // and is always built. The token in context is the invariant proof.
-        let _ = &signup_rate_limiter; // proves it's wired
     }
 
     let registration_mode_dto = match registration_mode {

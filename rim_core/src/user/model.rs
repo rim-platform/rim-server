@@ -15,12 +15,19 @@ pub struct User {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
+    /// Lowercased, trimmed email address. NOT NULL at the DB layer.
+    pub email: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUser {
     pub username: String,
     pub password: String,
+    /// Lowercased, trimmed email address. The repository stores this directly;
+    /// callers must normalise before constructing this struct.
+    pub email: String,
+    /// Optional display name. When `None`, the service layer falls back to `username`.
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

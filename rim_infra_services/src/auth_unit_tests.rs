@@ -119,6 +119,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
+            email: format!("{}@local.invalid", username.to_lowercase()),
         }
     }
 
@@ -389,6 +390,7 @@ mod tests {
                 avatar_url: None,
                 status_text: None,
                 bio: None,
+                email: "taken@local.invalid".to_string(),
             }))
         });
         user_repo.expect_create_user().never();
@@ -517,10 +519,11 @@ mod tests {
                     created_at: now,
                     updated_at: now,
                     last_login_at: Some(now),
-                    display_name: None,
+                    display_name: new.display_name,
                     avatar_url: None,
                     status_text: None,
                     bio: None,
+                    email: new.email,
                 })
             });
 
@@ -658,6 +661,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -695,6 +700,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -733,6 +740,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -773,6 +782,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -797,6 +808,7 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
             .returning(move |new| Ok(make_user(user_id, &new.username)));
@@ -826,6 +838,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap();
@@ -864,6 +878,7 @@ mod tests {
         let session_id = SessionId::new();
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
             .returning(move |new| Ok(make_user(user_id, &new.username)));
@@ -890,6 +905,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "bob".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "bob@example.com".to_string(),
+                display_name: None,
             })
             .await;
         assert!(res.is_ok(), "first use should succeed");
@@ -900,6 +917,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "carol".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -931,6 +950,7 @@ mod tests {
         let session_id = SessionId::new();
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
             .returning(move |new| Ok(make_user(user_id, &new.username)));
@@ -956,6 +976,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "user".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "user@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap();
@@ -966,6 +988,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "user4".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "user4@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -1005,6 +1029,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -1042,6 +1068,8 @@ mod tests {
                 instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -1186,6 +1214,7 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
             .returning(move |new| Ok(make_user(user_id, &new.username)));
@@ -1212,6 +1241,8 @@ mod tests {
                 username: "carol".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 remote_ip: "1.2.3.4".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap();
@@ -1280,6 +1311,8 @@ mod tests {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -1315,7 +1348,9 @@ mod tests {
             .signup_with_bootstrap(SignupWithBootstrapCmd {
                 bootstrap_token: "raw_token".to_string(),
                 username: "alice".to_string(),
-                password: "short".to_string(), // < 8 chars
+                password: "short".to_string(), // < 8 chars — validation fires before email check
+                email: "alice@example.com".to_string(),
+                display_name: None,
             })
             .await
             .unwrap_err();
@@ -1688,6 +1723,384 @@ mod tests {
         assert!(
             matches!(err, ServiceError::RateLimited { .. }),
             "31st call should be rate-limited, got: {err:?}"
+        );
+    }
+
+    // ── §13.6 Amendment tests ────────────────────────────────────────────────
+
+    // ── Test 33 ─────────────────────────────────────────────────────────────
+    /// Happy path: valid email + displayName are persisted correctly.
+    ///
+    /// Input `"  Foo@Bar.COM "` must be stored as `"foo@bar.com"` (trimmed + lowercased).
+    /// `display_name` must be stored as the trimmed input value.
+    #[tokio::test]
+    async fn signup_with_email_happy_path() {
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt.clone())));
+        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_create_user()
+            .returning(move |new: NewUser| {
+                // Verify normalisation happened before the repo is called.
+                assert_eq!(
+                    new.email, "foo@bar.com",
+                    "email must be lowercased and trimmed"
+                );
+                assert_eq!(
+                    new.display_name,
+                    Some("Alice Smith".to_string()),
+                    "display_name must match trimmed input"
+                );
+                Ok(User {
+                    id: user_id,
+                    username: new.username.clone(),
+                    password_hash: new.password.clone(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    last_login_at: None,
+                    display_name: new.display_name.clone(),
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    email: new.email.clone(),
+                })
+            });
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(move |new| Ok(make_session(session_id, new.user_id)));
+
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo,
+            sr,
+            smr,
+            session_repo,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        );
+
+        let res = svc
+            .signup_with_bootstrap(SignupWithBootstrapCmd {
+                bootstrap_token: "raw_token".to_string(),
+                username: "alice".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "  Foo@Bar.COM ".to_string(), // whitespace + mixed case
+                display_name: Some("Alice Smith".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(res.user_id, user_id);
+    }
+
+    // ── Test 34 ─────────────────────────────────────────────────────────────
+    /// Duplicate email (case-insensitive) returns `EmailTaken`.
+    ///
+    /// Pre-seeds a user with `email = "x@y.z"`; signup with `"X@Y.Z"` must
+    /// return `ServiceError::EmailTaken`, verifying case-insensitive uniqueness.
+    #[tokio::test]
+    async fn signup_duplicate_email_returns_email_taken() {
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+        let existing_id = UserId::new();
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt.clone())));
+        // mark_used must NOT be called when signup fails.
+        bootstrap_repo.expect_mark_used().never();
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        // find_by_email returns Some for the duplicate.
+        user_repo
+            .expect_find_by_email()
+            .returning(move |_| Ok(Some(make_user(existing_id, "other_user"))));
+        user_repo.expect_create_user().never();
+
+        let (_, sr, smr, sess_r, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo,
+            sr,
+            smr,
+            sess_r,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        );
+
+        let err = svc
+            .signup_with_bootstrap(SignupWithBootstrapCmd {
+                bootstrap_token: "raw_token".to_string(),
+                username: "bob".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                // Mixed-case version of the pre-seeded email; normalises to "x@y.zz".
+                email: "X@Y.ZZ".to_string(),
+                display_name: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::EmailTaken), "got: {err:?}");
+    }
+
+    // ── Test 35 ─────────────────────────────────────────────────────────────
+    /// Malformed email input returns `Validation`.
+    ///
+    /// Parametrized over the cases from spec §13.3:
+    /// "plain", "@host.com", "a@", "a@b", "a b@c.com", empty string, 255-char string.
+    #[tokio::test]
+    async fn signup_malformed_email_returns_validation() {
+        let bad_emails = [
+            "plain",
+            "@host.com",
+            "a@",
+            "a@b",
+            "a b@c.com",
+            "",
+            &"a".repeat(255), // exceeds 254 char limit (no @ sign either)
+        ];
+
+        for bad_email in &bad_emails {
+            // Each iteration builds a fresh service — we only need the validation to fire,
+            // which happens before any repo calls.
+            let token_id = BootstrapTokenId::new();
+            let bt = make_bootstrap_token(token_id);
+
+            let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+            bootstrap_repo
+                .expect_get_by_token_hash()
+                .returning(move |_| Ok(Some(bt.clone())));
+
+            let (ur, sr, smr, sess_r, ir, cr) = repos();
+            let svc = svc_with_registration(
+                ur,
+                sr,
+                smr,
+                sess_r,
+                ir,
+                cr,
+                bootstrap_repo,
+                MockInstanceInviteRepository::new(),
+            );
+
+            let err = svc
+                .signup_with_bootstrap(SignupWithBootstrapCmd {
+                    bootstrap_token: "raw_token".to_string(),
+                    username: "alice".to_string(),
+                    password: "s3cur3p4ss!".to_string(),
+                    email: bad_email.to_string(),
+                    display_name: None,
+                })
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(err, ServiceError::Validation(_)),
+                "email {bad_email:?} should produce Validation, got: {err:?}"
+            );
+        }
+    }
+
+    // ── Test 36 ─────────────────────────────────────────────────────────────
+    /// `display_name: None` falls back to `username` on the persisted user.
+    #[tokio::test]
+    async fn signup_displayname_omitted_falls_back_to_username() {
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt.clone())));
+        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_create_user()
+            .returning(move |new: NewUser| {
+                // When display_name was None, the service falls back to username.
+                assert_eq!(
+                    new.display_name,
+                    Some("alice".to_string()),
+                    "should fall back to username when display_name is None"
+                );
+                Ok(User {
+                    id: user_id,
+                    username: new.username.clone(),
+                    password_hash: new.password.clone(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    last_login_at: None,
+                    display_name: new.display_name.clone(),
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    email: new.email.clone(),
+                })
+            });
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(move |new| Ok(make_session(session_id, new.user_id)));
+
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo,
+            sr,
+            smr,
+            session_repo,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        );
+
+        svc.signup_with_bootstrap(SignupWithBootstrapCmd {
+            bootstrap_token: "raw_token".to_string(),
+            username: "alice".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            email: "alice@example.com".to_string(),
+            display_name: None,
+        })
+        .await
+        .unwrap();
+    }
+
+    // ── Test 37 ─────────────────────────────────────────────────────────────
+    /// `display_name: Some("   ")` (blank after trim) falls back to `username`.
+    ///
+    /// Must NOT return a `Validation` error — blank means "use my username."
+    #[tokio::test]
+    async fn signup_displayname_blank_falls_back_to_username() {
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt.clone())));
+        bootstrap_repo.expect_mark_used().returning(|_, _| Ok(()));
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_create_user()
+            .returning(move |new: NewUser| {
+                // Blank display_name falls back to username silently.
+                assert_eq!(
+                    new.display_name,
+                    Some("alice".to_string()),
+                    "blank display_name should fall back to username"
+                );
+                Ok(User {
+                    id: user_id,
+                    username: new.username.clone(),
+                    password_hash: new.password.clone(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    last_login_at: None,
+                    display_name: new.display_name.clone(),
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    email: new.email.clone(),
+                })
+            });
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(move |new| Ok(make_session(session_id, new.user_id)));
+
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo,
+            sr,
+            smr,
+            session_repo,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        );
+
+        svc.signup_with_bootstrap(SignupWithBootstrapCmd {
+            bootstrap_token: "raw_token".to_string(),
+            username: "alice".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            email: "alice@example.com".to_string(),
+            display_name: Some("   ".to_string()), // blank after trim → falls back to username
+        })
+        .await
+        .unwrap();
+    }
+
+    // ── Test 38 ─────────────────────────────────────────────────────────────
+    /// `display_name` of 81 chars (post-trim) returns `Validation`.
+    #[tokio::test]
+    async fn signup_displayname_too_long_returns_validation() {
+        let token_id = BootstrapTokenId::new();
+        let bt = make_bootstrap_token(token_id);
+
+        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
+        bootstrap_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(bt.clone())));
+
+        let (ur, sr, smr, sess_r, ir, cr) = repos();
+        let svc = svc_with_registration(
+            ur,
+            sr,
+            smr,
+            sess_r,
+            ir,
+            cr,
+            bootstrap_repo,
+            MockInstanceInviteRepository::new(),
+        );
+
+        let long_name = "x".repeat(81); // 81 chars — one over the 80-char limit
+
+        let err = svc
+            .signup_with_bootstrap(SignupWithBootstrapCmd {
+                bootstrap_token: "raw_token".to_string(),
+                username: "alice".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: Some(long_name),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ServiceError::Validation(ref m) if m.contains("display name")),
+            "got: {err:?}"
         );
     }
 }

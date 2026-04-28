@@ -117,6 +117,13 @@ pub enum ServiceError {
     #[error("token has expired")]
     ExpiredToken,
 
+    /// The signup email address is already associated with an existing user
+    /// (case-insensitive comparison). Deliberately distinguishable from the
+    /// generic `CONFLICT` code so the frontend can highlight the email field
+    /// specifically (spec §13.5).
+    #[error("email already in use")]
+    EmailTaken,
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }

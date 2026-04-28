@@ -46,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260426_200000_capability_registry_add_is_self_scoped::Migration),
             Box::new(m20260427_000001_audit_outcome_widen_check::Migration),
             Box::new(m20260428_182238_add_registration_invites::Migration),
+            Box::new(m20260428_194718_add_user_email::Migration),
         ]
     }
 }
@@ -96,3 +97,4 @@ mod m20260426_180614_macro_add_ai_columns;
 mod m20260426_200000_capability_registry_add_is_self_scoped;
 mod m20260427_000001_audit_outcome_widen_check;
 mod m20260428_182238_add_registration_invites;
+mod m20260428_194718_add_user_email;
