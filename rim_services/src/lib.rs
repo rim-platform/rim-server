@@ -105,6 +105,18 @@ pub enum ServiceError {
     #[error("rate limit exceeded; retry after {retry_after_seconds}s")]
     RateLimited { retry_after_seconds: u64 },
 
+    /// The presented registration token was not found, has already been used,
+    /// or has been revoked. Deliberately indistinguishable across all three
+    /// conditions so an attacker cannot probe token state (§4.5).
+    #[error("invalid or unknown token")]
+    InvalidToken,
+
+    /// The presented registration token exists but its `expires_at` is in the
+    /// past. Returning a distinct code here is acceptable — expiry is not
+    /// exploitable and the FE needs to surface a "link expired" message (§4.5).
+    #[error("token has expired")]
+    ExpiredToken,
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }

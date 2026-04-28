@@ -49,7 +49,14 @@ fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
 /// Mutation field names (camelCase, matching the GraphQL schema) that are
 /// exempt from CSRF validation because they are used before the client has
 /// a CSRF token.
-const CSRF_EXEMPT_MUTATIONS: &[&str] = &["bootstrap", "login", "acceptInvite", "logout"];
+const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
+    "bootstrap",
+    "login",
+    "acceptInvite",
+    "logout",
+    // signupWithInvite is unauthenticated (no session, no CSRF token yet).
+    "signupWithInvite",
+];
 
 /// Enforce CSRF for a batch request. Checks once at the HTTP level whether any
 /// request in the batch contains non-exempt mutations.

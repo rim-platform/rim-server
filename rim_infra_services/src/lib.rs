@@ -25,6 +25,7 @@ pub(crate) mod pipeline;
 pub mod presence;
 pub(crate) mod provider;
 pub(crate) mod read_state;
+pub mod registration_rate_limiter;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub(crate) mod server;
@@ -79,6 +80,9 @@ pub use macro_def::MacroRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use pipeline::PipelineRepos;
 pub use provider::DefaultAppServiceProvider;
+pub use registration_rate_limiter::{
+    PreviewInviteRateLimiter, RegistrationRateLimiter, SignupRateLimiter,
+};
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,

@@ -6,10 +6,11 @@ use crate::types::{
     Action, Attachment, Capability, ChannelCursorInput, ChannelLens, ChannelPage, Command,
     CommandContextInput, CommandSurface, Conversation, ConversationPage, ConversationTypeEnum,
     CustomEmoji, DefaultKeybind, Event, InboxCursorInput, IncidentGql, IncidentListCursorInput,
-    IncidentPage, IncidentSeverityGql, IncidentStatusGql, IncidentTimelineGql, Integration, Invite,
-    Keybind, KeybindContext, KeybindLayers, KeybindScope, MacroDef, Message, MessageCursorInput,
-    MessagePage, MessageReference, MutedConversation, SearchResultMessage, Server, ServerMember,
-    Setting, Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
+    IncidentPage, IncidentSeverityGql, IncidentStatusGql, IncidentTimelineGql, InstanceInviteGql,
+    Integration, Invite, InviteTokenPreviewGql, Keybind, KeybindContext, KeybindLayers,
+    KeybindScope, MacroDef, Message, MessageCursorInput, MessagePage, MessageReference,
+    MutedConversation, RegistrationModeGql, SearchResultMessage, Server, ServerMember, Setting,
+    Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -1271,6 +1272,69 @@ impl Query {
                 has_prev_page: page.page_info.has_prev_page,
             },
         })
+    }
+
+    /// Return the deployment-wide registration mode.
+    ///
+    /// Used by the login page to decide whether to render a "Sign up" link.
+    /// No authentication required — this is public configuration metadata.
+    async fn registration_mode(&self, ctx: &Context<'_>) -> Result<RegistrationModeGql> {
+        let mode = ctx.data::<std::sync::Arc<rim_services::auth::dto::RegistrationMode>>()?;
+        Ok(RegistrationModeGql::from(mode.as_ref().clone()))
+    }
+
+    /// List all active (non-revoked) instance invites.
+    ///
+    /// Admin-only: requires the caller to be `Owner` on at least one workspace.
+    /// Returns `FORBIDDEN` otherwise.
+    async fn list_instance_invites(&self, ctx: &Context<'_>) -> Result<Vec<InstanceInviteGql>> {
+        let actor = require_actor(ctx)?;
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+
+        let invites = auth
+            .list_instance_invites(rim_services::Actor::new(actor))
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(invites.into_iter().map(InstanceInviteGql::from).collect())
+    }
+
+    /// Preview a registration token without consuming it.
+    ///
+    /// Returns minimal metadata so the frontend can render the correct signup
+    /// copy before the user submits credentials. Rate-limited at 30 req / 5 min
+    /// per IP; no authentication required.
+    ///
+    /// See spec §4.7.
+    async fn preview_invite_token(
+        &self,
+        ctx: &Context<'_>,
+        token: String,
+    ) -> Result<InviteTokenPreviewGql> {
+        // Fail-closed: preview rate limiter MUST be wired into context (§4.7 boot invariant).
+        let _ = ctx
+            .data::<std::sync::Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>>()
+            .map_err(|_| {
+                async_graphql::Error::new("internal error: preview rate limiter not configured")
+                    .extend_with(|_, e| e.set("code", "INTERNAL"))
+            })?;
+
+        let remote_ip = ctx
+            .data::<crate::auth_context::RemoteIp>()
+            .map(|r| r.0.clone())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+
+        let preview = auth
+            .preview_invite_token(rim_services::auth::command::PreviewInviteTokenQuery {
+                token,
+                remote_ip,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(InviteTokenPreviewGql::from(preview))
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod bootstrap_token;
 pub mod capability_registry;
 pub mod channel_lens;
 pub mod conversation;
@@ -8,6 +9,7 @@ pub mod custom_emoji;
 pub mod incident;
 pub mod incident_message_tag;
 pub mod incident_phase;
+pub mod instance_invite;
 pub mod invite;
 pub mod keybind;
 pub mod link_preview;

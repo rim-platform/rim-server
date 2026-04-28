@@ -2,6 +2,9 @@
 
 pub mod prelude;
 
+pub mod bootstrap_token;
+mod bootstrap_token_mapper;
+
 pub mod command_audit_log;
 
 pub mod capability_registry;
@@ -22,6 +25,8 @@ pub mod incident_message_tag;
 mod incident_message_tag_mapper;
 pub mod incident_phase;
 mod incident_phase_mapper;
+pub mod instance_invite;
+mod instance_invite_mapper;
 pub mod invite;
 mod invite_mapper;
 pub mod keybind;

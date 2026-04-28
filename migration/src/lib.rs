@@ -29,13 +29,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20260318_210000_add_conversation_member_joined_at::Migration),
             Box::new(m20260320_000000_create_message_reaction::Migration),
             Box::new(m20260322_000000_add_unique_channel_title::Migration),
-            Box::new(m20260331_create_conversation_read_state::Migration),
-            Box::new(m20260401_add_conversation_topic::Migration),
-            Box::new(m20260401_create_message_pin::Migration),
-            Box::new(m20260402_add_message_forwarding::Migration),
-            Box::new(m20260402_add_user_profile_fields::Migration),
-            Box::new(m20260402_create_message_mention::Migration),
-            Box::new(m20260402_create_notification_preference::Migration),
             Box::new(m20260404_000000_create_password_reset_token::Migration),
             Box::new(m20260404_000001_create_link_preview::Migration),
             Box::new(m20260404_000002_create_custom_emoji::Migration),
@@ -52,6 +45,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260426_180614_macro_add_ai_columns::Migration),
             Box::new(m20260426_200000_capability_registry_add_is_self_scoped::Migration),
             Box::new(m20260427_000001_audit_outcome_widen_check::Migration),
+            Box::new(m20260428_182238_add_registration_invites::Migration),
         ]
     }
 }
@@ -101,3 +95,4 @@ mod m20260425_000002_audit_log_add_check_outcome_columns;
 mod m20260426_180614_macro_add_ai_columns;
 mod m20260426_200000_capability_registry_add_is_self_scoped;
 mod m20260427_000001_audit_outcome_widen_check;
+mod m20260428_182238_add_registration_invites;

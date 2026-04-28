@@ -42,6 +42,12 @@ pub fn map_service_error(err: ServiceError) -> Error {
             e.set("code", Value::from("RATE_LIMITED"));
             e.set("retryAfterSeconds", Value::from(retry_after_seconds as i64));
         }),
+        ServiceError::InvalidToken => Error::new("invalid or unknown token").extend_with(|_, e| {
+            e.set("code", Value::from("INVALID_TOKEN"));
+        }),
+        ServiceError::ExpiredToken => Error::new("token has expired").extend_with(|_, e| {
+            e.set("code", Value::from("EXPIRED_TOKEN"));
+        }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),

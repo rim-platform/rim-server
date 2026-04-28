@@ -28,12 +28,23 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
+/// Extra per-deployment context injected into the GraphQL schema at boot.
+pub struct RegistrationContext {
+    /// The registration mode (invite-only vs open).
+    pub registration_mode: Arc<rim_services::auth::dto::RegistrationMode>,
+    /// Rate limiter for `previewInviteToken` (always required).
+    pub preview_rate_limiter: Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>,
+    /// Rate limiter for open-mode signup (required when mode is `Open`).
+    pub signup_rate_limiter: Arc<rim_services::auth::dto::SignupRateLimiterToken>,
+}
+
 pub fn build_schema(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
     presence_manager: Arc<dyn rim_services::presence::PresenceService>,
     typing_tracker: Arc<dyn rim_services::typing::TypingService>,
     observers: Arc<rim_services::events::Observers>,
+    registration: RegistrationContext,
 ) -> AppSchema {
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
     use async_graphql::dataloader::DataLoader;
@@ -104,6 +115,10 @@ pub fn build_schema(
         .data(mention_loader)
         .data(pin_loader)
         .data(link_preview_loader)
+        // Registration context — §6.3
+        .data(registration.registration_mode)
+        .data(registration.preview_rate_limiter)
+        .data(registration.signup_rate_limiter)
         .limit_depth(10)
         .limit_complexity(200)
         .finish()
@@ -185,6 +200,14 @@ pub fn export_sdl(
         .data(mention_loader)
         .data(pin_loader)
         .data(link_preview_loader)
+        // Registration context defaults for SDL export (unused at runtime).
+        .data(Arc::new(
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        ))
+        .data(Arc::new(
+            rim_services::auth::dto::PreviewInviteRateLimiterToken,
+        ))
+        .data(Arc::new(rim_services::auth::dto::SignupRateLimiterToken))
         .finish();
 
     schema.sdl()
