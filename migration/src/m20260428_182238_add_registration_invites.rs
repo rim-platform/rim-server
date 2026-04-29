@@ -33,13 +33,17 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::SetNull)
                             .on_update(ForeignKeyAction::Cascade),
                     )
-                    .index(
-                        Index::create()
-                            .name("idx-bootstrap-token-hash-uniq")
-                            .table(BootstrapToken::Table)
-                            .col(BootstrapToken::TokenHash)
-                            .unique(),
-                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-bootstrap-token-hash-uniq")
+                    .table(BootstrapToken::Table)
+                    .col(BootstrapToken::TokenHash)
+                    .unique()
                     .to_owned(),
             )
             .await?;
@@ -84,20 +88,28 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::Restrict)
                             .on_update(ForeignKeyAction::Cascade),
                     )
-                    .index(
-                        Index::create()
-                            .name("idx-instance-invite-hash-uniq")
-                            .table(InstanceInvite::Table)
-                            .col(InstanceInvite::TokenHash)
-                            .unique(),
-                    )
-                    .index(
-                        Index::create()
-                            .name("idx-instance-invite-active")
-                            .table(InstanceInvite::Table)
-                            .col(InstanceInvite::RevokedAt)
-                            .col(InstanceInvite::ExpiresAt),
-                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-instance-invite-hash-uniq")
+                    .table(InstanceInvite::Table)
+                    .col(InstanceInvite::TokenHash)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx-instance-invite-active")
+                    .table(InstanceInvite::Table)
+                    .col(InstanceInvite::RevokedAt)
+                    .col(InstanceInvite::ExpiresAt)
                     .to_owned(),
             )
             .await

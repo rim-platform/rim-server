@@ -2670,12 +2670,18 @@ impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
 
 /// GraphQL enum for the type of an invite token, used by `InviteTokenPreview`.
 ///
-/// Both bootstrap and instance invites surface as `INSTANCE` to the frontend;
-/// the FE shows identical "create your RIM account" copy for both.
+/// `BOOTSTRAP` and `INSTANCE` both trigger the "create your RIM account" form
+/// copy on the frontend, but they are distinct so the frontend knows which input
+/// field to populate on `signupWithInvite`:
+/// - `BOOTSTRAP` → use `bootstrapToken`
+/// - `INSTANCE`  → use `instanceInviteToken`
+///
 /// Mirrors [`rim_services::auth::dto::InviteTokenType`].
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum InviteTokenTypeGql {
-    /// Bootstrap or instance invite: create-an-account flow.
+    /// Bootstrap token: routes to `bootstrapToken` input on `signupWithInvite`.
+    Bootstrap,
+    /// Instance invite: routes to `instanceInviteToken` input on `signupWithInvite`.
     Instance,
     /// Workspace invite: join-a-workspace flow.
     Workspace,
@@ -2685,6 +2691,7 @@ impl From<rim_services::auth::dto::InviteTokenType> for InviteTokenTypeGql {
     fn from(t: rim_services::auth::dto::InviteTokenType) -> Self {
         use rim_services::auth::dto::InviteTokenType as D;
         match t {
+            D::Bootstrap => Self::Bootstrap,
             D::Instance => Self::Instance,
             D::Workspace => Self::Workspace,
         }

@@ -1497,10 +1497,11 @@ mod tests {
     }
 
     // ── Test 18 ─────────────────────────────────────────────────────────────
-    /// `previewInviteToken` for a valid bootstrap token returns `INSTANCE` type.
-    /// (FE collapses bootstrap+instance into the same branch.)
+    /// `previewInviteToken` for a valid bootstrap token returns `Bootstrap` type
+    /// so the frontend can route to the `bootstrapToken` input field on
+    /// `signupWithInvite`. `expiresAt` is set; `workspace` is null.
     #[tokio::test]
-    async fn preview_invite_token_bootstrap_returns_instance_type() {
+    async fn preview_invite_token_bootstrap_returns_bootstrap_type() {
         let token_id = BootstrapTokenId::new();
         let bt = make_bootstrap_token(token_id);
         let expires_at = bt.expires_at;
@@ -1533,7 +1534,7 @@ mod tests {
             .unwrap();
 
         use rim_services::auth::dto::InviteTokenType;
-        assert_eq!(res.token_type, InviteTokenType::Instance);
+        assert_eq!(res.token_type, InviteTokenType::Bootstrap);
         assert_eq!(res.expires_at, Some(expires_at));
         assert!(res.workspace.is_none());
     }
