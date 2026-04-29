@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use entity::instance_invite;
 use sea_orm::Value;
 use sea_orm::prelude::{Expr, Uuid};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, Set};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -20,6 +20,36 @@ impl SeaOrmInstanceInviteRepository {
     /// Construct a new repository using the given [`DbHandle`].
     pub fn new(db: DbHandle) -> Self {
         Self { db }
+    }
+
+    /// Atomic revoke that returns the number of affected rows.
+    ///
+    /// `1` means this caller performed the revoke; `0` means the row was
+    /// already revoked or does not exist. This is the implementation core of
+    /// [`InstanceInviteRepository::revoke`] — exposed separately so the
+    /// concurrent-revoke regression test can assert that exactly one of two
+    /// racing callers observes the "did revoke" outcome.
+    ///
+    /// # Errors
+    /// Returns a repository error on database failure.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let did_revoke = repo.revoke_returning_affected(invite.id).await? == 1;
+    /// ```
+    pub async fn revoke_returning_affected(&self, id: InstanceInviteId) -> RepoResult<u64> {
+        let now = Utc::now();
+        let res = instance_invite::Entity::update_many()
+            .filter(instance_invite::Column::Id.eq::<Uuid>(id.into()))
+            .filter(instance_invite::Column::RevokedAt.is_null())
+            .col_expr(
+                instance_invite::Column::RevokedAt,
+                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
     }
 }
 
@@ -140,7 +170,18 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
 
     /// Revoke an instance invite by setting `revoked_at = now()`.
     ///
-    /// No-op if the row does not exist.
+    /// Executes a single
+    /// `UPDATE instance_invite SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`
+    /// statement, eliminating the read-then-update race where two concurrent
+    /// admin revokes could each see `revoked_at IS NULL`, both write, and the
+    /// second silently overwrites the first revoker's timestamp (C1-class
+    /// hardening).
+    ///
+    /// Idempotent: a no-op when the row is already revoked or does not exist.
+    /// Both outcomes are folded into `Ok(())` to keep the trait contract stable
+    /// (matches `InviteRepository::revoke_invite` semantics). Test coverage uses
+    /// the private [`Self::revoke_returning_affected`] helper to observe the
+    /// "did revoke / already revoked" distinction.
     ///
     /// # Errors
     /// Returns a repository error on database failure.
@@ -150,18 +191,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     /// repo.revoke(invite.id).await?;
     /// ```
     async fn revoke(&self, id: InstanceInviteId) -> RepoResult<()> {
-        let now: DateTime<Utc> = Utc::now();
-        let Some(model) = instance_invite::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-        else {
-            return Ok(());
-        };
-
-        let mut active: instance_invite::ActiveModel = model.into();
-        active.revoked_at = Set(Some(now.into()));
-        active.update(&self.db).await.map_err(map_db_err)?;
+        let _ = self.revoke_returning_affected(id).await?;
         Ok(())
     }
 
