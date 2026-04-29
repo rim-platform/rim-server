@@ -366,6 +366,112 @@ async fn signup_open_commits_user_and_session_atomically() {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrent-revoke regression — C1-class race on the revoke path
+// ---------------------------------------------------------------------------
+
+/// Two concurrent revokes of the same bootstrap token: exactly one caller must
+/// observe `affected == 1` ("did revoke") and the other must observe
+/// `affected == 0` ("already revoked"). Revoke-side analog of the C1
+/// atomic-claim test.
+#[tokio::test]
+async fn concurrent_bootstrap_token_revoke_exactly_one_wins() {
+    let Some(db) = support::db_conn_or_skip().await else {
+        return;
+    };
+    support::reset_db(&db).await;
+
+    let handle = DbHandle::Connection(db.clone());
+    let repo = SeaOrmBootstrapTokenRepository::new(handle.clone());
+
+    let bt = repo
+        .create(NewBootstrapToken {
+            email: "race@example.com".to_string(),
+            token_hash: hash_token("rim_boot_race_token"),
+            expires_at: Utc::now() + Duration::hours(1),
+        })
+        .await
+        .expect("create token failed");
+
+    let r1 = SeaOrmBootstrapTokenRepository::new(handle.clone());
+    let r2 = SeaOrmBootstrapTokenRepository::new(handle.clone());
+    let id = bt.id;
+
+    let (a, b) = tokio::join!(
+        r1.revoke_returning_affected(id),
+        r2.revoke_returning_affected(id),
+    );
+    let a = a.expect("revoke a failed");
+    let b = b.expect("revoke b failed");
+
+    assert_eq!(
+        a + b,
+        1,
+        "exactly one revoker must report rows_affected == 1; got a={a}, b={b}"
+    );
+
+    let after = repo.get_by_id(id).await.unwrap().expect("token must exist");
+    assert!(
+        after.revoked_at.is_some(),
+        "token must be revoked after race"
+    );
+}
+
+/// Two concurrent revokes of the same instance invite: exactly one caller must
+/// observe `affected == 1` and the other `affected == 0`.
+#[tokio::test]
+async fn concurrent_instance_invite_revoke_exactly_one_wins() {
+    let Some(db) = support::db_conn_or_skip().await else {
+        return;
+    };
+    support::reset_db(&db).await;
+
+    let handle = DbHandle::Connection(db.clone());
+
+    let user_repo = SeaOrmUserRepository::new(handle.clone());
+    let admin = user_repo
+        .create_user(rim_core::user::model::NewUser {
+            username: "raceadmin".to_string(),
+            password: "hash".to_string(),
+            email: "raceadmin@example.com".to_string(),
+            display_name: None,
+        })
+        .await
+        .expect("admin create failed");
+
+    let repo = SeaOrmInstanceInviteRepository::new(handle.clone());
+    let invite = repo
+        .create(NewInstanceInvite {
+            created_by_user_id: admin.id,
+            token_hash: hash_token("rim_iinv_race_token"),
+            expires_at: Utc::now() + Duration::hours(1),
+            max_uses: 1,
+        })
+        .await
+        .expect("create invite failed");
+
+    let r1 = SeaOrmInstanceInviteRepository::new(handle.clone());
+    let r2 = SeaOrmInstanceInviteRepository::new(handle.clone());
+    let id = invite.id;
+    let (a, b) = tokio::join!(
+        r1.revoke_returning_affected(id),
+        r2.revoke_returning_affected(id),
+    );
+    let a = a.expect("revoke a failed");
+    let b = b.expect("revoke b failed");
+    assert_eq!(a + b, 1, "exactly one revoker must win; got a={a}, b={b}");
+
+    let after = repo
+        .get_by_id(id)
+        .await
+        .unwrap()
+        .expect("invite must exist");
+    assert!(
+        after.revoked_at.is_some(),
+        "invite must be revoked after race"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // accept_invite — verify already-correct path is not regressed
 // ---------------------------------------------------------------------------
 

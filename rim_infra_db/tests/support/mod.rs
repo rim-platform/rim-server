@@ -92,25 +92,43 @@ pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
 }
 
 pub async fn reset_db(conn: &DatabaseConnection) {
-    // Keep this list explicit and stable; exclude seaql_migrations.
-    // CASCADE ensures FK-dependent rows are cleared.
+    // Full application-table truncate list, alphabetical. Kept in sync with
+    // entity/src/*.rs (table_name = "..."); excludes seaql_migrations.
+    // CASCADE ensures FK-dependent rows are cleared regardless of declaration order.
     let sql = r#"
 TRUNCATE TABLE
+  bootstrap_token,
+  capability_registry,
+  channel_lens,
+  command_audit_log,
+  conversation,
+  conversation_member,
+  conversation_read_state,
+  custom_emoji,
+  incident,
   incident_message_tag,
   incident_phase,
-  incident,
-  conversation_member,
-  message_attachment,
-  message,
-  message_thread,
-  user_command,
-  keybind,
+  instance_invite,
   invite,
-  session,
-  server_member,
-  conversation,
+  keybind,
+  link_preview,
+  "macro",
+  message,
+  message_attachment,
+  message_mention,
+  message_pin,
+  message_reaction,
+  message_thread,
+  notification_preference,
+  password_reset_token,
+  pipeline,
   server,
-  "user"
+  server_member,
+  session,
+  user_command,
+  user_skill_profile,
+  "user",
+  workspace_state
 RESTART IDENTITY CASCADE;
 "#;
 
