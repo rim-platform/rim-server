@@ -1,6 +1,8 @@
 pub(crate) mod action;
 pub(crate) mod audit;
-pub(crate) mod auth;
+// pub(crate) promoted to pub: DefaultAuthService is re-exported below for integration tests
+// (signup_txn_regression) that construct the service directly against a live database.
+pub mod auth;
 pub mod capability;
 pub(crate) mod channel_lens;
 pub mod command;
@@ -73,6 +75,7 @@ mod incident_unit_tests;
 #[cfg(test)]
 mod command_tests;
 
+pub use auth::DefaultAuthService;
 pub use channel_lens::ChannelLensRepos;
 pub use custom_emoji::CustomEmojiRepos;
 pub use incident::IncidentRepos;

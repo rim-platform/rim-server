@@ -355,6 +355,102 @@ async fn mutation_signup_with_invite_bootstrap_happy_path() {
     }
 }
 
+// ── Test 40 ──────────────────────────────────────────────────────────────────
+
+/// Verify `previewInviteToken` returns `BOOTSTRAP` for tokens found in the
+/// `bootstrap_token` table.
+///
+/// This is the resolver-level assertion that the `BOOTSTRAP` enum value flows
+/// correctly through the GraphQL SDL from service layer → resolver → wire.
+/// The frontend uses this to route via the `bootstrapToken` input field on
+/// `signupWithInvite` rather than `instanceInviteToken`.
+///
+/// Also verifies that `INSTANCE` is still returned for tokens in the
+/// `instance_invite` table, keeping the two paths distinct.
+#[tokio::test]
+async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
+    let Some(ctx) = TestCtx::new().await else {
+        return;
+    };
+
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+
+    // ── Bootstrap token → BOOTSTRAP ───────────────────────────────────────
+    let raw_bootstrap_token = "test_preview_bootstrap_type_token_abcdef";
+    let expires_at = Utc::now() + chrono::Duration::minutes(30);
+    let _token_id = seed_bootstrap_token(&ctx.db, raw_bootstrap_token, expires_at).await;
+
+    let query = format!(
+        r#"query {{
+            previewInviteToken(token: "{raw_bootstrap_token}") {{
+                tokenType
+                expiresAt
+                workspace {{
+                    serverId
+                }}
+            }}
+        }}"#
+    );
+    let res = schema.execute(Request::new(&query)).await;
+    assert!(
+        res.errors.is_empty(),
+        "previewInviteToken bootstrap: unexpected errors: {:?}",
+        res.errors
+    );
+    let json = res
+        .data
+        .into_json()
+        .expect("data must be JSON-serialisable");
+    assert_eq!(
+        json["previewInviteToken"]["tokenType"],
+        serde_json::json!("BOOTSTRAP"),
+        "bootstrap token must surface as BOOTSTRAP, not INSTANCE"
+    );
+    assert!(
+        json["previewInviteToken"]["workspace"].is_null(),
+        "workspace must be null for BOOTSTRAP token"
+    );
+    assert!(
+        !json["previewInviteToken"]["expiresAt"].is_null(),
+        "expiresAt must be set for BOOTSTRAP token"
+    );
+
+    // ── Instance invite token → INSTANCE (unchanged) ──────────────────────
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+    let owner = ctx.create_user("preview_bootstrap_type_owner").await;
+    let raw_instance_token = "test_preview_instance_type_token_abcdef";
+    let _iinv_id = seed_instance_invite(
+        &ctx.db,
+        owner.id,
+        raw_instance_token,
+        SeedInstanceInviteOpts::default(),
+    )
+    .await;
+
+    let iquery = format!(
+        r#"query {{
+            previewInviteToken(token: "{raw_instance_token}") {{
+                tokenType
+            }}
+        }}"#
+    );
+    let ires = schema.execute(Request::new(&iquery)).await;
+    assert!(
+        ires.errors.is_empty(),
+        "previewInviteToken instance: unexpected errors: {:?}",
+        ires.errors
+    );
+    let ijson = ires
+        .data
+        .into_json()
+        .expect("data must be JSON-serialisable");
+    assert_eq!(
+        ijson["previewInviteToken"]["tokenType"],
+        serde_json::json!("INSTANCE"),
+        "instance invite must still surface as INSTANCE"
+    );
+}
+
 // ── Test 39 ──────────────────────────────────────────────────────────────────
 
 /// Verify that submitting `signupWithInvite` **without** the required `email`

@@ -109,10 +109,16 @@ pub struct CreateInstanceInviteResultDto {
 }
 
 /// Token type discriminant for the preview query.
+///
+/// `Bootstrap` and `Instance` both lead to "create your RIM account" copy on
+/// the frontend; they are now distinct so the frontend knows which input field
+/// to use on `signupWithInvite` (`bootstrapToken` vs `instanceInviteToken`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InviteTokenType {
-    /// Bootstrap or instance invite: "create your RIM account" copy.
+    /// Bootstrap token: "create your RIM account" flow via `bootstrapToken` input.
+    Bootstrap,
+    /// Instance invite: "create your RIM account" flow via `instanceInviteToken` input.
     Instance,
     /// Workspace invite: "join workspace X" copy.
     Workspace,

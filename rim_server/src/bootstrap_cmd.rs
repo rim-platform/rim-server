@@ -10,7 +10,7 @@
 //!
 //! ## Outputs
 //!
-//! - **stdout**: one line — `https://<host>/join?bootstrap=<raw_token>`
+//! - **stdout**: one line — `https://<host>/join/<raw_token>`
 //! - **stderr**: token id, expiry, and SHA-256 fingerprint (for audit correlation).
 //!   The raw token is NOT printed to stderr.
 //!
@@ -88,7 +88,7 @@ async fn run_inner(args: impl Iterator<Item = String>) -> Result<(), String> {
     let base_url = opts
         .public_url
         .unwrap_or_else(|| format!("http://{}:{}", config.server_host, config.server_port));
-    let signup_url = format!("{base_url}/join?bootstrap={raw_token}");
+    let signup_url = format!("{base_url}/join/{raw_token}");
 
     // stdout: the URL only — operator may pipe this directly.
     println!("{signup_url}");

@@ -23,7 +23,7 @@ The product decision is fixed. This doc specifies:
 2. The **`bootstrap-user` CLI subcommand** on `rim_server`, plus its in-DB token row with consumption + revocation.
 3. The new **`signupWithInvite`** GraphQL mutation, gated by a `RegistrationMode` resolved at boot time from `RIM_OPEN_REGISTRATION`.
 4. **Three security flags** from the product memo, addressed inline (TTL, revocation, fail-closed startup wiring with `tracing::warn!` + rate-limit precondition).
-5. Test list (32 tests), migration sketch with rollback note, GraphQL SDL diff.
+5. Test list (40 tests, post-A1 floor), migration sketch with rollback note, GraphQL SDL diff.
 
 The scope here is **registration only**. Email-domain allowlist, OIDC/SAML JIT, and plugin marketplace registration are explicitly out of scope (see §11).
 
@@ -86,7 +86,7 @@ cargo run -p rim_server -- bootstrap-user --email <email>
 
 1. Connects to the configured DB using `RIMConfig::load()` — same env reading as the server entrypoint.
 2. Inserts one `bootstrap_token` row.
-3. Prints to **stdout** a single line: `https://<host>/join?bootstrap=<raw_token>` where `<host>` defaults to `${RIM_SERVER_HOST}:${RIM_SERVER_PORT}` and is overridable with `--public-url <url>`.
+3. Prints to **stdout** a single line: `https://<host>/join/<raw_token>` (path-param form, matching the rim-ui `/join/:token` route — verified in `rim_server/src/bootstrap_cmd.rs:91`) where `<host>` defaults to `${RIM_SERVER_HOST}:${RIM_SERVER_PORT}` and is overridable with `--public-url <url>`.
 4. Prints to **stderr** the token id, expiry, and SHA-256 fingerprint (for audit log correlation). Does **not** print `<raw_token>` to stderr.
 5. Exits 0 on success; nonzero on DB error or entropy failure.
 
@@ -135,7 +135,7 @@ Replaces no existing mutation; coexists with the existing `acceptInvite` mutatio
 
 - `acceptInvite` returns `AcceptInvitePayload { userId, serverId }` with `serverId` non-null. Bootstrap and instance-invite signups have no server. Making `serverId` nullable on the existing payload is a public-API break.
 - Three token types (bootstrap, instance, workspace) is enough divergence in error handling and downstream effects (server membership vs. none) that one mutation per concern reads cleaner.
-- Frontend (vision) is wiring a single `/join` page that branches on URL query param (`?bootstrap=`, `?invite=`, `?workspaceInvite=`) before submitting; one mutation taking a sum-typed input is the cleanest server-side contract for that.
+- Frontend (vision) is wiring a single `/join/:token` page (path-param form) that calls `previewInviteToken` to discover the `tokenType` (`BOOTSTRAP` / `INSTANCE` / `WORKSPACE`) and routes the raw token to the matching input field on `signupWithInvite`; one mutation taking a sum-typed input is the cleanest server-side contract for that.
 
 ### 4.2 Resolution of registration mode
 
@@ -230,13 +230,21 @@ previewInviteToken(token: String!): InviteTokenPreview!
 
 **Read-only — does NOT consume.** The resolver only reads. It does **not** mutate `used_at`, `use_count`, or any audit field on `bootstrap_token` / `instance_invite` / `invite`. Confirmed: previewing is **not** consumption. No audit log row is written for a successful preview (a noisy log entry per FE page-load is worse signal than no log; admins still see the eventual `signupWithInvite` audit row, which is the actually-meaningful event). Failed previews (rate-limit hits) **do** log at `target = "audit"`.
 
-**Token-type discrimination:** the resolver tries `bootstrap_token`, `instance_invite`, then `invite` (workspace) by hash, in that order. First non-revoked match wins. Bootstrap and instance invites both surface as `tokenType: INSTANCE` to the FE — the FE's `/join/:token` page treats them identically (both yield "create your RIM account"). Workspace invites surface as `tokenType: WORKSPACE`.
+**Token-type discrimination:** the resolver tries `bootstrap_token`, `instance_invite`, then `invite` (workspace) by hash, in that order. First non-revoked match wins. The three sources surface as **three distinct** `InviteTokenType` values to the FE so the FE can populate the correct GraphQL input field on `signupWithInvite`:
+
+- `BOOTSTRAP` — token from the `bootstrap_token` table; FE routes the raw token to the `bootstrapToken` input field on `signupWithInvite`.
+- `INSTANCE` — token from the `instance_invite` table; FE routes to `instanceInviteToken`.
+- `WORKSPACE` — token from the `invite` (workspace) table; FE routes to `workspaceInviteToken`.
+
+Verified against the live impl: `InviteTokenTypeGql` in `rim_api/src/types.rs` (three variants `Bootstrap`/`Instance`/`Workspace`) and the `preview_invite_token` mapping in `rim_infra_services/src/auth.rs` (lines ~1353–1443).
+
+Note (FE cross-reference): the form copy ("Create your RIM account") is shared between `BOOTSTRAP` and `INSTANCE` on the FE — only the GraphQL input field differs. That UX detail is owned by the FE spec; documented here only so the contract on this side reads correctly.
 
 **Workspace invite preview content:** workspace name (yes — already implied by the join URL the inviter shared, no new disclosure) and inviter display name (yes — the inviter consented to being named when they issued the invite; this is the same identity already shown in the existing `/invite/:token` flow). No privacy concern; we already disclose both in the existing `acceptInvite` UX.
 
 **Instance invite preview content:** `tokenType: INSTANCE` and `expiresAt`. Nothing else. Specifically: no inviter name, no `max_uses`/`use_count`. The first prevents reverse-mapping a leaked token to an admin; the second prevents revealing how many seats remain on a multi-use invite.
 
-**Bootstrap token preview content:** `tokenType: INSTANCE` and `expiresAt`. Same minimal shape as instance invites — the FE branches on `INSTANCE` vs `WORKSPACE`, not on bootstrap-vs-instance.
+**Bootstrap token preview content:** `tokenType: BOOTSTRAP` and `expiresAt`. Same minimal shape as instance invites. The FE renders identical "Create your RIM account" copy for both `BOOTSTRAP` and `INSTANCE`; the discriminator exists so the FE knows which `signupWithInvite` input field carries the raw token.
 
 **Error mapping** (matches §4.5 — same indistinguishability rules):
 
@@ -259,7 +267,7 @@ previewInviteToken(token: String!): InviteTokenPreview!
 **Trade-off accepted:**
 - (+) Zero boot-panic risk for the limiter wiring path; one fewer thing for an operator to misconfigure.
 - (−) No way to inject a custom limiter (e.g., a NoopLimiter for an integration test, or a Redis-backed limiter for multi-node). When that need materializes, retrofit DI at that point — until then YAGNI.
-- (−) The cosmetic `let _ = &preview_rate_limiter;` lines in `rim_server/src/app.rs:264-282` prove only that a marker token type was instantiated, which is tautological. **Hulk follow-up cleanup:** remove the `PreviewInviteRateLimiterToken` / `SignupRateLimiterToken` marker types and their `let _ = &...;` lines if they have no other consumer; if they're still referenced by `RegistrationContext` for trait-bound reasons, leave them but add a `// marker: see spec §4.7 R2` comment so the next reader doesn't think the lines mean something operational.
+- (−) The marker-token cleanup landed: the dead `PreviewInviteRateLimiter` / `SignupRateLimiter` newtype wrappers in `rim_infra_services/src/registration_rate_limiter.rs` were removed (per Hawkeye SF1), and the cosmetic `let _ = &..._rate_limiter;` lines in `rim_server/src/app.rs` were replaced with real wiring: the `PreviewInviteRateLimiterToken` / `SignupRateLimiterToken` marker types in `rim_services::auth::dto` are now passed through `RegistrationContext` (`app.rs:264-297`) and annotated with `// marker: see spec §4.7 R2`. Only the marker-token sentinel pattern remains, kept as a typed seam for a future swap to a Redis-backed limiter.
 
 ### 4.8 Login path unaffected
 
@@ -301,7 +309,7 @@ At server boot, in `rim_server::app::build_app_runtime`, after config load and b
    - ~~Verify the rate limiter for the `signup` key is wired into the runtime. If not, fail-closed.~~ **RESOLVED (R2): not applicable.** The signup rate limiter is built inside `DefaultAuthService::new()` and cannot be absent. The check has nothing to verify.
 2. If `mode == InviteOnly`: no warning. (Rate limiter still exists, but the signup mutation never reaches the rate-limit branch.)
 
-~~The fail-closed check is implemented as a startup invariant ... See test `boot_fails_when_open_mode_without_rate_limiter`.~~ **RESOLVED (R2):** the warning log line stays (it's the operator's nudge); the fail-closed check is dropped because there is no failure mode to catch.
+~~The fail-closed check is implemented as a startup invariant ... See test `boot_fails_when_open_mode_without_rate_limiter`.~~ **RESOLVED (R2):** the warning log line stays (it's the operator's nudge); the fail-closed check is dropped because there is no failure mode to catch. The marker-token cleanup also landed: the dead `PreviewInviteRateLimiter` / `SignupRateLimiter` newtype wrappers were removed from `rim_infra_services/src/registration_rate_limiter.rs`, and `app.rs:264-282` no longer holds `let _ = &..._rate_limiter;` placeholders — the marker tokens are now wired through `RegistrationContext` with `// marker: see spec §6.3 R2` annotations.
 
 ---
 
@@ -425,7 +433,7 @@ Every new function gets unit tests AND rustdoc. Hulk: if either is missing, this
 19. `signup_password_too_short_returns_validation` — same `validate_password` rules as existing service.
 20. `preview_invite_token_workspace_returns_workspace_payload` — valid workspace invite token returns `tokenType: WORKSPACE`, populated `workspace` field with server name + inviter display name; verifies no `used_at`/`use_count` mutation on the underlying row (re-read after preview, assert unchanged).
 21. `preview_invite_token_instance_returns_minimal_payload` — valid instance invite returns `tokenType: INSTANCE`, `expiresAt` set, `workspace` is null; verifies no mutation.
-22. `preview_invite_token_bootstrap_returns_instance_type` — valid bootstrap token also surfaces as `tokenType: INSTANCE` (FE collapses bootstrap+instance into one branch).
+22. `preview_invite_token_bootstrap_returns_bootstrap_type` — valid bootstrap token surfaces as `tokenType: BOOTSTRAP` (distinct from `INSTANCE`; FE uses the discriminator to pick which `signupWithInvite` input field carries the raw token, even though it shares "Create your RIM account" copy with `INSTANCE`).
 23. `preview_invite_token_expired_returns_expired_token` — token past `expires_at` returns `ExpiredToken` (distinguishable code, matches §4.5 rule).
 24. `preview_invite_token_invalid_returns_invalid_token` — missing / consumed / revoked all collapse to `InvalidToken` (indistinguishable, three sub-cases in one parametrized test).
 25. `preview_invite_token_rate_limited_after_threshold` — 31st call from same IP within 5min window returns `RateLimited`; 30 succeed.
@@ -546,8 +554,9 @@ enum RegistrationMode {
 }
 
 enum InviteTokenType {
-  WORKSPACE
+  BOOTSTRAP
   INSTANCE
+  WORKSPACE
 }
 
 """
@@ -588,7 +597,7 @@ type WorkspaceInvitePreview {
 
 1. Migration applied. Both new tables created. Existing `invite` untouched.
 2. Server ships with `RegistrationMode::InviteOnly` default. No env flag flip needed.
-3. Operator runs `cargo run -p rim_server -- bootstrap-user --email me@example.com`, copies the link, signs up at `/join?bootstrap=...`. They land in empty state.
+3. Operator runs `cargo run -p rim_server -- bootstrap-user --email me@example.com`, copies the link, signs up at `/join/<raw_token>` (path-param form). They land in empty state.
 4. Operator creates a workspace. Now they're a workspace owner. They can issue workspace invites (existing flow) AND instance invites (new flow).
 5. Existing `bootstrap` GraphQL mutation continues to work (deprecated, scheduled for removal one minor release later). `RIM_BOOTSTRAP_SECRET` continues to be honored.
 6. To enable open mode on a deployment: set `RIM_OPEN_REGISTRATION=true`, ensure rate limiter is built into the runtime (it always is — see §6.3 — but if the wiring is ever removed accidentally, the boot check catches it).
@@ -622,7 +631,7 @@ Before opening review:
 - [ ] `AuthService` extended with three new methods + two new admin methods (instance-invite create/revoke); each is documented and tested.
 - [ ] `RegistrationMode` enum lives in `rim_services::auth::dto` (or a new `registration` module), parsed in `rim_server::config`, injected into GraphQL context.
 - [ ] `signupWithInvite`, `createInstanceInvite`, `revokeInstanceInvite`, `listInstanceInvites`, `registrationMode`, `previewInviteToken` GraphQL items added in `rim_api/src/{mutation,query,types}.rs`.
-- [ ] `PreviewInviteRateLimiter` (30 req / 5min / IP) constructed inside `DefaultAuthService::new()`. **(R2: no DI; no boot-fail invariant.)** Cosmetic `let _ = &..._rate_limiter;` lines in `app.rs:264-282` cleaned up — either remove the marker tokens entirely or annotate them with `// marker: see spec §4.7 R2`.
+- [ ] `PreviewInviteRateLimiter` (30 req / 5min / IP) constructed inside `DefaultAuthService::new()`. **(R2: no DI; no boot-fail invariant.)** ~~Cosmetic `let _ = &..._rate_limiter;` lines in `app.rs:264-282` cleaned up — either remove the marker tokens entirely or annotate them with `// marker: see spec §4.7 R2`.~~ **DONE (R2):** the cosmetic `let _ = &..._rate_limiter;` placeholders were replaced with real wiring through `RegistrationContext` (`app.rs:264-297`) and annotated with `// marker: see spec §4.7 R2`.
 - [ ] Two new `ServiceError` variants (`InvalidToken`, `ExpiredToken`) + matching arms in `map_service_error`.
 - [ ] Boot-time validation in `build_app_runtime` for `RIM_OPEN_REGISTRATION=true` — `tracing::warn!` only. **(R2: fail-closed check dropped.)**
 - [ ] All 40 tests written and passing under `cargo test --workspace -- --test-threads=1` (25 unit + 2 db-integration + 2 e2e + 3 resolver-e2e + 1 boot-warning + 7 amendment tests per §13.4). Resolver-e2e tests live in `rim_api/tests/registration_resolvers_e2e.rs` under the `e2e-tests` feature.
@@ -805,7 +814,7 @@ Every new function gets rustdoc per §8.4 — `validate_email`, `normalize_displ
 
 ### 13.7 Cmd / DTO changes
 
-The `SignupWithBootstrapCmd`, `SignupWithInstanceInviteCmd`, `SignupOpenCmd`, and `AcceptInviteCmd` (the four commands fed by the resolver) all gain two fields:
+The `SignupWithBootstrapCmd`, `SignupWithInstanceInviteCmd`, and `SignupOpenCmd` (the three new commands fed by the `signupWithInvite` resolver) all gain two fields:
 
 ```rust
 pub email: String,                  // required, pre-normalized at the resolver boundary
@@ -814,7 +823,15 @@ pub display_name: Option<String>,   // raw input; service decides fallback
 
 The resolver normalizes `email` (trim + lowercase) before constructing the cmd, but the service **also** runs `validate_email` on the way in — defense in depth, in case a future caller bypasses the resolver. `display_name` is passed through raw; `normalize_display_name` is called inside the service, since the username fallback needs the username from the same cmd.
 
-`AcceptInviteCmd` is the existing path (workspace-invite signup). It also gets `email` + `display_name` so workspace-invite signups are no different from instance/bootstrap signups w.r.t. the new fields. **This is a behavior change to `acceptInvite`** — that mutation's input gains the same two fields. The `AcceptInviteInput` GraphQL type adds them per the same shape; the SDL diff for `acceptInvite` is parallel to the `signupWithInvite` diff above. Tests 33–38 above all run against both paths or get a parallel pair (hulk's call on parametrization vs. duplication).
+`AcceptInviteCmd` is intentionally **excluded** per Q2 ruling — see the supersedure note immediately below.
+
+~~`AcceptInviteCmd` is the existing path (workspace-invite signup). It also gets `email` + `display_name` so workspace-invite signups are no different from instance/bootstrap signups w.r.t. the new fields. **This is a behavior change to `acceptInvite`** — that mutation's input gains the same two fields. The `AcceptInviteInput` GraphQL type adds them per the same shape; the SDL diff for `acceptInvite` is parallel to the `signupWithInvite` diff above. Tests 33–38 above all run against both paths or get a parallel pair (hulk's call on parametrization vs. duplication).~~
+
+**SUPERSEDED by Q2 ruling (Hawkeye SD1).** `AcceptInviteCmd` is **not** modified. The `accept_invite` GraphQL mutation and its cmd remain at the original `(invite_token, username, password)` shape — verified against the live `AcceptInviteCmd` definition in `rim_services/src/auth/command.rs:37–41`. Amendment 2026-04-28b is scoped to `signupWithInvite` only; the workspace-invite path is intentionally left alone.
+
+**Implementation note (legacy path):** because `user.email` is `NOT NULL` post-amendment, the legacy `accept_invite` path supplies a synthetic placeholder email of the form `"<username>@local.invalid"` (verified at `rim_infra_services/src/auth.rs:730` — `email: format!("{}@local.invalid", username.to_lowercase())`; a parallel placeholder is also issued for the deprecated `bootstrap` mutation at `rim_infra_services/src/auth.rs:462`). RFC 2606 reserves `.invalid` for exactly this kind of placeholder. Operators created via `accept_invite` must update their email through a future profile-edit flow before relying on password reset / notifications. This is the same pattern used by the `m20260428_add_user_email` migration's backfill (§13.4 phase 2).
+
+The downstream consequence is that `signup_with_bootstrap`, `signup_with_instance_invite`, and `signup_open` all carry real `email`/`display_name` end-to-end, while `accept_invite` does not — which matches the Q2 scope decision and is the only place in the codebase where the synthetic-email path is acceptable.
 
 ### 13.8 Frontend coordination
 
@@ -831,4 +848,4 @@ This thread does not have a SendMessage tool available; only file/grep tools are
 
 **Suggested message body (under 100 words):**
 
-> Vision — registration-redesign amendment 2026-04-28b. `SignupWithInviteInput` adds `email: String!` (required, max 254, server lowercases + trims, case-insensitive unique) and `displayName: String` (optional, 1–80 chars, falls back to username if absent/blank). New error code `EMAIL_TAKEN` for collisions — highlight the email field, do not reuse generic `CONFLICT`. `acceptInviteInput` gets the same two fields. Pre-plan `JoinForm` accordingly; Spider-Man will pick up impl after Hawkeye review of hulk's backend changes. Spec at `docs/design/registration-redesign-2026-04-28.md` §13. — Tony
+> Vision — registration-redesign amendment 2026-04-28b. `SignupWithInviteInput` adds `email: String!` (required, max 254, server lowercases + trims, case-insensitive unique) and `displayName: String` (optional, 1–80 chars, falls back to username if absent/blank). New error code `EMAIL_TAKEN` for collisions — highlight the email field, do not reuse generic `CONFLICT`. `acceptInvite` is **out of scope** per Q2 ruling — its input is unchanged; legacy users get a synthetic `<username>@local.invalid` placeholder. Pre-plan `JoinForm` accordingly; Spider-Man will pick up impl after Hawkeye review of hulk's backend changes. Spec at `docs/design/registration-redesign-2026-04-28.md` §13. — Tony

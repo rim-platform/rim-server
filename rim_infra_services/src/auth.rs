@@ -244,11 +244,37 @@ impl DefaultAuthService {
         user_agent: Option<String>,
         ip: Option<String>,
     ) -> ServiceResult<(rim_core::auth::model::Session, String, String)> {
+        Self::create_session_in_txn(&self.repos, self.session_ttl, user_id, user_agent, ip).await
+    }
+
+    /// Insert a session row using the supplied `repos` handle.
+    ///
+    /// Unlike [`create_session_for_user`], this method takes an explicit
+    /// [`AuthRepos`] reference so that callers can pass transactional repos.
+    /// Every signup path that creates the user inside a transaction **must** use
+    /// this variant for the session insert; otherwise the session INSERT runs on
+    /// a separate connection that cannot see the uncommitted user row, causing
+    /// an `fk-session-user` FK violation.
+    ///
+    /// # Transaction contract
+    /// The `repos` argument **must** share the same database transaction as the
+    /// user-creation call that precedes this. When both operations commit
+    /// together, the FK is satisfied. If the transaction rolls back, neither the
+    /// user row nor the session row is persisted.
+    ///
+    /// # Errors
+    /// Propagates any underlying storage error from `session_repo.create_session`.
+    async fn create_session_in_txn(
+        repos: &AuthRepos,
+        session_ttl: Duration,
+        user_id: rim_core::user::model::UserId,
+        user_agent: Option<String>,
+        ip: Option<String>,
+    ) -> ServiceResult<(rim_core::auth::model::Session, String, String)> {
         let raw_token = generate_session_token();
         let token_hash = hash_token(&raw_token);
-        let expires_at: DateTime<Utc> = Utc::now() + self.session_ttl;
-        let sess = self
-            .repos
+        let expires_at: DateTime<Utc> = Utc::now() + session_ttl;
+        let sess = repos
             .session_repo
             .create_session(NewSession {
                 user_id,
@@ -991,7 +1017,7 @@ impl AuthService for DefaultAuthService {
         }
 
         let (sess, raw_sess_token, csrf) =
-            self.create_session_for_user(user.id, None, None).await?;
+            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
@@ -1086,7 +1112,7 @@ impl AuthService for DefaultAuthService {
         }
 
         let (sess, raw_sess_token, csrf) =
-            self.create_session_for_user(user.id, None, None).await?;
+            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
@@ -1174,7 +1200,7 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
         let (sess, raw_sess_token, csrf) =
-            self.create_session_for_user(user.id, None, None).await?;
+            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
@@ -1338,7 +1364,7 @@ impl AuthService for DefaultAuthService {
                 return Err(ServiceError::ExpiredToken);
             }
             return Ok(InviteTokenPreviewDto {
-                token_type: InviteTokenType::Instance,
+                token_type: InviteTokenType::Bootstrap,
                 expires_at: Some(bt.expires_at),
                 workspace: None,
             });
