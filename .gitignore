@@ -34,3 +34,9 @@ target/
 #/target
 
 data/
+
+# Local tooling / generated (added during C1 commit)
+audit.log
+coverage/
+.claude/
+.codex

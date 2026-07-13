@@ -17,6 +17,8 @@ pub struct Model {
     pub status_text: Option<String>,
     pub bio: Option<String>,
     pub email: String,
+    #[sea_orm(column_type = "String(StringLen::N(64))", nullable)]
+    pub timezone: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

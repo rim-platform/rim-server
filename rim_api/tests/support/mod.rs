@@ -4,9 +4,9 @@
 /// per test process (idempotent), resets state between tests, and exposes
 /// builder helpers for users, servers, and registration tokens.
 ///
-/// Use [`TestCtx::new`] to get a context.  Returns `None` when `DATABASE_URL`
-/// is absent or does not look like a test database, causing the caller to skip
-/// the test rather than hard-fail (matches the pattern used by
+/// Use [`TestCtx::new`] to get a context. Panics loudly when `DATABASE_URL`
+/// is absent or does not look like a test database, rather than silently
+/// skipping the test (matches the pattern used by
 /// `rim_infra_db/tests/support/mod.rs`).
 pub mod registration;
 
@@ -42,30 +42,42 @@ fn is_test_db_url(url: &str) -> bool {
         .any(|needle| db_name.contains(needle))
 }
 
-/// Connect to the test database, or return `None` to skip the test.
-///
-/// # Errors
-/// Panics if `DATABASE_URL` is set but the connection fails or migrations
-/// cannot be applied.
-pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
+/// Redact the password from a DB URL for safe logging.
+/// Replaces `://user:password@host` with `://user:***@host`.
+fn redact_url(url: &str) -> String {
+    if let Some(at) = url.find('@')
+        && let Some(scheme_end) = url.find("://")
+    {
+        let credentials = &url[scheme_end + 3..at];
+        if let Some(colon) = credentials.find(':') {
+            let user = &credentials[..colon];
+            let host_and_rest = &url[at..];
+            let scheme = &url[..scheme_end + 3];
+            return format!("{scheme}{user}:***{host_and_rest}");
+        }
+    }
+    "<redacted>".to_string()
+}
+
+/// Connect to the test database, or **panic loudly**. Only reachable under the
+/// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
+/// so a panic here means the feature was enabled without a usable test DB —
+/// which must fail CI, not silently skip. See CLAUDE.md P6-W6.
+pub async fn db_conn() -> DatabaseConnection {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,
-        _ => {
-            eprintln!(
-                "SKIP: rim_api e2e tests require DATABASE_URL \
-                 (e.g. postgres://rim:rim@localhost/rim_testdb)."
-            );
-            return None;
-        }
+        _ => panic!(
+            "DATABASE_URL must be set when running with --features e2e-tests \
+             (e.g. postgres://rim:rim@localhost/rim_testdb). Every db-test requires it; \
+             without it the suite would silently skip and report a false green."
+        ),
     };
-
-    if !is_test_db_url(&url) {
-        eprintln!(
-            "SKIP: DATABASE_URL must point to a test DB \
-             (dbname containing 'testdb', '_test', 'testing', etc.).\n  got: {url}"
-        );
-        return None;
-    }
+    assert!(
+        is_test_db_url(&url),
+        "DATABASE_URL must point to a test DB (dbname containing 'testdb'/'_test'/'testing'); \
+         refusing to run destructive db-tests against: {}",
+        redact_url(&url),
+    );
 
     let mut opts = ConnectOptions::new(url.clone());
     opts.sqlx_logging(false);
@@ -81,7 +93,7 @@ pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
         let _ = MIGRATED.set(());
     }
 
-    Some(conn)
+    conn
 }
 
 /// Reset all relevant tables between tests.
@@ -120,16 +132,15 @@ pub struct TestCtx {
 
 #[allow(dead_code)]
 impl TestCtx {
-    /// Build a new `TestCtx`.
-    ///
-    /// Returns `None` when `DATABASE_URL` is absent (test is skipped silently).
-    /// Runs all pending migrations exactly once per process and truncates the
-    /// relevant tables so each test starts with a clean slate.
-    pub async fn new() -> Option<Self> {
-        let conn = db_conn_or_skip().await?;
+    /// Build a new `TestCtx`. Panics loudly if `DATABASE_URL` is not set or
+    /// does not point at a test database — see [`db_conn`]. Runs all pending
+    /// migrations exactly once per process and truncates the relevant tables
+    /// so each test starts with a clean slate.
+    pub async fn new() -> Self {
+        let conn = db_conn().await;
         reset_db(&conn).await;
         let db: DbHandle = conn.clone().into();
-        Some(Self { conn, db })
+        Self { conn, db }
     }
 
     /// Create a user with the given `username` and an unusable password hash.
@@ -276,6 +287,9 @@ pub async fn build_test_schema(
         incident_message_tag_repo: Arc::new(
             rim_infra_db::sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(db.clone()),
         ),
+        ingest_token_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::ingest_token::SeaOrmIngestTokenRepository::new(db.clone()),
+        ),
         skill_profile_repo: Arc::new(
             rim_infra_db::sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(db.clone()),
         ),
@@ -289,6 +303,46 @@ pub async fn build_test_schema(
         ),
         capability_registry_repo: Arc::new(
             rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(db.clone()),
+        ),
+        on_call_schedule_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::on_call_schedule::SeaOrmOnCallScheduleRepository::new(
+                db.clone(),
+            ),
+        ),
+        rotation_layer_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::on_call_rotation_layer::SeaOrmRotationLayerRepository::new(
+                db.clone(),
+            ),
+        ),
+        rotation_participant_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::on_call_rotation_participant::SeaOrmRotationParticipantRepository::new(
+                db.clone(),
+            ),
+        ),
+        on_call_override_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::on_call_override::SeaOrmOnCallOverrideRepository::new(
+                db.clone(),
+            ),
+        ),
+        escalation_policy_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::escalation_policy::SeaOrmEscalationPolicyRepository::new(
+                db.clone(),
+            ),
+        ),
+        escalation_step_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::escalation_step::SeaOrmEscalationStepRepository::new(
+                db.clone(),
+            ),
+        ),
+        conversation_escalation_policy_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::conversation_escalation_policy::SeaOrmConversationEscalationPolicyRepository::new(
+                db.clone(),
+            ),
+        ),
+        escalation_run_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::escalation_run::SeaOrmEscalationRunRepository::new(
+                db.clone(),
+            ),
         ),
     };
 
@@ -313,6 +367,10 @@ pub async fn build_test_schema(
         chrono::Duration::days(30),
         observers.clone(),
         Arc::clone(&storage_service),
+        None, // no ingest-token TTL configured for registration tests
+        Arc::new(rim_infra_services::email::LogEmailSender),
+        None, // no public_base_url configured for registration tests
+        Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
     ));
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(

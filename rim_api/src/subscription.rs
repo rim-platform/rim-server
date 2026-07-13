@@ -112,13 +112,25 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
             }
         }
 
-        // Pin events — filter by conversation membership
+        // Pin events — filter by conversation type like messages: channels are visible to all
+        // workspace members (channels have no conversation_member rows, so member_user_ids
+        // would be empty there), DM/Group pins only to conversation members.
         WorkspaceEvent::MessagePinned {
-            member_user_ids, ..
+            conversation_type,
+            member_user_ids,
+            ..
         }
         | WorkspaceEvent::MessageUnpinned {
-            member_user_ids, ..
-        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+            conversation_type,
+            member_user_ids,
+            ..
+        } => {
+            if conversation_type == "Channel" {
+                true
+            } else {
+                member_user_ids.iter().any(|id| id.to_string() == user_id)
+            }
+        }
 
         // Workspace-level events: visible to all workspace members
         WorkspaceEvent::MemberJoined { .. } | WorkspaceEvent::PresenceChanged { .. } => true,
@@ -167,6 +179,36 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 
         // Pipeline events are visible to all workspace members.
         WorkspaceEvent::PipelineFired { .. } | WorkspaceEvent::PipelineSuspended { .. } => true,
+
+        // Incident events — filter by conversation type like messages: channels are visible to
+        // all workspace members (channels have no conversation_member rows, so member_user_ids
+        // would be empty there), DM/Group-scoped incidents only to conversation members.
+        WorkspaceEvent::IncidentDeclared {
+            conversation_type,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::IncidentUpdated {
+            conversation_type,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::EscalationStepFired {
+            conversation_type,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::IncidentAcknowledged {
+            conversation_type,
+            member_user_ids,
+            ..
+        } => {
+            if conversation_type == "Channel" {
+                true
+            } else {
+                member_user_ids.iter().any(|id| id.to_string() == user_id)
+            }
+        }
     }
 }
 
@@ -211,11 +253,9 @@ impl Subscription {
                     Ok(event) => {
                         if event.workspace_id() == ws_id
                             && user_can_see_event(&event, &subscriber_user_id)
-                        {
-                            if let Ok(json) = serde_json::to_string(&event) {
+                            && let Ok(json) = serde_json::to_string(&event) {
                                 yield json;
                             }
-                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("WS subscriber lagged, skipped {n} events");
@@ -234,5 +274,66 @@ impl Subscription {
             presence: Arc::clone(presence),
             user_id: actor,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rim_core::conversation::model::ConversationId;
+    use rim_core::message::model::MessageId;
+    use rim_core::server::model::ServerId;
+
+    /// Regression guard for the channel-pin visibility bug
+    /// (`docs/specs/fix-channel-pin-event-visibility.md`): a channel-scoped pin has no
+    /// `conversation_member` rows, so `member_user_ids` is always empty — before the fix, this
+    /// meant `MessagePinned`/`MessageUnpinned` never reached any subscriber for a channel. This
+    /// test fails on the pre-fix filter (bare `member_user_ids.iter().any(...)` over an empty
+    /// vec is always `false`).
+    #[test]
+    fn channel_pin_visible_despite_empty_member_user_ids() {
+        let event = WorkspaceEvent::MessagePinned {
+            workspace_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+            pinned_by: UserId::new(),
+            conversation_type: "Channel".to_string(),
+            member_user_ids: vec![],
+        };
+
+        assert!(user_can_see_event(&event, &UserId::new().to_string()));
+    }
+
+    #[test]
+    fn channel_unpin_visible_despite_empty_member_user_ids() {
+        let event = WorkspaceEvent::MessageUnpinned {
+            workspace_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+            conversation_type: "Channel".to_string(),
+            member_user_ids: vec![],
+        };
+
+        assert!(user_can_see_event(&event, &UserId::new().to_string()));
+    }
+
+    /// Symmetric case: a Group-scoped pin is still gated on membership — the channel bypass
+    /// must not accidentally widen visibility for DM/Group pins.
+    #[test]
+    fn group_pin_not_visible_to_non_member() {
+        let member_id = UserId::new();
+        let non_member_id = UserId::new();
+
+        let event = WorkspaceEvent::MessagePinned {
+            workspace_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+            pinned_by: member_id,
+            conversation_type: "Group".to_string(),
+            member_user_ids: vec![member_id],
+        };
+
+        assert!(user_can_see_event(&event, &member_id.to_string()));
+        assert!(!user_can_see_event(&event, &non_member_id.to_string()));
     }
 }

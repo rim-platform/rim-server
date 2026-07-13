@@ -17,6 +17,10 @@ pub struct User {
     pub bio: Option<String>,
     /// Lowercased, trimmed email address. NOT NULL at the DB layer.
     pub email: String,
+    /// IANA timezone name (e.g. `"America/Chicago"`), validated on write. Display/defaulting
+    /// only — see `docs/oncall.md`: rotation handoff math lives on the on-call **schedule's**
+    /// timezone, never the user's.
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

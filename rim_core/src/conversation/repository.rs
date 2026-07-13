@@ -71,6 +71,17 @@ pub trait ConversationRepository: Send + Sync {
     /// Check whether a channel with the given title already exists on the server.
     async fn exists_channel_by_title(&self, server_id: ServerId, title: &str) -> RepoResult<bool>;
 
+    /// Look up a channel conversation by its exact title within a server. Channel titles are
+    /// unique per server (see `m20260322_000000_add_unique_channel_title`), so this returns at
+    /// most one row. Returns `None` if no channel with that title exists (or a non-channel
+    /// conversation happens to share the title — this only ever matches `ConversationType::Channel`
+    /// rows). Used by the `in:#channel` search-syntax operator to resolve a channel name to an id.
+    async fn get_channel_by_title(
+        &self,
+        server_id: ServerId,
+        title: &str,
+    ) -> RepoResult<Option<Conversation>>;
+
     /// List all conversation IDs that the user can access in a server.
     /// Includes: all channels (server membership is sufficient) + DM/group where user is member.
     async fn list_accessible_conversation_ids(

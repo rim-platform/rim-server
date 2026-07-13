@@ -13,7 +13,9 @@ mod tests {
     };
     use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
     use rim_core::message::model::{Message, MessageId, NewMessage};
-    use rim_core::message::repository::{ListMessagesParams, MessageCursor};
+    use rim_core::message::repository::{
+        ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
+    };
     use rim_core::message_attachment::model::{
         MessageAttachment, MessageAttachmentId, NewMessageAttachment,
     };
@@ -108,6 +110,11 @@ mod tests {
                 server_id: ServerId,
                 title: &str,
             ) -> RepoResult<bool>;
+            async fn get_channel_by_title(
+                &self,
+                server_id: ServerId,
+                title: &str,
+            ) -> RepoResult<Option<Conversation>>;
             async fn list_accessible_conversation_ids(
                 &self,
                 server_id: ServerId,
@@ -172,19 +179,10 @@ mod tests {
                 &self,
                 params: ListMessagesParams,
             ) -> RepoResult<Page<Message, MessageCursor>>;
-            async fn search_messages(
+            async fn search_messages_fts(
                 &self,
-                conversation_id: ConversationId,
-                query: &str,
-                limit: u32,
-                include_deleted: bool,
-            ) -> RepoResult<Vec<Message>>;
-            async fn search_messages_across_conversations(
-                &self,
-                conversation_ids: &[ConversationId],
-                query: &str,
-                limit: u32,
-            ) -> RepoResult<Vec<Message>>;
+                params: MessageSearchParams,
+            ) -> RepoResult<Vec<MessageSearchHit>>;
             async fn update_message_text(
                 &self,
                 message_id: MessageId,

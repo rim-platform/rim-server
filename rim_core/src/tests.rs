@@ -244,14 +244,14 @@ mod repo_error {
 
     #[test]
     fn repo_error_with_source_has_source() {
-        let source = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+        let source = std::io::Error::other("disk full");
         let err = RepoError::with_source(RepoErrorKind::Internal, source);
         assert!(err.source().is_some());
     }
 
     #[test]
     fn repo_error_with_message_and_source() {
-        let source = std::io::Error::new(std::io::ErrorKind::Other, "io");
+        let source = std::io::Error::other("io");
         let err = RepoError::with_message_and_source(RepoErrorKind::Unavailable, "db down", source);
         assert_eq!(err.kind(), RepoErrorKind::Unavailable);
         assert_eq!(err.message(), Some("db down"));

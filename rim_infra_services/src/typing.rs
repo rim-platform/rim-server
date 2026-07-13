@@ -36,10 +36,10 @@ impl TypingTracker {
         let now = Instant::now();
         let key = (user_id, conversation_id);
 
-        if let Some(last) = self.last_typing.get(&key) {
-            if now.duration_since(*last).as_secs() < TYPING_THROTTLE_SECS {
-                return false;
-            }
+        if let Some(last) = self.last_typing.get(&key)
+            && now.duration_since(*last).as_secs() < TYPING_THROTTLE_SECS
+        {
+            return false;
         }
 
         self.last_typing.insert(key, now);

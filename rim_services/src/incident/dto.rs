@@ -27,6 +27,11 @@ pub struct IncidentDto {
     pub postmortem_draft: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub alert_fingerprint: Option<String>,
+    pub source: String,
+    pub escalation_policy_id: Option<rim_core::escalation::model::EscalationPolicyId>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub acknowledged_by: Option<UserId>,
 }
 
 impl From<Incident> for IncidentDto {
@@ -46,6 +51,11 @@ impl From<Incident> for IncidentDto {
             postmortem_draft: i.postmortem_draft,
             created_at: i.created_at,
             updated_at: i.updated_at,
+            alert_fingerprint: i.alert_fingerprint,
+            source: i.source,
+            escalation_policy_id: i.escalation_policy_id,
+            acknowledged_at: i.acknowledged_at,
+            acknowledged_by: i.acknowledged_by,
         }
     }
 }

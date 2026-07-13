@@ -62,7 +62,12 @@ mod fixtures {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
-                macro_service: None,
+                incident_service: std::sync::Arc::new(
+                    rim_services::incident::service::MockIncidentService::new(),
+                ),
+                oncall_service: std::sync::Arc::new(
+                    rim_services::oncall::service::MockOnCallService::new(),
+                ),
             },
         )
     }
@@ -191,7 +196,12 @@ async fn execute_command_proceeds_when_capability_check_passes() {
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            macro_service: None,
+            incident_service: std::sync::Arc::new(
+                rim_services::incident::service::MockIncidentService::new(),
+            ),
+            oncall_service: std::sync::Arc::new(
+                rim_services::oncall::service::MockOnCallService::new(),
+            ),
         },
     );
 

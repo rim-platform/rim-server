@@ -88,10 +88,16 @@ pub struct ListThreadMessagesQuery {
 pub struct SearchMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
+    /// Optional explicit single-conversation scope, in addition to the `in:` search operator.
+    /// When set, the full member-access gate is run for this conversation.
     pub conversation_id: Option<ConversationId>,
+    /// Raw search string — parsed by [`crate::message::search_query::parse_search_query`].
     pub query: String,
     pub limit: u32,
-    pub include_deleted: bool,
+    pub cursor: Option<MessagePageCursor>,
+    pub dir: PageDir,
+    // `include_deleted` intentionally removed: search never returns deleted messages, matching
+    // the forced behavior the old implementation already had. See `DefaultMessageService::search_messages`.
 }
 
 #[derive(Debug, Clone)]

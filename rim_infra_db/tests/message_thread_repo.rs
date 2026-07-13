@@ -13,9 +13,7 @@ use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 
 #[tokio::test]
 async fn create_get_and_list_threads_for_conversation() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
 
@@ -81,9 +79,7 @@ async fn create_get_and_list_threads_for_conversation() {
 
 #[tokio::test]
 async fn set_first_message_conflict_and_not_found() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
     let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
@@ -145,9 +141,7 @@ async fn set_first_message_conflict_and_not_found() {
 
 #[tokio::test]
 async fn create_thread_for_root_is_atomic_and_conflicts_on_duplicate_root() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
 
@@ -173,9 +167,7 @@ async fn create_thread_for_root_is_atomic_and_conflicts_on_duplicate_root() {
 
 #[tokio::test]
 async fn touch_last_message_at_not_found() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
     let err = repo
@@ -190,9 +182,7 @@ async fn touch_last_message_at_not_found() {
 
 #[tokio::test]
 async fn get_thread_ids_by_root_messages_batch() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
 

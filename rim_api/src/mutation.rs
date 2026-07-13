@@ -82,6 +82,9 @@ pub struct CreateInviteInput {
     pub server_id: ID,
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: Option<i32>,
+    /// Optional recipient to email the invite link to (Track B3). Validated server-side;
+    /// malformed addresses return a validation error.
+    pub recipient_email: Option<String>,
 }
 
 #[derive(SimpleObject)]
@@ -429,6 +432,7 @@ impl Mutation {
                 server_id,
                 expires_at: input.expires_at,
                 max_uses: input.max_uses.unwrap_or(1),
+                recipient_email: input.recipient_email,
             })
             .await
             .map_err(map_service_error)?;
@@ -658,6 +662,7 @@ impl Mutation {
                 actor: Actor::new(actor),
                 expires_at: input.expires_at,
                 max_uses: input.max_uses,
+                recipient_email: input.recipient_email,
             })
             .await
             .map_err(map_service_error)?;
@@ -1786,6 +1791,12 @@ impl Mutation {
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
 
+        let escalation_policy_id = input
+            .escalation_policy_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::escalation::model::EscalationPolicyId>)
+            .transpose()?;
+
         let incident = svc
             .start_incident(rim_services::incident::command::StartIncidentCmd {
                 actor: Actor::new(actor),
@@ -1793,6 +1804,9 @@ impl Mutation {
                 conversation_id,
                 title: input.title,
                 severity: input.severity.map(Into::into),
+                // An explicit override wins; `None` falls back to the conversation's default
+                // policy (§3/§10).
+                escalation_policy_id,
             })
             .await
             .map_err(map_service_error)?;
@@ -1912,6 +1926,213 @@ impl Mutation {
             .map_err(map_service_error)?;
 
         Ok(incident.into())
+    }
+
+    /// Acknowledge an incident (§4). Any server member may ack, not owner-gated — whoever
+    /// responds picked it up. Idempotent: acking an already-acked incident returns it unchanged.
+    /// Cancels the incident's active escalation run, if any.
+    async fn acknowledge_incident(
+        &self,
+        ctx: &Context<'_>,
+        incident_id: ID,
+    ) -> Result<crate::types::IncidentGql> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let incident_id = parse_uuid_id::<rim_core::incident::model::IncidentId>(&incident_id)?;
+
+        let incident = svc
+            .acknowledge_incident(rim_services::incident::command::AcknowledgeIncidentCmd {
+                actor: Actor::new(actor),
+                incident_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(incident.into())
+    }
+
+    // ── Escalation policies (Track C1b/C1c) ───────────────────────────
+
+    /// Create an escalation policy. Owner+Moderator (server-scoped — per-channel moderator
+    /// roles don't apply). Every step target is validated to belong to this server (C1 security
+    /// review): a `User` target must be a current member, an `OnCall` target's schedule must
+    /// belong to this server.
+    async fn create_escalation_policy(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        name: String,
+        steps: Vec<crate::types::EscalationStepInputGql>,
+    ) -> Result<crate::types::EscalationPolicyGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::escalation::service::EscalationPolicyService>>(
+            )?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let steps = steps
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+
+        let policy = svc
+            .create_policy(
+                rim_services::escalation::command::CreateEscalationPolicyCmd {
+                    actor: Actor::new(actor),
+                    server_id,
+                    name,
+                    steps,
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(policy.into())
+    }
+
+    /// Update an escalation policy's `name` and/or full step list. `steps: Some(_)` replaces
+    /// every step atomically; `None` leaves the existing steps untouched. Owner+Moderator
+    /// (resolved via the policy's own server); same per-target server constraint as create.
+    async fn update_escalation_policy(
+        &self,
+        ctx: &Context<'_>,
+        policy_id: ID,
+        name: Option<String>,
+        steps: Option<Vec<crate::types::EscalationStepInputGql>>,
+    ) -> Result<crate::types::EscalationPolicyGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::escalation::service::EscalationPolicyService>>(
+            )?;
+        let policy_id =
+            parse_uuid_id::<rim_core::escalation::model::EscalationPolicyId>(&policy_id)?;
+        let steps = steps
+            .map(|steps| {
+                steps
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+
+        let policy = svc
+            .update_policy(
+                rim_services::escalation::command::UpdateEscalationPolicyCmd {
+                    actor: Actor::new(actor),
+                    policy_id,
+                    name,
+                    steps,
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(policy.into())
+    }
+
+    /// Delete an escalation policy. Owner+Moderator (resolved via the policy's own server).
+    async fn delete_escalation_policy(&self, ctx: &Context<'_>, policy_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::escalation::service::EscalationPolicyService>>(
+            )?;
+        let policy_id =
+            parse_uuid_id::<rim_core::escalation::model::EscalationPolicyId>(&policy_id)?;
+
+        svc.delete_policy(
+            rim_services::escalation::command::DeleteEscalationPolicyCmd {
+                actor: Actor::new(actor),
+                policy_id,
+            },
+        )
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Set a conversation's default escalation policy — the policy `ingestAlert`-declared
+    /// incidents always use (there's no human to pick an override for an alert-declared
+    /// incident), and `startIncident`'s fallback when no per-call override is given.
+    /// Owner+Moderator.
+    async fn set_channel_escalation_policy(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        policy_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::escalation::service::EscalationPolicyService>>(
+            )?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+        let policy_id =
+            parse_uuid_id::<rim_core::escalation::model::EscalationPolicyId>(&policy_id)?;
+
+        svc.set_channel_policy(
+            rim_services::escalation::command::SetChannelEscalationPolicyCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                policy_id,
+            },
+        )
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    // ── Alert ingest tokens (Track B2) ────────────────────────────────
+
+    /// Mint a new alert-ingest token for a channel. Owner-only. The raw token is returned
+    /// exactly once, in `rawToken` — it is never retrievable again after this call.
+    async fn create_ingest_token(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateIngestTokenInput,
+    ) -> Result<crate::types::CreateIngestTokenResultGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::ingest_token::service::IngestTokenService>>(
+            )?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+
+        let result = svc
+            .create_token(rim_services::ingest_token::command::CreateIngestTokenCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                label: input.label,
+                severity_default: input.severity_default.map(Into::into),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(result.into())
+    }
+
+    /// Revoke an ingest token. Owner-only, permanent (no un-revoke).
+    async fn revoke_ingest_token(&self, ctx: &Context<'_>, token_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::ingest_token::service::IngestTokenService>>(
+            )?;
+        let token_id = parse_uuid_id::<rim_core::ingest_token::model::IngestTokenId>(&token_id)?;
+
+        svc.revoke_token(rim_services::ingest_token::command::RevokeIngestTokenCmd {
+            actor: Actor::new(actor),
+            token_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
     }
 
     async fn set_workspace_state(
@@ -2162,6 +2383,222 @@ impl Mutation {
 
         Ok(dto.into())
     }
+
+    /// Create an on-call schedule. Owner-only.
+    async fn create_on_call_schedule(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        name: String,
+        timezone: String,
+    ) -> Result<crate::types::OnCallScheduleGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let dto = svc
+            .create_schedule(rim_services::oncall::command::CreateOnCallScheduleCmd {
+                actor: Actor::new(actor),
+                server_id,
+                name,
+                timezone,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Update an on-call schedule's `name`/`timezone`. Owner-only.
+    async fn update_on_call_schedule(
+        &self,
+        ctx: &Context<'_>,
+        schedule_id: ID,
+        name: Option<String>,
+        timezone: Option<String>,
+    ) -> Result<crate::types::OnCallScheduleGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id = parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+
+        let dto = svc
+            .update_schedule(rim_services::oncall::command::UpdateOnCallScheduleCmd {
+                actor: Actor::new(actor),
+                schedule_id,
+                name,
+                timezone,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Delete an on-call schedule (cascades to its rotation layers/participants/overrides).
+    /// Owner-only.
+    async fn delete_on_call_schedule(&self, ctx: &Context<'_>, schedule_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id = parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+
+        svc.delete_schedule(rim_services::oncall::command::DeleteOnCallScheduleCmd {
+            actor: Actor::new(actor),
+            schedule_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Add a rotation layer to a schedule. Owner-only.
+    #[allow(clippy::too_many_arguments)]
+    async fn add_rotation_layer(
+        &self,
+        ctx: &Context<'_>,
+        schedule_id: ID,
+        name: String,
+        priority: i32,
+        kind: crate::types::RotationKindInputGql,
+        anchor_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::types::RotationLayerGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id = parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+
+        let dto = svc
+            .add_rotation_layer(rim_services::oncall::command::AddRotationLayerCmd {
+                actor: Actor::new(actor),
+                schedule_id,
+                name,
+                priority,
+                kind: kind.try_into()?,
+                anchor_at,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Update a rotation layer's `name`/`priority`/`kind`/`anchorAt`. Owner-only (resolved via
+    /// the layer's owning schedule).
+    #[allow(clippy::too_many_arguments)]
+    async fn update_rotation_layer(
+        &self,
+        ctx: &Context<'_>,
+        layer_id: ID,
+        name: Option<String>,
+        priority: Option<i32>,
+        kind: Option<crate::types::RotationKindInputGql>,
+        anchor_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<crate::types::RotationLayerGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let layer_id = parse_uuid_id::<rim_core::oncall::model::RotationLayerId>(&layer_id)?;
+
+        let dto = svc
+            .update_rotation_layer(rim_services::oncall::command::UpdateRotationLayerCmd {
+                actor: Actor::new(actor),
+                layer_id,
+                name,
+                priority,
+                kind: kind.map(TryInto::try_into).transpose()?,
+                anchor_at,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Remove a rotation layer (cascades to its participants). Owner-only.
+    async fn remove_rotation_layer(&self, ctx: &Context<'_>, layer_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let layer_id = parse_uuid_id::<rim_core::oncall::model::RotationLayerId>(&layer_id)?;
+
+        svc.remove_rotation_layer(rim_services::oncall::command::RemoveRotationLayerCmd {
+            actor: Actor::new(actor),
+            layer_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Replace a rotation layer's full ordered participant list. `userIds[0]` becomes the first
+    /// shift. Owner-only.
+    async fn set_rotation_participants(
+        &self,
+        ctx: &Context<'_>,
+        layer_id: ID,
+        user_ids: Vec<ID>,
+    ) -> Result<crate::types::RotationLayerGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let layer_id = parse_uuid_id::<rim_core::oncall::model::RotationLayerId>(&layer_id)?;
+        let user_ids = user_ids
+            .iter()
+            .map(parse_uuid_id::<rim_core::user::model::UserId>)
+            .collect::<Result<Vec<_>>>()?;
+
+        let dto = svc
+            .set_rotation_participants(rim_services::oncall::command::SetRotationParticipantsCmd {
+                actor: Actor::new(actor),
+                layer_id,
+                user_ids,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Create a one-off on-call override for a schedule. Owner-only.
+    async fn create_on_call_override(
+        &self,
+        ctx: &Context<'_>,
+        schedule_id: ID,
+        user_id: ID,
+        start_at: chrono::DateTime<chrono::Utc>,
+        end_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::types::OnCallOverrideGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id = parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+        let user_id = parse_uuid_id::<rim_core::user::model::UserId>(&user_id)?;
+
+        let dto = svc
+            .create_override(rim_services::oncall::command::CreateOnCallOverrideCmd {
+                actor: Actor::new(actor),
+                schedule_id,
+                user_id,
+                start_at,
+                end_at,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(dto.into())
+    }
+
+    /// Delete an on-call override. Owner-only (resolved via the override's owning schedule).
+    async fn delete_on_call_override(&self, ctx: &Context<'_>, override_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let override_id = parse_uuid_id::<rim_core::oncall::model::OnCallOverrideId>(&override_id)?;
+
+        svc.delete_override(rim_services::oncall::command::DeleteOnCallOverrideCmd {
+            actor: Actor::new(actor),
+            override_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
 }
 
 fn build_pipeline_trigger_dto(
@@ -2222,6 +2659,10 @@ struct StartIncidentInput {
     conversation_id: ID,
     title: String,
     severity: Option<crate::types::IncidentSeverityGql>,
+    /// Overrides the conversation's default escalation policy (`setChannelEscalationPolicy`) for
+    /// just this incident (§3/§10). `None` falls back to that default (or no escalation chain at
+    /// all if none is set).
+    escalation_policy_id: Option<ID>,
 }
 
 #[derive(InputObject)]
@@ -2242,6 +2683,14 @@ struct TagIncidentMessageInput {
     incident_id: ID,
     message_id: ID,
     tag_type: Option<crate::types::MessageTagTypeGql>,
+}
+
+#[derive(InputObject)]
+struct CreateIngestTokenInput {
+    server_id: ID,
+    conversation_id: ID,
+    label: String,
+    severity_default: Option<crate::types::IncidentSeverityGql>,
 }
 
 #[derive(InputObject)]
@@ -2371,6 +2820,9 @@ pub struct SignupWithInviteInput {
 pub struct CreateInstanceInviteInput {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub max_uses: Option<i32>,
+    /// Optional recipient to email the invite link to (Track B3). Validated server-side;
+    /// malformed addresses return a validation error.
+    pub recipient_email: Option<String>,
 }
 
 fn spawn_link_preview_fetch(

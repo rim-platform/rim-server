@@ -13,9 +13,7 @@ use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 
 #[tokio::test]
 async fn map_db_err_unique_violation_is_conflict_with_message() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let member_repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
     let invite_repo = SeaOrmInviteRepository::new(ctx.db.clone());
@@ -54,9 +52,7 @@ async fn map_db_err_unique_violation_is_conflict_with_message() {
 
 #[tokio::test]
 async fn map_db_err_row_not_found_is_not_found() {
-    let Some(_ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let _ctx = support::TestCtx::new().await;
 
     let err = sea_orm::DbErr::RecordNotFound("missing".to_string());
     let mapped = rim_infra_db::map_db_err(err);
@@ -65,9 +61,7 @@ async fn map_db_err_row_not_found_is_not_found() {
 
 #[tokio::test]
 async fn map_db_err_fk_violation_is_conflict() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
 

@@ -31,6 +31,7 @@ use rim_core::command::repository::MockUserCommandRepository;
 use rim_core::conversation::model::{ConversationId, ConversationType};
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::message::model::MessageId;
+use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_services::CommandRepos;
@@ -47,7 +48,7 @@ use rim_services::command::request::{ExecuteCommandCmd, ListCommandsQuery};
 use rim_services::command::service::CommandService;
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::MockConversationService;
-use rim_services::message::dto::MessageDto;
+use rim_services::message::dto::{MessageDto, MessageSearchHitDto};
 use rim_services::message::service::MockMessageService;
 use rim_services::message_reaction::dto::ReactionGroupDto;
 use rim_services::message_reaction::service::MockMessageReactionService;
@@ -117,7 +118,12 @@ fn build_service_with_store(mocks: Mocks) -> (DefaultCommandService, Arc<dyn Con
             user_service: Arc::new(mocks.user),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            macro_service: None,
+            incident_service: std::sync::Arc::new(
+                rim_services::incident::service::MockIncidentService::new(),
+            ),
+            oncall_service: std::sync::Arc::new(
+                rim_services::oncall::service::MockOnCallService::new(),
+            ),
         },
         Arc::clone(&store),
     );
@@ -174,6 +180,16 @@ fn msg(
         thread_root_message_id: None,
         is_deleted: false,
         sent_at: chrono::Utc::now(),
+    }
+}
+
+/// Wraps a [`MessageDto`] into a search hit with a nominal rank and no headline — the exact
+/// rank/headline values don't matter for these DataLoader-batching tests.
+fn hit(message: MessageDto) -> MessageSearchHitDto {
+    MessageSearchHitDto {
+        message,
+        rank: 1.0,
+        headline: None,
     }
 }
 
@@ -381,16 +397,26 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
         .withf(move |q| q.query == "auth" && q.server_id == workspace && q.limit <= 50)
         .return_once(move |_q| {
             Box::pin(async move {
-                Ok(vec![
-                    msg(msg_a, workspace, conv_a, author_a, "auth migration done"),
-                    msg(
-                        msg_b,
-                        workspace,
-                        conv_b,
-                        author_b,
-                        "auth follow-up tomorrow",
-                    ),
-                ])
+                Ok(Page::new(
+                    vec![
+                        hit(msg(
+                            msg_a,
+                            workspace,
+                            conv_a,
+                            author_a,
+                            "auth migration done",
+                        )),
+                        hit(msg(
+                            msg_b,
+                            workspace,
+                            conv_b,
+                            author_b,
+                            "auth follow-up tomorrow",
+                        )),
+                    ],
+                    None,
+                    None,
+                ))
             })
         });
     mocks.message = msg_svc;
@@ -501,7 +527,7 @@ async fn execute_search_messages_clamps_limit_over_max() {
     msg_svc
         .expect_search_messages()
         .withf(|q| q.limit == 50) // clamped from 999
-        .return_once(|_q| Box::pin(async { Ok(vec![]) }));
+        .return_once(|_q| Box::pin(async { Ok(Page::new(vec![], None, None)) }));
     mocks.message = msg_svc;
     // empty result — no user/conv lookups needed.
 

@@ -8,9 +8,7 @@ use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 
 #[tokio::test]
 async fn create_get_by_id_and_token_hash() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
     let user = ctx.create_user("u").await;
@@ -40,9 +38,7 @@ async fn create_get_by_id_and_token_hash() {
 
 #[tokio::test]
 async fn touch_and_revoke_are_idempotent_and_revoke_all_counts() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
 
@@ -96,9 +92,7 @@ async fn touch_and_revoke_are_idempotent_and_revoke_all_counts() {
 
 #[tokio::test]
 async fn touch_last_seen_at_updates_timestamp() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
     let user = ctx.create_user("touch-user").await;

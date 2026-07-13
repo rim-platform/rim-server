@@ -2,7 +2,9 @@ mod admin;
 mod chat;
 mod chat_messages;
 mod conversation;
+mod incident;
 mod member;
+mod oncall;
 mod pin;
 mod reaction;
 mod state;
@@ -69,6 +71,8 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
         reaction::commands(),
         state::commands(),
         admin::commands(),
+        incident::commands(),
+        oncall::commands(),
     ]
     .into_iter()
     .flatten()

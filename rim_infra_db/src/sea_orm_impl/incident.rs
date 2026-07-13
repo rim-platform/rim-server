@@ -48,6 +48,11 @@ impl IncidentRepository for SeaOrmIncidentRepository {
             postmortem_draft: Set(None),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
+            alert_fingerprint: Set(new.alert_fingerprint),
+            source: Set(new.source),
+            escalation_policy_id: Set(new.escalation_policy_id.map(Into::into)),
+            acknowledged_at: Set(None),
+            acknowledged_by: Set(None),
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
@@ -70,6 +75,22 @@ impl IncidentRepository for SeaOrmIncidentRepository {
         let model = incident::Entity::find()
             .filter(incident::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
             .filter(incident::Column::Status.eq("active"))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
+    async fn find_by_fingerprint(
+        &self,
+        server_id: ServerId,
+        fingerprint: &str,
+    ) -> RepoResult<Option<Incident>> {
+        let model = incident::Entity::find()
+            .filter(incident::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(incident::Column::AlertFingerprint.eq(fingerprint))
+            .filter(incident::Column::Status.ne("resolved"))
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -116,19 +137,18 @@ impl IncidentRepository for SeaOrmIncidentRepository {
         let mut q = incident::Entity::find()
             .filter(incident::Column::ServerId.eq::<Uuid>(server_id.into()));
 
-        if let Some(statuses) = status_filter {
-            if !statuses.is_empty() {
-                let values: Vec<String> = statuses.iter().map(|s| s.as_str().to_string()).collect();
-                q = q.filter(incident::Column::Status.is_in(values));
-            }
+        if let Some(statuses) = status_filter
+            && !statuses.is_empty()
+        {
+            let values: Vec<String> = statuses.iter().map(|s| s.as_str().to_string()).collect();
+            q = q.filter(incident::Column::Status.is_in(values));
         }
 
-        if let Some(severities) = severity_filter {
-            if !severities.is_empty() {
-                let values: Vec<String> =
-                    severities.iter().map(|s| s.as_str().to_string()).collect();
-                q = q.filter(incident::Column::Severity.is_in(values));
-            }
+        if let Some(severities) = severity_filter
+            && !severities.is_empty()
+        {
+            let values: Vec<String> = severities.iter().map(|s| s.as_str().to_string()).collect();
+            q = q.filter(incident::Column::Severity.is_in(values));
         }
 
         let has_cursor = cursor.is_some();
@@ -213,6 +233,31 @@ impl IncidentRepository for SeaOrmIncidentRepository {
 
         let mut active: incident::ActiveModel = model.into();
         active.postmortem_draft = Set(Some(draft));
+        active.updated_at = Set(chrono::Utc::now().into());
+
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
+
+    async fn acknowledge(
+        &self,
+        id: IncidentId,
+        acknowledged_at: chrono::DateTime<chrono::Utc>,
+        acknowledged_by: rim_core::user::model::UserId,
+    ) -> RepoResult<Incident> {
+        let model = incident::Entity::find_by_id::<Uuid>(id.into())
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| {
+                rim_core::repository::error::RepoError::new(
+                    rim_core::repository::error::RepoErrorKind::NotFound,
+                )
+            })?;
+
+        let mut active: incident::ActiveModel = model.into();
+        active.acknowledged_at = Set(Some(acknowledged_at.into()));
+        active.acknowledged_by = Set(Some(acknowledged_by.into()));
         active.updated_at = Set(chrono::Utc::now().into());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;

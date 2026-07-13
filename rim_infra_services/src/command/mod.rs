@@ -31,8 +31,10 @@ use rim_services::command::request::{
 use rim_services::command::sensitivity::{CommandSensitivityDto, sanitize_args_for_audit};
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
+use rim_services::incident::service::IncidentService;
 use rim_services::macro_def::service::MacroService;
 use rim_services::message::service::MessageService;
+use rim_services::oncall::service::OnCallService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
@@ -54,19 +56,18 @@ pub struct CommandServices {
     pub user_service: std::sync::Arc<dyn rim_services::user::service::UserService>,
     pub workspace_state_service:
         std::sync::Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
+    /// C1b: `incident.ack`/`incident.escalate` dispatch to the same `IncidentService` methods
+    /// as their GraphQL mutations (unified dispatch, no duplicated logic — §10.1).
+    pub incident_service: std::sync::Arc<dyn IncidentService>,
+    /// C1b: `oncall.who`/`oncall.take_shift` dispatch to the same `OnCallService` methods as
+    /// their GraphQL query/mutation (§10.1).
+    pub oncall_service: std::sync::Arc<dyn OnCallService>,
     /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target="audit")`
     /// line. Both sinks are kept — the tracing line is for low-cardinality
     /// monitoring (grep/tail); the DB row is for queryable forensics.
     pub audit_log_service: Option<std::sync::Arc<dyn AuditLogService>>,
-    /// Single source of truth for AI-surface macro discovery. `None` in test
-    /// contexts and initially `None` in production (set after `macro_service`
-    /// is constructed to break the command↔macro circular init dependency).
-    /// When `Some`, `list_commands(Surface::Ai)` delegates to
-    /// `macro_service.synthesize_command_definitions` instead of duplicating
-    /// the MacroDef→CommandDefinitionDto mapping inline.
-    pub macro_service: Option<std::sync::Arc<dyn MacroService>>,
 }
 
 #[derive(Clone)]
@@ -81,6 +82,15 @@ pub struct DefaultCommandService {
     /// In-memory per-(actor, command_id) sliding-window rate limiter.
     /// Single-node only in Phase 5; multi-node coordination deferred.
     pub(super) rate_limiter: rate_limiter::RateLimiter,
+    /// AI-surface macro discovery source, wired **after** construction to break
+    /// the command↔macro circular init dependency (provider builds the command
+    /// service first, then the macro service from it, then calls
+    /// [`Self::set_macro_service`]). Wrapped in `Arc<OnceLock<_>>` so that the
+    /// single write is visible through every `Arc<dyn CommandService>` clone the
+    /// provider hands to keybind/pipeline/macro. `None` (unset) in test contexts
+    /// and until the provider wires it. When set, `list_commands(Surface::Ai)`
+    /// delegates macro synthesis to `MacroService::synthesize_command_definitions`.
+    pub(super) macro_service: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<dyn MacroService>>>,
     /// Extra command definitions injected by tests. Empty in production.
     #[cfg(test)]
     pub(super) extra_builtins: Vec<CommandDefinitionDto>,
@@ -106,6 +116,7 @@ impl DefaultCommandService {
             services,
             confirmation_store,
             rate_limiter: rate_limiter::RateLimiter::new(),
+            macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
             #[cfg(test)]
             extra_builtins: vec![],
         }
@@ -124,6 +135,7 @@ impl DefaultCommandService {
             services,
             confirmation_store: shared_in_memory_store(),
             rate_limiter: rate_limiter::RateLimiter::new(),
+            macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
             extra_builtins,
         }
     }
@@ -149,6 +161,27 @@ impl DefaultCommandService {
 
     pub(super) fn parse_user_command(user_command: UserCommand) -> ServiceResult<UserCommandDto> {
         user_commands::parse_user_command(user_command)
+    }
+
+    /// Wire the macro service into this command service exactly once, after the
+    /// macro service has been constructed. Idempotent-safe: a second call is a
+    /// no-op and is logged, never a panic. Returns `Ok(())` on the first set,
+    /// `Err(())` if already set — callers may ignore the result in production
+    /// wiring where set-once is guaranteed by construction order.
+    // `Err(())` carries no information beyond "already set" (see the
+    // tracing::warn! above for the diagnostic); a dedicated error type would
+    // add ceremony without adding value for a set-once cell.
+    #[allow(clippy::result_unit_err)]
+    pub(crate) fn set_macro_service(
+        &self,
+        macro_service: std::sync::Arc<dyn MacroService>,
+    ) -> Result<(), ()> {
+        self.macro_service.set(macro_service).map_err(|_| {
+            tracing::warn!(
+                event = "command_service_macro_double_set",
+                "set_macro_service called after macro service already wired; ignoring"
+            );
+        })
     }
 }
 
@@ -184,7 +217,7 @@ impl CommandService for DefaultCommandService {
             // Delegate AI-callable macro discovery to MacroService — single
             // source of truth for MacroDef→CommandDefinitionDto mapping.
             if let (Some(macro_svc), Some(server_id)) = (
-                self.services.macro_service.as_deref(),
+                self.macro_service.get().map(std::sync::Arc::as_ref),
                 context.and_then(|c| c.workspace_id),
             ) {
                 use rim_services::macro_def::request::SynthesizeMacroCommandsQuery;

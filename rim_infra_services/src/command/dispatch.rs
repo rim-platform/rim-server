@@ -512,37 +512,35 @@ impl DefaultCommandService {
         }
 
         // ── R1: rate-limit gate (runs after capability + confirmation) ───
-        if !cmd.is_pipe {
-            if let Some(def) = self
+        if !cmd.is_pipe
+            && let Some(def) = self
                 .resolve_command_definition(cmd.actor, &cmd.command_id)
                 .await
                 .ok()
                 .flatten()
+            && let Some(limit) = def.rate_limit_per_minute
+        {
+            let decision = self.rate_limiter.check_and_record(
+                cmd.actor.user_id,
+                &cmd.command_id,
+                limit,
+                chrono::Utc::now(),
+            );
+            if let rim_services::command::rate_limit::RateLimitDecision::Limited {
+                retry_after_seconds,
+            } = decision
             {
-                if let Some(limit) = def.rate_limit_per_minute {
-                    let decision = self.rate_limiter.check_and_record(
-                        cmd.actor.user_id,
-                        &cmd.command_id,
-                        limit,
-                        chrono::Utc::now(),
-                    );
-                    if let rim_services::command::rate_limit::RateLimitDecision::Limited {
-                        retry_after_seconds,
-                    } = decision
-                    {
-                        tracing::info!(
-                            target: "audit",
-                            event = "rate_limited",
-                            actor_id = %cmd.actor.user_id,
-                            command_id = %cmd.command_id,
-                            limit = limit,
-                            retry_after = retry_after_seconds,
-                        );
-                        return Err(ServiceError::RateLimited {
-                            retry_after_seconds,
-                        });
-                    }
-                }
+                tracing::info!(
+                    target: "audit",
+                    event = "rate_limited",
+                    actor_id = %cmd.actor.user_id,
+                    command_id = %cmd.command_id,
+                    limit = limit,
+                    retry_after = retry_after_seconds,
+                );
+                return Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                });
             }
         }
 

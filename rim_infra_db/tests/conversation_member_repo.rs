@@ -12,9 +12,7 @@ use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRep
 
 #[tokio::test]
 async fn add_get_is_member_list_member_ids_and_get_members() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -38,8 +36,8 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
     let by_id = repo.get_by_id(cm1.id).await.unwrap().unwrap();
     assert_eq!(by_id.user_id, u1);
 
-    assert_eq!(repo.is_member(conv.id, u1).await.unwrap(), true);
-    assert_eq!(repo.is_member(conv.id, UserId::new()).await.unwrap(), false);
+    assert!(repo.is_member(conv.id, u1).await.unwrap());
+    assert!(!repo.is_member(conv.id, UserId::new()).await.unwrap());
 
     let ids = repo.list_member_ids(conv.id).await.unwrap();
     assert_eq!(ids.len(), 2);
@@ -50,9 +48,7 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
 
 #[tokio::test]
 async fn remove_member_success_and_not_found() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -73,14 +69,12 @@ async fn remove_member_success_and_not_found() {
 
     let _ = repo.add_member(conv.id, u).await.unwrap();
     repo.remove_member(conv.id, u).await.unwrap();
-    assert_eq!(repo.is_member(conv.id, u).await.unwrap(), false);
+    assert!(!repo.is_member(conv.id, u).await.unwrap());
 }
 
 #[tokio::test]
 async fn add_member_conflicts_on_duplicate_conversation_membership() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -104,9 +98,7 @@ async fn add_member_conflicts_on_duplicate_conversation_membership() {
 
 #[tokio::test]
 async fn list_member_ids_for_conversations_batch() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());

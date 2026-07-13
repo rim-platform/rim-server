@@ -36,10 +36,9 @@ impl DefaultLinkPreviewService {
                     .url()
                     .host_str()
                     .and_then(|h| h.parse::<IpAddr>().ok())
+                    && is_private_ip(&addr)
                 {
-                    if is_private_ip(&addr) {
-                        return attempt.stop();
-                    }
+                    return attempt.stop();
                 }
                 if attempt.previous().len() > 5 {
                     return attempt.stop();
@@ -93,10 +92,10 @@ fn is_url_safe(url: &str) -> bool {
     // Parse the URL and check for private IPs in the host
     if let Ok(parsed) = reqwest::Url::parse(url) {
         if let Some(host) = parsed.host_str() {
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                if is_private_ip(&ip) {
-                    return false;
-                }
+            if let Ok(ip) = host.parse::<IpAddr>()
+                && is_private_ip(&ip)
+            {
+                return false;
             }
             // Block localhost variants
             if host == "localhost" || host.ends_with(".local") {
@@ -243,10 +242,10 @@ impl DefaultLinkPreviewService {
             .map_err(ServiceError::internal)?;
 
         // Check content length before downloading
-        if let Some(len) = response.content_length() {
-            if len > MAX_BODY_SIZE as u64 {
-                return Err(ServiceError::Validation("response body too large".into()));
-            }
+        if let Some(len) = response.content_length()
+            && len > MAX_BODY_SIZE as u64
+        {
+            return Err(ServiceError::Validation("response body too large".into()));
         }
 
         let bytes = response.bytes().await.map_err(ServiceError::internal)?;

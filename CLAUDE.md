@@ -1,0 +1,152 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+RIM is a programmable communication workspace backend — not another chat app. Chat is the communication layer; the product is commands, keybinds, macros, and client-side plugins. See docs/vision.md for full product vision. Rust workspace (edition 2024) with Actix Web + async-graphql, backed by PostgreSQL 17 via SeaORM.
+
+## Build / Run / Test Commands
+
+```sh
+# Build
+cargo build --workspace
+
+# Run server
+cargo run -p rim_server
+
+# Migrations (requires DATABASE_URL)
+sea migrate up
+sea migrate down
+sea migrate status
+sea migrate generate MIGRATION_NAME
+
+# Generate new migration file (ALWAYS use this, never create migration files manually):
+sea migrate generate <migration_name>
+# `sea migrate generate` has repeatedly rewritten migration/src/lib.rs and silently dropped
+# adjacent Box::new(...) registrations in the process. After generating, `cargo test -p migration`
+# verifies no registration was dropped (registration_complete.rs, no DATABASE_URL needed) — it
+# fails loudly, naming the offender, if one goes missing.
+
+# Entity generation (NEVER regenerate directly into entity/src/ — it contains hand-written mappers)
+# Generate to temp dir first, then manually merge new/changed entities into entity/src/:
+sea generate entity -l -o /tmp/rim-entities
+
+# Format + lint (CI enforces these)
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Tests
+cargo test --workspace                    # all unit tests
+cargo test --all -- --test-threads=1      # single-threaded (CI style, needed for shared DB)
+cargo test -p rim_services send_message   # single test by substring
+cargo test -p rim_services conversation::tests::creates_conversation  # specific test path
+cargo test -p rim_core -- --nocapture     # with stdout
+
+# Feature-gated integration tests (require running Postgres)
+# NOTE: These tests PANIC if DATABASE_URL is unset — this is intentional (P6-W6).
+# To skip them entirely, simply omit the --features flag. Do NOT set the feature
+# flag without a valid DATABASE_URL or CI will fail loudly (by design).
+cargo test -p rim_infra_db --features db-tests -- --test-threads=1
+cargo test -p rim_api --features e2e-tests -- --test-threads=1
+cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
+```
+
+Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. Plain `cargo test` (without `--workspace`) only runs root package targets.
+
+## Architecture
+
+Layered architecture with strict dependency direction (top depends on bottom):
+
+```
+rim_server  (HTTP/Actix bootstrap, CORS, CSRF, session cookies)
+    ↓                                          ↘  (composition root + non-GraphQL transports — see notes below)
+rim_api  (GraphQL schema, Query/Mutation resolvers, auth context injection)
+    ↓
+rim_infra_services  (business logic implementations, validation, orchestration)
+    ↓
+rim_infra_db  (SeaORM repository implementations) + entity (generated SeaORM entities)
+    ↓
+PostgreSQL
+```
+
+Cross-cutting contracts that define boundaries between layers:
+- **rim_core** — domain models, repository traits, strongly-typed IDs via `model_id!()` macro
+- **rim_services** — service traits, DTOs (`*Dto`), commands (`*Cmd`), queries (`*Query`), `ServiceResult<T>`/`ServiceError`
+
+**Two documented exceptions to the strict chain** (both intentional, both bounded):
+
+1. **Composition root (FL1).** `rim_server` legitimately depends on `rim_infra_services` to instantiate concrete services at boot — see `rim_server/src/app.rs` (composition root: `DefaultAppServiceProvider::new` at ~line 179, plus `PresenceManager`/`TypingTracker`/`DefaultStorageService` wiring nearby). The wiring layer must know the concrete impls; everything downstream sees only traits. If this ever leaks beyond `app.rs`, refactor into a dedicated `rim_app` crate that holds wiring and is the only thing both `rim_server` and `rim_infra_services` import.
+
+2. **Non-GraphQL transports (FL2).** `rim_server` reaches into `rim_services` directly (skipping `rim_api`) for transports that are not GraphQL: `file_handlers.rs` (multipart upload) and `graphql_support.rs` consume `rim_services::auth::service::RequestAuthenticator`, `rim_services::storage::service::StorageService`, and `rim_services::message_attachment::service::MessageAttachmentService`. This is architecturally defensible — multipart upload bypasses the GraphQL pipeline by design — but it shortens the chain. Any new non-GraphQL transport (WebSocket file streaming, Webhooks, etc.) follows the same pattern: depend on `rim_services` traits, not `rim_infra_services` impls.
+
+### Key patterns
+
+- **Provider pattern**: `AppServiceProvider` trait (rim_services) → `DefaultAppServiceProvider` (rim_infra_services) wires all service implementations
+- **Strongly-typed IDs**: all entities use `model_id!(TypeName)` macro in `rim_core/src/macros.rs` generating UUID v7-based wrappers
+- **Cursor-based pagination**: standardized `(timestamp, id)` tuples; contract in `docs/pagination.md`
+- **Error mapping chain**: DB errors → `RepoError` → `ServiceError` → GraphQL errors
+- **Auth flow**: session cookie → `RequestAuthenticator` → `Actor` (principal + user_id) injected into GraphQL context
+- **CSRF protection**: enforced on mutations via `X-CSRF-Token` header
+
+### Crate responsibilities
+
+| Crate | Role |
+|---|---|
+| `rim_server` | Actix Web server wiring, config loading, request handler |
+| `rim_api` | async-graphql schema, types, pagination, auth context |
+| `rim_core` | Domain models, repository traits, ID macros |
+| `rim_services` | Service traits, DTOs/Cmd/Query types, `ServiceError` |
+| `rim_infra_services` | Default service implementations + unit tests (mockall) |
+| `rim_infra_db` | SeaORM-backed repository implementations |
+| `entity` | Generated SeaORM entities — do not edit manually |
+| `migration` | SeaORM migrations + CLI |
+| `rim_auth` | Cryptographic primitives (Argon2, SHA2, base64) |
+| `rim_logging` | Structured tracing initialization (JSON output) |
+
+## Conventions
+
+- **Imports**: `std` → external crates → local modules, separated by blank lines. Globs only for SeaORM entities and async-graphql.
+- **Naming**: `*Cmd` (write commands), `*Query` (read queries), `*Dto` (transport objects)
+- **Timestamps**: `chrono::DateTime<chrono::Utc>`
+- **Error handling**: `?` propagation, `ServiceResult<T>`/`ServiceError` at service boundaries, `anyhow::Result` in infra layers. No `unwrap`/`expect` in library code.
+- **Async traits**: use `async_trait`, must be `Send + Sync`
+- **rim_core purity**: keep free of transport/Actix/GraphQL concerns
+- **Module visibility default**: new modules declare as `pub(crate) mod foo;` by default. Promotion to `pub mod foo;` requires a documented external consumer (named in a comment or PR description). This keeps the public surface area of each crate minimal — Rust's compiler-enforced privacy is one of the cheapest tools we have for preventing layer leaks like F7. (Established by Fury during P7-RFAC-10 GREEN review.)
+- **Mockable async traits**: put `#[async_trait]` *above* `#[cfg_attr(any(test, feature = "mocks"), automock)]`, consistently — this is what the large majority of mockable traits in `rim_core`/`rim_services` already do. Mixed order is a compile footgun: `automock` generates a different mock shape depending on whether it sees the trait before or after `async_trait` desugars it. With `async_trait` above (the chosen order), the generated `Mock*` type's `.returning(...)` closures must return a boxed future (`Box::pin(async move { ... })`); a handful of pre-existing traits (e.g. `UserRepository`, `ServerMemberRepository`, `PasswordResetTokenRepository`) have the reverse order and their mocks instead expect `.returning(...)` closures to return a plain `Result<T, E>` directly. Check the actual generated `Mock*` type (or an existing test using it) before assuming which shape applies — don't guess from the trait name alone.
+
+## Local Dev Environment
+
+Requires `.env` file with: `DATABASE_URL`, `RIM_SERVER_HOST`, `RIM_SERVER_PORT`, `RIM_LOG_LEVEL`. Config loaded via `dotenvy` in `rim_server/src/config.rs`.
+
+## GraphQL Schema Export (CRITICAL for frontend codegen)
+
+The server exposes `GET /api/sdl` which returns the full GraphQL schema in SDL format.
+The frontend uses this to generate TypeScript types via `@graphql-codegen`.
+
+**When you add or change GraphQL types, enums, inputs, or resolvers:**
+
+1. The running server automatically reflects changes at `/api/sdl`
+2. The frontend team must re-export and regenerate:
+   ```bash
+   curl -s http://localhost:8080/api/sdl > ../rim-ui/schema.graphql
+   cd ../rim-ui && npm run codegen
+   ```
+
+**Key rules for GraphQL types:**
+- `#[derive(Enum)]` on Rust enums auto-converts variants to SCREAMING_SNAKE in GraphQL
+  (e.g., Rust `Sev2` → GraphQL `SEV_2`, Rust `ActionItem` → GraphQL `ACTION_ITEM`)
+- `#[derive(SimpleObject)]` converts Rust `snake_case` fields to GraphQL `camelCase`
+- The `export_sdl()` function in `rim_api/src/lib.rs` builds the full schema for SDL export
+- The SDL endpoint in `rim_server/src/server.rs` serves it at `/api/sdl`
+- **Always verify enum value names** in the SDL match what the frontend expects
+
+## Code Review (MANDATORY)
+
+Every code change (fix, feature, refactor) MUST be reviewed by the Hawkeye agent (code-reviewer) before being reported as done. No exceptions.
+
+Review covers: layered architecture compliance, pattern consistency, cross-repo GraphQL schema match, error handling, import ordering, copy-paste detection. BLOCK findings must be fixed before shipping.
+
+## CI
+
+GitHub Actions runs: build+test (single-threaded), fmt check, clippy (-D warnings), coverage (95% line gate via cargo-llvm-cov), cargo audit, Docker build validation.

@@ -82,12 +82,12 @@ impl DefaultPipelineService {
     }
 
     fn validate_cooldown(cooldown_secs: Option<i32>) -> ServiceResult<()> {
-        if let Some(secs) = cooldown_secs {
-            if secs < 0 {
-                return Err(ServiceError::Validation(
-                    "cooldown_secs cannot be negative".into(),
-                ));
-            }
+        if let Some(secs) = cooldown_secs
+            && secs < 0
+        {
+            return Err(ServiceError::Validation(
+                "cooldown_secs cannot be negative".into(),
+            ));
         }
         Ok(())
     }
@@ -95,12 +95,13 @@ impl DefaultPipelineService {
     fn validate_trigger(trigger: &PipelineTriggerDto) -> ServiceResult<()> {
         match trigger.kind {
             rim_services::pipeline::dto::PipelineTriggerKindDto::MemberJoined
-            | rim_services::pipeline::dto::PipelineTriggerKindDto::WorkspaceStateChanged => {
-                if trigger.conversation_id.is_some() {
-                    return Err(ServiceError::Validation(
-                        "MemberJoined and WorkspaceStateChanged triggers cannot have a conversation_id".into(),
-                    ));
-                }
+            | rim_services::pipeline::dto::PipelineTriggerKindDto::WorkspaceStateChanged
+                if trigger.conversation_id.is_some() =>
+            {
+                return Err(ServiceError::Validation(
+                    "MemberJoined and WorkspaceStateChanged triggers cannot have a conversation_id"
+                        .into(),
+                ));
             }
             _ => {}
         }
@@ -177,12 +178,12 @@ impl DefaultPipelineService {
     }
 
     fn check_cooldown(&self, pipeline: &Pipeline) -> bool {
-        if let Some(cooldown) = pipeline.cooldown_secs {
-            if let Some(last) = self.cooldowns.get(&pipeline.id) {
-                let elapsed = last.elapsed().as_secs();
-                if elapsed < cooldown as u64 {
-                    return false;
-                }
+        if let Some(cooldown) = pipeline.cooldown_secs
+            && let Some(last) = self.cooldowns.get(&pipeline.id)
+        {
+            let elapsed = last.elapsed().as_secs();
+            if elapsed < cooldown as u64 {
+                return false;
             }
         }
         true

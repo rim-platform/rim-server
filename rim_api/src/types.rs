@@ -1,4 +1,6 @@
-use async_graphql::{ComplexObject, Context, Enum, InputObject, Object, Result, SimpleObject};
+use async_graphql::{
+    ComplexObject, Context, Enum, Error, InputObject, Object, Result, SimpleObject,
+};
 
 use rim_core::repository::pagination::Page;
 
@@ -295,10 +297,74 @@ impl From<rim_services::user::dto::UserDto> for User {
     }
 }
 
+/// GraphQL exposure of `rim_core::server_member::model::ServerMemberRole`. Reused (not
+/// duplicated) across every place a member's role needs to cross the wire — currently
+/// `Server.viewerRole`.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum ServerMemberRoleGql {
+    Owner,
+    Moderator,
+    Guest,
+}
+
+impl From<rim_core::server_member::model::ServerMemberRole> for ServerMemberRoleGql {
+    fn from(value: rim_core::server_member::model::ServerMemberRole) -> Self {
+        use rim_core::server_member::model::ServerMemberRole as D;
+        match value {
+            D::Owner => Self::Owner,
+            D::Moderator => Self::Moderator,
+            D::Guest => Self::Guest,
+        }
+    }
+}
+
+impl From<ServerMemberRoleGql> for rim_core::server_member::model::ServerMemberRole {
+    fn from(value: ServerMemberRoleGql) -> Self {
+        match value {
+            ServerMemberRoleGql::Owner => Self::Owner,
+            ServerMemberRoleGql::Moderator => Self::Moderator,
+            ServerMemberRoleGql::Guest => Self::Guest,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct Server {
     pub id: async_graphql::ID,
     pub name: String,
+}
+
+#[ComplexObject]
+impl Server {
+    /// The requesting actor's effective role in this server. **Display/affordance signal
+    /// only — not an authorization boundary.** Every mutation independently re-checks the
+    /// role server-side (defense in depth); this field just lets the client avoid rendering
+    /// controls the viewer can't use. Non-null: every viewer who can query a `Server` is
+    /// necessarily a member of it (query-level visibility already guards non-members), so
+    /// there is no "not a member" variant to represent here.
+    async fn viewer_role(&self, ctx: &Context<'_>) -> Result<ServerMemberRoleGql> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
+            )?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&self.id)?;
+
+        let member = svc
+            .get_member(rim_services::server_member::command::GetServerMemberQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+                user_id: actor,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        member
+            .member_role
+            .parse::<rim_core::server_member::model::ServerMemberRole>()
+            .map(Into::into)
+            .map_err(|e| Error::new(format!("failed to parse member role: {e}")))
+    }
 }
 
 impl From<rim_services::server::dto::ServerDto> for Server {
@@ -969,6 +1035,12 @@ pub struct SearchResultMessage {
     pub author_id: async_graphql::ID,
     pub text: Option<String>,
     pub sent_at: chrono::DateTime<chrono::Utc>,
+    /// `ts_rank` relevance score. Informational / for client-side secondary sort — results are
+    /// paginated by recency (`sentAt`, `id`), not by rank. See `docs/search.md`.
+    pub rank: f64,
+    /// `ts_headline` snippet with `<mark>...</mark>` highlights around matched terms. `None` when
+    /// the query had no free-text component (a purely operator-based search, e.g. `from:@alice`).
+    pub headline: Option<String>,
 }
 
 #[ComplexObject]
@@ -1277,6 +1349,21 @@ impl TryFrom<MessageCursorInput> for rim_services::message::dto::MessagePageCurs
     }
 }
 
+/// Input for the `searchMessages` full-text-search query. See `docs/search.md` for the
+/// `from:`/`in:`/`has:`/`before:`/`after:` operator syntax accepted in `query`.
+#[derive(InputObject, Clone, Debug)]
+pub struct SearchMessagesInput {
+    pub server_id: async_graphql::ID,
+    pub query: String,
+    /// Optional explicit single-conversation scope, in addition to the `in:` search operator.
+    pub conversation_id: Option<async_graphql::ID>,
+    /// Clamped server-side; defaults to 25 if omitted.
+    pub limit: Option<i32>,
+    pub cursor: Option<MessageCursorInput>,
+    /// Defaults to `AFTER` (most-recent-first) if omitted.
+    pub dir: Option<crate::pagination::PageDir>,
+}
+
 #[derive(InputObject, Clone, Debug)]
 pub struct ThreadCursorInput {
     pub last_message_at: chrono::DateTime<chrono::Utc>,
@@ -1397,6 +1484,17 @@ impl MessagePage {
             page_info: PageInfo { has_next, has_prev },
         }
     }
+}
+
+/// Cursor-paginated `searchMessages` result. Mirrors [`MessagePage`] — same `(sentAt, messageId)`
+/// cursor contract — because search results are paginated by recency, not relevance; see the
+/// `rank` field on [`SearchResultMessage`] and `docs/search.md` for why.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SearchResultPage {
+    pub items: Vec<SearchResultMessage>,
+    pub next: Option<MessageCursorOutput>,
+    pub prev: Option<MessageCursorOutput>,
+    pub page_info: PageInfo,
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -2044,6 +2142,7 @@ impl From<MessageTagTypeGql> for rim_core::incident::model::MessageTagType {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct IncidentGql {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
@@ -2059,6 +2158,15 @@ pub struct IncidentGql {
     pub postmortem_draft: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The escalation policy armed at declare time, if any (§3/§10). `None` if the incident was
+    /// declared without an escalation chain.
+    pub escalation_policy_id: Option<async_graphql::ID>,
+    /// Set by `acknowledgeIncident` (§4). `None` until acked.
+    pub acknowledged_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Bare id companion to `acknowledgedByUser` below — kept alongside it (rather than only
+    /// exposing the nested object) so a client that only needs the id avoids a DataLoader round
+    /// trip (§10).
+    pub acknowledged_by: Option<async_graphql::ID>,
 }
 
 impl From<rim_services::incident::dto::IncidentDto> for IncidentGql {
@@ -2078,6 +2186,92 @@ impl From<rim_services::incident::dto::IncidentDto> for IncidentGql {
             postmortem_draft: value.postmortem_draft,
             created_at: value.created_at,
             updated_at: value.updated_at,
+            escalation_policy_id: value.escalation_policy_id.map(|id| id.to_string().into()),
+            acknowledged_at: value.acknowledged_at,
+            acknowledged_by: value.acknowledged_by.map(|id| id.to_string().into()),
+        }
+    }
+}
+
+#[ComplexObject]
+impl IncidentGql {
+    /// Nested `User` for `acknowledgedBy`, resolved via the shared `User` DataLoader (the
+    /// `message.author` pattern) rather than requiring a second round-trip. `None` if the
+    /// incident hasn't been acknowledged.
+    async fn acknowledged_by_user(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        match &self.acknowledged_by {
+            Some(id) => ctx.load_user(id).await,
+            None => Ok(None),
+        }
+    }
+
+    /// The incident's active escalation run, if any (§10 FLAG C) — lets a client loading
+    /// mid-incident, or reconnecting, render a live "escalating to L2 in 4:32" countdown (the
+    /// `EscalationStepFired` event alone can't give `nextFireAt` to a fresh client). `None` if no
+    /// policy is attached, or the run has already completed/been cancelled — only the currently
+    /// `Active` run is meaningful to show. Pure read projection of the DB `escalation_run` row;
+    /// adds no persistence.
+    async fn escalation_run(&self, ctx: &Context<'_>) -> Result<Option<IncidentEscalationRunGql>> {
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::incident::service::IncidentService>>()?;
+        let incident_id =
+            crate::ids::parse_uuid_id::<rim_core::incident::model::IncidentId>(&self.id)?;
+
+        let run = svc
+            .get_active_escalation_run(incident_id)
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(run.map(Into::into))
+    }
+}
+
+/// GraphQL projection of an alert-ingest token (Track B2). Never exposes `token_hash` — the raw
+/// token is only ever returned once, at creation, via [`CreateIngestTokenResultGql::raw_token`].
+#[derive(SimpleObject, Clone, Debug)]
+pub struct IngestTokenGql {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub conversation_id: async_graphql::ID,
+    pub created_by: async_graphql::ID,
+    pub label: String,
+    pub severity_default: Option<IncidentSeverityGql>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<rim_services::ingest_token::dto::IngestTokenDto> for IngestTokenGql {
+    fn from(value: rim_services::ingest_token::dto::IngestTokenDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            server_id: async_graphql::ID(value.server_id.to_string()),
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            created_by: async_graphql::ID(value.created_by.to_string()),
+            label: value.label,
+            severity_default: value.severity_default.map(Into::into),
+            created_at: value.created_at,
+            revoked_at: value.revoked_at,
+            last_used_at: value.last_used_at,
+        }
+    }
+}
+
+/// Result of `createIngestToken` — `raw_token` is surfaced exactly once and is never
+/// retrievable again (mirrors invite-token creation).
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CreateIngestTokenResultGql {
+    pub token: IngestTokenGql,
+    pub raw_token: String,
+}
+
+impl From<rim_services::ingest_token::dto::CreateIngestTokenResultDto>
+    for CreateIngestTokenResultGql
+{
+    fn from(value: rim_services::ingest_token::dto::CreateIngestTokenResultDto) -> Self {
+        Self {
+            token: value.token.into(),
+            raw_token: value.raw_token,
         }
     }
 }
@@ -2790,4 +2984,711 @@ pub struct CreateInstanceInvitePayloadGql {
 pub struct SignupWithInvitePayloadGql {
     pub user_id: async_graphql::ID,
     pub server_id: Option<async_graphql::ID>,
+}
+
+// ── On-call schedules (Track C1a) ───────────────────────────────────────────
+
+/// Discriminator for [`RotationLayerGql::kind`] / [`RotationKindInputGql::kind`]. See
+/// `docs/oncall.md` for the timezone/DST semantics of each variant.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum RotationKindGql {
+    Daily,
+    Weekly,
+    Custom,
+}
+
+/// A `RotationKind`, flattened for GraphQL: `kind` selects which of the other fields are
+/// populated (GraphQL has no native tagged-union input type). `handoffTime` is `"HH:MM:SS"`
+/// 24-hour wall-clock local time.
+#[derive(InputObject, Clone, Debug)]
+pub struct RotationKindInputGql {
+    pub kind: RotationKindGql,
+    /// Required for `DAILY`/`WEEKLY`; ignored otherwise.
+    pub handoff_time: Option<String>,
+    /// `0` (Monday) .. `6` (Sunday). Required for `WEEKLY`; ignored otherwise.
+    pub handoff_weekday: Option<i32>,
+    /// Required for `CUSTOM` (must be `> 0`); ignored otherwise.
+    pub interval_seconds: Option<i64>,
+}
+
+impl TryFrom<RotationKindInputGql> for rim_core::oncall::model::RotationKind {
+    type Error = Error;
+
+    fn try_from(value: RotationKindInputGql) -> Result<Self> {
+        use rim_core::oncall::model::RotationKind;
+
+        let parse_time = |raw: &str| -> Result<chrono::NaiveTime> {
+            chrono::NaiveTime::parse_from_str(raw, "%H:%M:%S")
+                .or_else(|_| chrono::NaiveTime::parse_from_str(raw, "%H:%M"))
+                .map_err(|_| Error::new(format!("invalid handoffTime {raw:?}, expected HH:MM:SS")))
+        };
+
+        // Strict flattened-union rejection: a field that belongs to a *different* kind than the
+        // one selected is almost always a client bug (e.g. sent `intervalSeconds` alongside
+        // `kind: DAILY`) — reject loudly rather than silently discarding it.
+        match value.kind {
+            RotationKindGql::Daily | RotationKindGql::Weekly => {
+                if value.interval_seconds.is_some() {
+                    return Err(Error::new(format!(
+                        "intervalSeconds must not be set for {:?}",
+                        value.kind
+                    )));
+                }
+            }
+            RotationKindGql::Custom => {
+                if value.handoff_time.is_some() || value.handoff_weekday.is_some() {
+                    return Err(Error::new(
+                        "handoffTime/handoffWeekday must not be set for CUSTOM".to_string(),
+                    ));
+                }
+            }
+        }
+        if value.kind == RotationKindGql::Daily && value.handoff_weekday.is_some() {
+            return Err(Error::new(
+                "handoffWeekday must not be set for DAILY".to_string(),
+            ));
+        }
+
+        match value.kind {
+            RotationKindGql::Daily => {
+                let raw = value
+                    .handoff_time
+                    .ok_or_else(|| Error::new("handoffTime is required for DAILY"))?;
+                Ok(RotationKind::Daily {
+                    handoff_time: parse_time(&raw)?,
+                })
+            }
+            RotationKindGql::Weekly => {
+                let raw_time = value
+                    .handoff_time
+                    .ok_or_else(|| Error::new("handoffTime is required for WEEKLY"))?;
+                let raw_weekday = value
+                    .handoff_weekday
+                    .ok_or_else(|| Error::new("handoffWeekday is required for WEEKLY"))?;
+                let handoff_weekday = rim_core::oncall::model::weekday_from_i16(raw_weekday as i16)
+                    .ok_or_else(|| {
+                        Error::new("handoffWeekday must be 0 (Monday) through 6 (Sunday)")
+                    })?;
+                Ok(RotationKind::Weekly {
+                    handoff_weekday,
+                    handoff_time: parse_time(&raw_time)?,
+                })
+            }
+            RotationKindGql::Custom => {
+                let interval_seconds = value
+                    .interval_seconds
+                    .ok_or_else(|| Error::new("intervalSeconds is required for CUSTOM"))?;
+                Ok(RotationKind::Custom { interval_seconds })
+            }
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
+pub struct OnCallScheduleGql {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub name: String,
+    pub timezone: String,
+    pub created_by: async_graphql::ID,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<rim_services::oncall::dto::OnCallScheduleDto> for OnCallScheduleGql {
+    fn from(value: rim_services::oncall::dto::OnCallScheduleDto) -> Self {
+        Self {
+            id: value.id.to_string().into(),
+            server_id: value.server_id.to_string().into(),
+            name: value.name,
+            timezone: value.timezone,
+            created_by: value.created_by.to_string().into(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+#[ComplexObject]
+impl OnCallScheduleGql {
+    /// This schedule's existing rotation layers, each with its participants attached, ordered
+    /// `priority DESC, created_at ASC` (§10) — lets the frontend editor load and edit existing
+    /// rotations rather than only being able to create new ones. Any server member may read.
+    async fn rotation_layers(&self, ctx: &Context<'_>) -> Result<Vec<RotationLayerGql>> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id =
+            crate::ids::parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&self.id)?;
+
+        let layers = svc
+            .list_rotation_layers(rim_services::oncall::command::ListRotationLayersQuery {
+                actor: rim_services::Actor::new(actor),
+                schedule_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(layers.into_iter().map(Into::into).collect())
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RotationLayerGql {
+    pub id: async_graphql::ID,
+    pub schedule_id: async_graphql::ID,
+    pub name: String,
+    pub priority: i32,
+    pub kind: RotationKindGql,
+    /// `"HH:MM:SS"`, present only when `kind` is `DAILY`/`WEEKLY`.
+    pub handoff_time: Option<String>,
+    /// `0` (Monday) .. `6` (Sunday), present only when `kind` is `WEEKLY`.
+    pub handoff_weekday: Option<i32>,
+    /// Present only when `kind` is `CUSTOM`.
+    pub interval_seconds: Option<i64>,
+    pub anchor_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Ordered by shift position.
+    pub participants: Vec<async_graphql::ID>,
+}
+
+impl From<rim_services::oncall::dto::RotationLayerDto> for RotationLayerGql {
+    fn from(value: rim_services::oncall::dto::RotationLayerDto) -> Self {
+        use rim_core::oncall::model::RotationKind;
+
+        let (kind, handoff_time, handoff_weekday, interval_seconds) = match value.kind {
+            RotationKind::Daily { handoff_time } => (
+                RotationKindGql::Daily,
+                Some(handoff_time.format("%H:%M:%S").to_string()),
+                None,
+                None,
+            ),
+            RotationKind::Weekly {
+                handoff_weekday,
+                handoff_time,
+            } => (
+                RotationKindGql::Weekly,
+                Some(handoff_time.format("%H:%M:%S").to_string()),
+                Some(rim_core::oncall::model::weekday_to_i16(handoff_weekday) as i32),
+                None,
+            ),
+            RotationKind::Custom { interval_seconds } => {
+                (RotationKindGql::Custom, None, None, Some(interval_seconds))
+            }
+        };
+
+        Self {
+            id: value.id.to_string().into(),
+            schedule_id: value.schedule_id.to_string().into(),
+            name: value.name,
+            priority: value.priority,
+            kind,
+            handoff_time,
+            handoff_weekday,
+            interval_seconds,
+            anchor_at: value.anchor_at,
+            created_at: value.created_at,
+            participants: value
+                .participants
+                .into_iter()
+                .map(|id| id.to_string().into())
+                .collect(),
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct OnCallOverrideGql {
+    pub id: async_graphql::ID,
+    pub schedule_id: async_graphql::ID,
+    pub user_id: async_graphql::ID,
+    pub start_at: chrono::DateTime<chrono::Utc>,
+    pub end_at: chrono::DateTime<chrono::Utc>,
+    pub created_by: async_graphql::ID,
+}
+
+impl From<rim_services::oncall::dto::OnCallOverrideDto> for OnCallOverrideGql {
+    fn from(value: rim_services::oncall::dto::OnCallOverrideDto) -> Self {
+        Self {
+            id: value.id.to_string().into(),
+            schedule_id: value.schedule_id.to_string().into(),
+            user_id: value.user_id.to_string().into(),
+            start_at: value.start_at,
+            end_at: value.end_at,
+            created_by: value.created_by.to_string().into(),
+        }
+    }
+}
+
+/// Answer to "who is on call now" (`whoIsOnCall`/`serverOnCall` queries). `currentUser`/`nextUser`
+/// are resolved via the shared `User` DataLoader (the `message.author` pattern) rather than
+/// exposed as bare ids.
+#[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
+pub struct OnCallNowGql {
+    pub schedule_id: async_graphql::ID,
+    #[graphql(skip)]
+    pub current_user_id: Option<async_graphql::ID>,
+    pub shift_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[graphql(skip)]
+    pub next_user_id: Option<async_graphql::ID>,
+}
+
+impl From<rim_services::oncall::dto::OnCallNowDto> for OnCallNowGql {
+    fn from(value: rim_services::oncall::dto::OnCallNowDto) -> Self {
+        Self {
+            schedule_id: value.schedule_id.to_string().into(),
+            current_user_id: value.current_user_id.map(|id| id.to_string().into()),
+            shift_ends_at: value.shift_ends_at,
+            next_user_id: value.next_user_id.map(|id| id.to_string().into()),
+        }
+    }
+}
+
+#[ComplexObject]
+impl OnCallNowGql {
+    async fn current_user(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        match &self.current_user_id {
+            Some(id) => ctx.load_user(id).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn next_user(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        match &self.next_user_id {
+            Some(id) => ctx.load_user(id).await,
+            None => Ok(None),
+        }
+    }
+}
+
+/// One contiguous block of on-call coverage (`onCallShifts` query). `user` is resolved via the
+/// shared `User` DataLoader, not exposed as a bare id.
+#[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
+pub struct OnCallShiftGql {
+    #[graphql(skip)]
+    pub user_id: Option<async_graphql::ID>,
+    pub start_at: chrono::DateTime<chrono::Utc>,
+    pub end_at: chrono::DateTime<chrono::Utc>,
+    /// `true` if this block came from a one-off `OnCallOverride` rather than the base rotation
+    /// layer (§10 FLAG B) — lets the frontend render override segments distinctly.
+    pub is_override: bool,
+}
+
+impl From<rim_services::oncall::dto::OnCallShiftDto> for OnCallShiftGql {
+    fn from(value: rim_services::oncall::dto::OnCallShiftDto) -> Self {
+        Self {
+            user_id: value.user_id.map(|id| id.to_string().into()),
+            start_at: value.start_at,
+            end_at: value.end_at,
+            is_override: value.is_override,
+        }
+    }
+}
+
+#[ComplexObject]
+impl OnCallShiftGql {
+    async fn user(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        match &self.user_id {
+            Some(id) => ctx.load_user(id).await,
+            None => Ok(None),
+        }
+    }
+}
+
+// ── Escalation policies (Track C1b/C1c) ─────────────────────────────────────
+
+/// Discriminator for [`EscalationStepGql::target_kind`] / [`EscalationTargetInputGql::kind`].
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum EscalationTargetKindGql {
+    User,
+    OnCall,
+}
+
+/// An `EscalationTarget`, flattened for GraphQL: `kind` selects which of `userId`/`scheduleId`
+/// is populated (GraphQL has no native tagged-union input type) — same flattened-union pattern
+/// as [`RotationKindInputGql`], including strict rejection of a field that belongs to the
+/// *other* kind.
+#[derive(InputObject, Clone, Debug)]
+pub struct EscalationTargetInputGql {
+    pub kind: EscalationTargetKindGql,
+    /// Required for `USER`; must not be set for `ON_CALL`.
+    pub user_id: Option<async_graphql::ID>,
+    /// Required for `ON_CALL`; must not be set for `USER`.
+    pub schedule_id: Option<async_graphql::ID>,
+}
+
+impl TryFrom<EscalationTargetInputGql> for rim_core::escalation::model::EscalationTarget {
+    type Error = Error;
+
+    fn try_from(value: EscalationTargetInputGql) -> Result<Self> {
+        use rim_core::escalation::model::EscalationTarget;
+
+        match value.kind {
+            EscalationTargetKindGql::User => {
+                if value.schedule_id.is_some() {
+                    return Err(Error::new(
+                        "scheduleId must not be set for USER".to_string(),
+                    ));
+                }
+                let user_id = value
+                    .user_id
+                    .ok_or_else(|| Error::new("userId is required for USER"))?;
+                Ok(EscalationTarget::User(crate::ids::parse_uuid_id::<
+                    rim_core::user::model::UserId,
+                >(&user_id)?))
+            }
+            EscalationTargetKindGql::OnCall => {
+                if value.user_id.is_some() {
+                    return Err(Error::new("userId must not be set for ON_CALL".to_string()));
+                }
+                let schedule_id = value
+                    .schedule_id
+                    .ok_or_else(|| Error::new("scheduleId is required for ON_CALL"))?;
+                Ok(EscalationTarget::OnCall(crate::ids::parse_uuid_id::<
+                    rim_core::oncall::model::OnCallScheduleId,
+                >(&schedule_id)?))
+            }
+        }
+    }
+}
+
+/// `MENTION_IN_CHANNEL`/`EMAIL` — `PUSH` is reserved for a future track and intentionally has no
+/// GraphQL representation yet (mirrors `rim_core::escalation::model::EscalationAction`, which has
+/// no `Push` variant either — see that enum's doc comment).
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum EscalationActionKindGql {
+    MentionInChannel,
+    Email,
+}
+
+impl From<rim_core::escalation::model::EscalationAction> for EscalationActionKindGql {
+    fn from(value: rim_core::escalation::model::EscalationAction) -> Self {
+        use rim_core::escalation::model::EscalationAction;
+        match value {
+            EscalationAction::MentionInChannel => Self::MentionInChannel,
+            EscalationAction::Email => Self::Email,
+        }
+    }
+}
+
+impl From<EscalationActionKindGql> for rim_core::escalation::model::EscalationAction {
+    fn from(value: EscalationActionKindGql) -> Self {
+        match value {
+            EscalationActionKindGql::MentionInChannel => Self::MentionInChannel,
+            EscalationActionKindGql::Email => Self::Email,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum EscalationRunStatusGql {
+    Active,
+    Cancelled,
+    Completed,
+}
+
+impl From<rim_core::escalation::model::EscalationRunStatus> for EscalationRunStatusGql {
+    fn from(value: rim_core::escalation::model::EscalationRunStatus) -> Self {
+        use rim_core::escalation::model::EscalationRunStatus as D;
+        match value {
+            D::Active => Self::Active,
+            D::Cancelled => Self::Cancelled,
+            D::Completed => Self::Completed,
+        }
+    }
+}
+
+/// A step input for `createEscalationPolicy`/`updateEscalationPolicy` — no `id`/`policyId`
+/// (assigned by the repository) since the full step list is replaced atomically (§3).
+#[derive(InputObject, Clone, Debug)]
+pub struct EscalationStepInputGql {
+    pub delay_seconds: i64,
+    pub target: EscalationTargetInputGql,
+    /// At least one action is required — enforced at the service boundary.
+    pub actions: Vec<EscalationActionKindGql>,
+}
+
+impl TryFrom<EscalationStepInputGql> for rim_services::escalation::dto::EscalationStepInput {
+    type Error = Error;
+
+    fn try_from(value: EscalationStepInputGql) -> Result<Self> {
+        Ok(Self {
+            delay_seconds: value.delay_seconds,
+            target: value.target.try_into()?,
+            actions: value.actions.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct EscalationStepGql {
+    pub id: async_graphql::ID,
+    pub policy_id: async_graphql::ID,
+    /// 0-based order within the policy.
+    pub position: i32,
+    pub delay_seconds: i64,
+    pub target_kind: EscalationTargetKindGql,
+    /// Present only when `targetKind` is `USER`.
+    pub target_user_id: Option<async_graphql::ID>,
+    /// Present only when `targetKind` is `ON_CALL`.
+    pub target_schedule_id: Option<async_graphql::ID>,
+    pub actions: Vec<EscalationActionKindGql>,
+}
+
+impl From<rim_services::escalation::dto::EscalationStepDto> for EscalationStepGql {
+    fn from(value: rim_services::escalation::dto::EscalationStepDto) -> Self {
+        use rim_core::escalation::model::EscalationTarget;
+
+        let (target_kind, target_user_id, target_schedule_id) = match value.target {
+            EscalationTarget::User(user_id) => (
+                EscalationTargetKindGql::User,
+                Some(user_id.to_string().into()),
+                None,
+            ),
+            EscalationTarget::OnCall(schedule_id) => (
+                EscalationTargetKindGql::OnCall,
+                None,
+                Some(schedule_id.to_string().into()),
+            ),
+        };
+
+        Self {
+            id: value.id.to_string().into(),
+            policy_id: value.policy_id.to_string().into(),
+            position: value.position,
+            delay_seconds: value.delay_seconds,
+            target_kind,
+            target_user_id,
+            target_schedule_id,
+            actions: value.actions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct EscalationPolicyGql {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    pub name: String,
+    pub created_by: async_graphql::ID,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Ordered by `position`.
+    pub steps: Vec<EscalationStepGql>,
+}
+
+impl From<rim_services::escalation::dto::EscalationPolicyDto> for EscalationPolicyGql {
+    fn from(value: rim_services::escalation::dto::EscalationPolicyDto) -> Self {
+        Self {
+            id: value.id.to_string().into(),
+            server_id: value.server_id.to_string().into(),
+            name: value.name,
+            created_by: value.created_by.to_string().into(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            steps: value.steps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Read projection of the DB `escalation_run` row for a live incident (§10 FLAG C) — backs
+/// `Incident.escalationRun`. See `IncidentGql`'s `escalation_run` resolver for the
+/// nullability rationale.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct IncidentEscalationRunGql {
+    pub current_step_index: i32,
+    pub next_fire_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub status: EscalationRunStatusGql,
+}
+
+impl From<rim_services::escalation::dto::EscalationRunDto> for IncidentEscalationRunGql {
+    fn from(value: rim_services::escalation::dto::EscalationRunDto) -> Self {
+        Self {
+            current_step_index: value.current_step_index,
+            next_fire_at: value.next_fire_at,
+            status: value.status.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod escalation_target_input_tests {
+    use super::{EscalationTargetInputGql, EscalationTargetKindGql};
+    use rim_core::escalation::model::EscalationTarget;
+    use rim_core::oncall::model::OnCallScheduleId;
+    use rim_core::user::model::UserId;
+
+    #[test]
+    fn user_kind_converts_with_user_id() {
+        let user_id = UserId::new();
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::User,
+            user_id: Some(user_id.to_string().into()),
+            schedule_id: None,
+        };
+        let target: EscalationTarget = input.try_into().unwrap();
+        assert_eq!(target, EscalationTarget::User(user_id));
+    }
+
+    #[test]
+    fn on_call_kind_converts_with_schedule_id() {
+        let schedule_id = OnCallScheduleId::new();
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::OnCall,
+            user_id: None,
+            schedule_id: Some(schedule_id.to_string().into()),
+        };
+        let target: EscalationTarget = input.try_into().unwrap();
+        assert_eq!(target, EscalationTarget::OnCall(schedule_id));
+    }
+
+    #[test]
+    fn user_kind_rejects_schedule_id_set() {
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::User,
+            user_id: Some(UserId::new().to_string().into()),
+            schedule_id: Some(OnCallScheduleId::new().to_string().into()),
+        };
+        let err: Result<EscalationTarget, _> = input.try_into();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn on_call_kind_rejects_user_id_set() {
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::OnCall,
+            user_id: Some(UserId::new().to_string().into()),
+            schedule_id: Some(OnCallScheduleId::new().to_string().into()),
+        };
+        let err: Result<EscalationTarget, _> = input.try_into();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn user_kind_requires_user_id() {
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::User,
+            user_id: None,
+            schedule_id: None,
+        };
+        let err: Result<EscalationTarget, _> = input.try_into();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn on_call_kind_requires_schedule_id() {
+        let input = EscalationTargetInputGql {
+            kind: EscalationTargetKindGql::OnCall,
+            user_id: None,
+            schedule_id: None,
+        };
+        let err: Result<EscalationTarget, _> = input.try_into();
+        assert!(err.is_err());
+    }
+}
+
+#[cfg(test)]
+mod rotation_kind_input_tests {
+    use super::{RotationKindGql, RotationKindInputGql};
+    use rim_core::oncall::model::RotationKind;
+
+    #[test]
+    fn daily_converts_with_only_handoff_time() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Daily,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: None,
+            interval_seconds: None,
+        };
+        let kind = RotationKind::try_from(input).expect("valid DAILY input must convert");
+        assert!(matches!(kind, RotationKind::Daily { .. }));
+    }
+
+    #[test]
+    fn weekly_converts_with_handoff_time_and_weekday() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Weekly,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: Some(0),
+            interval_seconds: None,
+        };
+        let kind = RotationKind::try_from(input).expect("valid WEEKLY input must convert");
+        assert!(matches!(kind, RotationKind::Weekly { .. }));
+    }
+
+    #[test]
+    fn custom_converts_with_only_interval_seconds() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Custom,
+            handoff_time: None,
+            handoff_weekday: None,
+            interval_seconds: Some(3600),
+        };
+        let kind = RotationKind::try_from(input).expect("valid CUSTOM input must convert");
+        assert!(matches!(
+            kind,
+            RotationKind::Custom {
+                interval_seconds: 3600
+            }
+        ));
+    }
+
+    /// Strict flattened-union rejection (C1a-tail nit): a field belonging to a *different* kind
+    /// than the one selected is rejected rather than silently discarded.
+    #[test]
+    fn daily_with_interval_seconds_set_is_rejected() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Daily,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: None,
+            interval_seconds: Some(300),
+        };
+        assert!(RotationKind::try_from(input).is_err());
+    }
+
+    #[test]
+    fn daily_with_handoff_weekday_set_is_rejected() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Daily,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: Some(2),
+            interval_seconds: None,
+        };
+        assert!(RotationKind::try_from(input).is_err());
+    }
+
+    #[test]
+    fn weekly_with_interval_seconds_set_is_rejected() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Weekly,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: Some(0),
+            interval_seconds: Some(300),
+        };
+        assert!(RotationKind::try_from(input).is_err());
+    }
+
+    #[test]
+    fn custom_with_handoff_time_set_is_rejected() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Custom,
+            handoff_time: Some("09:00:00".to_string()),
+            handoff_weekday: None,
+            interval_seconds: Some(3600),
+        };
+        assert!(RotationKind::try_from(input).is_err());
+    }
+
+    #[test]
+    fn custom_with_handoff_weekday_set_is_rejected() {
+        let input = RotationKindInputGql {
+            kind: RotationKindGql::Custom,
+            handoff_time: None,
+            handoff_weekday: Some(3),
+            interval_seconds: Some(3600),
+        };
+        assert!(RotationKind::try_from(input).is_err());
+    }
 }

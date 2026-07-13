@@ -615,12 +615,11 @@ impl KeybindService for DefaultKeybindService {
                 cmd.keystroke.trim(),
             )
             .await?
+            && other.id != existing.id
         {
-            if other.id != existing.id {
-                return Err(ServiceError::Conflict(
-                    "keybind already exists for this scope/context/keystroke".to_string(),
-                ));
-            }
+            return Err(ServiceError::Conflict(
+                "keybind already exists for this scope/context/keystroke".to_string(),
+            ));
         }
 
         let updated = self

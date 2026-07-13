@@ -346,6 +346,25 @@ impl ConversationRepository for SeaOrmConversationRepository {
         Ok(count > 0)
     }
 
+    async fn get_channel_by_title(
+        &self,
+        server_id: ServerId,
+        title: &str,
+    ) -> RepoResult<Option<Conversation>> {
+        let channel: entity::sea_orm_active_enums::ConversationType =
+            ConversationType::Channel.into();
+
+        let model = conversation::Entity::find()
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(conversation::Column::Title.eq(title))
+            .filter(conversation::Column::ConversationType.eq(channel))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
     async fn list_accessible_conversation_ids(
         &self,
         server_id: ServerId,

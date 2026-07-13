@@ -8,7 +8,9 @@ use crate::message::command::{
     ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
     SendMessageCmd,
 };
-use crate::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
+use crate::message::dto::{
+    MessageDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
+};
 use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
 
@@ -36,7 +38,13 @@ pub trait MessageService: Send + Sync {
         query: ListThreadMessagesQuery,
     ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
 
-    async fn search_messages(&self, query: SearchMessagesQuery) -> ServiceResult<Vec<MessageDto>>;
+    /// Full-text search, cursor-paginated by `(sent_at, id)` (see `docs/pagination.md`) and
+    /// ranked via `rank`/`headline` on each hit. Visibility-scoped: never returns a message in a
+    /// conversation the actor cannot see.
+    async fn search_messages(
+        &self,
+        query: SearchMessagesQuery,
+    ) -> ServiceResult<Page<MessageSearchHitDto, MessagePageCursor>>;
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto>;
 

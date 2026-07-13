@@ -64,6 +64,8 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
         None, // no bootstrap secret needed for these paths
         Duration::days(30),
         noop_observers(),
+        std::sync::Arc::new(rim_infra_services::email::LogEmailSender),
+        None,
     )
 }
 
@@ -79,9 +81,7 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
 /// and could not see the uncommitted user row.
 #[tokio::test]
 async fn signup_with_bootstrap_commits_user_session_and_token_atomically() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     // Seed a bootstrap token directly via the repo so we have a valid token_hash.
@@ -158,9 +158,7 @@ async fn signup_with_bootstrap_commits_user_session_and_token_atomically() {
 /// neither the user, the session, nor the token-consumed update must land.
 #[tokio::test]
 async fn signup_with_bootstrap_rolls_back_on_conflict() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     let handle = DbHandle::Connection(db.clone());
@@ -238,9 +236,7 @@ async fn signup_with_bootstrap_rolls_back_on_conflict() {
 /// consumption atomically without hitting the `fk-session-user` FK constraint.
 #[tokio::test]
 async fn signup_with_instance_invite_commits_atomically() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     let handle = DbHandle::Connection(db.clone());
@@ -323,9 +319,7 @@ async fn signup_with_instance_invite_commits_atomically() {
 /// the `fk-session-user` FK constraint.
 #[tokio::test]
 async fn signup_open_commits_user_and_session_atomically() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     let handle = DbHandle::Connection(db.clone());
@@ -375,9 +369,7 @@ async fn signup_open_commits_user_and_session_atomically() {
 /// atomic-claim test.
 #[tokio::test]
 async fn concurrent_bootstrap_token_revoke_exactly_one_wins() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     let handle = DbHandle::Connection(db.clone());
@@ -420,9 +412,7 @@ async fn concurrent_bootstrap_token_revoke_exactly_one_wins() {
 /// observe `affected == 1` and the other `affected == 0`.
 #[tokio::test]
 async fn concurrent_instance_invite_revoke_exactly_one_wins() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     let handle = DbHandle::Connection(db.clone());
@@ -471,6 +461,76 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
     );
 }
 
+/// Two concurrent revokes of the same workspace invite: exactly one caller
+/// must observe `affected == 1` and the other `affected == 0`. Workspace-invite
+/// analog of `concurrent_bootstrap_token_revoke_exactly_one_wins` and
+/// `concurrent_instance_invite_revoke_exactly_one_wins`.
+#[tokio::test]
+async fn concurrent_invite_revoke_exactly_one_wins() {
+    use rim_core::auth::model::NewInvite;
+    use rim_core::auth::repository::InviteRepository;
+    use rim_core::server::repository::ServerRepository;
+    use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
+    use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
+
+    let db = support::db_conn().await;
+    support::reset_db(&db).await;
+
+    let handle = DbHandle::Connection(db.clone());
+
+    // Workspace invite requires a `created_by_user_id` (FK -> user) and a
+    // `server_id` (FK -> server) to satisfy referential integrity.
+    let user_repo = SeaOrmUserRepository::new(handle.clone());
+    let issuer = user_repo
+        .create_user(rim_core::user::model::NewUser {
+            username: "inviteraceadmin".to_string(),
+            password: "hash".to_string(),
+            email: "inviteraceadmin@example.com".to_string(),
+            display_name: None,
+        })
+        .await
+        .expect("admin create failed");
+
+    let server_repo = SeaOrmServerRepository::new(handle.clone());
+    let server = server_repo
+        .create_server("invite-race-server")
+        .await
+        .expect("create server failed");
+
+    let repo = SeaOrmInviteRepository::new(handle.clone());
+    let invite = repo
+        .create_invite(NewInvite {
+            server_id: server.id,
+            created_by_user_id: issuer.id,
+            token_hash: hash_token("rim_inv_race_token"),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            max_uses: 5,
+        })
+        .await
+        .expect("create invite failed");
+
+    let r1 = SeaOrmInviteRepository::new(handle.clone());
+    let r2 = SeaOrmInviteRepository::new(handle.clone());
+    let id = invite.id;
+    let (a, b) = tokio::join!(
+        r1.revoke_invite_returning_affected(id),
+        r2.revoke_invite_returning_affected(id),
+    );
+    let a = a.expect("revoke a failed");
+    let b = b.expect("revoke b failed");
+    assert_eq!(a + b, 1, "exactly one revoker must win; got a={a}, b={b}");
+
+    let after = repo
+        .get_by_id(id)
+        .await
+        .unwrap()
+        .expect("invite must exist");
+    assert!(
+        after.revoked_at.is_some(),
+        "invite must be revoked after race"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // accept_invite — verify already-correct path is not regressed
 // ---------------------------------------------------------------------------
@@ -482,9 +542,7 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
 /// paths.
 #[tokio::test]
 async fn accept_invite_commits_user_session_and_invite_consumption_atomically() {
-    let Some(db) = support::db_conn_or_skip().await else {
-        return;
-    };
+    let db = support::db_conn().await;
     support::reset_db(&db).await;
 
     use rim_core::auth::model::NewInvite;

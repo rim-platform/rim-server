@@ -54,6 +54,15 @@ impl MigratorTrait for Migrator {
             Box::new(m20260427_000001_audit_outcome_widen_check::Migration),
             Box::new(m20260428_182238_add_registration_invites::Migration),
             Box::new(m20260428_194718_add_user_email::Migration),
+            Box::new(m20260708_220447_add_command_audit_log_parent_audit_id::Migration),
+            Box::new(m20260708_225022_add_message_search_tsv::Migration),
+            Box::new(m20260708_232445_create_workspace_ingest_token::Migration),
+            Box::new(m20260708_233516_add_incident_alert_fields::Migration),
+            Box::new(m20260710_094314_create_oncall_schedules::Migration),
+            Box::new(m20260710_094331_add_user_timezone::Migration),
+            Box::new(m20260710_111731_create_escalation_policies::Migration),
+            Box::new(m20260710_111818_create_escalation_run::Migration),
+            Box::new(m20260710_111818_add_incident_escalation_and_ack_fields::Migration),
         ]
     }
 }
@@ -105,3 +114,12 @@ mod m20260426_200000_capability_registry_add_is_self_scoped;
 mod m20260427_000001_audit_outcome_widen_check;
 mod m20260428_182238_add_registration_invites;
 mod m20260428_194718_add_user_email;
+mod m20260708_220447_add_command_audit_log_parent_audit_id;
+mod m20260708_225022_add_message_search_tsv;
+mod m20260708_232445_create_workspace_ingest_token;
+mod m20260708_233516_add_incident_alert_fields;
+mod m20260710_094314_create_oncall_schedules;
+mod m20260710_094331_add_user_timezone;
+mod m20260710_111731_create_escalation_policies;
+mod m20260710_111818_add_incident_escalation_and_ack_fields;
+mod m20260710_111818_create_escalation_run;

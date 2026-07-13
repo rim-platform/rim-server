@@ -30,6 +30,17 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (feature-gated test code)
+        # Compiles (does not run) the code behind db-tests/infra-db-tests/e2e-tests so it
+        # can't rot silently between feature-suite runs. Compile-only, so no DATABASE_URL
+        # is needed here — the db-test *run* job below still requires Postgres for that.
+        # NOTE: --all-features is intentionally NOT used here — it also enables an unrelated
+        # `serde` cargo feature on rim_core/rim_services (gating derives on SkillTier/Principal)
+        # that does not currently compile. That's a separate, pre-existing gap unrelated to the
+        # db-tests/infra-db-tests/e2e-tests features this step targets; flagged to iron-man rather
+        # than silently worked around. The explicit feature list below covers exactly what this
+        # spec asks for.
+        run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
 
   build_and_test:
     name: Build & Test

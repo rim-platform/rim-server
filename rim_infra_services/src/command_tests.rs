@@ -98,7 +98,12 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                macro_service: None,
+                incident_service: std::sync::Arc::new(
+                    rim_services::incident::service::MockIncidentService::new(),
+                ),
+                oncall_service: std::sync::Arc::new(
+                    rim_services::oncall::service::MockOnCallService::new(),
+                ),
             },
         )
     }
@@ -1000,7 +1005,12 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: audit_svc,
-                macro_service: None,
+                incident_service: std::sync::Arc::new(
+                    rim_services::incident::service::MockIncidentService::new(),
+                ),
+                oncall_service: std::sync::Arc::new(
+                    rim_services::oncall::service::MockOnCallService::new(),
+                ),
             },
             vec![cmd_def],
         )
@@ -1115,7 +1125,7 @@ mod tests {
         let mut repo = MockUserCommandRepository::new();
         repo.expect_list_for_user().returning(|_| Ok(vec![]));
 
-        DefaultCommandService::new(
+        let svc = DefaultCommandService::new(
             CommandRepos {
                 user_command_repo: Arc::new(repo),
                 macro_repo: Arc::new(rim_core::macro_def::repository::MockMacroRepository::new()),
@@ -1140,9 +1150,18 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                macro_service: macro_svc,
+                incident_service: std::sync::Arc::new(
+                    rim_services::incident::service::MockIncidentService::new(),
+                ),
+                oncall_service: std::sync::Arc::new(
+                    rim_services::oncall::service::MockOnCallService::new(),
+                ),
             },
-        )
+        );
+        if let Some(macro_svc) = macro_svc {
+            let _ = svc.set_macro_service(macro_svc);
+        }
+        svc
     }
 
     fn full_caps() -> rim_services::capability::service::MockCapabilityService {
@@ -1502,7 +1521,12 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                macro_service: None,
+                incident_service: std::sync::Arc::new(
+                    rim_services::incident::service::MockIncidentService::new(),
+                ),
+                oncall_service: std::sync::Arc::new(
+                    rim_services::oncall::service::MockOnCallService::new(),
+                ),
             },
             vec![mutating_cmd],
         )
@@ -1669,6 +1693,165 @@ mod tests {
         assert!(
             dangerous_def.requires_confirmation_for_initiator(CommandInitiator::Palette),
             "dangerous: true must require confirmation even for Palette"
+        );
+    }
+
+    /// Builds a `MockMacroService` whose `synthesize_command_definitions` returns
+    /// one synthetic `macro.<id>` `CommandDefinitionDto` with `ai_callable: true`,
+    /// so it survives the AI-surface filter. Shared by the `set_macro_service`
+    /// tests below.
+    fn mock_macro_service_returning(
+        macro_cmd_id: String,
+    ) -> rim_services::macro_def::service::MockMacroService {
+        use rim_services::command::dto::{CommandExecutionTargetDto, CommandSourceKindDto};
+
+        let mut macro_svc = rim_services::macro_def::service::MockMacroService::new();
+        macro_svc
+            .expect_synthesize_command_definitions()
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(vec![CommandDefinitionDto {
+                        id: macro_cmd_id,
+                        title: "Synthetic Macro".to_string(),
+                        description: "Synthetic macro command for tests".to_string(),
+                        category: "Macro".to_string(),
+                        source_kind: CommandSourceKindDto::User,
+                        execution_target: CommandExecutionTargetDto::Backend,
+                        arguments: vec![],
+                        required_context: vec![],
+                        required_capabilities: vec![],
+                        visible_in_palette: false,
+                        visible_in_context_menus: false,
+                        keybind_capable: false,
+                        dangerous: false,
+                        user_command_id: None,
+                        nl_description: Some("synthetic".to_string()),
+                        intent_samples: vec!["synthetic".to_string()],
+                        ai_callable: true,
+                        sensitivity: CommandSensitivityDto::Safe,
+                        typed_verb: rim_services::command::verb::TypedVerb::Other,
+                        rate_limit_per_minute: None,
+                    }])
+                })
+            });
+        macro_svc
+    }
+
+    /// Builds a `ListCommandsQuery` for `Surface::Ai` carrying a `workspace_id`,
+    /// which is required for `list_commands` to reach the macro-discovery branch.
+    fn ai_query_with_workspace(
+        actor: Actor,
+        workspace_id: rim_core::server::model::ServerId,
+    ) -> ListCommandsQuery {
+        ListCommandsQuery {
+            actor,
+            context: Some(CommandContextDto {
+                workspace_id: Some(workspace_id),
+                conversation_id: None,
+                thread_id: None,
+                selected_text: None,
+                selected_message_id: None,
+                selected_message_ids: vec![],
+                focused_surface: None,
+                active_panel: None,
+            }),
+            surface: CommandSurfaceDto::Ai,
+        }
+    }
+
+    #[tokio::test]
+    async fn set_macro_service_wires_ai_discovery() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let workspace_id = rim_core::server::model::ServerId::new();
+        let macro_cmd_id = format!("macro.{}", uuid::Uuid::now_v7());
+
+        let svc = service_with_macro(full_caps(), None);
+        let macro_svc = mock_macro_service_returning(macro_cmd_id.clone());
+        svc.set_macro_service(Arc::new(macro_svc))
+            .expect("first set_macro_service call must succeed");
+
+        let commands = svc
+            .list_commands(ai_query_with_workspace(actor, workspace_id))
+            .await
+            .unwrap();
+
+        assert!(
+            commands.iter().any(|c| c.id == macro_cmd_id),
+            "synthesized macro command must appear once set_macro_service wires the \
+             macro service into list_commands(Surface::Ai)"
+        );
+    }
+
+    /// Regression test for the command/macro two-instance defect fixed by the
+    /// `OnceLock` late-binding design (Track A item 2, 2026-07-08): previously
+    /// the provider held **two** `DefaultCommandService` instances, and
+    /// `keybind`/`pipeline` held the macro-less phase-1 instance, so a late
+    /// macro wire was invisible to them. With a single shared instance behind
+    /// `Arc<OnceLock<_>>`, setting the macro service on one `Arc` clone must be
+    /// observed through every other clone. If a future refactor reintroduces a
+    /// second `DefaultCommandService` instance, this test fails.
+    #[tokio::test]
+    async fn macro_visible_through_shared_arc_clone() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let workspace_id = rim_core::server::model::ServerId::new();
+        let macro_cmd_id = format!("macro.{}", uuid::Uuid::now_v7());
+
+        let svc = Arc::new(service_with_macro(full_caps(), None));
+        // Stands in for what keybind/pipeline hold: a separate Arc clone of the
+        // *same* underlying DefaultCommandService instance.
+        let svc_clone = Arc::clone(&svc);
+
+        let macro_svc = mock_macro_service_returning(macro_cmd_id.clone());
+        svc.set_macro_service(Arc::new(macro_svc))
+            .expect("first set_macro_service call must succeed");
+
+        let commands = svc_clone
+            .list_commands(ai_query_with_workspace(actor, workspace_id))
+            .await
+            .unwrap();
+
+        assert!(
+            commands.iter().any(|c| c.id == macro_cmd_id),
+            "the late macro wire on one Arc clone must be visible through every \
+             other clone of the shared DefaultCommandService instance"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_macro_service_second_call_is_noop() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let workspace_id = rim_core::server::model::ServerId::new();
+        let first_macro_cmd_id = format!("macro.{}", uuid::Uuid::now_v7());
+        let second_macro_cmd_id = format!("macro.{}", uuid::Uuid::now_v7());
+
+        let svc = service_with_macro(full_caps(), None);
+
+        let first_macro_svc = mock_macro_service_returning(first_macro_cmd_id.clone());
+        let second_macro_svc = mock_macro_service_returning(second_macro_cmd_id.clone());
+
+        assert_eq!(
+            svc.set_macro_service(Arc::new(first_macro_svc)),
+            Ok(()),
+            "first call must succeed"
+        );
+        assert_eq!(
+            svc.set_macro_service(Arc::new(second_macro_svc)),
+            Err(()),
+            "second call must be rejected"
+        );
+
+        let commands = svc
+            .list_commands(ai_query_with_workspace(actor, workspace_id))
+            .await
+            .unwrap();
+
+        assert!(
+            commands.iter().any(|c| c.id == first_macro_cmd_id),
+            "the first-wired macro service must still be the one in effect"
+        );
+        assert!(
+            !commands.iter().any(|c| c.id == second_macro_cmd_id),
+            "the second (rejected) macro service must not have taken effect"
         );
     }
 }

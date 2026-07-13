@@ -13,9 +13,7 @@ use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 
 #[tokio::test]
 async fn create_get_update_text_and_soft_delete() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -51,7 +49,7 @@ async fn create_get_update_text_and_soft_delete() {
 
     repo.soft_delete_message(created.id).await.unwrap();
     let after = repo.get_by_id(created.id).await.unwrap().unwrap();
-    assert_eq!(after.is_deleted, true);
+    assert!(after.is_deleted);
 
     let err = repo
         .update_message_text(MessageId::new(), "x".to_string())
@@ -68,9 +66,7 @@ async fn create_get_update_text_and_soft_delete() {
 
 #[tokio::test]
 async fn list_messages_respects_include_deleted_and_ordering() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -123,9 +119,7 @@ async fn list_messages_respects_include_deleted_and_ordering() {
 
 #[tokio::test]
 async fn timeline_listing_excludes_thread_messages() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
@@ -180,9 +174,7 @@ async fn timeline_listing_excludes_thread_messages() {
 
 #[tokio::test]
 async fn desc_pagination_advances_to_older_messages() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -253,10 +245,8 @@ async fn desc_pagination_advances_to_older_messages() {
 }
 
 #[tokio::test]
-async fn search_messages_returns_recent_matches() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+async fn search_messages_fts_returns_recent_matches() {
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -275,20 +265,30 @@ async fn search_messages_returns_recent_matches() {
         .await;
 
     let results = repo
-        .search_messages(conv.id, "deploy failed", 10, false)
+        .search_messages_fts(rim_core::message::repository::MessageSearchParams {
+            conversation_ids: vec![conv.id],
+            tsquery: "deploy failed".to_string(),
+            author_id: None,
+            has_link: false,
+            has_attachment: false,
+            after: None,
+            before: None,
+            limit: 10,
+            cursor: None,
+            dir: PageDir::After,
+        })
         .await
         .unwrap();
 
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].id, newer.id);
-    assert_eq!(results[1].id, older.id);
+    assert_eq!(results[0].message.id, newer.id);
+    assert_eq!(results[1].message.id, older.id);
+    assert!(results[0].rank > 0.0);
 }
 
 #[tokio::test]
 async fn get_by_ids_returns_matching_messages() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -311,9 +311,7 @@ async fn get_by_ids_returns_matching_messages() {
 
 #[tokio::test]
 async fn get_by_ids_with_empty_slice_returns_empty() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 
@@ -323,9 +321,7 @@ async fn get_by_ids_with_empty_slice_returns_empty() {
 
 #[tokio::test]
 async fn set_has_attachments_updates_flag() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());
 

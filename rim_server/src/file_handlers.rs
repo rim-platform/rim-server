@@ -11,7 +11,10 @@ use rim_services::storage::service::StorageService;
 use crate::graphql_support::{extract_actor_and_session_id, validate_csrf_header};
 
 /// Map a ServiceError to an HTTP response for REST endpoints.
-fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpResponse {
+///
+/// Shared by every non-GraphQL (FL2) transport in `rim_server` — file handlers and the
+/// alert-ingest webhook handlers (`alert_handlers.rs`) — so REST error shapes stay consistent.
+pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpResponse {
     match err {
         rim_services::ServiceError::NotFound => {
             HttpResponse::NotFound().json(serde_json::json!({"error": "not found"}))
@@ -27,6 +30,14 @@ fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpRespons
         rim_services::ServiceError::Conflict(msg) => {
             HttpResponse::Conflict().json(serde_json::json!({"error": msg}))
         }
+        rim_services::ServiceError::RateLimited {
+            retry_after_seconds,
+        } => HttpResponse::TooManyRequests()
+            .insert_header(("Retry-After", retry_after_seconds.to_string()))
+            .json(serde_json::json!({
+                "error": "rate limit exceeded",
+                "retryAfterSeconds": retry_after_seconds,
+            })),
         _ => {
             tracing::error!(error = %err, "service error in file handler");
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "internal error"}))

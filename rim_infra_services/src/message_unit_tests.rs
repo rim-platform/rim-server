@@ -15,6 +15,7 @@ mod tests {
     use rim_core::server::model::ServerId;
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::user::repository::MockUserRepository;
     use rim_services::message::command::{
         DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
         ListMessagesQuery, ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd,
@@ -130,6 +131,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -211,6 +213,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -275,6 +278,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -323,6 +327,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -400,6 +405,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -497,6 +503,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -581,6 +588,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -640,6 +648,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -667,37 +676,28 @@ mod tests {
         assert_eq!(reference.anchor, format!("message-{}", msg.id));
     }
 
+    /// Unlike the pre-FTS implementation, an empty/whitespace-only query is no longer an error —
+    /// `parse_search_query` accepts it (operator-only or fully-empty searches are valid; see
+    /// `rim_services::message::search_query`). What the service still must reject, *before*
+    /// touching any repo, is an invalid parsed operator — proving `search_messages` propagates
+    /// `parse_search_query`'s `Validation` error ahead of the access gate. No mock expectations
+    /// are set on any repo here, so a repo call would panic — that's the proof parsing runs first.
     #[tokio::test]
-    async fn search_messages_requires_non_empty_query() {
+    async fn search_messages_propagates_parser_validation_error() {
         let actor_id = UserId::new();
         let server_id = ServerId::new();
         let conv_id = ConversationId::new();
 
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_, _| Ok(true));
-
-        let mut conversation_repo = MockConversationRepository::new();
-        conversation_repo.expect_get_by_id().returning(move |_| {
-            let c = conversation(server_id);
-            Box::pin(async move { Ok(Some(c)) })
-        });
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-
         let svc = DefaultMessageService::new(
             MessageRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
+                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
                 message_repo: Arc::new(MockMessageRepository::new()),
                 message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
-                server_member_repo: Arc::new(server_member_repo),
+                server_member_repo: Arc::new(MockServerMemberRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),
@@ -708,9 +708,10 @@ mod tests {
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id: Some(conv_id),
-                query: "   ".to_string(),
+                query: "has:bogus".to_string(),
                 limit: 10,
-                include_deleted: false,
+                cursor: None,
+                dir: PageDir::After,
             })
             .await
             .unwrap_err();
@@ -758,6 +759,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             test_observers(),

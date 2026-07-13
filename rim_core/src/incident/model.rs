@@ -14,8 +14,7 @@ model_id!(IncidentPhaseId);
 
 // ── IncidentStatus ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum IncidentStatus {
     Active,
     Mitigated,
@@ -68,8 +67,7 @@ impl FromStr for IncidentStatus {
 
 // ── IncidentSeverity ───────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum IncidentSeverity {
     Sev1,
     Sev2,
@@ -125,8 +123,7 @@ impl FromStr for IncidentSeverity {
 
 // ── IncidentPhaseName ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum IncidentPhaseName {
     Detection,
     Triage,
@@ -185,8 +182,7 @@ impl FromStr for IncidentPhaseName {
 
 // ── MessageTagType ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MessageTagType {
     Decision,
     ActionItem,
@@ -258,6 +254,22 @@ pub struct Incident {
     pub postmortem_draft: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Dedup key for alert-ingested incidents (Track B2). `None` for human-declared incidents.
+    /// At most one non-resolved incident per `(server_id, alert_fingerprint)` — enforced by
+    /// the partial unique index `idx_incident_active_fingerprint`.
+    pub alert_fingerprint: Option<String>,
+    /// `"manual" | "generic" | "alertmanager" | "grafana"`. Defaults to `"manual"` for
+    /// human-declared incidents (see `m20260708_233516_add_incident_alert_fields`).
+    pub source: String,
+    /// The escalation policy armed for this incident's [`crate::escalation::model::EscalationRun`],
+    /// if any. `None` when no policy applied (no channel default and no override at declare
+    /// time), and unchanged thereafter — the *run itself* (not this field) tracks whether the
+    /// chain is still active/cancelled/completed. See `m20260711_..._add_incident_escalation_and_ack_fields`.
+    pub escalation_policy_id: Option<crate::escalation::model::EscalationPolicyId>,
+    /// Set by `acknowledge_incident`. Orthogonal to `status` (§4 of the spec): acking means "a
+    /// human has this, stop paging" and can coexist with `Active`. `None` until acked.
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub acknowledged_by: Option<UserId>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +280,14 @@ pub struct NewIncident {
     pub severity: Option<IncidentSeverity>,
     pub title: String,
     pub original_topic: Option<String>,
+    /// `None` + `"manual"` for a human-declared incident (`start_incident`). Alert ingestion
+    /// (`ingest_alert`) sets both.
+    pub alert_fingerprint: Option<String>,
+    pub source: String,
+    /// The escalation policy to arm at declare time (an explicit `StartIncidentCmd` override, or
+    /// the conversation's default), resolved by the service before insert. `None` if neither
+    /// applies — the incident is declared without an escalation chain.
+    pub escalation_policy_id: Option<crate::escalation::model::EscalationPolicyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

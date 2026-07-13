@@ -16,46 +16,39 @@ fn is_test_db_url(url: &str) -> bool {
 }
 
 fn redact_url(url: &str) -> String {
-    if let Some(at) = url.find('@') {
-        if let Some(scheme_end) = url.find("://") {
-            let credentials = &url[scheme_end + 3..at];
-            if let Some(colon) = credentials.find(':') {
-                let user = &credentials[..colon];
-                let host_and_rest = &url[at..];
-                let scheme = &url[..scheme_end + 3];
-                return format!("{scheme}{user}:***{host_and_rest}");
-            }
+    if let Some(at) = url.find('@')
+        && let Some(scheme_end) = url.find("://")
+    {
+        let credentials = &url[scheme_end + 3..at];
+        if let Some(colon) = credentials.find(':') {
+            let user = &credentials[..colon];
+            let host_and_rest = &url[at..];
+            let scheme = &url[..scheme_end + 3];
+            return format!("{scheme}{user}:***{host_and_rest}");
         }
     }
     "<redacted>".to_string()
 }
 
-/// Obtain a database connection or skip the test.
-///
-/// Returns `None` when `DATABASE_URL` is unset (test is skipped), `Some` when
-/// the connection succeeds and all migrations have been applied.
-///
-/// The function is idempotent: migrations are applied at most once per
-/// process thanks to the `OnceLock` guard.
-pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
+/// Connect to the test database, or **panic loudly**. Only reachable under the
+/// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
+/// so a panic here means the feature was enabled without a usable test DB —
+/// which must fail CI, not silently skip. See CLAUDE.md P6-W6.
+pub async fn db_conn() -> DatabaseConnection {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,
-        _ => {
-            eprintln!(
-                "SKIP: rim_infra_services integration tests require DATABASE_URL \
-                 (e.g. postgres://rim:rim@localhost/rim_testdb)."
-            );
-            return None;
-        }
+        _ => panic!(
+            "DATABASE_URL must be set when running with --features db-tests \
+             (e.g. postgres://rim:rim@localhost/rim_testdb). Every db-test requires it; \
+             without it the suite would silently skip and report a false green."
+        ),
     };
-
-    if !is_test_db_url(&url) {
-        eprintln!(
-            "SKIP: DATABASE_URL must point to a test DB \
-             (dbname must contain 'testdb', '_test', 'testing', etc.).\n  got: {url}"
-        );
-        return None;
-    }
+    assert!(
+        is_test_db_url(&url),
+        "DATABASE_URL must point to a test DB (dbname containing 'testdb'/'_test'/'testing'); \
+         refusing to run destructive db-tests against: {}",
+        redact_url(&url),
+    );
 
     let mut opts = ConnectOptions::new(url.clone());
     opts.sqlx_logging(false);
@@ -73,7 +66,7 @@ pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
         let _ = MIGRATED.set(());
     }
 
-    Some(conn)
+    conn
 }
 
 /// Truncate all application tables so each test starts from a clean slate.
@@ -85,6 +78,14 @@ pub async fn reset_db(conn: &DatabaseConnection) {
 TRUNCATE TABLE
   bootstrap_token,
   instance_invite,
+  escalation_run,
+  escalation_step,
+  conversation_escalation_policy,
+  escalation_policy,
+  on_call_override,
+  on_call_rotation_participant,
+  on_call_rotation_layer,
+  on_call_schedule,
   incident_message_tag,
   incident_phase,
   incident,

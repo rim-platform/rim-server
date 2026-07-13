@@ -135,7 +135,7 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
                 sea_orm::Value::Uuid(Some(id.into())),
                 sea_orm::Value::Uuid(Some(server_id_val)),
                 sea_orm::Value::String(Some(new.key)),
-                sea_orm::Value::Json(Some(new.value)),
+                sea_orm::Value::Json(Some(Box::new(new.value))),
                 sea_orm::Value::String(Some(scope_str)),
                 match user_id_val {
                     Some(uid) => sea_orm::Value::Uuid(Some(uid)),
@@ -169,16 +169,16 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
             .map_err(map_db_err)?
             .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
 
-        if let Some(expected) = update.expected_version {
-            if model.version != expected {
-                return Err(RepoError::with_message(
-                    RepoErrorKind::PreconditionFailed,
-                    format!(
-                        "version mismatch: expected {expected}, actual {}",
-                        model.version
-                    ),
-                ));
-            }
+        if let Some(expected) = update.expected_version
+            && model.version != expected
+        {
+            return Err(RepoError::with_message(
+                RepoErrorKind::PreconditionFailed,
+                format!(
+                    "version mismatch: expected {expected}, actual {}",
+                    model.version
+                ),
+            ));
         }
 
         let next_version = model.version + 1;

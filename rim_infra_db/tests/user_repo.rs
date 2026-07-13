@@ -7,9 +7,7 @@ use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 #[tokio::test]
 async fn create_and_get_user_roundtrip() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmUserRepository::new(ctx.db.clone());
     let created = repo
@@ -30,9 +28,7 @@ async fn create_and_get_user_roundtrip() {
 
 #[tokio::test]
 async fn create_user_duplicate_username_is_conflict() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmUserRepository::new(ctx.db.clone());
 
@@ -65,13 +61,11 @@ async fn create_user_duplicate_username_is_conflict() {
 
 #[tokio::test]
 async fn find_by_username_and_delete_by_username_and_any_users_exist() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmUserRepository::new(ctx.db.clone());
 
-    assert_eq!(repo.any_users_exist().await.unwrap(), false);
+    assert!(!repo.any_users_exist().await.unwrap());
     assert!(repo.find_by_username("missing").await.unwrap().is_none());
 
     let created = repo
@@ -84,7 +78,7 @@ async fn find_by_username_and_delete_by_username_and_any_users_exist() {
         .await
         .unwrap();
 
-    assert_eq!(repo.any_users_exist().await.unwrap(), true);
+    assert!(repo.any_users_exist().await.unwrap());
     let found = repo.find_by_username("u_test_find").await.unwrap().unwrap();
     assert_eq!(found.id, created.id);
 

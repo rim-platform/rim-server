@@ -36,6 +36,21 @@ pub struct MessageDto {
     pub sent_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A single full-text search hit: the matched message plus its relevance rank and an optional
+/// highlighted snippet. Wraps [`MessageDto`] rather than flattening its fields, so callers that
+/// only need the message (e.g. the `chat.search_messages` command executor's author/channel
+/// resolution helpers, which take `&[MessageDto]`) can trivially project `hit.message`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MessageSearchHitDto {
+    pub message: MessageDto,
+    /// `ts_rank` score against the query — informational, not the sort key. See
+    /// `DefaultMessageService::search_messages` for why relevance is not used for pagination.
+    pub rank: f32,
+    /// `ts_headline` snippet with `<mark>...</mark>` highlights around matched terms.
+    pub headline: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageReferenceDto {

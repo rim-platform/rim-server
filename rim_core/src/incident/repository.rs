@@ -11,6 +11,7 @@ use crate::incident::model::{
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
 use crate::server::model::ServerId;
+use crate::user::model::UserId;
 
 /// Cursor for paginating the incident history list.
 ///
@@ -33,6 +34,17 @@ pub trait IncidentRepository: Send + Sync {
         conversation_id: ConversationId,
     ) -> RepoResult<Option<Incident>>;
 
+    /// Find a **non-resolved** incident matching `(server_id, fingerprint)` — the alert-ingest
+    /// dedup lookup (Track B2). Mirrors the DB-level guarantee of
+    /// `idx_incident_active_fingerprint`: returns `None` once the matching incident is
+    /// resolved, so a later alert with the same fingerprint creates a fresh incident rather
+    /// than reopening an old one.
+    async fn find_by_fingerprint(
+        &self,
+        server_id: ServerId,
+        fingerprint: &str,
+    ) -> RepoResult<Option<Incident>>;
+
     async fn update_status(
         &self,
         id: IncidentId,
@@ -42,6 +54,16 @@ pub trait IncidentRepository: Send + Sync {
     ) -> RepoResult<Incident>;
 
     async fn update_postmortem_draft(&self, id: IncidentId, draft: String) -> RepoResult<Incident>;
+
+    /// Sets `acknowledged_at`/`acknowledged_by`. Callers enforce idempotency (§4: acking an
+    /// already-acked incident is a no-op) *before* calling this — this method unconditionally
+    /// overwrites, so a repeat call would reset `acknowledged_at` to a later timestamp.
+    async fn acknowledge(
+        &self,
+        id: IncidentId,
+        acknowledged_at: DateTime<Utc>,
+        acknowledged_by: UserId,
+    ) -> RepoResult<Incident>;
 
     /// List incidents on a server, ordered by `created_at DESC, id DESC`.
     ///

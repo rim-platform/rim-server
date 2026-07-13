@@ -1,9 +1,11 @@
 #![cfg(feature = "infra-db-tests")]
 
 /// Fail loudly when `--features infra-db-tests` is active but `DATABASE_URL`
-/// is not set. Without this guard the integration tests silently skip
-/// themselves (via `db_conn_or_skip()` returning `None`) and the CI job
-/// reports a false green — every test "passes" because none actually ran.
+/// is not set. `support::db_conn()` now panics on an unset/invalid
+/// `DATABASE_URL` too (the loud failure lives in the helper every test
+/// actually calls, not only here) — this guard is a fast, DB-connection-free
+/// belt-and-suspenders check that fails before any test even attempts to
+/// connect.
 ///
 /// This test is synchronous and has no DB dependency; it exists purely to
 /// convert the silent skip into a hard failure so misconfigured CI is

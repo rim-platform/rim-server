@@ -14,9 +14,7 @@ use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRep
 
 #[tokio::test]
 async fn create_conversation_and_get_by_id() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let server = ctx.create_server("s").await;
@@ -36,9 +34,7 @@ async fn create_conversation_and_get_by_id() {
 
 #[tokio::test]
 async fn create_conversation_with_members_is_atomic() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -66,9 +62,7 @@ async fn create_conversation_with_members_is_atomic() {
 
 #[tokio::test]
 async fn find_direct_between_users() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -106,9 +100,7 @@ async fn find_direct_between_users() {
 
 #[tokio::test]
 async fn touch_last_activity_at_updates_and_not_found() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let server = ctx.create_server("s").await;
@@ -135,9 +127,7 @@ async fn touch_last_activity_at_updates_and_not_found() {
 
 #[tokio::test]
 async fn list_inbox_conversations_paginates_and_orders() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
@@ -215,9 +205,7 @@ async fn list_inbox_conversations_paginates_and_orders() {
 
 #[tokio::test]
 async fn list_channels_for_user_paginates_and_orders_oldest_first() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
     let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
