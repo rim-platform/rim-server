@@ -12,9 +12,7 @@ use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepos
 
 #[tokio::test]
 async fn add_get_and_list_attachments_for_message() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
     let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
@@ -95,9 +93,7 @@ async fn add_get_and_list_attachments_for_message() {
 
 #[tokio::test]
 async fn get_attachments_for_messages_batch() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
     let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
@@ -185,9 +181,7 @@ async fn get_attachments_for_messages_batch() {
 
 #[tokio::test]
 async fn get_attachments_for_messages_empty_slice() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
 

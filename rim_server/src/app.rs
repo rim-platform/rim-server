@@ -15,14 +15,6 @@ use tokio::sync::watch;
 use crate::config::RIMConfig;
 
 use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl;
-use rim_infra_db::sea_orm_impl::{
-    bootstrap_token::SeaOrmBootstrapTokenRepository,
-    instance_invite::SeaOrmInstanceInviteRepository, invite::SeaOrmInviteRepository,
-    keybind::SeaOrmKeybindRepository, server::SeaOrmServerRepository,
-    server_member::SeaOrmServerMemberRepository, session::SeaOrmSessionRepository,
-    user::SeaOrmUserRepository, user_command::SeaOrmUserCommandRepository,
-};
 use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::provider::AppServiceProvider;
@@ -35,6 +27,10 @@ pub struct AppRuntime {
     pub storage_service: Arc<dyn StorageService>,
     pub message_attachment_service:
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
+    pub ingest_token_service: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
+    pub incident_service: Arc<dyn rim_services::incident::service::IncidentService>,
+    pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
+    pub alert_max_body_bytes: usize,
     pub shutdown_tx: watch::Sender<bool>,
 }
 
@@ -45,102 +41,10 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let raw_db = db.clone(); // Keep raw DatabaseConnection for UoW
     let db: DbHandle = db.into();
 
-    let user_repo: Arc<dyn rim_core::user::repository::UserRepository> =
-        Arc::new(SeaOrmUserRepository::new(db.clone()));
-    let server_repo: Arc<dyn rim_core::server::repository::ServerRepository> =
-        Arc::new(SeaOrmServerRepository::new(db.clone()));
-    let server_member_repo: Arc<dyn rim_core::server_member::repository::ServerMemberRepository> =
-        Arc::new(SeaOrmServerMemberRepository::new(db.clone()));
-    let session_repo: Arc<dyn rim_core::auth::repository::SessionRepository> =
-        Arc::new(SeaOrmSessionRepository::new(db.clone()));
-    let invite_repo: Arc<dyn rim_core::auth::repository::InviteRepository> =
-        Arc::new(SeaOrmInviteRepository::new(db.clone()));
-    let bootstrap_token_repo: Arc<dyn rim_core::auth::repository::BootstrapTokenRepository> =
-        Arc::new(SeaOrmBootstrapTokenRepository::new(db.clone()));
-    let instance_invite_repo: Arc<dyn rim_core::auth::repository::InstanceInviteRepository> =
-        Arc::new(SeaOrmInstanceInviteRepository::new(db.clone()));
-
-    let repos = AppRepos {
-        bootstrap_token_repo: Arc::clone(&bootstrap_token_repo),
-        instance_invite_repo: Arc::clone(&instance_invite_repo),
-        channel_lens_repo: Arc::new(
-            sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(db.clone()),
-        ),
-        conversation_repo: Arc::new(
-            sea_orm_impl::conversation::SeaOrmConversationRepository::new(db.clone()),
-        ),
-        conversation_member_repo: Arc::new(
-            sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository::new(db.clone()),
-        ),
-        keybind_repo: Arc::new(SeaOrmKeybindRepository::new(db.clone())),
-        macro_repo: Arc::new(sea_orm_impl::macro_def::SeaOrmMacroRepository::new(
-            db.clone(),
-        )),
-        message_repo: Arc::new(sea_orm_impl::message::SeaOrmMessageRepository::new(
-            db.clone(),
-        )),
-        message_attachment_repo: Arc::new(
-            sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository::new(db.clone()),
-        ),
-        message_thread_repo: Arc::new(
-            sea_orm_impl::message_thread::SeaOrmMessageThreadRepository::new(db.clone()),
-        ),
-        message_reaction_repo: Arc::new(
-            sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(db.clone()),
-        ),
-        message_mention_repo: Arc::new(
-            sea_orm_impl::message_mention::SeaOrmMessageMentionRepository::new(db.clone()),
-        ),
-        message_pin_repo: Arc::new(sea_orm_impl::message_pin::SeaOrmMessagePinRepository::new(
-            db.clone(),
-        )),
-        notification_preference_repo: Arc::new(
-            sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
-                db.clone(),
-            ),
-        ),
-        password_reset_token_repo: Arc::new(
-            sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(db.clone()),
-        ),
-        read_state_repo: Arc::new(
-            sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository::new(
-                db.clone(),
-            ),
-        ),
-        user_command_repo: Arc::new(SeaOrmUserCommandRepository::new(db.clone())),
-        server_repo: Arc::clone(&server_repo),
-        server_member_repo: Arc::clone(&server_member_repo),
-        user_repo: Arc::clone(&user_repo),
-        session_repo: Arc::clone(&session_repo),
-        invite_repo: Arc::clone(&invite_repo),
-        link_preview_repo: Arc::new(
-            sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
-        ),
-        custom_emoji_repo: Arc::new(
-            sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(db.clone()),
-        ),
-        incident_repo: Arc::new(sea_orm_impl::incident::SeaOrmIncidentRepository::new(
-            db.clone(),
-        )),
-        incident_phase_repo: Arc::new(
-            sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(db.clone()),
-        ),
-        incident_message_tag_repo: Arc::new(
-            sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(db.clone()),
-        ),
-        skill_profile_repo: Arc::new(
-            sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(db.clone()),
-        ),
-        workspace_state_repo: Arc::new(
-            sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(db.clone()),
-        ),
-        pipeline_repo: Arc::new(sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(
-            db.clone(),
-        )),
-        capability_registry_repo: Arc::new(
-            sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(db.clone()),
-        ),
-    };
+    // Canonical repo constructor (mirrors the FL1 composition-root note in
+    // CLAUDE.md) — keeps this composition root in sync with every other
+    // production UoW path without hand-duplicating the 31-repo literal.
+    let repos = AppRepos::with_handle(&db);
 
     // Phase 1 §3.3 — closes Black Widow C1. Seed builtin capabilities into
     // the registry SYNCHRONOUSLY before the HTTP listener binds, so the
@@ -183,6 +87,30 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             max_workspace_bytes,
         ));
 
+    // Track B3 — real SMTP only when RIM_SMTP_HOST + RIM_SMTP_FROM are both configured;
+    // otherwise every send falls back to LogEmailSender (log-only, no delivery). See
+    // docs/email.md.
+    let email_sender: Arc<dyn rim_infra_services::email::EmailSender> = match config.smtp_config() {
+        Some(smtp) => Arc::new(
+            rim_infra_services::email::SmtpEmailSender::new(smtp)
+                .map_err(|e| std::io::Error::other(format!("failed to build SMTP sender: {e}")))?,
+        ),
+        None => {
+            tracing::warn!(
+                "RIM_SMTP_HOST/RIM_SMTP_FROM not configured; using LogEmailSender \
+                 (emails will not be delivered)"
+            );
+            Arc::new(rim_infra_services::email::LogEmailSender)
+        }
+    };
+
+    // C1b — single-node in-memory escalation timer wheel (§6). Constructed here (not inside
+    // the provider) so this function can also drive the boot-recovery arm + the polling loop
+    // below, mirroring how `presence_manager`/`typing_tracker` are built here and handed to the
+    // schema as a concrete type alongside their `Arc<dyn ...>` use inside the provider.
+    let escalation_scheduler =
+        Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
+
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
         raw_db,
@@ -190,7 +118,33 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         chrono::Duration::days(i64::from(config.session_ttl_days)),
         observers,
         Arc::clone(&storage_service),
+        config.ingest_token_ttl_seconds(),
+        email_sender,
+        config.public_base_url(),
+        Arc::clone(&escalation_scheduler)
+            as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
     ));
+
+    // Boot recovery (§6) — extracted into `rim_infra_services::escalation::recover_active_escalation_runs`
+    // so it's independently db-testable without spinning up the whole app runtime.
+    match rim_infra_services::escalation::recover_active_escalation_runs(
+        repos.escalation_run_repo.as_ref(),
+        escalation_scheduler.as_ref(),
+    )
+    .await
+    {
+        Ok(armed) => {
+            tracing::info!(
+                target = "audit",
+                event = "escalation_boot_recovery",
+                armed_count = armed,
+                "re-armed active escalation runs on boot (§6)"
+            );
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "boot recovery: failed to list active escalation runs");
+        }
+    }
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
         observers_for_presence,
@@ -256,7 +210,54 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
+    // Background task: escalation timer driver (§6). Sleeps until the earliest armed deadline
+    // (or a floor of `escalation_timer_resolution_secs` when nothing is armed), fires every due
+    // run through `IncidentService::fire_escalation_step`, and races that sleep against
+    // `notified()` so a newly-armed earlier deadline (or a cancellation) is picked up
+    // immediately rather than after the stale sleep elapses — mirrors the pipeline evaluator's
+    // `tokio::select!` shutdown pattern above.
+    {
+        let scheduler = Arc::clone(&escalation_scheduler);
+        let incident_service_for_driver = service_provider.incident_service();
+        let floor = std::time::Duration::from_secs(config.escalation_timer_resolution_secs());
+        let mut shutdown_rx3 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let sleep_duration =
+                    escalation_sleep_duration(scheduler.next_deadline(), chrono::Utc::now(), floor);
+                tokio::select! {
+                    () = tokio::time::sleep(sleep_duration) => {
+                        let due = scheduler.take_due(chrono::Utc::now());
+                        for run_id in due {
+                            if let Err(e) = incident_service_for_driver.fire_escalation_step(run_id).await {
+                                tracing::error!(error = %e, run_id = %run_id, "escalation step fire failed");
+                            }
+                        }
+                    }
+                    () = scheduler.notified() => {
+                        // Loop again to recompute the deadline against the updated armed set.
+                    }
+                    _ = shutdown_rx3.changed() => {
+                        tracing::info!("escalation driver: shutdown signal received");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     let message_attachment_service = service_provider.message_attachment_service();
+    let ingest_token_service = service_provider.ingest_token_service();
+    let incident_service = service_provider.incident_service();
+
+    // Track B2 — alert-ingest rate limiting is keyed per ingest-token id, not IP (a token is
+    // the trusted principal here; see `AlertRateLimiter`'s doc comment). Window is fixed at
+    // 60s; the configured `alert_rate_limit_per_min` is the per-window request cap.
+    let alert_rate_limiter = Arc::new(rim_infra_services::AlertRateLimiter::new(
+        60,
+        config.alert_rate_limit_per_min(),
+    ));
+    let alert_max_body_bytes = config.alert_max_body_bytes();
 
     // ── Registration mode boot-time validation (§6.3) ──────────────────────
     let registration_mode = config.registration_mode();
@@ -304,8 +305,47 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         storage_backend,
         storage_service,
         message_attachment_service,
+        ingest_token_service,
+        incident_service,
+        alert_rate_limiter,
+        alert_max_body_bytes,
         shutdown_tx,
     })
+}
+
+/// Computes how long the escalation timer driver should sleep before its
+/// next wakeup.
+///
+/// Three cases:
+/// - No run armed (`next_deadline` is `None`): sleep for the `floor` (the
+///   configured `escalation_timer_resolution_secs`), then loop and re-check.
+/// - A run is already past due (`deadline <= now`): sleep zero, fire
+///   immediately.
+/// - A run is armed in the future: sleep until that deadline, but capped at
+///   `floor`. This cap is a correctness requirement, not just tidiness — the
+///   driver races this sleep against `scheduler.notified()` (see the
+///   `tokio::select!` call site) so a *newly*-armed, earlier deadline is
+///   normally picked up instantly. But if the narrow window between reading
+///   `next_deadline()` and polling `notified()` misses a fresh `arm()` call
+///   (e.g. a brand-new incident declared while an older, far-future run is
+///   already armed), the driver would otherwise sleep until that older
+///   deadline — which could be minutes away — before re-checking. Capping at
+///   `floor` bounds that worst case to `floor` (~5s by default) instead.
+fn escalation_sleep_duration(
+    next_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+    floor: std::time::Duration,
+) -> std::time::Duration {
+    match next_deadline {
+        Some(deadline) => {
+            if deadline <= now {
+                std::time::Duration::ZERO
+            } else {
+                (deadline - now).to_std().unwrap_or(floor).min(floor)
+            }
+        }
+        None => floor,
+    }
 }
 
 /// Idempotent startup seeding for the capability registry.
@@ -340,4 +380,60 @@ async fn seed_builtin_capabilities(
         "seeded builtin capabilities into registry (Phase 1 §3.3)"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod escalation_sleep_duration_tests {
+    use super::escalation_sleep_duration;
+    use chrono::Duration as ChronoDuration;
+    use std::time::Duration;
+
+    const FLOOR: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn no_run_armed_sleeps_the_floor() {
+        let now = chrono::Utc::now();
+        assert_eq!(escalation_sleep_duration(None, now, FLOOR), FLOOR);
+    }
+
+    #[test]
+    fn past_due_deadline_sleeps_zero() {
+        let now = chrono::Utc::now();
+        let deadline = now - ChronoDuration::seconds(1);
+        assert_eq!(
+            escalation_sleep_duration(Some(deadline), now, FLOOR),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn equal_to_now_sleeps_zero() {
+        let now = chrono::Utc::now();
+        assert_eq!(
+            escalation_sleep_duration(Some(now), now, FLOOR),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn near_deadline_sleeps_until_deadline() {
+        let now = chrono::Utc::now();
+        let deadline = now + ChronoDuration::seconds(2);
+        let sleep = escalation_sleep_duration(Some(deadline), now, FLOOR);
+        // Should be ~2s, well under the 5s floor, and NOT capped.
+        assert!(sleep >= Duration::from_millis(1900) && sleep <= Duration::from_secs(2));
+    }
+
+    /// This is the regression test for iron-man's C1b-review hardening: a
+    /// deadline far in the future (minutes away) must NOT produce a sleep
+    /// longer than `floor`. Without the `.min(floor)` cap, a missed
+    /// `notified()` window for a freshly-armed *earlier* run would leave the
+    /// driver asleep until this far-future deadline instead of re-checking
+    /// within `floor`.
+    #[test]
+    fn far_future_deadline_is_capped_at_floor() {
+        let now = chrono::Utc::now();
+        let deadline = now + ChronoDuration::minutes(10);
+        assert_eq!(escalation_sleep_duration(Some(deadline), now, FLOOR), FLOOR);
+    }
 }

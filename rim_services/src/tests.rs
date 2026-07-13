@@ -169,7 +169,7 @@ mod service_error_display {
 
     #[test]
     fn internal_from_helper() {
-        let err = ServiceError::internal(std::io::Error::new(std::io::ErrorKind::Other, "oops"));
+        let err = ServiceError::internal(std::io::Error::other("oops"));
         assert!(matches!(err, ServiceError::Internal(Some(_))));
     }
 }

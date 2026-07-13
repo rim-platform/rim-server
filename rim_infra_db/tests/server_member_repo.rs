@@ -9,9 +9,7 @@ use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
 #[tokio::test]
 async fn add_get_is_member_get_by_id_and_list_members() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
 
@@ -19,7 +17,7 @@ async fn add_get_is_member_get_by_id_and_list_members() {
     let u1 = ctx.create_user("u1").await.id;
     let u2 = ctx.create_user("u2").await.id;
 
-    assert_eq!(repo.is_member(server.id, u1).await.unwrap(), false);
+    assert!(!repo.is_member(server.id, u1).await.unwrap());
 
     let m1 = repo
         .add_member(server.id, u1, ServerMemberRole::Owner)
@@ -30,7 +28,7 @@ async fn add_get_is_member_get_by_id_and_list_members() {
         .await
         .unwrap();
 
-    assert_eq!(repo.is_member(server.id, u1).await.unwrap(), true);
+    assert!(repo.is_member(server.id, u1).await.unwrap());
 
     let by_pair = repo.get_member(server.id, u1).await.unwrap().unwrap();
     assert_eq!(by_pair.id, m1.id);
@@ -44,9 +42,7 @@ async fn add_get_is_member_get_by_id_and_list_members() {
 
 #[tokio::test]
 async fn change_member_role_and_remove_member_errors() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
 
@@ -80,9 +76,7 @@ async fn change_member_role_and_remove_member_errors() {
 
 #[tokio::test]
 async fn add_member_conflicts_on_duplicate_server_membership() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
 

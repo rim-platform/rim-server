@@ -1,6 +1,6 @@
 use async_graphql::Enum;
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum PageDir {
     Before,
     After,

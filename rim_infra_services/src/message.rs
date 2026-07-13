@@ -6,8 +6,9 @@ use tracing::{info, instrument};
 /// Maximum number of items any paginated query can return in a single page.
 const MAX_PAGE_LIMIT: u32 = 200;
 
-use rim_core::message::model::NewMessage;
-use rim_core::repository::pagination::SortOrder;
+use rim_core::message::model::{Message, NewMessage};
+use rim_core::message::repository::MessageSearchParams;
+use rim_core::repository::pagination::{Page, PageDir, SortOrder};
 use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
 use rim_services::message::command::{
@@ -15,7 +16,10 @@ use rim_services::message::command::{
     ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
     SendMessageCmd,
 };
-use rim_services::message::dto::{MessageDto, MessagePageCursor, MessageReferenceDto};
+use rim_services::message::dto::{
+    MessageDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
+};
+use rim_services::message::search_query::{ChannelToken, FromToken, HasFilter, parse_search_query};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::dto::AttachmentDto;
 use rim_services::{ServiceError, ServiceResult};
@@ -375,13 +379,13 @@ impl MessageService for DefaultMessageService {
             _ => None, // Allow empty text (e.g. attachment-only messages)
         };
 
-        if let Some(ref t) = text {
-            if t.chars().count() > MAX_MESSAGE_TEXT_LENGTH {
-                return Err(ServiceError::Validation(format!(
-                    "message text too long (max {} characters)",
-                    MAX_MESSAGE_TEXT_LENGTH
-                )));
-            }
+        if let Some(ref t) = text
+            && t.chars().count() > MAX_MESSAGE_TEXT_LENGTH
+        {
+            return Err(ServiceError::Validation(format!(
+                "message text too long (max {} characters)",
+                MAX_MESSAGE_TEXT_LENGTH
+            )));
         }
 
         let parent_message_id = match cmd.parent_message_id {
@@ -787,62 +791,153 @@ impl MessageService for DefaultMessageService {
         ))
     }
 
-    async fn search_messages(&self, query: SearchMessagesQuery) -> ServiceResult<Vec<MessageDto>> {
-        let q = query.query.trim();
-        if q.is_empty() {
-            return Err(ServiceError::Validation(
-                "search query must be non-empty".to_string(),
-            ));
-        }
+    /// Full-text search. See [`rim_services::message::search_query`] for the operator syntax and
+    /// `rim_core::message::repository::MessageSearchParams` for the visibility contract this
+    /// method is responsible for upholding: the repository only ever searches the conversation
+    /// set this method hands it, derived from `list_accessible_conversation_ids` (plus the member
+    /// gate for an explicit `conversation_id` scope). `from:`/`in:` tokens that don't resolve, or
+    /// an `in:` channel outside the accessible set, return an **empty page**, never an error —
+    /// this avoids leaking whether a username/channel exists to an actor who can't see it.
+    async fn search_messages(
+        &self,
+        query: SearchMessagesQuery,
+    ) -> ServiceResult<Page<MessageSearchHitDto, MessagePageCursor>> {
+        let parsed = parse_search_query(&query.query)?;
 
-        let messages = match query.conversation_id {
-            Some(conversation_id) => {
-                // Scoped search: single conversation — full three-step access gate.
-                ensure_conversation_member_access(
-                    ConversationAccessRepos::from_arcs(
-                        &self.repos.server_member_repo,
-                        &self.repos.conversation_repo,
-                        &self.repos.conversation_member_repo,
-                    ),
-                    query.actor.user_id,
-                    query.server_id,
-                    conversation_id,
-                )
-                .await?;
-
-                // Security: always exclude deleted messages from search results.
-                let clamped_limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
-                self.repos
-                    .message_repo
-                    .search_messages(conversation_id, q, clamped_limit, false)
-                    .await?
+        // Resolve `from:` to a concrete UserId. Unknown username => empty page.
+        let author_id = match &parsed.from {
+            Some(FromToken::UserId(uuid)) => Some((*uuid).into()),
+            Some(FromToken::Username(name)) => {
+                match self.repos.user_repo.find_by_username(name).await? {
+                    Some(user) => Some(user.id),
+                    None => return Ok(Page::new(vec![], None, None)),
+                }
             }
-            None => {
-                // Workspace-wide search: server membership gates access;
-                // list_accessible_conversation_ids already scopes to joined conversations.
-                ensure_server_member(
-                    self.repos.server_member_repo.as_ref(),
-                    query.server_id,
-                    query.actor.user_id,
-                )
-                .await?;
+            None => None,
+        };
 
-                let accessible_ids = self
+        // Resolve `in:` to a concrete ConversationId. Unknown/non-channel => empty page.
+        let in_channel_id = match &parsed.in_channel {
+            Some(ChannelToken::ConversationId(uuid)) => Some((*uuid).into()),
+            Some(ChannelToken::Name(name)) => {
+                match self
                     .repos
                     .conversation_repo
-                    .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
-                    .await?;
-
-                let clamped_limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
-                self.repos
-                    .message_repo
-                    .search_messages_across_conversations(&accessible_ids, q, clamped_limit)
+                    .get_channel_by_title(query.server_id, name)
                     .await?
+                {
+                    Some(conv) => Some(conv.id),
+                    None => return Ok(Page::new(vec![], None, None)),
+                }
+            }
+            None => None,
+        };
+
+        // Compute the accessible conversation set — the security-critical step.
+        let conversation_ids = if let Some(explicit_conversation_id) = query.conversation_id {
+            // Explicit single-conversation scope: full three-step access gate.
+            ensure_conversation_member_access(
+                ConversationAccessRepos::from_arcs(
+                    &self.repos.server_member_repo,
+                    &self.repos.conversation_repo,
+                    &self.repos.conversation_member_repo,
+                ),
+                query.actor.user_id,
+                query.server_id,
+                explicit_conversation_id,
+            )
+            .await?;
+            vec![explicit_conversation_id]
+        } else {
+            // Workspace-wide search: server membership gates access;
+            // list_accessible_conversation_ids already scopes to joined conversations.
+            ensure_server_member(
+                self.repos.server_member_repo.as_ref(),
+                query.server_id,
+                query.actor.user_id,
+            )
+            .await?;
+
+            let accessible_ids = self
+                .repos
+                .conversation_repo
+                .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
+                .await?;
+
+            match in_channel_id {
+                // `in:` intersects the accessible set. A channel outside it never leaks —
+                // return empty rather than a permission error.
+                Some(channel_id) if accessible_ids.contains(&channel_id) => vec![channel_id],
+                Some(_) => return Ok(Page::new(vec![], None, None)),
+                None => accessible_ids,
             }
         };
 
-        self.map_messages_to_dtos(query.server_id, messages, true)
-            .await
+        let clamped_limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
+        let mut hits = self
+            .repos
+            .message_repo
+            .search_messages_fts(MessageSearchParams {
+                conversation_ids,
+                tsquery: parsed.text,
+                author_id,
+                has_link: parsed.has.contains(&HasFilter::Link),
+                has_attachment: parsed.has.contains(&HasFilter::Attachment),
+                after: parsed.after,
+                before: parsed.before,
+                limit: clamped_limit,
+                cursor: query.cursor.map(Into::into),
+                dir: query.dir,
+            })
+            .await?;
+
+        // Boundary computation mirrors the (SortOrder::Desc, dir) branches in
+        // SeaOrmMessageRepository::list_messages — search results are always ordered
+        // (sent_at DESC, id DESC), so only those two branches apply. The repo already fetched
+        // up to `clamped_limit + 1` rows so we can detect a next page here.
+        let has_cursor = query.cursor.is_some();
+        let has_more_in_dir = hits.len() > clamped_limit as usize;
+        if has_more_in_dir {
+            hits.truncate(clamped_limit as usize);
+        }
+
+        let to_cursor = |hit: &rim_core::message::repository::MessageSearchHit| MessagePageCursor {
+            sent_at: hit.message.sent_at,
+            message_id: hit.message.id,
+        };
+        let min_cursor = hits.last().map(to_cursor);
+        let max_cursor = hits.first().map(to_cursor);
+        let has_opposite = has_cursor && !hits.is_empty();
+        let (next, prev) = match query.dir {
+            PageDir::After => (
+                has_more_in_dir.then_some(min_cursor).flatten(),
+                has_opposite.then_some(max_cursor).flatten(),
+            ),
+            PageDir::Before => (
+                has_more_in_dir.then_some(max_cursor).flatten(),
+                has_opposite.then_some(min_cursor).flatten(),
+            ),
+        };
+
+        let ranks_and_headlines: Vec<(f32, Option<String>)> = hits
+            .iter()
+            .map(|hit| (hit.rank, hit.headline.clone()))
+            .collect();
+        let messages: Vec<Message> = hits.into_iter().map(|hit| hit.message).collect();
+        let message_dtos = self
+            .map_messages_to_dtos(query.server_id, messages, true)
+            .await?;
+        let items: Vec<MessageSearchHitDto> = message_dtos
+            .into_iter()
+            .zip(ranks_and_headlines)
+            .map(|(message, (rank, headline))| MessageSearchHitDto {
+                message,
+                rank,
+                headline,
+            })
+            .collect();
+
+        Ok(Page::new(items, next, prev))
     }
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto> {

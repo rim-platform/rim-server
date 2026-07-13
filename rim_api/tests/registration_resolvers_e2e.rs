@@ -29,9 +29,7 @@ use support::registration::{seed_bootstrap_token, seed_workspace_invite};
 /// schemas with different `RegistrationMode` context values.
 #[tokio::test]
 async fn query_registration_mode_returns_invite_only_by_default() {
-    let Some(ctx) = TestCtx::new().await else {
-        return;
-    };
+    let ctx = TestCtx::new().await;
 
     // ── InviteOnly ────────────────────────────────────────────────────────
     let schema_invite_only = ctx.build_schema(RegistrationMode::InviteOnly).await;
@@ -87,9 +85,7 @@ async fn query_registration_mode_returns_invite_only_by_default() {
 ///    rate-limit window (30 requests per 5 min per IP).
 #[tokio::test]
 async fn query_preview_invite_token_workspace_happy_path() {
-    let Some(ctx) = TestCtx::new().await else {
-        return;
-    };
+    let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
@@ -252,9 +248,7 @@ async fn query_preview_invite_token_workspace_happy_path() {
 /// 5. There is no `server_member` row for the created user.
 #[tokio::test]
 async fn mutation_signup_with_invite_bootstrap_happy_path() {
-    let Some(ctx) = TestCtx::new().await else {
-        return;
-    };
+    let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
@@ -369,9 +363,7 @@ async fn mutation_signup_with_invite_bootstrap_happy_path() {
 /// `instance_invite` table, keeping the two paths distinct.
 #[tokio::test]
 async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
-    let Some(ctx) = TestCtx::new().await else {
-        return;
-    };
+    let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
@@ -460,9 +452,7 @@ async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
 /// before any resolver code runs.
 #[tokio::test]
 async fn mutation_signup_with_invite_missing_email_rejected_by_schema() {
-    let Some(ctx) = TestCtx::new().await else {
-        return;
-    };
+    let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 

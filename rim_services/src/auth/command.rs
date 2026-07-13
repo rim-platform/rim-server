@@ -31,6 +31,11 @@ pub struct CreateInviteCmd {
     pub server_id: ServerId,
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: i32,
+    /// Optional recipient to email the invite link to. Validated server-side (basic format
+    /// check) before the invite is persisted; malformed addresses return
+    /// [`crate::ServiceError::Validation`]. Send failure is best-effort — the invite is still
+    /// created and its raw token still returned even if the email doesn't go out.
+    pub recipient_email: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +115,9 @@ pub struct CreateInstanceInviteCmd {
     pub actor: Actor,
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: Option<i32>,
+    /// Optional recipient to email the invite link to. Same validation/best-effort-send
+    /// semantics as [`CreateInviteCmd::recipient_email`].
+    pub recipient_email: Option<String>,
 }
 
 /// Command for an admin to revoke an existing instance invite.

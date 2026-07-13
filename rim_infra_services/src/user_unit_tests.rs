@@ -25,6 +25,7 @@ mod tests {
             status_text: None,
             bio: None,
             email: "u@local.invalid".to_string(),
+            timezone: None,
         }
     }
 

@@ -33,9 +33,7 @@ fn make_entry(
 
 #[tokio::test]
 async fn insert_and_list_roundtrip() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
     let server_id = uuid::Uuid::now_v7();
@@ -69,9 +67,7 @@ async fn insert_and_list_roundtrip() {
 
 #[tokio::test]
 async fn pagination_cursor_advances_pages() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
     let server_id = uuid::Uuid::now_v7();
@@ -143,9 +139,7 @@ async fn pagination_cursor_advances_pages() {
 
 #[tokio::test]
 async fn delete_older_than_removes_stale_rows() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
     let server_id = uuid::Uuid::now_v7();
@@ -189,9 +183,7 @@ async fn delete_older_than_removes_stale_rows() {
 
 #[tokio::test]
 async fn typed_verb_filter_returns_matching_rows_only() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
     let server_id = uuid::Uuid::now_v7();
@@ -252,9 +244,7 @@ async fn typed_verb_filter_returns_matching_rows_only() {
 /// dropped via the "audit write failed" fallback.
 #[tokio::test]
 async fn all_audit_outcome_variants_accepted_by_db_constraint() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
     let server_id = uuid::Uuid::now_v7();
@@ -294,4 +284,108 @@ async fn all_audit_outcome_variants_accepted_by_db_constraint() {
         AuditOutcome::all().len(),
         page.items.len()
     );
+}
+
+/// Regression test for the missing `parent_audit_id` column (Track A item 4,
+/// 2026-07-08, migration `m20260708_220447_add_command_audit_log_parent_audit_id`).
+/// Pre-fix, this insert failed with `column "parent_audit_id" does not exist`
+/// because the column was declared on the entity and written by the
+/// repository but never created by any migration.
+#[tokio::test]
+async fn audit_insert_roundtrips_parent_audit_id() {
+    let ctx = support::TestCtx::new().await;
+
+    let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
+    let server_id = uuid::Uuid::now_v7();
+    let actor_id = uuid::Uuid::now_v7();
+    let parent_id = uuid::Uuid::now_v7();
+
+    let mut entry = make_entry(server_id, actor_id, "test.child");
+    entry.parent_audit_id = Some(parent_id);
+    let entry_id = entry.id;
+
+    repo.insert(entry)
+        .await
+        .expect("insert with parent_audit_id set should succeed");
+
+    let page = repo
+        .list(AuditLogListQuery {
+            actor_user_id: Some(actor_id),
+            server_id: Some(server_id),
+            command_id: None,
+            typed_verb: None,
+            since: None,
+            until: None,
+            cursor: None,
+            limit: 10,
+        })
+        .await
+        .expect("list should succeed");
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id, entry_id);
+    assert_eq!(page.items[0].parent_audit_id, Some(parent_id));
+}
+
+/// Mirrors the macro execution write order in `macro_def.rs`: a child audit
+/// row (with `parent_audit_id` set) is inserted **before** the parent row
+/// (with `id` equal to that same value) exists. Proves the plain nullable
+/// column with no self-referencing FK tolerates child-before-parent inserts,
+/// and exercises the already-widened `outcome` CHECK with a macro outcome
+/// value on the child row.
+#[tokio::test]
+async fn audit_parent_child_linkage() {
+    let ctx = support::TestCtx::new().await;
+
+    let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
+    let server_id = uuid::Uuid::now_v7();
+    let actor_id = uuid::Uuid::now_v7();
+    let parent_id = uuid::Uuid::now_v7();
+
+    // Child row inserted first, referencing a parent row that does not exist yet.
+    let mut child = make_entry(server_id, actor_id, "test.macro_step");
+    child.id = uuid::Uuid::now_v7();
+    child.parent_audit_id = Some(parent_id);
+    child.outcome = AuditOutcome::StepError.as_str().to_string();
+    repo.insert(child)
+        .await
+        .expect("child insert (parent not yet written) should succeed");
+
+    // Parent row, written after its child, per the macro_def.rs execution order.
+    let mut parent = make_entry(server_id, actor_id, "test.macro");
+    parent.id = parent_id;
+    parent.parent_audit_id = None;
+    repo.insert(parent)
+        .await
+        .expect("parent insert should succeed");
+
+    // Top-level row, unrelated to the parent/child pair.
+    let mut top_level = make_entry(server_id, actor_id, "test.top_level");
+    top_level.parent_audit_id = None;
+    repo.insert(top_level)
+        .await
+        .expect("top-level insert should succeed");
+
+    let page = repo
+        .list(AuditLogListQuery {
+            actor_user_id: Some(actor_id),
+            server_id: Some(server_id),
+            command_id: None,
+            typed_verb: None,
+            since: None,
+            until: None,
+            cursor: None,
+            limit: 10,
+        })
+        .await
+        .expect("list should succeed");
+
+    assert_eq!(page.items.len(), 3);
+    let child_row = page
+        .items
+        .iter()
+        .find(|r| r.command_id == "test.macro_step")
+        .expect("child row must be present");
+    assert_eq!(child_row.parent_audit_id, Some(parent_id));
+    assert_eq!(child_row.outcome, AuditOutcome::StepError.as_str());
 }

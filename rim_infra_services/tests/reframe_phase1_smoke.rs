@@ -149,7 +149,12 @@ fn build_service(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            macro_service: None,
+            incident_service: std::sync::Arc::new(
+                rim_services::incident::service::MockIncidentService::new(),
+            ),
+            oncall_service: std::sync::Arc::new(
+                rim_services::oncall::service::MockOnCallService::new(),
+            ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,
     );
@@ -185,7 +190,12 @@ fn build_service_with_audit(
             audit_log_service: Some(
                 Arc::new(audit_service) as Arc<dyn rim_services::audit::service::AuditLogService>
             ),
-            macro_service: None,
+            incident_service: std::sync::Arc::new(
+                rim_services::incident::service::MockIncidentService::new(),
+            ),
+            oncall_service: std::sync::Arc::new(
+                rim_services::oncall::service::MockOnCallService::new(),
+            ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,
     );

@@ -190,14 +190,12 @@ impl RegistrationRateLimiter {
         drop(entry);
 
         // M6: track insertion order and evict when over the cap.
-        if is_new {
-            if let Ok(mut order) = self.insertion_order.lock() {
-                order.push_back(map_key);
-                // Evict oldest bucket(s) until we're within the cap.
-                while order.len() > MAX_BUCKETS {
-                    if let Some(oldest_key) = order.pop_front() {
-                        self.store.remove(&oldest_key);
-                    }
+        if is_new && let Ok(mut order) = self.insertion_order.lock() {
+            order.push_back(map_key);
+            // Evict oldest bucket(s) until we're within the cap.
+            while order.len() > MAX_BUCKETS {
+                if let Some(oldest_key) = order.pop_front() {
+                    self.store.remove(&oldest_key);
                 }
             }
         }

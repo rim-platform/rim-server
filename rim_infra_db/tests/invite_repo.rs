@@ -11,9 +11,7 @@ use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
 #[tokio::test]
 async fn create_get_by_id_and_token_hash_and_revoke() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let member_repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
     let repo = SeaOrmInviteRepository::new(ctx.db.clone());
@@ -47,9 +45,7 @@ async fn create_get_by_id_and_token_hash_and_revoke() {
 
 #[tokio::test]
 async fn try_consume_respects_max_uses() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmInviteRepository::new(ctx.db.clone());
 
@@ -67,6 +63,6 @@ async fn try_consume_respects_max_uses() {
         .await
         .unwrap();
 
-    assert_eq!(repo.try_consume(inv.id).await.unwrap(), true);
-    assert_eq!(repo.try_consume(inv.id).await.unwrap(), false);
+    assert!(repo.try_consume(inv.id).await.unwrap());
+    assert!(!repo.try_consume(inv.id).await.unwrap());
 }

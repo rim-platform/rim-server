@@ -24,6 +24,7 @@ mod tests {
     use rim_services::custom_emoji::service::MockCustomEmojiService;
     use rim_services::event::service::MockEventService;
     use rim_services::incident::service::MockIncidentService;
+    use rim_services::ingest_token::service::MockIngestTokenService;
     use rim_services::integration::service::MockIntegrationService;
     use rim_services::keybind::service::MockKeybindService;
     use rim_services::link_preview::service::MockLinkPreviewService;
@@ -50,6 +51,7 @@ mod tests {
     use crate::auth_context::AuthActorCtx;
     use crate::broadcast::InMemoryBroadcaster;
     use crate::build_schema;
+    use crate::export_sdl;
 
     fn test_presence_manager() -> Arc<dyn rim_services::presence::PresenceService> {
         let broadcaster: Arc<dyn rim_services::events::Broadcaster> =
@@ -120,9 +122,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -167,9 +174,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -211,9 +223,169 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
+            }),
+            InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
+            test_registration_context(),
+        )
+    }
+
+    /// Builds a schema with a custom `IncidentService` mock and (since `Incident.
+    /// acknowledgedByUser`/`escalationRun` need it) a custom `UserService` mock for the shared
+    /// `User` DataLoader.
+    fn schema_with_incident_mocks(
+        incident: MockIncidentService,
+        user: MockUserService,
+    ) -> crate::AppSchema {
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(user),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(incident),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
+            }),
+            InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
+            test_registration_context(),
+        )
+    }
+
+    fn schema_with_oncall_mock(
+        oncall: rim_services::oncall::service::MockOnCallService,
+    ) -> crate::AppSchema {
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(oncall),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
+            }),
+            InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
+            test_registration_context(),
+        )
+    }
+
+    fn schema_with_escalation_policy_mock(
+        escalation_policy: rim_services::escalation::service::MockEscalationPolicyService,
+    ) -> crate::AppSchema {
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(escalation_policy),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -233,6 +405,83 @@ mod tests {
             title: None,
             topic: None,
             member_ids: vec![],
+        }
+    }
+
+    fn test_incident_dto() -> rim_services::incident::dto::IncidentDto {
+        let now = chrono::Utc::now();
+        rim_services::incident::dto::IncidentDto {
+            id: rim_core::incident::model::IncidentId::new(),
+            server_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            started_by: UserId::new(),
+            status: rim_core::incident::model::IncidentStatus::Active,
+            severity: Some(rim_core::incident::model::IncidentSeverity::Sev2),
+            title: "Test incident".to_string(),
+            original_topic: None,
+            started_at: now,
+            mitigated_at: None,
+            resolved_at: None,
+            postmortem_draft: None,
+            created_at: now,
+            updated_at: now,
+            alert_fingerprint: None,
+            source: "manual".to_string(),
+            escalation_policy_id: None,
+            acknowledged_at: None,
+            acknowledged_by: None,
+        }
+    }
+
+    fn test_escalation_policy_dto() -> rim_services::escalation::dto::EscalationPolicyDto {
+        let now = chrono::Utc::now();
+        rim_services::escalation::dto::EscalationPolicyDto {
+            id: rim_core::escalation::model::EscalationPolicyId::new(),
+            server_id: ServerId::new(),
+            name: "Primary".to_string(),
+            created_by: UserId::new(),
+            created_at: now,
+            updated_at: now,
+            steps: vec![test_escalation_step_dto()],
+        }
+    }
+
+    fn test_escalation_step_dto() -> rim_services::escalation::dto::EscalationStepDto {
+        rim_services::escalation::dto::EscalationStepDto {
+            id: rim_core::escalation::model::EscalationStepId::new(),
+            policy_id: rim_core::escalation::model::EscalationPolicyId::new(),
+            position: 0,
+            delay_seconds: 0,
+            target: rim_core::escalation::model::EscalationTarget::User(UserId::new()),
+            actions: vec![rim_core::escalation::model::EscalationAction::Email],
+        }
+    }
+
+    fn test_on_call_schedule_dto() -> rim_services::oncall::dto::OnCallScheduleDto {
+        let now = chrono::Utc::now();
+        rim_services::oncall::dto::OnCallScheduleDto {
+            id: rim_core::oncall::model::OnCallScheduleId::new(),
+            server_id: ServerId::new(),
+            name: "Primary".to_string(),
+            timezone: "UTC".to_string(),
+            created_by: UserId::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn test_rotation_layer_dto() -> rim_services::oncall::dto::RotationLayerDto {
+        rim_services::oncall::dto::RotationLayerDto {
+            id: rim_core::oncall::model::RotationLayerId::new(),
+            schedule_id: rim_core::oncall::model::OnCallScheduleId::new(),
+            name: "Primary rotation".to_string(),
+            priority: 0,
+            kind: rim_core::oncall::model::RotationKind::Custom {
+                interval_seconds: 3600,
+            },
+            anchor_at: chrono::Utc::now(),
+            created_at: chrono::Utc::now(),
+            participants: vec![],
         }
     }
 
@@ -359,9 +608,12 @@ mod tests {
         custom_emoji: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
         channel_lens: Arc<dyn rim_services::channel_lens::service::ChannelLensService>,
         incident: Arc<dyn rim_services::incident::service::IncidentService>,
+        ingest_token: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
         skill_profile: Arc<dyn rim_services::skill_profile::service::SkillProfileService>,
         workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
         pipeline: Arc<dyn rim_services::pipeline::service::PipelineService>,
+        oncall: Arc<dyn rim_services::oncall::service::OnCallService>,
+        escalation_policy: Arc<dyn rim_services::escalation::service::EscalationPolicyService>,
     }
 
     impl AppServiceProvider for TestAppServiceProvider {
@@ -506,6 +758,18 @@ mod tests {
             Arc::clone(&self.incident)
         }
 
+        fn escalation_policy_service(
+            &self,
+        ) -> Arc<dyn rim_services::escalation::service::EscalationPolicyService> {
+            Arc::clone(&self.escalation_policy)
+        }
+
+        fn ingest_token_service(
+            &self,
+        ) -> Arc<dyn rim_services::ingest_token::service::IngestTokenService> {
+            Arc::clone(&self.ingest_token)
+        }
+
         fn skill_profile_service(
             &self,
         ) -> Arc<dyn rim_services::skill_profile::service::SkillProfileService> {
@@ -520,6 +784,10 @@ mod tests {
 
         fn pipeline_service(&self) -> Arc<dyn rim_services::pipeline::service::PipelineService> {
             Arc::clone(&self.pipeline)
+        }
+
+        fn oncall_service(&self) -> Arc<dyn rim_services::oncall::service::OnCallService> {
+            Arc::clone(&self.oncall)
         }
     }
 
@@ -561,9 +829,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -611,9 +884,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -655,9 +933,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -1714,7 +1997,12 @@ mod tests {
                 dto.conversation_id = conversation_id;
                 dto.author_id = actor;
                 dto.text = Some("deploy failed".to_string());
-                Ok(vec![dto])
+                let hit = rim_services::message::dto::MessageSearchHitDto {
+                    message: dto,
+                    rank: 0.5,
+                    headline: Some("<mark>deploy</mark> failed".to_string()),
+                };
+                Ok(Page::new(vec![hit], None, None))
             })
         });
 
@@ -1742,7 +2030,12 @@ mod tests {
         );
 
         let req = authed_request(
-            r#"query($sid: ID!, $cid: ID!) { searchMessages(serverId: $sid, conversationId: $cid, query: "deploy", limit: 10, includeDeleted: false) { id text conversationTitle conversationType } }"#,
+            r#"query($sid: ID!, $cid: ID!) {
+                searchMessages(input: { serverId: $sid, conversationId: $cid, query: "deploy", limit: 10 }) {
+                    items { id text conversationTitle conversationType rank headline }
+                    pageInfo { hasNext hasPrev }
+                }
+            }"#,
             actor,
         )
         .variables(Variables::from_json(serde_json::json!({
@@ -2543,6 +2836,122 @@ mod tests {
         assert_eq!(json["server"]["name"], serde_json::json!("My Server"));
     }
 
+    // ── Server.viewerRole (docs/specs/server-viewer-role.md) ──────────────
+
+    /// Builds a schema + query for the `viewerRole` sub-field test cases below, differing only
+    /// in what `get_member` returns for the requesting actor.
+    async fn run_viewer_role_query(
+        actor: UserId,
+        server_id: ServerId,
+        get_member_result: impl Fn() -> rim_services::ServiceResult<
+            rim_services::server_member::dto::ServerMemberDto,
+        > + Send
+        + Sync
+        + 'static,
+    ) -> async_graphql::Response {
+        let mut server = MockServerService::new();
+        server.expect_get_server().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_server_dto();
+                dto.id = server_id;
+                Ok(dto)
+            })
+        });
+
+        let mut server_member = MockServerMemberService::new();
+        server_member
+            .expect_get_member()
+            .returning(move |_q| Box::pin(std::future::ready(get_member_result())));
+
+        let schema = schema_with_server_mocks(server, server_member);
+
+        let req = authed_request(
+            r#"query($sid: ID!) { server(serverId: $sid) { id viewerRole } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        schema.execute(req).await
+    }
+
+    #[tokio::test]
+    async fn viewer_role_resolves_owner() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let res = run_viewer_role_query(actor, server_id, move || {
+            let mut dto = test_server_member_dto();
+            dto.server_id = server_id;
+            dto.user_id = actor;
+            dto.member_role = "owner".to_string();
+            Ok(dto)
+        })
+        .await;
+
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["server"]["viewerRole"], serde_json::json!("OWNER"));
+    }
+
+    #[tokio::test]
+    async fn viewer_role_resolves_moderator() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let res = run_viewer_role_query(actor, server_id, move || {
+            let mut dto = test_server_member_dto();
+            dto.server_id = server_id;
+            dto.user_id = actor;
+            dto.member_role = "moderator".to_string();
+            Ok(dto)
+        })
+        .await;
+
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["server"]["viewerRole"], serde_json::json!("MODERATOR"));
+    }
+
+    #[tokio::test]
+    async fn viewer_role_resolves_guest() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let res = run_viewer_role_query(actor, server_id, move || {
+            let mut dto = test_server_member_dto();
+            dto.server_id = server_id;
+            dto.user_id = actor;
+            dto.member_role = "guest".to_string();
+            Ok(dto)
+        })
+        .await;
+
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["server"]["viewerRole"], serde_json::json!("GUEST"));
+    }
+
+    /// Non-member path: `viewerRole` is non-null in the schema, so a caller who isn't a member
+    /// must get a GraphQL error (matching existing server-visibility behavior), never a fake
+    /// role.
+    #[tokio::test]
+    async fn viewer_role_non_member_returns_error_not_a_fake_role() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let res = run_viewer_role_query(actor, server_id, || {
+            Err(rim_services::ServiceError::PermissionDenied)
+        })
+        .await;
+
+        assert!(
+            !res.errors.is_empty(),
+            "non-member viewerRole query must error, not resolve a fake role"
+        );
+    }
+
     // ── serverMembers query ──────────────────────────────────────────────
 
     #[tokio::test]
@@ -2771,9 +3180,14 @@ mod tests {
                 custom_emoji: Arc::new(MockCustomEmojiService::new()),
                 channel_lens: Arc::new(MockChannelLensService::new()),
                 incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
             }),
             InMemoryBroadcaster::new(16),
             test_presence_manager(),
@@ -3087,5 +3501,851 @@ mod tests {
     #[test]
     fn _keep_ids_referenced() {
         let _ = (MessageId::new(), ConversationId::new(), ServerId::new());
+    }
+
+    /// Fully-mocked `AppServiceProvider` for tests that only need `export_sdl`
+    /// to build (no resolver is actually invoked, so every mock is empty).
+    fn test_service_provider() -> Arc<dyn AppServiceProvider> {
+        Arc::new(TestAppServiceProvider {
+            action: Arc::new(MockActionService::new()),
+            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
+            auth: Arc::new(MockAuthService::new()),
+            capability: Arc::new(MockCapabilityService::new()),
+            command: Arc::new(MockCommandService::new()),
+            conversation: Arc::new(MockConversationService::new()),
+            event: Arc::new(MockEventService::new()),
+            integration: Arc::new(MockIntegrationService::new()),
+            keybind: Arc::new(MockKeybindService::new()),
+            macro_def: Arc::new(MockMacroService::new()),
+            mention: Arc::new(MockMentionService::new()),
+            message: Arc::new(MockMessageService::new()),
+            attachment: Arc::new(MockMessageAttachmentService::new()),
+            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+            password_reset: Arc::new(MockPasswordResetService::new()),
+            pin: Arc::new(MockPinService::new()),
+            reaction: Arc::new(MockMessageReactionService::new()),
+            read_state: Arc::new(MockReadStateService::new()),
+            server: Arc::new(MockServerService::new()),
+            server_member: Arc::new(MockServerMemberService::new()),
+            setting: Arc::new(MockSettingService::new()),
+            storage: Arc::new(MockStorageService::new()),
+            thread: Arc::new(MockThreadService::new()),
+            user: Arc::new(MockUserService::new()),
+            request_auth: Arc::new(MockRequestAuthenticator::new()),
+            link_preview: Arc::new(MockLinkPreviewService::new()),
+            custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            channel_lens: Arc::new(MockChannelLensService::new()),
+            incident: Arc::new(MockIncidentService::new()),
+            ingest_token: Arc::new(MockIngestTokenService::new()),
+            skill_profile: Arc::new(MockSkillProfileService::new()),
+            workspace_state: Arc::new(MockWorkspaceStateService::new()),
+            pipeline: Arc::new(MockPipelineService::new()),
+            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+            escalation_policy: Arc::new(
+                rim_services::escalation::service::MockEscalationPolicyService::new(),
+            ),
+        })
+    }
+
+    /// Guards the `wire_common_schema_data` extraction (Track A item 3a,
+    /// 2026-07-08): `export_sdl` had no test before this, so the dedup between
+    /// it and `build_schema` was unverified. Asserts the SDL is non-empty and
+    /// contains a few well-known type markers.
+    #[test]
+    fn sdl_export_is_nonempty_and_has_core_types() {
+        let sdl = export_sdl(
+            test_service_provider(),
+            InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
+        );
+
+        assert!(
+            !sdl.is_empty(),
+            "export_sdl must return a non-empty SDL string"
+        );
+        assert!(
+            sdl.contains("type Query"),
+            "SDL must declare the Query type"
+        );
+        assert!(
+            sdl.contains("type Mutation"),
+            "SDL must declare the Mutation type"
+        );
+    }
+
+    // ── Ingest token (Track B2) resolver tests ────────────────────────────────
+
+    fn schema_with_ingest_token_mocks(
+        ingest_token: rim_services::ingest_token::service::MockIngestTokenService,
+    ) -> crate::AppSchema {
+        build_schema(
+            Arc::new(TestAppServiceProvider {
+                action: Arc::new(MockActionService::new()),
+                audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
+                auth: Arc::new(MockAuthService::new()),
+                capability: Arc::new(MockCapabilityService::new()),
+                command: Arc::new(MockCommandService::new()),
+                conversation: Arc::new(MockConversationService::new()),
+                event: Arc::new(MockEventService::new()),
+                integration: Arc::new(MockIntegrationService::new()),
+                keybind: Arc::new(MockKeybindService::new()),
+                macro_def: Arc::new(MockMacroService::new()),
+                mention: Arc::new(MockMentionService::new()),
+                message: Arc::new(MockMessageService::new()),
+                attachment: Arc::new(MockMessageAttachmentService::new()),
+                notification_preference: Arc::new(MockNotificationPreferenceService::new()),
+                password_reset: Arc::new(MockPasswordResetService::new()),
+                pin: Arc::new(MockPinService::new()),
+                reaction: Arc::new(MockMessageReactionService::new()),
+                read_state: Arc::new(MockReadStateService::new()),
+                server: Arc::new(MockServerService::new()),
+                server_member: Arc::new(MockServerMemberService::new()),
+                setting: Arc::new(MockSettingService::new()),
+                storage: Arc::new(MockStorageService::new()),
+                thread: Arc::new(MockThreadService::new()),
+                user: Arc::new(MockUserService::new()),
+                request_auth: Arc::new(MockRequestAuthenticator::new()),
+                link_preview: Arc::new(MockLinkPreviewService::new()),
+                custom_emoji: Arc::new(MockCustomEmojiService::new()),
+                channel_lens: Arc::new(MockChannelLensService::new()),
+                incident: Arc::new(MockIncidentService::new()),
+                ingest_token: Arc::new(ingest_token),
+                skill_profile: Arc::new(MockSkillProfileService::new()),
+                workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                pipeline: Arc::new(MockPipelineService::new()),
+                oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
+                escalation_policy: Arc::new(
+                    rim_services::escalation::service::MockEscalationPolicyService::new(),
+                ),
+            }),
+            InMemoryBroadcaster::new(16),
+            test_presence_manager(),
+            test_typing_tracker(),
+            test_observers(),
+            test_registration_context(),
+        )
+    }
+
+    #[tokio::test]
+    async fn create_ingest_token_mutation_requires_auth() {
+        let schema = schema_with_ingest_token_mocks(
+            rim_services::ingest_token::service::MockIngestTokenService::new(),
+        );
+        let res = schema
+            .execute(Request::new(
+                r#"mutation($sid: ID!, $cid: ID!) { createIngestToken(input: { serverId: $sid, conversationId: $cid, label: "prom" }) { rawToken } }"#,
+            ).variables(Variables::from_json(serde_json::json!({
+                "sid": ServerId::new().to_string(),
+                "cid": ConversationId::new().to_string(),
+            }))))
+            .await;
+        assert!(!res.errors.is_empty(), "expected an auth error");
+    }
+
+    #[tokio::test]
+    async fn create_ingest_token_mutation_returns_raw_token() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let token_id = rim_core::ingest_token::model::IngestTokenId::new();
+
+        let mut ingest_token = rim_services::ingest_token::service::MockIngestTokenService::new();
+        ingest_token.expect_create_token().returning(move |cmd| {
+            Box::pin(async move {
+                Ok(
+                    rim_services::ingest_token::dto::CreateIngestTokenResultDto {
+                        token: rim_services::ingest_token::dto::IngestTokenDto {
+                            id: token_id,
+                            server_id: cmd.server_id,
+                            conversation_id: cmd.conversation_id,
+                            created_by: cmd.actor.user_id,
+                            label: cmd.label,
+                            severity_default: cmd.severity_default,
+                            created_at: chrono::Utc::now(),
+                            revoked_at: None,
+                            last_used_at: None,
+                        },
+                        raw_token: "rim_ingest_test_raw_token".to_string(),
+                    },
+                )
+            })
+        });
+
+        let schema = schema_with_ingest_token_mocks(ingest_token);
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!) { createIngestToken(input: { serverId: $sid, conversationId: $cid, label: "prom" }) { rawToken token { id label } } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["createIngestToken"]["rawToken"],
+            "rim_ingest_test_raw_token"
+        );
+        assert_eq!(json["createIngestToken"]["token"]["label"], "prom");
+    }
+
+    #[tokio::test]
+    async fn revoke_ingest_token_mutation_returns_true() {
+        let actor = UserId::new();
+        let token_id = rim_core::ingest_token::model::IngestTokenId::new();
+
+        let mut ingest_token = rim_services::ingest_token::service::MockIngestTokenService::new();
+        ingest_token
+            .expect_revoke_token()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let schema = schema_with_ingest_token_mocks(ingest_token);
+
+        let req = authed_request(
+            r#"mutation($id: ID!) { revokeIngestToken(tokenId: $id) }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "id": token_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["revokeIngestToken"], true);
+    }
+
+    #[tokio::test]
+    async fn ingest_tokens_query_returns_list() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let token_id = rim_core::ingest_token::model::IngestTokenId::new();
+
+        let mut ingest_token = rim_services::ingest_token::service::MockIngestTokenService::new();
+        ingest_token.expect_list_tokens().returning(move |_| {
+            Box::pin(async move {
+                Ok(vec![rim_services::ingest_token::dto::IngestTokenDto {
+                    id: token_id,
+                    server_id,
+                    conversation_id: ConversationId::new(),
+                    created_by: UserId::new(),
+                    label: "prom".to_string(),
+                    severity_default: None,
+                    created_at: chrono::Utc::now(),
+                    revoked_at: None,
+                    last_used_at: None,
+                }])
+            })
+        });
+
+        let schema = schema_with_ingest_token_mocks(ingest_token);
+
+        let req = authed_request(
+            r#"query($sid: ID!) { ingestTokens(serverId: $sid) { id label } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["ingestTokens"].as_array().unwrap().len(), 1);
+        assert_eq!(json["ingestTokens"][0]["label"], "prom");
+    }
+
+    // ── On-call gap-fill: OnCallShift.isOverride + OnCallSchedule.rotationLayers ───────────
+
+    #[tokio::test]
+    async fn on_call_shifts_query_exposes_is_override() {
+        let actor = UserId::new();
+        let schedule_id = rim_core::oncall::model::OnCallScheduleId::new();
+        let rotation_user = UserId::new();
+        let override_user = UserId::new();
+        let from = chrono::Utc::now();
+        let to = from + chrono::Duration::hours(2);
+
+        let mut oncall = rim_services::oncall::service::MockOnCallService::new();
+        oncall.expect_list_shifts().returning(move |_q| {
+            Box::pin(async move {
+                Ok(vec![
+                    rim_services::oncall::dto::OnCallShiftDto {
+                        user_id: Some(rotation_user),
+                        start_at: from,
+                        end_at: from + chrono::Duration::hours(1),
+                        is_override: false,
+                    },
+                    rim_services::oncall::dto::OnCallShiftDto {
+                        user_id: Some(override_user),
+                        start_at: from + chrono::Duration::hours(1),
+                        end_at: to,
+                        is_override: true,
+                    },
+                ])
+            })
+        });
+
+        let schema = schema_with_oncall_mock(oncall);
+
+        let req = authed_request(
+            r#"query($sid: ID!, $from: DateTime!, $to: DateTime!) {
+                onCallShifts(scheduleId: $sid, from: $from, to: $to) { isOverride }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": schedule_id.to_string(),
+            "from": from.to_rfc3339(),
+            "to": to.to_rfc3339(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        let shifts = json["onCallShifts"].as_array().unwrap();
+        assert_eq!(shifts.len(), 2);
+        assert_eq!(shifts[0]["isOverride"], serde_json::json!(false));
+        assert_eq!(shifts[1]["isOverride"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn on_call_schedule_rotation_layers_field_resolves_nested_layers() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let participant_id = UserId::new();
+
+        let schedule_dto = test_on_call_schedule_dto();
+        let schedule_id = schedule_dto.id;
+
+        let mut oncall = rim_services::oncall::service::MockOnCallService::new();
+        oncall.expect_list_schedules().returning(move |_q| {
+            let dto = schedule_dto.clone();
+            Box::pin(async move { Ok(vec![dto]) })
+        });
+        oncall
+            .expect_list_rotation_layers()
+            .withf(move |q| q.schedule_id == schedule_id)
+            .returning(move |_q| {
+                Box::pin(async move {
+                    let mut layer = test_rotation_layer_dto();
+                    layer.schedule_id = schedule_id;
+                    layer.participants = vec![participant_id];
+                    Ok(vec![layer])
+                })
+            });
+
+        let schema = schema_with_oncall_mock(oncall);
+
+        let req = authed_request(
+            r#"query($sid: ID!) {
+                onCallSchedules(serverId: $sid) {
+                    rotationLayers { name participants }
+                }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        let layers = json["onCallSchedules"][0]["rotationLayers"]
+            .as_array()
+            .unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0]["name"], serde_json::json!("Primary rotation"));
+        assert_eq!(
+            layers[0]["participants"],
+            serde_json::json!([participant_id.to_string()])
+        );
+    }
+
+    // ── Escalation policies (Track C1c) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn escalation_policies_query_returns_policies() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        escalation_policy
+            .expect_list_policies()
+            .returning(move |_q| {
+                Box::pin(async move {
+                    let mut dto = test_escalation_policy_dto();
+                    dto.server_id = server_id;
+                    Ok(vec![dto])
+                })
+            });
+
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"query($sid: ID!) {
+                escalationPolicies(serverId: $sid) {
+                    id name steps { position delaySeconds targetKind targetUserId actions }
+                }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        let policies = json["escalationPolicies"].as_array().unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0]["name"], serde_json::json!("Primary"));
+        assert_eq!(
+            policies[0]["steps"][0]["targetKind"],
+            serde_json::json!("USER")
+        );
+        assert_eq!(
+            policies[0]["steps"][0]["actions"][0],
+            serde_json::json!("EMAIL")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_escalation_policy_mutation_creates_policy() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let target_user_id = UserId::new();
+
+        let mut escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        escalation_policy
+            .expect_create_policy()
+            .withf(move |cmd| {
+                cmd.server_id == server_id
+                    && cmd.name == "Primary"
+                    && cmd.steps.len() == 1
+                    && cmd.steps[0].target
+                        == rim_core::escalation::model::EscalationTarget::User(target_user_id)
+            })
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    let mut dto = test_escalation_policy_dto();
+                    dto.server_id = server_id;
+                    dto.name = cmd.name;
+                    Ok(dto)
+                })
+            });
+
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $uid: ID!) {
+                createEscalationPolicy(
+                    serverId: $sid
+                    name: "Primary"
+                    steps: [{ delaySeconds: 0, target: { kind: USER, userId: $uid }, actions: [EMAIL] }]
+                ) { name }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "uid": target_user_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["createEscalationPolicy"]["name"],
+            serde_json::json!("Primary")
+        );
+    }
+
+    /// The flattened `EscalationTargetInput` rejects a field set for the wrong kind before it
+    /// ever reaches the service — mirrors `RotationKindInputGql`'s strict-rejection tests.
+    #[tokio::test]
+    async fn create_escalation_policy_mutation_rejects_mismatched_target_fields() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let schedule_id = rim_core::oncall::model::OnCallScheduleId::new();
+
+        // No expectations set — the input must be rejected before the service is ever called.
+        let escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $schedId: ID!) {
+                createEscalationPolicy(
+                    serverId: $sid
+                    name: "Primary"
+                    steps: [{ delaySeconds: 0, target: { kind: ON_CALL, scheduleId: $schedId, userId: $schedId }, actions: [EMAIL] }]
+                ) { name }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "schedId": schedule_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert!(
+            !res.errors.is_empty(),
+            "userId set alongside kind: ON_CALL must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_escalation_policy_mutation_renames_policy() {
+        let actor = UserId::new();
+        let policy_id = rim_core::escalation::model::EscalationPolicyId::new();
+
+        let mut escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        escalation_policy
+            .expect_update_policy()
+            .withf(move |cmd| {
+                cmd.policy_id == policy_id
+                    && cmd.name.as_deref() == Some("Renamed")
+                    && cmd.steps.is_none()
+            })
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    let mut dto = test_escalation_policy_dto();
+                    dto.id = cmd.policy_id;
+                    dto.name = cmd.name.unwrap();
+                    Ok(dto)
+                })
+            });
+
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"mutation($pid: ID!) {
+                updateEscalationPolicy(policyId: $pid, name: "Renamed") { name }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "pid": policy_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["updateEscalationPolicy"]["name"],
+            serde_json::json!("Renamed")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_escalation_policy_mutation_deletes() {
+        let actor = UserId::new();
+        let policy_id = rim_core::escalation::model::EscalationPolicyId::new();
+
+        let mut escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        escalation_policy
+            .expect_delete_policy()
+            .withf(move |cmd| cmd.policy_id == policy_id)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"mutation($pid: ID!) { deleteEscalationPolicy(policyId: $pid) }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "pid": policy_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["deleteEscalationPolicy"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn set_channel_escalation_policy_mutation_sets_default() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let policy_id = rim_core::escalation::model::EscalationPolicyId::new();
+
+        let mut escalation_policy =
+            rim_services::escalation::service::MockEscalationPolicyService::new();
+        escalation_policy
+            .expect_set_channel_policy()
+            .withf(move |cmd| {
+                cmd.server_id == server_id
+                    && cmd.conversation_id == conversation_id
+                    && cmd.policy_id == policy_id
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let schema = schema_with_escalation_policy_mock(escalation_policy);
+
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!, $pid: ID!) {
+                setChannelEscalationPolicy(serverId: $sid, conversationId: $cid, policyId: $pid)
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+            "pid": policy_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(json["setChannelEscalationPolicy"], serde_json::json!(true));
+    }
+
+    // ── acknowledgeIncident + Incident escalation fields (Track C1c) ───────
+
+    #[tokio::test]
+    async fn acknowledge_incident_mutation_acknowledges() {
+        let actor = UserId::new();
+        let incident_id = rim_core::incident::model::IncidentId::new();
+
+        let mut incident = MockIncidentService::new();
+        incident
+            .expect_acknowledge_incident()
+            .withf(move |cmd| cmd.incident_id == incident_id)
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    let mut dto = test_incident_dto();
+                    dto.id = cmd.incident_id;
+                    dto.acknowledged_at = Some(chrono::Utc::now());
+                    dto.acknowledged_by = Some(cmd.actor.user_id);
+                    Ok(dto)
+                })
+            });
+
+        let schema = schema_with_incident_mocks(incident, MockUserService::new());
+
+        let req = authed_request(
+            r#"mutation($iid: ID!) {
+                acknowledgeIncident(incidentId: $iid) { id acknowledgedAt acknowledgedBy }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "iid": incident_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert!(!json["acknowledgeIncident"]["acknowledgedAt"].is_null());
+        assert_eq!(
+            json["acknowledgeIncident"]["acknowledgedBy"],
+            serde_json::json!(actor.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn incident_escalation_run_field_resolves_active_run() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let incident_id = rim_core::incident::model::IncidentId::new();
+
+        let mut incident = MockIncidentService::new();
+        incident.expect_get_active_incident().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_incident_dto();
+                dto.id = incident_id;
+                Ok(Some(dto))
+            })
+        });
+        incident
+            .expect_get_active_escalation_run()
+            .withf(move |id| *id == incident_id)
+            .returning(move |_| {
+                Box::pin(async move {
+                    Ok(Some(rim_services::escalation::dto::EscalationRunDto {
+                        id: rim_core::escalation::model::EscalationRunId::new(),
+                        incident_id,
+                        policy_id: rim_core::escalation::model::EscalationPolicyId::new(),
+                        current_step_index: 1,
+                        next_fire_at: Some(chrono::Utc::now()),
+                        status: rim_core::escalation::model::EscalationRunStatus::Active,
+                    }))
+                })
+            });
+
+        let schema = schema_with_incident_mocks(incident, MockUserService::new());
+
+        let req = authed_request(
+            r#"query($sid: ID!, $cid: ID!) {
+                activeIncident(serverId: $sid, conversationId: $cid) {
+                    escalationRun { currentStepIndex status }
+                }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["activeIncident"]["escalationRun"]["currentStepIndex"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            json["activeIncident"]["escalationRun"]["status"],
+            serde_json::json!("ACTIVE")
+        );
+    }
+
+    /// No active run (never armed, or already completed/cancelled) is `null`, not an error.
+    #[tokio::test]
+    async fn incident_escalation_run_field_is_null_when_no_active_run() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+
+        let mut incident = MockIncidentService::new();
+        incident
+            .expect_get_active_incident()
+            .returning(move |_q| Box::pin(async move { Ok(Some(test_incident_dto())) }));
+        incident
+            .expect_get_active_escalation_run()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let schema = schema_with_incident_mocks(incident, MockUserService::new());
+
+        let req = authed_request(
+            r#"query($sid: ID!, $cid: ID!) {
+                activeIncident(serverId: $sid, conversationId: $cid) { escalationRun { status } }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert!(json["activeIncident"]["escalationRun"].is_null());
+    }
+
+    #[tokio::test]
+    async fn incident_acknowledged_by_user_field_resolves_nested_user() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let acker_id = UserId::new();
+
+        let mut incident = MockIncidentService::new();
+        incident.expect_get_active_incident().returning(move |_q| {
+            Box::pin(async move {
+                let mut dto = test_incident_dto();
+                dto.acknowledged_at = Some(chrono::Utc::now());
+                dto.acknowledged_by = Some(acker_id);
+                Ok(Some(dto))
+            })
+        });
+
+        let mut user = MockUserService::new();
+        user.expect_get_users_by_ids().returning(move |ids| {
+            let ids = ids.to_vec();
+            Box::pin(async move {
+                Ok(ids
+                    .into_iter()
+                    .map(|id| {
+                        let mut dto = test_user_dto();
+                        dto.id = id;
+                        dto.username = "acker".to_string();
+                        dto
+                    })
+                    .collect())
+            })
+        });
+
+        let schema = schema_with_incident_mocks(incident, user);
+
+        let req = authed_request(
+            r#"query($sid: ID!, $cid: ID!) {
+                activeIncident(serverId: $sid, conversationId: $cid) {
+                    acknowledgedBy
+                    acknowledgedByUser { id username }
+                }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert_eq!(
+            json["activeIncident"]["acknowledgedBy"],
+            serde_json::json!(acker_id.to_string())
+        );
+        assert_eq!(
+            json["activeIncident"]["acknowledgedByUser"]["username"],
+            serde_json::json!("acker")
+        );
+    }
+
+    /// `acknowledgedByUser` must be `null`, not an error, when the incident hasn't been
+    /// acknowledged — the loader must not even be invoked (zero expectations on `user`).
+    #[tokio::test]
+    async fn incident_acknowledged_by_user_field_is_null_when_not_acknowledged() {
+        let actor = UserId::new();
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+
+        let mut incident = MockIncidentService::new();
+        incident
+            .expect_get_active_incident()
+            .returning(move |_q| Box::pin(async move { Ok(Some(test_incident_dto())) }));
+
+        let schema = schema_with_incident_mocks(incident, MockUserService::new());
+
+        let req = authed_request(
+            r#"query($sid: ID!, $cid: ID!) {
+                activeIncident(serverId: $sid, conversationId: $cid) {
+                    acknowledgedBy
+                    acknowledgedByUser { id }
+                }
+            }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        let json = res.data.into_json().unwrap();
+        assert!(json["activeIncident"]["acknowledgedBy"].is_null());
+        assert!(json["activeIncident"]["acknowledgedByUser"].is_null());
     }
 }

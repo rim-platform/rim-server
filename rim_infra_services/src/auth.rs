@@ -29,8 +29,10 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
+use crate::email::{EmailSender, templates};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
+use crate::url_encode::percent_encode_path_segment;
 use crate::util::ensure_server_owner;
 
 #[derive(Clone)]
@@ -42,6 +44,10 @@ pub struct DefaultAuthService {
     observers: Observers,
     preview_rate_limiter: RegistrationRateLimiter,
     signup_rate_limiter: RegistrationRateLimiter,
+    email_sender: std::sync::Arc<dyn EmailSender>,
+    /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
+    /// invite emails fall back to the bare token (dev-only — see `docs/email.md`).
+    public_base_url: Option<String>,
 }
 
 impl DefaultAuthService {
@@ -49,7 +55,9 @@ impl DefaultAuthService {
     ///
     /// # Examples
     /// ```ignore
-    /// let svc = DefaultAuthService::new(repos, Some(db), None, Duration::days(30), observers);
+    /// let svc = DefaultAuthService::new(
+    ///     repos, Some(db), None, Duration::days(30), observers, email_sender, None,
+    /// );
     /// ```
     pub fn new(
         repos: AuthRepos,
@@ -57,6 +65,8 @@ impl DefaultAuthService {
         bootstrap_secret: Option<String>,
         session_ttl: Duration,
         observers: Observers,
+        email_sender: std::sync::Arc<dyn EmailSender>,
+        public_base_url: Option<String>,
     ) -> Self {
         Self {
             repos,
@@ -66,6 +76,25 @@ impl DefaultAuthService {
             observers,
             preview_rate_limiter: RegistrationRateLimiter::preview_default(),
             signup_rate_limiter: RegistrationRateLimiter::signup_default(),
+            email_sender,
+            public_base_url,
+        }
+    }
+
+    /// Build the invite link as a path segment: `{public_base_url}/join/{token}` — never a
+    /// `?token=` query string (see `docs/email.md`). Falls back to the bare token (with a
+    /// warning) if `public_base_url` is unset.
+    fn build_invite_link(&self, raw_token: &str) -> String {
+        let encoded = percent_encode_path_segment(raw_token);
+        match &self.public_base_url {
+            Some(base) => format!("{}/join/{}", base.trim_end_matches('/'), encoded),
+            None => {
+                warn!(
+                    "RIM_PUBLIC_BASE_URL is not configured; invite email will contain the bare \
+                     token instead of a clickable link"
+                );
+                raw_token.to_string()
+            }
         }
     }
 
@@ -87,10 +116,10 @@ impl DefaultAuthService {
     /// ```ignore
     /// let svc = DefaultAuthService::with_rate_limiters(
     ///     repos, Some(db), None, Duration::days(30), observers,
-    ///     preview_rl, signup_rl,
+    ///     preview_rl, signup_rl, email_sender, None,
     /// );
     /// ```
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn with_rate_limiters(
         repos: AuthRepos,
         db: Option<DatabaseConnection>,
@@ -99,6 +128,8 @@ impl DefaultAuthService {
         observers: Observers,
         preview_rate_limiter: RegistrationRateLimiter,
         signup_rate_limiter: RegistrationRateLimiter,
+        email_sender: std::sync::Arc<dyn EmailSender>,
+        public_base_url: Option<String>,
     ) -> Self {
         Self {
             repos,
@@ -108,6 +139,8 @@ impl DefaultAuthService {
             observers,
             preview_rate_limiter,
             signup_rate_limiter,
+            email_sender,
+            public_base_url,
         }
     }
 
@@ -370,10 +403,9 @@ impl DefaultAuthService {
                 .server_member_repo
                 .get_member(server.id, actor_user_id)
                 .await?
+                && member.member_role == ServerMemberRole::Owner
             {
-                if member.member_role == ServerMemberRole::Owner {
-                    return Ok(());
-                }
+                return Ok(());
             }
         }
         Err(ServiceError::PermissionDenied)
@@ -628,10 +660,17 @@ impl AuthService for DefaultAuthService {
             server_id,
             expires_at,
             max_uses,
+            recipient_email,
         } = cmd;
         if max_uses <= 0 {
             return Err(ServiceError::Validation("max_uses must be > 0".to_string()));
         }
+
+        // Validate before persisting, per docs/email.md — a malformed address should surface
+        // as a validation error, not a silently-dropped invite email.
+        let recipient_email = recipient_email
+            .map(|email| Self::validate_email(&email))
+            .transpose()?;
 
         ensure_server_owner(
             self.repos.server_member_repo.as_ref(),
@@ -659,6 +698,14 @@ impl AuthService for DefaultAuthService {
                 max_uses,
             })
             .await?;
+
+        if let Some(recipient_email) = recipient_email {
+            let link = self.build_invite_link(&raw_token);
+            let message = templates::invite(&recipient_email, &link);
+            if let Err(e) = self.email_sender.send(message).await {
+                warn!(error = %e, "failed to send invite email");
+            }
+        }
 
         Ok(CreateInviteResultDto {
             invite: Self::to_invite_dto(inv),
@@ -689,10 +736,10 @@ impl AuthService for DefaultAuthService {
         if inv.revoked_at.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
-        if let Some(expires_at) = inv.expires_at {
-            if expires_at < Utc::now() {
-                return Err(ServiceError::PermissionDenied);
-            }
+        if let Some(expires_at) = inv.expires_at
+            && expires_at < Utc::now()
+        {
+            return Err(ServiceError::PermissionDenied);
         }
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
@@ -819,10 +866,10 @@ impl AuthService for DefaultAuthService {
         if inv.revoked_at.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
-        if let Some(expires_at) = inv.expires_at {
-            if expires_at < Utc::now() {
-                return Err(ServiceError::PermissionDenied);
-            }
+        if let Some(expires_at) = inv.expires_at
+            && expires_at < Utc::now()
+        {
+            return Err(ServiceError::PermissionDenied);
         }
 
         // Check if user is already a member of the server.
@@ -1233,6 +1280,14 @@ impl AuthService for DefaultAuthService {
         // Gate: must be Owner of at least one server (§5 placeholder gate).
         Self::ensure_any_server_owner(&self.repos, cmd.actor.user_id).await?;
 
+        // Validate before persisting, per docs/email.md — a malformed address should surface
+        // as a validation error, not a silently-dropped invite email.
+        let recipient_email = cmd
+            .recipient_email
+            .clone()
+            .map(|email| Self::validate_email(&email))
+            .transpose()?;
+
         // Validate expires_at: mandatory, must be in the future, at most 30 days out.
         let expires_at = cmd
             .expires_at
@@ -1277,6 +1332,14 @@ impl AuthService for DefaultAuthService {
             issued_by_user_id = %cmd.actor.user_id,
             "instance invite issued"
         );
+
+        if let Some(recipient_email) = recipient_email {
+            let link = self.build_invite_link(&raw_token);
+            let message = templates::invite(&recipient_email, &link);
+            if let Err(e) = self.email_sender.send(message).await {
+                warn!(error = %e, "failed to send instance invite email");
+            }
+        }
 
         Ok(CreateInstanceInviteResultDto {
             invite: Self::to_instance_invite_dto(invite),
@@ -1408,10 +1471,10 @@ impl AuthService for DefaultAuthService {
             if inv.use_count >= inv.max_uses {
                 return Err(ServiceError::InvalidToken);
             }
-            if let Some(expires_at) = inv.expires_at {
-                if expires_at < Utc::now() {
-                    return Err(ServiceError::ExpiredToken);
-                }
+            if let Some(expires_at) = inv.expires_at
+                && expires_at < Utc::now()
+            {
+                return Err(ServiceError::ExpiredToken);
             }
 
             // Fetch workspace name and inviter display name.

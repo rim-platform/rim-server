@@ -21,6 +21,11 @@ impl From<incident::Model> for Incident {
             postmortem_draft: m.postmortem_draft,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
+            alert_fingerprint: m.alert_fingerprint,
+            source: m.source,
+            escalation_policy_id: m.escalation_policy_id.map(Into::into),
+            acknowledged_at: m.acknowledged_at.map(Into::into),
+            acknowledged_by: m.acknowledged_by.map(Into::into),
         }
     }
 }

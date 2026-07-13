@@ -11,9 +11,7 @@ use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
 #[tokio::test]
 async fn create_get_and_find_by_name() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerRepository::new(ctx.db.clone());
     assert!(repo.find_by_name("missing").await.unwrap().is_none());
@@ -29,9 +27,7 @@ async fn create_get_and_find_by_name() {
 
 #[tokio::test]
 async fn get_servers_for_user_returns_joined_servers() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let server_repo = SeaOrmServerRepository::new(ctx.db.clone());
     let member_repo = SeaOrmServerMemberRepository::new(ctx.db.clone());

@@ -40,37 +40,39 @@ fn is_test_db_url(url: &str) -> bool {
 /// Redact the password from a DB URL for safe logging.
 /// Replaces `://user:password@host` with `://user:***@host`.
 fn redact_url(url: &str) -> String {
-    if let Some(at) = url.find('@') {
-        if let Some(scheme_end) = url.find("://") {
-            let credentials = &url[scheme_end + 3..at];
-            if let Some(colon) = credentials.find(':') {
-                let user = &credentials[..colon];
-                let host_and_rest = &url[at..];
-                let scheme = &url[..scheme_end + 3];
-                return format!("{scheme}{user}:***{host_and_rest}");
-            }
+    if let Some(at) = url.find('@')
+        && let Some(scheme_end) = url.find("://")
+    {
+        let credentials = &url[scheme_end + 3..at];
+        if let Some(colon) = credentials.find(':') {
+            let user = &credentials[..colon];
+            let host_and_rest = &url[at..];
+            let scheme = &url[..scheme_end + 3];
+            return format!("{scheme}{user}:***{host_and_rest}");
         }
     }
     "<redacted>".to_string()
 }
 
-pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
+/// Connect to the test database, or **panic loudly**. Only reachable under the
+/// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
+/// so a panic here means the feature was enabled without a usable test DB —
+/// which must fail CI, not silently skip. See CLAUDE.md P6-W6.
+pub async fn db_conn() -> DatabaseConnection {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,
-        _ => {
-            eprintln!(
-                "SKIP: rim_infra_db integration tests require DATABASE_URL (e.g. postgres://...)."
-            );
-            return None;
-        }
+        _ => panic!(
+            "DATABASE_URL must be set when running with --features db-tests \
+             (e.g. postgres://rim:rim@localhost/rim_testdb). Every db-test requires it; \
+             without it the suite would silently skip and report a false green."
+        ),
     };
-
-    if !is_test_db_url(&url) {
-        eprintln!(
-            "SKIP: DATABASE_URL must point to a test DB (dbname containing e.g. 'testdb', '_test', 'testing').\n  got: {url}"
-        );
-        return None;
-    }
+    assert!(
+        is_test_db_url(&url),
+        "DATABASE_URL must point to a test DB (dbname containing 'testdb'/'_test'/'testing'); \
+         refusing to run destructive db-tests against: {}",
+        redact_url(&url),
+    );
 
     let mut opts = ConnectOptions::new(url.clone());
     opts.sqlx_logging(false);
@@ -88,7 +90,7 @@ pub async fn db_conn_or_skip() -> Option<DatabaseConnection> {
         let _ = MIGRATED.set(());
     }
 
-    Some(conn)
+    conn
 }
 
 pub async fn reset_db(conn: &DatabaseConnection) {
@@ -102,9 +104,13 @@ TRUNCATE TABLE
   channel_lens,
   command_audit_log,
   conversation,
+  conversation_escalation_policy,
   conversation_member,
   conversation_read_state,
   custom_emoji,
+  escalation_policy,
+  escalation_run,
+  escalation_step,
   incident,
   incident_message_tag,
   incident_phase,
@@ -120,6 +126,10 @@ TRUNCATE TABLE
   message_reaction,
   message_thread,
   notification_preference,
+  on_call_override,
+  on_call_rotation_layer,
+  on_call_rotation_participant,
+  on_call_schedule,
   password_reset_token,
   pipeline,
   server,
@@ -128,6 +138,7 @@ TRUNCATE TABLE
   user_command,
   user_skill_profile,
   "user",
+  workspace_ingest_token,
   workspace_state
 RESTART IDENTITY CASCADE;
 "#;
@@ -146,11 +157,12 @@ pub struct TestCtx {
 
 #[allow(dead_code)]
 impl TestCtx {
-    /// Create a new test context. Returns `None` if `DATABASE_URL` is not set (test skipped).
-    pub async fn new() -> Option<Self> {
-        let conn = db_conn_or_skip().await?;
+    /// Create a new test context. Panics loudly if `DATABASE_URL` is not set
+    /// or does not point at a test database — see [`db_conn`].
+    pub async fn new() -> Self {
+        let conn = db_conn().await;
         reset_db(&conn).await;
-        Some(Self { db: conn.into() })
+        Self { db: conn.into() }
     }
 
     pub async fn create_user(&self, username: &str) -> rim_core::user::model::User {

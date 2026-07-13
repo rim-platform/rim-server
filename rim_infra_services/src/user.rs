@@ -81,12 +81,12 @@ impl UserService for DefaultUserService {
             let v = strip_control_chars_single_line(v.trim());
             if v.is_empty() { None } else { Some(v) }
         });
-        if let Some(Some(ref dn)) = display_name {
-            if dn.chars().count() > 64 {
-                return Err(ServiceError::Validation(
-                    "display_name must be at most 64 characters".to_string(),
-                ));
-            }
+        if let Some(Some(ref dn)) = display_name
+            && dn.chars().count() > 64
+        {
+            return Err(ServiceError::Validation(
+                "display_name must be at most 64 characters".to_string(),
+            ));
         }
 
         // Sanitize and validate status_text.
@@ -94,12 +94,12 @@ impl UserService for DefaultUserService {
             let v = strip_control_chars_single_line(v.trim());
             if v.is_empty() { None } else { Some(v) }
         });
-        if let Some(Some(ref st)) = status_text {
-            if st.chars().count() > 256 {
-                return Err(ServiceError::Validation(
-                    "status_text must be at most 256 characters".to_string(),
-                ));
-            }
+        if let Some(Some(ref st)) = status_text
+            && st.chars().count() > 256
+        {
+            return Err(ServiceError::Validation(
+                "status_text must be at most 256 characters".to_string(),
+            ));
         }
 
         // Sanitize and validate bio.
@@ -107,12 +107,12 @@ impl UserService for DefaultUserService {
             let v = strip_control_chars(v.trim());
             if v.is_empty() { None } else { Some(v) }
         });
-        if let Some(Some(ref b)) = bio {
-            if b.chars().count() > 2000 {
-                return Err(ServiceError::Validation(
-                    "bio must be at most 2000 characters".to_string(),
-                ));
-            }
+        if let Some(Some(ref b)) = bio
+            && b.chars().count() > 2000
+        {
+            return Err(ServiceError::Validation(
+                "bio must be at most 2000 characters".to_string(),
+            ));
         }
 
         // Validate avatar_url: must be internal path.
@@ -120,12 +120,12 @@ impl UserService for DefaultUserService {
             let v = v.trim().to_string();
             if v.is_empty() { None } else { Some(v) }
         });
-        if let Some(Some(ref url)) = avatar_url {
-            if !url.starts_with("/api/files/") {
-                return Err(ServiceError::Validation(
-                    "avatar_url must start with /api/files/".to_string(),
-                ));
-            }
+        if let Some(Some(ref url)) = avatar_url
+            && !url.starts_with("/api/files/")
+        {
+            return Err(ServiceError::Validation(
+                "avatar_url must start with /api/files/".to_string(),
+            ));
         }
 
         let user = self

@@ -92,6 +92,18 @@ pub struct AuditLogEntryDto {
     pub capability_check_outcome: Option<String>,
     pub confirmation_outcome: Option<String>,
     /// Set on child rows emitted for macro steps. `None` for top-level entries.
+    ///
+    /// By design, child rows are written **before** the parent row: macro
+    /// step audit rows are inserted inside the step loop, and the parent
+    /// macro audit row is written only after the loop completes (see
+    /// `macro_def.rs`). These are separate inserts, not one transaction, and
+    /// `parent_audit_id` has no foreign key (see the migration that adds
+    /// this column for the rationale). If a macro crashes or the process
+    /// dies mid-execution, child rows can be left permanently referencing a
+    /// `parent_audit_id` whose parent row was never written. Forensic
+    /// tooling and any query that joins on `parent_audit_id` must tolerate
+    /// dangling references — treat a missing parent as "macro execution did
+    /// not complete," not as a data-integrity error.
     pub parent_audit_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }

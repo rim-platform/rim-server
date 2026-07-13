@@ -3,7 +3,9 @@ mod chat;
 mod chat_messages;
 mod conversation;
 mod desktop_local;
+mod incident;
 mod member;
+mod oncall;
 mod pin;
 mod reaction;
 mod state;
@@ -28,7 +30,7 @@ pub(super) async fn execute_builtin_command(
     let args = require_object_args(args)?;
 
     match command_id {
-        "chat.post_message" => chat_messages::post_message(services, actor, args).await,
+        "chat.post_message" => chat_messages::post_message(services, actor, args, context).await,
         "chat.reply_to_selected_message" => {
             chat_messages::reply_to_selected_message(services, actor, args, context).await
         }
@@ -36,22 +38,28 @@ pub(super) async fn execute_builtin_command(
             chat_messages::delete_message(services, actor, args, context).await
         }
         "chat.edit_message" => chat_messages::edit_message(services, actor, args, context).await,
-        "chat.create_group" => conversation::create_group(services, actor, args).await,
-        "chat.list_channels" => chat::list_channels(services, actor, args).await,
-        "chat.create_channel" => chat::create_channel(services, actor, args).await,
-        "chat.mark_as_read" => chat::mark_as_read(services, actor, args).await,
-        "chat.mark_all_as_read" => chat::mark_all_as_read(services, actor, args).await,
-        "chat.search_messages" => chat::search_messages(services, actor, args).await,
-        "chat.get_recent_messages" => chat::get_recent_messages(services, actor, args).await,
-        "chat.list_members" => member::list_members(services, actor, args).await,
-        "chat.pin_message" => pin::pin_message(services, actor, args).await,
-        "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args).await,
-        "admin.invite_member" => admin::invite_member(services, actor, args).await,
-        "state.get" => state::get(services, actor, args).await,
-        "state.set" => state::set(services, actor, args).await,
-        "state.delete" => state::delete(services, actor, args).await,
-        "state.list" => state::list(services, actor, args).await,
-        "state.incr" => state::incr(services, actor, args).await,
+        "chat.create_group" => conversation::create_group(services, actor, args, context).await,
+        "chat.list_channels" => chat::list_channels(services, actor, args, context).await,
+        "chat.create_channel" => chat::create_channel(services, actor, args, context).await,
+        "chat.mark_as_read" => chat::mark_as_read(services, actor, args, context).await,
+        "chat.mark_all_as_read" => chat::mark_all_as_read(services, actor, args, context).await,
+        "chat.search_messages" => chat::search_messages(services, actor, args, context).await,
+        "chat.get_recent_messages" => {
+            chat::get_recent_messages(services, actor, args, context).await
+        }
+        "chat.list_members" => member::list_members(services, actor, args, context).await,
+        "chat.pin_message" => pin::pin_message(services, actor, args, context).await,
+        "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args, context).await,
+        "admin.invite_member" => admin::invite_member(services, actor, args, context).await,
+        "incident.ack" => incident::ack(services, actor, args, context).await,
+        "incident.escalate" => incident::escalate(services, actor, args, context).await,
+        "oncall.who" => oncall::who(services, actor, args, context).await,
+        "oncall.take_shift" => oncall::take_shift(services, actor, args, context).await,
+        "state.get" => state::get(services, actor, args, context).await,
+        "state.set" => state::set(services, actor, args, context).await,
+        "state.delete" => state::delete(services, actor, args, context).await,
+        "state.list" => state::list(services, actor, args, context).await,
+        "state.incr" => state::incr(services, actor, args, context).await,
         id if desktop_local::is_desktop_local(id) => desktop_local::desktop_local_rejected(id),
         _ => Err(ServiceError::NotFound),
     }
@@ -120,6 +128,91 @@ where
     let uuid = uuid::Uuid::parse_str(&raw)
         .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{key}`")))?;
     Ok(T::from(uuid))
+}
+
+/// Parse a required RFC 3339 timestamp string arg (e.g. `"2026-07-10T15:00:00Z"`) into a UTC
+/// `DateTime`. Used by `oncall.take_shift`, which takes an explicit override window rather than
+/// an invented default duration.
+pub(super) fn parse_rfc3339_arg(
+    map: &serde_json::Map<String, Value>,
+    key: &str,
+) -> ServiceResult<chrono::DateTime<chrono::Utc>> {
+    let raw = require_string_arg(map, key)?;
+    chrono::DateTime::parse_from_rfc3339(&raw)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|_| ServiceError::Validation(format!("invalid RFC 3339 timestamp arg `{key}`")))
+}
+
+/// Resolve a `WorkspaceId`-typed argument with context fallback.
+///
+/// Precedence:
+///   1. `args.<arg_name>` — used when the key is present and the value is a
+///      non-empty string that parses as a valid UUID. The empty string and
+///      whitespace-only strings are treated as **absent** (consistent with
+///      `require_string_arg`).
+///   2. `context.workspace_id` — used when the arg is absent OR empty/blank.
+///      The `Option<&CommandContextDto>` is dereferenced with the
+///      `.and_then(|c| c.workspace_id)` shape (i.e. either a missing context
+///      or a context with `workspace_id: None` falls through to the error).
+///   3. If neither path yields a value, returns
+///      `ServiceError::Validation("missing workspace id: provide \
+///       `<arg_name>` arg or `context.workspace_id`")`. The message MUST
+///      mention BOTH paths so the developer debugging it knows what to
+///      check.
+///
+/// A present-but-malformed arg is a hard error (returns
+/// `Validation("invalid uuid arg `<arg_name>`")`). The function does NOT
+/// silently fall through to context when the arg parses badly — that would
+/// hide LLM tool-call bugs.
+///
+/// Generic over the target ID type so the same helper works for any
+/// `WorkspaceId`-typed arg name. Today every call passes
+/// `ServerId` and `"server_id"`, but the signature accepts any
+/// `T: From<uuid::Uuid>` and any string key so future commands using a
+/// different arg name (e.g. `workspace_id`) get free coverage.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Palette path — args is empty, context carries workspace.
+/// let server_id = resolve_workspace_id::<ServerId>(&args, context.as_ref(), "server_id")?;
+///
+/// // AI path — args carries server_id, context is None.
+/// // Same call site; arg wins.
+/// let server_id = resolve_workspace_id::<ServerId>(&args, context.as_ref(), "server_id")?;
+/// ```
+pub(super) fn resolve_workspace_id<T>(
+    args: &serde_json::Map<String, Value>,
+    context: Option<&CommandContextDto>,
+    arg_name: &str,
+) -> ServiceResult<T>
+where
+    T: From<uuid::Uuid>,
+{
+    // 1. Try the arg.
+    if let Some(raw) = args.get(arg_name).and_then(|v| v.as_str()) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            // Present and non-blank: parse strictly. A bad UUID here is a
+            // hard error; we don't fall through to context because that
+            // would mask LLM tool-call bugs.
+            let uuid = uuid::Uuid::parse_str(trimmed)
+                .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{arg_name}`")))?;
+            return Ok(T::from(uuid));
+        }
+    }
+
+    // 2. Fall back to context.
+    if let Some(ws) = context.and_then(|c| c.workspace_id) {
+        // ServerId already wraps a UUID; bounce through Uuid to stay generic.
+        let raw_uuid: uuid::Uuid = ws.into();
+        return Ok(T::from(raw_uuid));
+    }
+
+    // 3. Neither path. Mention both in the error.
+    Err(ServiceError::Validation(format!(
+        "missing workspace id: provide `{arg_name}` arg or `context.workspace_id`"
+    )))
 }
 
 pub(super) fn parse_uuid_array_arg<T>(
@@ -222,5 +315,175 @@ pub(super) fn reaction_has_actor(
 ) -> bool {
     groups
         .iter()
-        .any(|g| g.emoji == emoji && g.user_ids.iter().any(|uid| *uid == actor_user_id))
+        .any(|g| g.emoji == emoji && g.user_ids.contains(&actor_user_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rim_core::server::model::ServerId;
+    use rim_services::command::dto::CommandContextDto;
+
+    fn ctx_with_workspace(ws: ServerId) -> CommandContextDto {
+        CommandContextDto {
+            workspace_id: Some(ws),
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        }
+    }
+
+    fn ctx_without_workspace() -> CommandContextDto {
+        CommandContextDto {
+            workspace_id: None,
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        }
+    }
+
+    fn args_with_server_id(server_id: ServerId) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert(
+            "server_id".to_string(),
+            serde_json::Value::String(server_id.to_string()),
+        );
+        m
+    }
+
+    fn empty_args() -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::new()
+    }
+
+    /// 1. Arg only — no context. Returns the arg UUID.
+    #[test]
+    fn resolve_workspace_id_arg_only_returns_arg_uuid() {
+        let ws = ServerId::new();
+        let args = args_with_server_id(ws);
+        let result = resolve_workspace_id::<ServerId>(&args, None, "server_id");
+        assert_eq!(result.unwrap(), ws);
+    }
+
+    /// 2. Context only — empty args. Returns the context UUID.
+    #[test]
+    fn resolve_workspace_id_context_only_returns_context_uuid() {
+        let ws = ServerId::new();
+        let ctx = ctx_with_workspace(ws);
+        let result = resolve_workspace_id::<ServerId>(&empty_args(), Some(&ctx), "server_id");
+        assert_eq!(result.unwrap(), ws);
+    }
+
+    /// 3. Both supplied with different UUIDs — arg wins.
+    #[test]
+    fn resolve_workspace_id_arg_wins_when_both_present() {
+        let arg_ws = ServerId::new();
+        let ctx_ws = ServerId::new();
+        assert_ne!(arg_ws, ctx_ws);
+
+        let args = args_with_server_id(arg_ws);
+        let ctx = ctx_with_workspace(ctx_ws);
+        let result = resolve_workspace_id::<ServerId>(&args, Some(&ctx), "server_id");
+        assert_eq!(result.unwrap(), arg_ws);
+    }
+
+    /// 4. Arg present but empty string — falls back to context UUID.
+    #[test]
+    fn resolve_workspace_id_arg_present_but_empty_falls_back_to_context() {
+        let ws = ServerId::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "server_id".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        let ctx = ctx_with_workspace(ws);
+        let result = resolve_workspace_id::<ServerId>(&args, Some(&ctx), "server_id");
+        assert_eq!(result.unwrap(), ws);
+    }
+
+    /// 5. Arg present but whitespace-only — falls back to context UUID.
+    #[test]
+    fn resolve_workspace_id_arg_present_but_whitespace_falls_back_to_context() {
+        let ws = ServerId::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "server_id".to_string(),
+            serde_json::Value::String("   ".to_string()),
+        );
+        let ctx = ctx_with_workspace(ws);
+        let result = resolve_workspace_id::<ServerId>(&args, Some(&ctx), "server_id");
+        assert_eq!(result.unwrap(), ws);
+    }
+
+    /// 6. Neither arg nor context — Validation error mentioning both paths.
+    #[test]
+    fn resolve_workspace_id_neither_present_returns_validation_with_both_paths_in_msg() {
+        let result = resolve_workspace_id::<ServerId>(&empty_args(), None, "server_id");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ServiceError::Validation(_)),
+            "expected Validation, got: {err:?}"
+        );
+        if let ServiceError::Validation(msg) = err {
+            assert!(
+                msg.contains("server_id"),
+                "error message must mention `server_id`; got: {msg}"
+            );
+            assert!(
+                msg.contains("context.workspace_id"),
+                "error message must mention `context.workspace_id`; got: {msg}"
+            );
+        }
+    }
+
+    /// 7. Malformed arg — hard Validation error, does NOT fall through to context.
+    #[test]
+    fn resolve_workspace_id_malformed_arg_returns_validation() {
+        let ws = ServerId::new();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "server_id".to_string(),
+            serde_json::Value::String("not-a-uuid".to_string()),
+        );
+        let ctx = ctx_with_workspace(ws);
+        let result = resolve_workspace_id::<ServerId>(&args, Some(&ctx), "server_id");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ServiceError::Validation(_)),
+            "expected Validation for malformed uuid, got: {err:?}"
+        );
+        if let ServiceError::Validation(msg) = err {
+            assert!(
+                msg.contains("invalid uuid"),
+                "error message must mention `invalid uuid`; got: {msg}"
+            );
+        }
+    }
+
+    /// 8. Context present but workspace_id is None — falls through to Validation.
+    #[test]
+    fn resolve_workspace_id_context_with_no_workspace_id_falls_through_to_error() {
+        let ctx = ctx_without_workspace();
+        let result = resolve_workspace_id::<ServerId>(&empty_args(), Some(&ctx), "server_id");
+        assert!(
+            matches!(result, Err(ServiceError::Validation(_))),
+            "expected Validation when context has no workspace_id, got: {result:?}"
+        );
+    }
+
+    /// 9. Context is None but arg is present — returns the arg UUID.
+    #[test]
+    fn resolve_workspace_id_context_none_with_args_works() {
+        let ws = ServerId::new();
+        let args = args_with_server_id(ws);
+        let result = resolve_workspace_id::<ServerId>(&args, None, "server_id");
+        assert_eq!(result.unwrap(), ws);
+    }
 }

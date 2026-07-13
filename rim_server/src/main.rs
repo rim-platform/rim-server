@@ -1,6 +1,7 @@
 use crate::server::start_server;
 use rim_logging::{LoggingHandle, init_tracing_json};
 
+mod alert_handlers;
 mod app;
 mod bootstrap_cmd;
 pub(crate) mod config;
@@ -28,11 +29,11 @@ async fn main() {
     let _logging_handle = initialize();
 
     let mut args = std::env::args().skip(1);
-    if let Some(subcmd) = args.next() {
-        if subcmd == "bootstrap-user" {
-            let exit_code = bootstrap_cmd::run(args).await;
-            std::process::exit(exit_code);
-        }
+    if let Some(subcmd) = args.next()
+        && subcmd == "bootstrap-user"
+    {
+        let exit_code = bootstrap_cmd::run(args).await;
+        std::process::exit(exit_code);
     }
 
     let config = match config::load_config() {

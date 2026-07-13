@@ -10,9 +10,7 @@ use rim_infra_db::sea_orm_impl::keybind::SeaOrmKeybindRepository;
 
 #[tokio::test]
 async fn create_update_and_delete_keybind() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmKeybindRepository::new(ctx.db.clone());
     let user = ctx.create_user("keybind-user").await;

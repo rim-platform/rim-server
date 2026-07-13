@@ -9,8 +9,9 @@ use crate::types::{
     IncidentPage, IncidentSeverityGql, IncidentStatusGql, IncidentTimelineGql, InstanceInviteGql,
     Integration, Invite, InviteTokenPreviewGql, Keybind, KeybindContext, KeybindLayers,
     KeybindScope, MacroDef, Message, MessageCursorInput, MessagePage, MessageReference,
-    MutedConversation, RegistrationModeGql, SearchResultMessage, Server, ServerMember, Setting,
-    Thread, ThreadCursorInput, ThreadPage, UnreadCount, User, UserPresenceGql,
+    MutedConversation, RegistrationModeGql, SearchMessagesInput, SearchResultMessage,
+    SearchResultPage, Server, ServerMember, Setting, Thread, ThreadCursorInput, ThreadPage,
+    UnreadCount, User, UserPresenceGql,
 };
 use rim_services::Actor;
 use rim_services::action::service::ActionService;
@@ -411,32 +412,44 @@ impl Query {
         Ok(MessagePage::from_page(page))
     }
 
+    /// Full-text search over messages. Supports the `from:`/`in:`/`has:`/`before:`/`after:`
+    /// operator syntax in `input.query` — see `docs/search.md`.
+    ///
+    /// **Breaking change (Track B1):** this replaced a flat, unpaginated `[SearchResultMessage!]!`
+    /// return with top-level `limit`/`includeDeleted` args. It now takes a single
+    /// `SearchMessagesInput` and returns a cursor-paginated `SearchResultPage`. Frontend codegen
+    /// must be re-run against the updated schema.
+    ///
+    /// **Why cursor-paginated by recency, not relevance:** results are ordered `(sentAt, id)` —
+    /// the same contract as every other message list (`docs/pagination.md`) — rather than by
+    /// `SearchResultMessage.rank`. `ts_rank` is neither unique nor stable across concurrent
+    /// inserts, so paginating by it would produce skips/duplicates across pages. `rank` and
+    /// `headline` are still returned on every item for client-side display or a page-local sort.
+    /// See `docs/search.md` for the full rationale.
     async fn search_messages(
         &self,
         ctx: &Context<'_>,
-        server_id: ID,
-        conversation_id: Option<ID>,
-        query: String,
-        limit: i32,
-        include_deleted: bool,
-    ) -> Result<Vec<SearchResultMessage>> {
+        input: SearchMessagesInput,
+    ) -> Result<SearchResultPage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
         let conv_svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-        let conversation_id = conversation_id
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+        let conversation_id = input
+            .conversation_id
             .as_ref()
             .map(parse_uuid_id::<rim_core::conversation::model::ConversationId>)
             .transpose()?;
 
-        let dtos = svc
+        let page = svc
             .search_messages(SearchMessagesQuery {
                 actor: Actor::new(actor),
                 server_id,
                 conversation_id,
-                query,
-                limit: (limit.max(1) as u32).min(50),
-                include_deleted,
+                query: input.query,
+                limit: (input.limit.unwrap_or(25).max(1) as u32).min(200),
+                cursor: input.cursor.map(TryFrom::try_from).transpose()?,
+                dir: input.dir.unwrap_or(PageDir::After).into(),
             })
             .await
             .map_err(crate::errors::map_service_error)?;
@@ -444,10 +457,11 @@ impl Query {
         // Batch-load conversation metadata for results
         let unique_conv_ids: Vec<_> = {
             let mut seen = std::collections::HashSet::new();
-            dtos.iter()
-                .filter_map(|d| {
-                    if seen.insert(d.conversation_id) {
-                        Some(d.conversation_id)
+            page.items
+                .iter()
+                .filter_map(|hit| {
+                    if seen.insert(hit.message.conversation_id) {
+                        Some(hit.message.conversation_id)
                     } else {
                         None
                     }
@@ -462,9 +476,13 @@ impl Query {
         let conv_map: std::collections::HashMap<_, _> =
             conversations.into_iter().map(|c| (c.id, c)).collect();
 
-        Ok(dtos
+        let has_next = page.next.is_some();
+        let has_prev = page.prev.is_some();
+        let items = page
+            .items
             .into_iter()
-            .map(|dto| {
+            .map(|hit| {
+                let dto = hit.message;
                 let conv = conv_map.get(&dto.conversation_id);
                 SearchResultMessage {
                     id: ID(dto.id.to_string()),
@@ -479,9 +497,24 @@ impl Query {
                     author_id: ID(dto.author_id.to_string()),
                     text: dto.text,
                     sent_at: dto.sent_at,
+                    rank: f64::from(hit.rank),
+                    headline: hit.headline,
                 }
             })
-            .collect())
+            .collect();
+
+        Ok(SearchResultPage {
+            items,
+            next: page.next.map(|c| crate::types::MessageCursorOutput {
+                sent_at: c.sent_at,
+                message_id: ID(c.message_id.to_string()),
+            }),
+            prev: page.prev.map(|c| crate::types::MessageCursorOutput {
+                sent_at: c.sent_at,
+                message_id: ID(c.message_id.to_string()),
+            }),
+            page_info: crate::types::PageInfo { has_next, has_prev },
+        })
     }
 
     async fn message(
@@ -1102,6 +1135,29 @@ impl Query {
         Ok(IncidentPage::from_page(page))
     }
 
+    /// List every alert-ingest token for a server (including revoked). Owner-only.
+    async fn ingest_tokens(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<crate::types::IngestTokenGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::ingest_token::service::IngestTokenService>>(
+            )?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let tokens = svc
+            .list_tokens(rim_services::ingest_token::command::ListIngestTokensQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(tokens.into_iter().map(Into::into).collect())
+    }
+
     async fn workspace_state(
         &self,
         ctx: &Context<'_>,
@@ -1340,6 +1396,126 @@ impl Query {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(InviteTokenPreviewGql::from(preview))
+    }
+
+    /// List a server's on-call schedules. Any workspace member may read.
+    async fn on_call_schedules(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<crate::types::OnCallScheduleGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let schedules = svc
+            .list_schedules(rim_services::oncall::command::ListOnCallSchedulesQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(schedules.into_iter().map(Into::into).collect())
+    }
+
+    /// Resolve who is on call for a schedule right now (or at `at`, if provided). Any workspace
+    /// member may read.
+    async fn who_is_on_call(
+        &self,
+        ctx: &Context<'_>,
+        schedule_id: ID,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<crate::types::OnCallNowGql> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id =
+            crate::ids::parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+
+        let now = svc
+            .who_is_on_call(rim_services::oncall::command::WhoIsOnCallQuery {
+                actor: Actor::new(actor),
+                schedule_id,
+                at,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(now.into())
+    }
+
+    /// Batch [`who_is_on_call`] across every on-call schedule on a server — avoids an N+1 of
+    /// individual `whoIsOnCall` calls for a status-bar-style UI. Any workspace member may read.
+    async fn server_on_call(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<crate::types::OnCallNowGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let results = svc
+            .server_on_call(rim_services::oncall::command::ServerOnCallQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(results.into_iter().map(Into::into).collect())
+    }
+
+    /// Resolve on-call coverage for a schedule over `[from, to)`. Rejects spans over 90 days. Any
+    /// workspace member may read.
+    async fn on_call_shifts(
+        &self,
+        ctx: &Context<'_>,
+        schedule_id: ID,
+        from: chrono::DateTime<chrono::Utc>,
+        to: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::types::OnCallShiftGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::oncall::service::OnCallService>>()?;
+        let schedule_id =
+            crate::ids::parse_uuid_id::<rim_core::oncall::model::OnCallScheduleId>(&schedule_id)?;
+
+        let shifts = svc
+            .list_shifts(rim_services::oncall::command::ListOnCallShiftsQuery {
+                actor: Actor::new(actor),
+                schedule_id,
+                from,
+                to,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(shifts.into_iter().map(Into::into).collect())
+    }
+
+    /// List a server's escalation policies. Any workspace member may read.
+    async fn escalation_policies(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+    ) -> Result<Vec<crate::types::EscalationPolicyGql>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::escalation::service::EscalationPolicyService>>(
+            )?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+
+        let policies = svc
+            .list_policies(
+                rim_services::escalation::command::ListEscalationPoliciesQuery {
+                    actor: Actor::new(actor),
+                    server_id,
+                },
+            )
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(policies.into_iter().map(Into::into).collect())
     }
 }
 

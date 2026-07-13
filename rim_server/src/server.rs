@@ -1,3 +1,4 @@
+use crate::alert_handlers::{ingest_alertmanager, ingest_generic, ingest_grafana};
 use crate::app::build_app_runtime;
 use crate::config::RIMConfig;
 use crate::file_handlers::{
@@ -59,6 +60,11 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
     let message_attachment_service = runtime.message_attachment_service;
+    let ingest_token_service = runtime.ingest_token_service;
+    let incident_service = runtime.incident_service;
+    let alert_rate_limiter = runtime.alert_rate_limiter;
+    let alert_max_body_bytes =
+        crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
 
     HttpServer::new(move || {
         let schema = schema.clone();
@@ -103,7 +109,22 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .service(
                 web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
             )
-            .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)));
+            .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)))
+            .service(
+                web::resource("/api/hooks/alerts/generic")
+                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
+                    .route(web::post().to(ingest_generic)),
+            )
+            .service(
+                web::resource("/api/hooks/alerts/alertmanager")
+                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
+                    .route(web::post().to(ingest_alertmanager)),
+            )
+            .service(
+                web::resource("/api/hooks/alerts/grafana")
+                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
+                    .route(web::post().to(ingest_grafana)),
+            );
 
         if enable_graphiql {
             app = app.service(index_graphiql);
@@ -114,6 +135,10 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
+            .app_data(web::Data::new(Arc::clone(&ingest_token_service)))
+            .app_data(web::Data::new(Arc::clone(&incident_service)))
+            .app_data(web::Data::new(Arc::clone(&alert_rate_limiter)))
+            .app_data(web::Data::new(alert_max_body_bytes))
             .app_data(web::Data::new(handler_cfg))
     })
     .bind(bind_host)?

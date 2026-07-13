@@ -45,7 +45,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn pin_message(&self, cmd: PinMessageCmd) -> ServiceResult<()> {
-        ensure_conversation_member_access(
+        let conversation = ensure_conversation_member_access(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -118,6 +118,7 @@ impl PinService for DefaultPinService {
             conversation_id: cmd.conversation_id,
             message_id: cmd.message_id,
             pinned_by: cmd.actor.user_id,
+            conversation_type: conversation.conversation_type.as_str().to_string(),
             member_user_ids: member_ids,
         });
 
@@ -130,7 +131,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn unpin_message(&self, cmd: UnpinMessageCmd) -> ServiceResult<()> {
-        ensure_conversation_member_access(
+        let conversation = ensure_conversation_member_access(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -160,6 +161,7 @@ impl PinService for DefaultPinService {
             workspace_id: cmd.server_id,
             conversation_id: cmd.conversation_id,
             message_id: cmd.message_id,
+            conversation_type: conversation.conversation_type.as_str().to_string(),
             member_user_ids: member_ids,
         });
 

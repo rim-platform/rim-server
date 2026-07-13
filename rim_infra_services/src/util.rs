@@ -87,6 +87,30 @@ pub async fn ensure_server_owner(
     Ok(())
 }
 
+/// Gates on `member_role ∈ {Owner, Moderator}` — the edit gate for server-scoped resources that
+/// don't have their own per-channel moderator concept (on-call schedules, escalation policies:
+/// see spec §10, iron-man's ruling). Per-channel moderator roles do NOT apply here since these
+/// resources are server-scoped, so the server role alone governs.
+pub async fn ensure_server_owner_or_moderator(
+    server_member_repo: &dyn ServerMemberRepository,
+    server_id: ServerId,
+    user_id: rim_core::user::model::UserId,
+) -> ServiceResult<()> {
+    let member = server_member_repo
+        .get_member(server_id, user_id)
+        .await?
+        .ok_or(ServiceError::PermissionDenied)?;
+
+    if !matches!(
+        member.member_role,
+        ServerMemberRole::Owner | ServerMemberRole::Moderator
+    ) {
+        return Err(ServiceError::PermissionDenied);
+    }
+
+    Ok(())
+}
+
 pub async fn ensure_server_exists(
     server_repo: &dyn ServerRepository,
     server_id: ServerId,
@@ -364,6 +388,14 @@ mod tests {
             Ok(false)
         }
 
+        async fn get_channel_by_title(
+            &self,
+            _server_id: ServerId,
+            _title: &str,
+        ) -> RepoResult<Option<Conversation>> {
+            Ok(None)
+        }
+
         async fn list_accessible_conversation_ids(
             &self,
             _server_id: ServerId,
@@ -431,6 +463,47 @@ mod tests {
         };
 
         let err = ensure_server_owner(&repo, server_id, user_id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn ensure_server_owner_or_moderator_allows_moderator() {
+        let server_id = ServerId::new();
+        let user_id = UserId::new();
+        let repo = FakeServerMemberRepo {
+            is_member: true,
+            member: Some(ServerMember {
+                id: ServerMemberId::new(),
+                server_id,
+                user_id,
+                member_role: ServerMemberRole::Moderator,
+                joined_at: chrono::Utc::now(),
+            }),
+        };
+
+        ensure_server_owner_or_moderator(&repo, server_id, user_id)
+            .await
+            .expect("moderator must pass the owner-or-moderator gate");
+    }
+
+    #[tokio::test]
+    async fn ensure_server_owner_or_moderator_denies_guest() {
+        let server_id = ServerId::new();
+        let user_id = UserId::new();
+        let repo = FakeServerMemberRepo {
+            is_member: true,
+            member: Some(ServerMember {
+                id: ServerMemberId::new(),
+                server_id,
+                user_id,
+                member_role: ServerMemberRole::Guest,
+                joined_at: chrono::Utc::now(),
+            }),
+        };
+
+        let err = ensure_server_owner_or_moderator(&repo, server_id, user_id)
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));

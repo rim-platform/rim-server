@@ -299,16 +299,14 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
 
         // Delete the file from storage before removing the DB record.
         // Ignore NotFound errors — the file may have been deleted manually.
-        if !attachment.storage_url.starts_with("pending://") {
-            if let Err(e) = self
+        if !attachment.storage_url.starts_with("pending://")
+            && let Err(e) = self
                 .storage_service
                 .delete_file(&attachment.storage_url)
                 .await
-            {
-                if !matches!(e, ServiceError::NotFound) {
-                    return Err(e);
-                }
-            }
+            && !matches!(e, ServiceError::NotFound)
+        {
+            return Err(e);
         }
 
         self.repos

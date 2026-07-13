@@ -8,9 +8,7 @@ use rim_infra_db::sea_orm_impl::user_command::SeaOrmUserCommandRepository;
 
 #[tokio::test]
 async fn create_and_list_user_commands() {
-    let Some(ctx) = support::TestCtx::new().await else {
-        return;
-    };
+    let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmUserCommandRepository::new(ctx.db.clone());
     let user = ctx.create_user("tester").await;

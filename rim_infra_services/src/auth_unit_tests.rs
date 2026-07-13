@@ -120,6 +120,7 @@ mod tests {
             status_text: None,
             bio: None,
             email: format!("{}@local.invalid", username.to_lowercase()),
+            timezone: None,
         }
     }
 
@@ -214,6 +215,8 @@ mod tests {
             None,
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -253,6 +256,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -311,6 +316,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -349,6 +356,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -357,10 +366,265 @@ mod tests {
                 server_id,
                 expires_at: None,
                 max_uses: 0,
+                recipient_email: None,
             })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    fn make_owner_member(server_id: ServerId, user_id: UserId) -> ServerMember {
+        ServerMember {
+            id: ServerMemberId::new(),
+            server_id,
+            user_id,
+            member_role: ServerMemberRole::Owner,
+            joined_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_invite_with_recipient_email_sends_email() {
+        let server_id = ServerId::new();
+        let actor_user_id = UserId::new();
+
+        let (
+            user_repo,
+            server_repo,
+            mut server_member_repo,
+            session_repo,
+            mut invite_repo,
+            conversation_repo,
+        ) = repos();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_user_id))));
+        invite_repo.expect_create_invite().returning(move |new| {
+            Ok(Invite {
+                id: InviteId::new(),
+                server_id: new.server_id,
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender
+            .expect_send()
+            .withf(|msg| msg.to == "invitee@example.com" && msg.body_text.contains("/join/"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let svc = DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ),
+            None,
+            Some("secret".to_string()),
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor_user_id),
+                server_id,
+                expires_at: None,
+                max_uses: 1,
+                recipient_email: Some("invitee@example.com".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(!result.invite_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_invite_without_recipient_email_does_not_send() {
+        let server_id = ServerId::new();
+        let actor_user_id = UserId::new();
+
+        let (
+            user_repo,
+            server_repo,
+            mut server_member_repo,
+            session_repo,
+            mut invite_repo,
+            conversation_repo,
+        ) = repos();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_user_id))));
+        invite_repo.expect_create_invite().returning(move |new| {
+            Ok(Invite {
+                id: InviteId::new(),
+                server_id: new.server_id,
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().never();
+
+        let svc = DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ),
+            None,
+            Some("secret".to_string()),
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor_user_id),
+                server_id,
+                expires_at: None,
+                max_uses: 1,
+                recipient_email: None,
+            })
+            .await
+            .unwrap();
+        assert!(!result.invite_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_invite_rejects_malformed_recipient_email() {
+        let server_id = ServerId::new();
+        let actor_user_id = UserId::new();
+
+        let (
+            user_repo,
+            server_repo,
+            server_member_repo,
+            session_repo,
+            invite_repo,
+            conversation_repo,
+        ) = repos();
+
+        let svc = DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ),
+            None,
+            Some("secret".to_string()),
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        );
+
+        let err = svc
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor_user_id),
+                server_id,
+                expires_at: None,
+                max_uses: 1,
+                recipient_email: Some("not-an-email".to_string()),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    /// Email delivery is best-effort: an `EmailSender` failure must not fail the mutation, and
+    /// the invite (with its usable token) must still be created and returned.
+    #[tokio::test]
+    async fn create_invite_send_failure_is_non_fatal() {
+        let server_id = ServerId::new();
+        let actor_user_id = UserId::new();
+
+        let (
+            user_repo,
+            server_repo,
+            mut server_member_repo,
+            session_repo,
+            mut invite_repo,
+            conversation_repo,
+        ) = repos();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_user_id))));
+        invite_repo.expect_create_invite().returning(move |new| {
+            Ok(Invite {
+                id: InviteId::new(),
+                server_id: new.server_id,
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender
+            .expect_send()
+            .returning(|_| Err(anyhow::anyhow!("smtp down")));
+
+        let svc = DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ),
+            None,
+            Some("secret".to_string()),
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_invite(CreateInviteCmd {
+                actor: Actor::new(actor_user_id),
+                server_id,
+                expires_at: None,
+                max_uses: 1,
+                recipient_email: Some("invitee@example.com".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(
+            !result.invite_token.is_empty(),
+            "invite token must still be returned even when the email send fails"
+        );
     }
 
     #[tokio::test]
@@ -391,6 +655,7 @@ mod tests {
                 status_text: None,
                 bio: None,
                 email: "taken@local.invalid".to_string(),
+                timezone: None,
             }))
         });
         user_repo.expect_create_user().never();
@@ -423,6 +688,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -475,6 +742,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let err = svc
@@ -524,6 +793,7 @@ mod tests {
                     status_text: None,
                     bio: None,
                     email: new.email,
+                    timezone: None,
                 })
             });
 
@@ -580,6 +850,8 @@ mod tests {
             Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let res = svc
@@ -628,6 +900,8 @@ mod tests {
             None,
             Duration::hours(1),
             noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         )
     }
 
@@ -1128,6 +1402,7 @@ mod tests {
                 actor: Actor::new(actor_id),
                 expires_at: Some(Utc::now() + Duration::days(7)),
                 max_uses: Some(51),
+                recipient_email: None,
             })
             .await
             .unwrap_err();
@@ -1135,6 +1410,230 @@ mod tests {
         assert!(
             matches!(err, ServiceError::Validation(ref m) if m.contains("max_uses")),
             "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_instance_invite_with_recipient_email_sends_email() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_id))));
+
+        let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_get_servers_for_user()
+            .returning(move |_| {
+                Ok(vec![Server {
+                    id: server_id,
+                    name: "ws".to_string(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }])
+            });
+
+        let mut instance_invite_repo = MockInstanceInviteRepository::new();
+        instance_invite_repo.expect_create().returning(|new| {
+            Ok(InstanceInvite {
+                id: InstanceInviteId::new(),
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender
+            .expect_send()
+            .withf(|msg| msg.to == "invitee@example.com" && msg.body_text.contains("/join/"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let (ur, _, _, sess_r, ir, cr) = repos();
+        let svc = DefaultAuthService::new(
+            make_auth_repos_with_registration(
+                ur,
+                server_repo,
+                server_member_repo,
+                sess_r,
+                ir,
+                cr,
+                MockBootstrapTokenRepository::new(),
+                instance_invite_repo,
+            ),
+            None,
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_instance_invite(CreateInstanceInviteCmd {
+                actor: Actor::new(actor_id),
+                expires_at: Some(Utc::now() + Duration::days(7)),
+                max_uses: Some(1),
+                recipient_email: Some("invitee@example.com".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(!result.invite_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_instance_invite_without_recipient_email_does_not_send() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_id))));
+
+        let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_get_servers_for_user()
+            .returning(move |_| {
+                Ok(vec![Server {
+                    id: server_id,
+                    name: "ws".to_string(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }])
+            });
+
+        let mut instance_invite_repo = MockInstanceInviteRepository::new();
+        instance_invite_repo.expect_create().returning(|new| {
+            Ok(InstanceInvite {
+                id: InstanceInviteId::new(),
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().never();
+
+        let (ur, _, _, sess_r, ir, cr) = repos();
+        let svc = DefaultAuthService::new(
+            make_auth_repos_with_registration(
+                ur,
+                server_repo,
+                server_member_repo,
+                sess_r,
+                ir,
+                cr,
+                MockBootstrapTokenRepository::new(),
+                instance_invite_repo,
+            ),
+            None,
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_instance_invite(CreateInstanceInviteCmd {
+                actor: Actor::new(actor_id),
+                expires_at: Some(Utc::now() + Duration::days(7)),
+                max_uses: Some(1),
+                recipient_email: None,
+            })
+            .await
+            .unwrap();
+        assert!(!result.invite_token.is_empty());
+    }
+
+    /// Email delivery is best-effort: an `EmailSender` failure must not fail the mutation, and
+    /// the instance invite (with its usable token) must still be created and returned.
+    #[tokio::test]
+    async fn create_instance_invite_send_failure_is_non_fatal() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, actor_id))));
+
+        let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_get_servers_for_user()
+            .returning(move |_| {
+                Ok(vec![Server {
+                    id: server_id,
+                    name: "ws".to_string(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }])
+            });
+
+        let mut instance_invite_repo = MockInstanceInviteRepository::new();
+        instance_invite_repo.expect_create().returning(|new| {
+            Ok(InstanceInvite {
+                id: InstanceInviteId::new(),
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender
+            .expect_send()
+            .returning(|_| Err(anyhow::anyhow!("smtp down")));
+
+        let (ur, _, _, sess_r, ir, cr) = repos();
+        let svc = DefaultAuthService::new(
+            make_auth_repos_with_registration(
+                ur,
+                server_repo,
+                server_member_repo,
+                sess_r,
+                ir,
+                cr,
+                MockBootstrapTokenRepository::new(),
+                instance_invite_repo,
+            ),
+            None,
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(email_sender),
+            Some("https://rim.example.com".to_string()),
+        );
+
+        let result = svc
+            .create_instance_invite(CreateInstanceInviteCmd {
+                actor: Actor::new(actor_id),
+                expires_at: Some(Utc::now() + Duration::days(7)),
+                max_uses: Some(1),
+                recipient_email: Some("invitee@example.com".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(
+            !result.invite_token.is_empty(),
+            "invite token must still be returned even when the email send fails"
         );
     }
 
@@ -1194,6 +1693,7 @@ mod tests {
                 actor: Actor::new(actor_id),
                 expires_at: None, // should default to 7 days
                 max_uses: Some(1),
+                recipient_email: None,
             })
             .await
             .unwrap();
@@ -1704,6 +2204,8 @@ mod tests {
             noop_observers(),
             preview_rl,
             RegistrationRateLimiter::signup_default(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
         );
 
         let ip = "5.6.7.8";
@@ -1781,6 +2283,7 @@ mod tests {
                     status_text: None,
                     bio: None,
                     email: new.email.clone(),
+                    timezone: None,
                 })
             });
 
@@ -1967,6 +2470,7 @@ mod tests {
                     status_text: None,
                     bio: None,
                     email: new.email.clone(),
+                    timezone: None,
                 })
             });
 
@@ -2041,6 +2545,7 @@ mod tests {
                     status_text: None,
                     bio: None,
                     email: new.email.clone(),
+                    timezone: None,
                 })
             });
 
@@ -2207,5 +2712,60 @@ mod tests {
             invalid_token_failures, 1,
             "exactly one signup must fail with InvalidToken; got r1={r1:?} r2={r2:?}"
         );
+    }
+
+    // ── DefaultAuthService::validate_email ────────────────────────────────────
+
+    #[test]
+    fn validate_email_accepts_a_well_formed_address() {
+        let normalised = DefaultAuthService::validate_email("alice@example.com").unwrap();
+        assert_eq!(normalised, "alice@example.com");
+    }
+
+    #[test]
+    fn validate_email_trims_and_lowercases() {
+        let normalised = DefaultAuthService::validate_email("  Foo@Bar.COM  ").unwrap();
+        assert_eq!(normalised, "foo@bar.com");
+    }
+
+    #[test]
+    fn validate_email_rejects_missing_at_sign() {
+        let err = DefaultAuthService::validate_email("alice.example.com").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_email_rejects_missing_domain() {
+        let err = DefaultAuthService::validate_email("alice@").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_email_rejects_domain_without_dot() {
+        let err = DefaultAuthService::validate_email("alice@localhost").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_email_rejects_internal_whitespace() {
+        let err = DefaultAuthService::validate_email("alice bob@example.com").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_email_rejects_empty_string() {
+        let err = DefaultAuthService::validate_email("   ").unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_email_rejects_address_over_254_chars() {
+        // 255 chars total (250-char local part + "@a.co", which is 5 chars), all otherwise
+        // well-formed.
+        let local = "a".repeat(250);
+        let email = format!("{local}@a.co");
+        assert_eq!(email.len(), 255);
+        let err = DefaultAuthService::validate_email(&email).unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 }
