@@ -14,18 +14,29 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::message::dto::MessageDto;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto};
 
+/// Dispatches a resolved builtin command id to its domain executor.
+///
+/// `initiator` (C2 §3b) is only consumed by the `incident.ack` /
+/// `incident.escalate` arms, which thread it into
+/// [`rim_services::incident::command::AcknowledgeIncidentCmd`] /
+/// [`rim_services::incident::command::EscalateIncidentNowCmd`] so the
+/// service layer can append an agent-transcript timeline note when the
+/// initiator is agentic. Every other domain executor ignores it — this
+/// function does not change any other arm's signature.
 pub(super) async fn execute_builtin_command(
     services: &CommandServices,
     actor: Actor,
     command_id: &str,
     args: Option<Value>,
     context: Option<CommandContextDto>,
+    initiator: CommandInitiator,
 ) -> ServiceResult<CommandResultDto> {
     let args = require_object_args(args)?;
 
@@ -51,8 +62,8 @@ pub(super) async fn execute_builtin_command(
         "chat.pin_message" => pin::pin_message(services, actor, args, context).await,
         "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args, context).await,
         "admin.invite_member" => admin::invite_member(services, actor, args, context).await,
-        "incident.ack" => incident::ack(services, actor, args, context).await,
-        "incident.escalate" => incident::escalate(services, actor, args, context).await,
+        "incident.ack" => incident::ack(services, actor, args, context, initiator).await,
+        "incident.escalate" => incident::escalate(services, actor, args, context, initiator).await,
         "oncall.who" => oncall::who(services, actor, args, context).await,
         "oncall.take_shift" => oncall::take_shift(services, actor, args, context).await,
         "state.get" => state::get(services, actor, args, context).await,

@@ -65,6 +65,11 @@ pub struct ResolveIncidentCmd {
 pub struct AcknowledgeIncidentCmd {
     pub actor: Actor,
     pub incident_id: IncidentId,
+    /// Command-dispatch initiator, when this call arrives via the command
+    /// executor (C2 §3). `None` for direct GraphQL mutations. When
+    /// `Some(i)` and `i.is_agentic()`, the service appends an
+    /// agent-transcript timeline note to the incident.
+    pub initiator: Option<crate::command::initiator::CommandInitiator>,
 }
 
 /// `incident.escalate` — manually trigger the incident's current escalation step immediately,
@@ -73,6 +78,11 @@ pub struct AcknowledgeIncidentCmd {
 pub struct EscalateIncidentNowCmd {
     pub actor: Actor,
     pub incident_id: IncidentId,
+    /// Command-dispatch initiator, when this call arrives via the command
+    /// executor (C2 §3). `None` for direct GraphQL mutations. When
+    /// `Some(i)` and `i.is_agentic()`, the service appends an
+    /// agent-transcript timeline note to the incident.
+    pub initiator: Option<crate::command::initiator::CommandInitiator>,
 }
 
 #[derive(Debug, Clone)]

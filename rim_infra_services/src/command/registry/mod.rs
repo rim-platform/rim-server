@@ -133,16 +133,20 @@ mod tests {
     }
 
     #[test]
-    fn collect_ai_callable_inventory_phase4_a5_yields_twelve_commands() {
+    fn collect_ai_callable_inventory_matches_reviewed_set_c2_sixteen_commands() {
         // P3 + P4-A4 yielded 7 ai_callable builtins. P4-A5 adds 5 brand-new
         // commands (`chat.list_members`, `chat.search_messages`,
         // `chat.get_recent_messages`, `chat.pin_message`,
-        // `chat.toggle_reaction`) for a total of 12.
+        // `chat.toggle_reaction`) for a total of 12. Track C2
+        // (`docs/specs/track-c2-agent-operator.md` §1, Jakub-ratified) flips
+        // 4 more C1 lifecycle commands to `ai_callable: true` — `incident.ack`,
+        // `incident.escalate`, `oncall.who`, `oncall.take_shift` — for a new
+        // total of 16.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 12 IDs are AI-callable. Adding a new ai_callable builtin without a
-        // Widow security review (and updating this set) must fail CI.
-        // Order is intentionally NOT asserted — registration order is a
+        // 16 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // Hawkeye + Widow security review (and updating this set) must fail
+        // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
         // snapshot in ops dashboards for order-sensitive monitoring.
         let cmds = builtin_commands();
@@ -162,6 +166,10 @@ mod tests {
             "chat.get_recent_messages",
             "chat.pin_message",
             "chat.toggle_reaction",
+            "incident.ack",
+            "incident.escalate",
+            "oncall.who",
+            "oncall.take_shift",
         ];
         expected.sort();
 

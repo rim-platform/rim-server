@@ -1256,6 +1256,39 @@ impl IncidentService for DefaultIncidentService {
 
         self.cancel_escalation_run(cmd.incident_id).await;
 
+        // C2 §3c: agent-driven ack leaves a visible transcript note. Gated on `is_agentic()`
+        // (NOT `is_some()`) — a human initiator (Palette/Keybind/ContextMenu/Cli/Macro) writes
+        // no note; `None` (direct GraphQL mutation) writes no note either. Only reached after
+        // state actually changed (the idempotent already-acked early return above never gets
+        // here), reusing the same `incident_phase` mechanism as every other timeline event in
+        // this service. Best-effort: a note-write failure never fails the command (`:1371-1391`
+        // precedent for the fired-step note).
+        if let Some(initiator) = cmd.initiator.filter(|i| i.is_agentic()) {
+            let current_phase = self
+                .repos
+                .incident_phase_repo
+                .find_current_phase(cmd.incident_id)
+                .await?
+                .map(|p| p.phase)
+                .unwrap_or(IncidentPhaseName::Detection);
+            if let Err(e) = self
+                .repos
+                .incident_phase_repo
+                .create(
+                    cmd.incident_id,
+                    current_phase,
+                    Some(format!(
+                        "Incident acknowledged by {} via AI agent (initiator: {}) — escalation \
+                         chain cancelled, paging stopped",
+                        cmd.actor.user_id, initiator
+                    )),
+                )
+                .await
+            {
+                tracing::warn!(error = %e, incident_id = %cmd.incident_id, "failed to append agent-ack timeline note");
+            }
+        }
+
         if let Some(conversation) = self
             .repos
             .conversation_repo
@@ -1302,11 +1335,44 @@ impl IncidentService for DefaultIncidentService {
             .find_active_by_incident(cmd.incident_id)
             .await?
         else {
-            // No active escalation run — a no-op success (nothing to escalate).
+            // No active escalation run — a no-op success (nothing to escalate). No transcript
+            // note either: nothing actually happened (C2 §3c).
             return Ok(());
         };
 
-        self.fire_escalation_step(run.id).await
+        self.fire_escalation_step(run.id).await?;
+
+        // C2 §3c: agent-driven immediate escalation leaves a visible transcript note, gated on
+        // `is_agentic()` (not `is_some()`), only in this `Some(run)` branch — mirrors the
+        // `acknowledge_incident` gate above. This note is distinct from (and in addition to) the
+        // C1 fired-step note `fire_escalation_step` already writes unconditionally at
+        // `:1371-1391` (unchanged).
+        if let Some(initiator) = cmd.initiator.filter(|i| i.is_agentic()) {
+            let current_phase = self
+                .repos
+                .incident_phase_repo
+                .find_current_phase(cmd.incident_id)
+                .await?
+                .map(|p| p.phase)
+                .unwrap_or(IncidentPhaseName::Detection);
+            if let Err(e) = self
+                .repos
+                .incident_phase_repo
+                .create(
+                    cmd.incident_id,
+                    current_phase,
+                    Some(format!(
+                        "Immediate escalation requested by {} via AI agent (initiator: {})",
+                        cmd.actor.user_id, initiator
+                    )),
+                )
+                .await
+            {
+                tracing::warn!(error = %e, incident_id = %cmd.incident_id, "failed to append agent-escalate timeline note");
+            }
+        }
+
+        Ok(())
     }
 
     async fn fire_escalation_step(&self, run_id: EscalationRunId) -> ServiceResult<()> {

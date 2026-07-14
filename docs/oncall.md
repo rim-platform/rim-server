@@ -342,13 +342,54 @@ when nothing is currently armed — the driver actually sleeps until the next ar
 
 ### Builtin commands (§10.1)
 
-Four commands are registered (all `keybind_capable: true`, `ai_callable: false` — C2 may flip the
-latter later, this is not re-architected): `incident.ack` (Mutating, calls
-`acknowledge_incident`), `incident.escalate` (Mutating, calls `fire_escalation_step` for the active
-run), `oncall.who` (Safe, calls `who_is_on_call`), `oncall.take_shift` (Mutating, calls
-`create_override` scoped to the acting user — the caller supplies `start_at`/`end_at` explicitly;
-there is no invented default "short" duration). Each executor calls the exact same service method
+Four commands are registered (all `keybind_capable: true`; as of **C2 all four are now
+`ai_callable: true`** — see the "C2 — AI agent operation" section below): `incident.ack` (Mutating,
+calls `acknowledge_incident`), `incident.escalate` (Mutating, calls `fire_escalation_step` for the
+active run), `oncall.who` (Safe, calls `who_is_on_call`), `oncall.take_shift` (Mutating, calls
+`create_override` for the acting user — the caller supplies `start_at`/`end_at` explicitly;
+there is no invented default "short" duration; note `create_override` is gated **Owner+Moderator**,
+§10, so a plain member cannot take a shift). Each executor calls the exact same service method
 its GraphQL mutation/query calls — unified dispatch, no duplicated logic.
+
+### C2 — AI agent operation
+
+_Spec: `docs/specs/track-c2-agent-operator.md`. The moat: everyone else's AI *suggests*; RIM's
+*acts* under a human confirmation gate, and the incident timeline proves it._
+
+The four lifecycle commands are **AI-callable** (`ai_callable: true`) with `nl_description` +
+`intent_samples` for intent routing, so the client-side BYO-model agent can operate incidents.
+This is a field/behavior upgrade on the C1 registrations — no re-architecture, no schema change.
+
+- **Confirmation policy (no exemptions).** The gate is the existing
+  `CommandDefinitionDto::requires_confirmation_for_initiator`: `oncall.who` is Safe and executes
+  one-shot for any initiator including the agent; `oncall.take_shift`, `incident.escalate`, and
+  `incident.ack` are Mutating, so an **agentic** initiator always gets a `ConfirmationRequired`
+  challenge and must re-submit a verified `InBandToken` proof — a human approves every mutating
+  agent action. Human initiators (Palette/Keybind/ContextMenu/Cli) are unchanged (one-shot); no C1
+  surface behaves differently. `incident.ack` cancels the escalation chain and **stops paging** —
+  the exact class of action the human gate exists for — and is deliberately **not** exempted
+  (ratified by Jakub).
+- **Ack consequence copy.** `incident.ack`'s `description` states the paging-stop consequence
+  ("…cancels the escalation chain and stops paging on-call…"); the FE agent-confirmation modal
+  renders `Command.description` so the approver sees it before confirming. (No challenge-message
+  API field — the copy is static per command; see spec §4.)
+- **Agent-action transcript.** When an agentic initiator runs `incident.ack` or `incident.escalate`,
+  the service appends an `incident_phase` timeline note ("… via AI agent (initiator: …)") — gated on
+  `is_agentic()`, so human invocations and direct GraphQL mutations write no note, and it fires
+  exactly once per action (never on the idempotent already-acked path or a no-active-run escalate).
+  `oncall.who` (read) and `oncall.take_shift` (schedule-scoped, no incident) write no note; the
+  latter is still fully audited via the command audit log.
+- **Capabilities = `[]` (intentional).** The four keep `required_capabilities: []`. Builtin caps
+  have no per-user grant store today (the check is registry-lookup + server-membership), so seeding
+  a capability would only duplicate the `ensure_server_member` the service methods already enforce
+  while adding a `workspace_id`-context precondition that breaks arg-only agent calls and the C1
+  paged-toast/keybind ack. AI-surface *visibility* is not *authorization*: every one of the four is
+  authz-gated at the service layer (`ensure_server_member`; `oncall.take_shift` is stricter —
+  Owner+Moderator via `create_override`). **Revisit** if/when a real per-user capability grant store
+  exists (Track D3 / plugin runbooks).
+- **Composes into agent runbooks for free.** Flipping `ai_callable` makes these legal steps in
+  agent-routed macros; the existing macro sensitivity rollup (`CommandSensitivityDto::effective` =
+  max, per-step confirmation-token issuance) gates a runbook by its worst step — no new rollup code.
 
 ### GraphQL surface (C1c slice)
 
