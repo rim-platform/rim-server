@@ -196,8 +196,17 @@ impl DefaultCommandService {
         command_id: &str,
         args: Option<Value>,
         context: Option<CommandContextDto>,
+        initiator: CommandInitiator,
     ) -> ServiceResult<CommandResultDto> {
-        executor::execute_builtin_command(&self.services, actor, command_id, args, context).await
+        executor::execute_builtin_command(
+            &self.services,
+            actor,
+            command_id,
+            args,
+            context,
+            initiator,
+        )
+        .await
     }
 
     #[async_recursion]
@@ -432,7 +441,7 @@ impl DefaultCommandService {
                 ));
             }
             return self
-                .execute_builtin(ctx.actor, command_id, args, ctx.context)
+                .execute_builtin(ctx.actor, command_id, args, ctx.context, ctx.initiator)
                 .await;
         }
 

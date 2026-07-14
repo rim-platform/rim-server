@@ -26,6 +26,7 @@ mod tests {
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_core::user::repository::MockUserRepository;
+    use rim_services::command::initiator::CommandInitiator;
     use rim_services::escalation::scheduler::MockEscalationScheduler;
     use rim_services::events::Observers;
     use rim_services::incident::command::{IngestAlertOutcome, ListIncidentsQuery};
@@ -926,7 +927,9 @@ mod tests {
         EscalationStep, EscalationStepId, EscalationTarget,
     };
     use rim_core::oncall::model::OnCallScheduleId;
-    use rim_services::incident::command::{AcknowledgeIncidentCmd, UpdateIncidentStatusCmd};
+    use rim_services::incident::command::{
+        AcknowledgeIncidentCmd, EscalateIncidentNowCmd, UpdateIncidentStatusCmd,
+    };
 
     #[allow(clippy::too_many_arguments)]
     fn build_escalation_service(
@@ -1546,6 +1549,7 @@ mod tests {
         svc.acknowledge_incident(AcknowledgeIncidentCmd {
             actor: Actor::new(actor_id),
             incident_id,
+            initiator: None,
         })
         .await
         .expect("acknowledge_incident must succeed");
@@ -1592,10 +1596,725 @@ mod tests {
             .acknowledge_incident(AcknowledgeIncidentCmd {
                 actor: Actor::new(actor_id),
                 incident_id,
+                initiator: None,
             })
             .await
             .expect("idempotent ack must succeed");
         assert!(dto.acknowledged_at.is_some());
+    }
+
+    // ── C2 §6.4: incident-timeline transcript of agent-driven ack ────────────
+
+    /// Agent-driven ack (§3c): `initiator: Some(Agent)` appends exactly one `incident_phase`
+    /// note whose text names the agent and the "paging stopped" consequence.
+    #[tokio::test]
+    async fn acknowledge_incident_agent_initiator_writes_agent_transcript_note() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            acknowledged_at: None,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 6)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+        incident_repo
+            .expect_acknowledge()
+            .return_once(move |id, at, by| {
+                Box::pin(async move {
+                    Ok(Incident {
+                        acknowledged_at: Some(at),
+                        acknowledged_by: Some(by),
+                        ..Incident {
+                            id,
+                            ..make_incident(ServerId::new(), IncidentStatus::Active, 6)
+                        }
+                    })
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let notes_for_mock = Arc::clone(&notes);
+        let mut incident_phase_repo = MockIncidentPhaseRepository::new();
+        incident_phase_repo
+            .expect_find_current_phase()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        incident_phase_repo
+            .expect_create()
+            .times(1)
+            .returning(move |incident_id, phase, note| {
+                if let Some(n) = &note {
+                    notes_for_mock
+                        .lock()
+                        .expect("notes mutex must not be poisoned")
+                        .push(n.clone());
+                }
+                Box::pin(async move {
+                    Ok(rim_core::incident::model::IncidentPhaseRecord {
+                        id: rim_core::incident::model::IncidentPhaseId::new(),
+                        incident_id,
+                        phase,
+                        started_at: Utc::now(),
+                        ended_at: None,
+                        note,
+                    })
+                })
+            });
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            incident_phase_repo,
+            server_member_repo,
+            conversation_repo,
+        );
+
+        svc.acknowledge_incident(AcknowledgeIncidentCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: Some(CommandInitiator::Agent),
+        })
+        .await
+        .expect("agent-initiated ack must succeed");
+
+        // Hawkeye C2 review should-fix: pin the note *text*, not just the call count — the
+        // "moat" strings (`via AI agent` + the `paging stopped` consequence) are the contract.
+        let captured = notes.lock().expect("notes mutex must not be poisoned");
+        let agent_notes: Vec<&String> = captured
+            .iter()
+            .filter(|n| n.contains("via AI agent"))
+            .collect();
+        assert_eq!(
+            agent_notes.len(),
+            1,
+            "exactly one agent-attribution note expected, got: {captured:?}"
+        );
+        assert!(
+            agent_notes[0].contains("paging stopped"),
+            "ack note must state the paging-stopped consequence, got: {}",
+            agent_notes[0]
+        );
+    }
+
+    /// `initiator: None` (direct GraphQL mutation) writes no transcript note —
+    /// `MockIncidentPhaseRepository` has zero expectations, so any call panics.
+    #[tokio::test]
+    async fn acknowledge_incident_none_initiator_writes_no_note() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            acknowledged_at: None,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 7)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+        incident_repo
+            .expect_acknowledge()
+            .return_once(move |id, at, by| {
+                Box::pin(async move {
+                    Ok(Incident {
+                        acknowledged_at: Some(at),
+                        acknowledged_by: Some(by),
+                        ..Incident {
+                            id,
+                            ..make_incident(ServerId::new(), IncidentStatus::Active, 7)
+                        }
+                    })
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        // MockIncidentPhaseRepository::new() with no expectations: any call panics — this is
+        // the "no note" assertion.
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            MockIncidentPhaseRepository::new(),
+            server_member_repo,
+            conversation_repo,
+        );
+
+        svc.acknowledge_incident(AcknowledgeIncidentCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: None,
+        })
+        .await
+        .expect("None-initiated ack must succeed");
+    }
+
+    /// `initiator: Some(Palette)` — a human initiator — also writes no note. Gated on
+    /// `is_agentic()`, not `is_some()`.
+    #[tokio::test]
+    async fn acknowledge_incident_palette_initiator_writes_no_note() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            acknowledged_at: None,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 8)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+        incident_repo
+            .expect_acknowledge()
+            .return_once(move |id, at, by| {
+                Box::pin(async move {
+                    Ok(Incident {
+                        acknowledged_at: Some(at),
+                        acknowledged_by: Some(by),
+                        ..Incident {
+                            id,
+                            ..make_incident(ServerId::new(), IncidentStatus::Active, 8)
+                        }
+                    })
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        // MockIncidentPhaseRepository::new() with no expectations: any call panics.
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            MockIncidentPhaseRepository::new(),
+            server_member_repo,
+            conversation_repo,
+        );
+
+        svc.acknowledge_incident(AcknowledgeIncidentCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: Some(CommandInitiator::Palette),
+        })
+        .await
+        .expect("Palette-initiated ack must succeed");
+    }
+
+    /// Already-acknowledged incident + `Some(Agent)`: the idempotent early return happens
+    /// BEFORE the note gate, so no note is written — `MockIncidentPhaseRepository` has zero
+    /// expectations.
+    #[tokio::test]
+    async fn acknowledge_incident_already_acknowledged_with_agent_initiator_writes_no_note() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            acknowledged_at: Some(Utc::now()),
+            acknowledged_by: Some(UserId::new()),
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 9)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+        // No `expect_acknowledge()` — a second ack must not write again.
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        // No expectations on escalation_run_repo or incident_phase_repo — neither cancellation
+        // nor a transcript note may be attempted for an already-acked incident.
+        let svc = build_escalation_service(
+            incident_repo,
+            MockEscalationRunRepository::new(),
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            MockIncidentPhaseRepository::new(),
+            server_member_repo,
+            MockConversationRepository::new(),
+        );
+
+        let dto = svc
+            .acknowledge_incident(AcknowledgeIncidentCmd {
+                actor: Actor::new(actor_id),
+                incident_id,
+                initiator: Some(CommandInitiator::Agent),
+            })
+            .await
+            .expect("idempotent ack must succeed even for an agentic initiator");
+        assert!(dto.acknowledged_at.is_some());
+    }
+
+    /// Note-write repo failure is warn-only — the command still returns `Ok`.
+    #[tokio::test]
+    async fn acknowledge_incident_note_write_failure_does_not_fail_command() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            acknowledged_at: None,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 10)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+        incident_repo
+            .expect_acknowledge()
+            .return_once(move |id, at, by| {
+                Box::pin(async move {
+                    Ok(Incident {
+                        acknowledged_at: Some(at),
+                        acknowledged_by: Some(by),
+                        ..Incident {
+                            id,
+                            ..make_incident(ServerId::new(), IncidentStatus::Active, 10)
+                        }
+                    })
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let mut incident_phase_repo = MockIncidentPhaseRepository::new();
+        incident_phase_repo
+            .expect_find_current_phase()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        incident_phase_repo
+            .expect_create()
+            .times(1)
+            .returning(|_incident_id, _phase, _note| {
+                Box::pin(async {
+                    Err(rim_core::repository::error::RepoError::with_message(
+                        rim_core::repository::error::RepoErrorKind::Internal,
+                        "db unavailable",
+                    ))
+                })
+            });
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            incident_phase_repo,
+            server_member_repo,
+            conversation_repo,
+        );
+
+        let dto = svc
+            .acknowledge_incident(AcknowledgeIncidentCmd {
+                actor: Actor::new(actor_id),
+                incident_id,
+                initiator: Some(CommandInitiator::Agent),
+            })
+            .await
+            .expect("a note-write failure must not fail the command (warn-only path)");
+        assert!(dto.acknowledged_at.is_some());
+    }
+
+    // ── C2 §6.4: incident-timeline transcript of agent-driven escalate ───────
+
+    /// Agent-driven escalate with an active run: exactly one agent-attribution note is written
+    /// (distinct from — and in addition to — the unconditional C1 fired-step note).
+    #[tokio::test]
+    async fn escalate_incident_now_agent_initiator_with_active_run_writes_one_agent_note() {
+        let incident_id = IncidentId::new();
+        let run_id = EscalationRunId::new();
+        let policy_id = EscalationPolicyId::new();
+        let actor_id = UserId::new();
+        let target_user = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 11)
+        };
+        incident_repo.expect_find_by_id().returning(move |_| {
+            let incident = incident.clone();
+            Box::pin(async move { Ok(Some(incident)) })
+        });
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .withf(move |id| *id == incident_id)
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(Some(make_run(
+                        run_id,
+                        incident_id,
+                        policy_id,
+                        0,
+                        EscalationRunStatus::Active,
+                    )))
+                })
+            });
+        escalation_run_repo
+            .expect_find_by_id()
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(Some(make_run(
+                        run_id,
+                        incident_id,
+                        policy_id,
+                        0,
+                        EscalationRunStatus::Active,
+                    )))
+                })
+            });
+        escalation_run_repo
+            .expect_set_status()
+            .withf(move |id, status| *id == run_id && *status == EscalationRunStatus::Completed)
+            .times(1)
+            .return_once(move |id, status| {
+                Box::pin(async move { Ok(make_run(id, incident_id, policy_id, 0, status)) })
+            });
+
+        let mut escalation_step_repo = MockEscalationStepRepository::new();
+        escalation_step_repo
+            .expect_list_by_policy()
+            .returning(move |_| {
+                Box::pin(async move {
+                    Ok(vec![make_step(
+                        policy_id,
+                        0,
+                        0,
+                        EscalationTarget::User(target_user),
+                        vec![],
+                    )])
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(move |_, user_id| Ok(user_id == actor_id));
+
+        let notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let notes_for_mock = Arc::clone(&notes);
+        let mut incident_phase_repo = MockIncidentPhaseRepository::new();
+        incident_phase_repo
+            .expect_find_current_phase()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        incident_phase_repo
+            .expect_create()
+            .times(2) // C1's fired-step note + C2's agent-attribution note
+            .returning(move |incident_id, phase, note| {
+                if let Some(n) = &note {
+                    notes_for_mock
+                        .lock()
+                        .expect("notes mutex must not be poisoned")
+                        .push(n.clone());
+                }
+                Box::pin(async move {
+                    Ok(rim_core::incident::model::IncidentPhaseRecord {
+                        id: rim_core::incident::model::IncidentPhaseId::new(),
+                        incident_id,
+                        phase,
+                        started_at: Utc::now(),
+                        ended_at: None,
+                        note,
+                    })
+                })
+            });
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            escalation_step_repo,
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            incident_phase_repo,
+            server_member_repo,
+            conversation_repo,
+        );
+
+        svc.escalate_incident_now(EscalateIncidentNowCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: Some(CommandInitiator::Agent),
+        })
+        .await
+        .expect("agent-initiated escalate must succeed");
+
+        let captured = notes.lock().expect("notes mutex must not be poisoned");
+        let agent_notes: Vec<&String> = captured
+            .iter()
+            .filter(|n| n.contains("via AI agent"))
+            .collect();
+        assert_eq!(
+            agent_notes.len(),
+            1,
+            "exactly one agent-attribution note expected, got: {captured:?}"
+        );
+        assert!(agent_notes[0].contains("Immediate escalation requested"));
+    }
+
+    /// Agent-driven escalate with NO active run: a no-op success, no note (nothing happened).
+    #[tokio::test]
+    async fn escalate_incident_now_agent_initiator_no_active_run_writes_no_note() {
+        let incident_id = IncidentId::new();
+        let actor_id = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 12)
+        };
+        incident_repo
+            .expect_find_by_id()
+            .return_once(move |_| Box::pin(async move { Ok(Some(incident)) }));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .return_once(|_| Box::pin(async { Ok(None) }));
+
+        // MockIncidentPhaseRepository::new() with no expectations: fire_escalation_step is never
+        // reached, so neither the C1 fired-step note nor the C2 agent note can be attempted.
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            MockEscalationStepRepository::new(),
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            MockIncidentPhaseRepository::new(),
+            server_member_repo,
+            MockConversationRepository::new(),
+        );
+
+        svc.escalate_incident_now(EscalateIncidentNowCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: Some(CommandInitiator::Agent),
+        })
+        .await
+        .expect("no-op escalate must succeed");
+    }
+
+    /// `initiator: None` with an active run: the C1 fired-step note is still written
+    /// (unchanged), but no agent-attribution note is added.
+    #[tokio::test]
+    async fn escalate_incident_now_none_initiator_with_active_run_writes_no_agent_note() {
+        let incident_id = IncidentId::new();
+        let run_id = EscalationRunId::new();
+        let policy_id = EscalationPolicyId::new();
+        let actor_id = UserId::new();
+        let target_user = UserId::new();
+
+        let mut incident_repo = MockIncidentRepository::new();
+        let incident = Incident {
+            id: incident_id,
+            ..make_incident(ServerId::new(), IncidentStatus::Active, 13)
+        };
+        incident_repo.expect_find_by_id().returning(move |_| {
+            let incident = incident.clone();
+            Box::pin(async move { Ok(Some(incident)) })
+        });
+
+        let mut escalation_run_repo = MockEscalationRunRepository::new();
+        escalation_run_repo
+            .expect_find_active_by_incident()
+            .withf(move |id| *id == incident_id)
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(Some(make_run(
+                        run_id,
+                        incident_id,
+                        policy_id,
+                        0,
+                        EscalationRunStatus::Active,
+                    )))
+                })
+            });
+        escalation_run_repo
+            .expect_find_by_id()
+            .return_once(move |_| {
+                Box::pin(async move {
+                    Ok(Some(make_run(
+                        run_id,
+                        incident_id,
+                        policy_id,
+                        0,
+                        EscalationRunStatus::Active,
+                    )))
+                })
+            });
+        escalation_run_repo
+            .expect_set_status()
+            .times(1)
+            .return_once(move |id, status| {
+                Box::pin(async move { Ok(make_run(id, incident_id, policy_id, 0, status)) })
+            });
+
+        let mut escalation_step_repo = MockEscalationStepRepository::new();
+        escalation_step_repo
+            .expect_list_by_policy()
+            .returning(move |_| {
+                Box::pin(async move {
+                    Ok(vec![make_step(
+                        policy_id,
+                        0,
+                        0,
+                        EscalationTarget::User(target_user),
+                        vec![],
+                    )])
+                })
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(move |_, user_id| Ok(user_id == actor_id));
+
+        let notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let notes_for_mock = Arc::clone(&notes);
+        let mut incident_phase_repo = MockIncidentPhaseRepository::new();
+        incident_phase_repo
+            .expect_find_current_phase()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        incident_phase_repo
+            .expect_create()
+            .times(1) // only the C1 fired-step note — no agent note for a None initiator
+            .returning(move |incident_id, phase, note| {
+                if let Some(n) = &note {
+                    notes_for_mock
+                        .lock()
+                        .expect("notes mutex must not be poisoned")
+                        .push(n.clone());
+                }
+                Box::pin(async move {
+                    Ok(rim_core::incident::model::IncidentPhaseRecord {
+                        id: rim_core::incident::model::IncidentPhaseId::new(),
+                        incident_id,
+                        phase,
+                        started_at: Utc::now(),
+                        ended_at: None,
+                        note,
+                    })
+                })
+            });
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let svc = build_escalation_service(
+            incident_repo,
+            escalation_run_repo,
+            escalation_step_repo,
+            MockOnCallScheduleRepository::new(),
+            no_op_message_service(),
+            no_op_escalation_scheduler(),
+            incident_phase_repo,
+            server_member_repo,
+            conversation_repo,
+        );
+
+        svc.escalate_incident_now(EscalateIncidentNowCmd {
+            actor: Actor::new(actor_id),
+            incident_id,
+            initiator: None,
+        })
+        .await
+        .expect("None-initiated escalate must succeed");
+
+        let captured = notes.lock().expect("notes mutex must not be poisoned");
+        assert!(
+            captured.iter().all(|n| !n.contains("via AI agent")),
+            "no agent-attribution note expected for a None initiator, got: {captured:?}"
+        );
     }
 
     /// Mitigating an incident cancels its active escalation run (§4/§6/§7 bullet 3).

@@ -502,7 +502,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_commands_ai_surface_phase4_a5_returns_twelve_commands_with_caps() {
+    // C2 (`docs/specs/track-c2-agent-operator.md` §1) flips 4 more builtins to
+    // `ai_callable: true` — `incident.ack`/`incident.escalate`/`oncall.who`/
+    // `oncall.take_shift`, all with `required_capabilities: []` (§2) — so they
+    // surface here unconditionally regardless of the mocked capability grants.
+    // Renamed 12→16 to match the sibling inventory gate in `registry/mod.rs`.
+    async fn list_commands_ai_surface_c2_returns_sixteen_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -553,6 +558,10 @@ mod tests {
                 "chat.post_message",
                 "chat.search_messages",
                 "chat.toggle_reaction",
+                "incident.ack",
+                "incident.escalate",
+                "oncall.take_shift",
+                "oncall.who",
                 "workspace.navigate_to_channel",
                 "workspace.open_settings",
                 "workspace.switch_workspace",

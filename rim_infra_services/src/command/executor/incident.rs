@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::incident::command::{AcknowledgeIncidentCmd, EscalateIncidentNowCmd};
 use rim_services::{Actor, ServiceResult};
 
@@ -9,19 +10,26 @@ use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandRes
 use super::parse_uuid_arg;
 
 /// `incident.ack` — calls the same `IncidentService::acknowledge_incident` method the
-/// `acknowledgeIncident` GraphQL mutation calls (unified dispatch, §10.1).
+/// `acknowledgeIncident` GraphQL mutation calls (unified dispatch, §10.1). `initiator` is
+/// threaded into `AcknowledgeIncidentCmd` (C2 §3b) so the service can append an
+/// agent-transcript timeline note when the dispatch initiator is agentic.
 pub(super) async fn ack(
     services: &CommandServices,
     actor: Actor,
     args: serde_json::Map<String, Value>,
     _context: Option<CommandContextDto>,
+    initiator: CommandInitiator,
 ) -> ServiceResult<CommandResultDto> {
     let incident_id =
         parse_uuid_arg::<rim_core::incident::model::IncidentId>(&args, "incident_id")?;
 
     let incident = services
         .incident_service
-        .acknowledge_incident(AcknowledgeIncidentCmd { actor, incident_id })
+        .acknowledge_incident(AcknowledgeIncidentCmd {
+            actor,
+            incident_id,
+            initiator: Some(initiator),
+        })
         .await?;
 
     Ok(CommandResultDto {
@@ -40,18 +48,25 @@ pub(super) async fn ack(
 
 /// `incident.escalate` — calls the same `IncidentService::escalate_incident_now` method a
 /// future `escalateIncidentNow` GraphQL mutation would call (unified dispatch, §10.1).
+/// `initiator` is threaded into `EscalateIncidentNowCmd` (C2 §3b) so the service can append an
+/// agent-transcript timeline note when the dispatch initiator is agentic.
 pub(super) async fn escalate(
     services: &CommandServices,
     actor: Actor,
     args: serde_json::Map<String, Value>,
     _context: Option<CommandContextDto>,
+    initiator: CommandInitiator,
 ) -> ServiceResult<CommandResultDto> {
     let incident_id =
         parse_uuid_arg::<rim_core::incident::model::IncidentId>(&args, "incident_id")?;
 
     services
         .incident_service
-        .escalate_incident_now(EscalateIncidentNowCmd { actor, incident_id })
+        .escalate_incident_now(EscalateIncidentNowCmd {
+            actor,
+            incident_id,
+            initiator: Some(initiator),
+        })
         .await?;
 
     Ok(CommandResultDto {
@@ -78,6 +93,7 @@ mod tests {
     use rim_services::auth::service::MockAuthService;
     use rim_services::capability::service::MockCapabilityService;
     use rim_services::command::dto::CommandResultStatusDto;
+    use rim_services::command::initiator::CommandInitiator;
     use rim_services::conversation::service::MockConversationService;
     use rim_services::incident::dto::IncidentDto;
     use rim_services::incident::service::MockIncidentService;
@@ -164,18 +180,30 @@ mod tests {
             });
 
         let svc = make_services(incident_service, MockOnCallService::new());
-        let result = super::ack(&svc, actor(), args_with(incident_id), None)
-            .await
-            .expect("ack must succeed");
+        let result = super::ack(
+            &svc,
+            actor(),
+            args_with(incident_id),
+            None,
+            CommandInitiator::Palette,
+        )
+        .await
+        .expect("ack must succeed");
         assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
     #[tokio::test]
     async fn ack_missing_incident_id_returns_validation() {
         let svc = make_services(MockIncidentService::new(), MockOnCallService::new());
-        let err = super::ack(&svc, actor(), serde_json::Map::new(), None)
-            .await
-            .unwrap_err();
+        let err = super::ack(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            None,
+            CommandInitiator::Palette,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, rim_services::ServiceError::Validation(_)));
     }
 
@@ -189,18 +217,77 @@ mod tests {
             .return_once(|_| Box::pin(async { Ok(()) }));
 
         let svc = make_services(incident_service, MockOnCallService::new());
-        let result = super::escalate(&svc, actor(), args_with(incident_id), None)
-            .await
-            .expect("escalate must succeed");
+        let result = super::escalate(
+            &svc,
+            actor(),
+            args_with(incident_id),
+            None,
+            CommandInitiator::Palette,
+        )
+        .await
+        .expect("escalate must succeed");
         assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
     #[tokio::test]
     async fn escalate_missing_incident_id_returns_validation() {
         let svc = make_services(MockIncidentService::new(), MockOnCallService::new());
-        let err = super::escalate(&svc, actor(), serde_json::Map::new(), None)
-            .await
-            .unwrap_err();
+        let err = super::escalate(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            None,
+            CommandInitiator::Palette,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, rim_services::ServiceError::Validation(_)));
+    }
+
+    // ── C2 §6.5: executor threading — initiator lands on the Cmd struct ──
+
+    #[tokio::test]
+    async fn ack_threads_agent_initiator_onto_acknowledge_incident_cmd() {
+        let incident_id = IncidentId::new();
+        let now = chrono::Utc::now();
+        let mut incident_service = MockIncidentService::new();
+        incident_service
+            .expect_acknowledge_incident()
+            .withf(|cmd| cmd.initiator == Some(CommandInitiator::Agent))
+            .return_once(move |_| {
+                Box::pin(async move { Ok(make_incident_dto(incident_id, Some(now))) })
+            });
+
+        let svc = make_services(incident_service, MockOnCallService::new());
+        super::ack(
+            &svc,
+            actor(),
+            args_with(incident_id),
+            None,
+            CommandInitiator::Agent,
+        )
+        .await
+        .expect("ack must succeed");
+    }
+
+    #[tokio::test]
+    async fn escalate_threads_agent_initiator_onto_escalate_incident_now_cmd() {
+        let incident_id = IncidentId::new();
+        let mut incident_service = MockIncidentService::new();
+        incident_service
+            .expect_escalate_incident_now()
+            .withf(|cmd| cmd.initiator == Some(CommandInitiator::Agent))
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        let svc = make_services(incident_service, MockOnCallService::new());
+        super::escalate(
+            &svc,
+            actor(),
+            args_with(incident_id),
+            None,
+            CommandInitiator::Agent,
+        )
+        .await
+        .expect("escalate must succeed");
     }
 }

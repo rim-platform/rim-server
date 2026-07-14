@@ -1945,6 +1945,7 @@ impl Mutation {
             .acknowledge_incident(rim_services::incident::command::AcknowledgeIncidentCmd {
                 actor: Actor::new(actor),
                 incident_id,
+                initiator: None,
             })
             .await
             .map_err(map_service_error)?;
