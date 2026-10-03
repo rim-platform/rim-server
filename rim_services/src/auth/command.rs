@@ -17,6 +17,8 @@ pub struct BootstrapCmd {
 pub struct LoginCmd {
     pub username: String,
     pub password: String,
+    /// Client IP for per-IP login rate limiting (`"unknown"` when unavailable).
+    pub remote_ip: String,
 }
 
 #[derive(Debug, Clone)]

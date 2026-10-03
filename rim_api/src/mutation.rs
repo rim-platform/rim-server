@@ -379,10 +379,16 @@ impl Mutation {
 
     async fn login(&self, ctx: &Context<'_>, input: LoginInput) -> Result<LoginPayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        // Remote IP for rate limiting — service enforces the limit.
+        let remote_ip = ctx
+            .data::<crate::auth_context::RemoteIp>()
+            .map(|r| r.0.clone())
+            .unwrap_or_else(|_| "unknown".to_string());
         let res = auth
             .login(LoginCmd {
                 username: input.username,
                 password: input.password,
+                remote_ip,
             })
             .await
             .map_err(map_service_error)?;
