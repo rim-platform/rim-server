@@ -7,6 +7,25 @@
 
 ---
 
+## Status (re-checked against code 2026-10-03)
+
+| Finding | Status |
+|---|---|
+| S-H1 reset tokens in logs | **Fixed** (Track B3 — `LogEmailSender` logs recipient/subject only) |
+| S-H2 SSRF via DNS in link previews | **Fixed** (public-only DNS resolver on the fetch client) |
+| S-H3 no login rate limiting | **Fixed** (per-IP attempts + per-username failures) |
+| A-M1 `mockall` in production deps | **Fixed** (moved to `[dev-dependencies]`) |
+| S-M1 reset doesn't revoke sessions | Open |
+| S-M2 `workspacePresence` IDOR | Open |
+| S-M3 login timing oracle | Open (comment in `verify_login` still claims indistinguishability) |
+| S-M4 no rate limit on `requestPasswordReset` | Open |
+| S-M5 storage quota not enforced | Open |
+| A-H1 `BEFORE` pagination | Paginator reworked; not re-verified end to end |
+
+Everything not listed has not been re-checked. Update this table when fixing a finding.
+
+---
+
 ## Overall assessment
 
 This is a mature, security-conscious backend. The layered architecture (`rim_server → rim_api → rim_infra_services → rim_infra_db → entity`, with contracts in `rim_core`/`rim_services`) is **enforced in practice, not just documented**: greps confirm zero infra/SeaORM imports leaking into `rim_api`, zero transport/Actix/GraphQL concerns in `rim_core`/`rim_services`, and the only infra reach from `rim_server` is the sanctioned composition root (`app.rs`, FL1) plus one undocumented CLI spot (L-A1). Naming discipline is excellent (73 `*Cmd`, 72 `*Dto`, 49 `*Query`, no strays), the error-mapping chain (`DbErr → RepoError → ServiceError → GraphQL extension code`) is real and consistent, DataLoaders eliminate the obvious N+1s, and authorization is centralized through a shared access gate (`ensure_conversation_member_access` / `ensure_server_member`) applied at 29 call sites — so IDOR is mitigated by construction rather than per-resolver vigilance. Crypto is genuinely strong.
