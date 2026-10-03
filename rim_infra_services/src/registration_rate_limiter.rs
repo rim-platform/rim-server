@@ -21,11 +21,12 @@ type BucketKey = (String, String);
 type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 
 /// Shared, thread-safe per-(normalised-IP, key) sliding-window rate limiter for
-/// unauthenticated registration endpoints.
+/// unauthenticated registration and login endpoints.
 ///
 /// Used for:
 /// - `previewInviteToken`: 30 req / 5-min / IP (keyed `"preview_invite"`)
 /// - `signupWithInvite` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
+/// - `login`: 30 attempts / 5-min / IP, plus 10 failures / 15-min / username
 ///
 /// Single-node only; DashMap-backed.
 ///
@@ -101,6 +102,35 @@ impl RegistrationRateLimiter {
         // 20 signups per 10-minute window per IP — tighter than preview but
         // less tight than auth attempts.
         Self::new(600, 20)
+    }
+
+    /// Construct the per-IP login limiter (30 attempts / 5 min / IP).
+    ///
+    /// Counts every attempt, checked before the Argon2 verify, so it also bounds the
+    /// password-hashing CPU/memory a single source can burn.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// let limiter = RegistrationRateLimiter::login_ip_default();
+    /// ```
+    pub fn login_ip_default() -> Self {
+        Self::new(300, 30)
+    }
+
+    /// Construct the per-account login limiter (10 failures / 15 min / username).
+    ///
+    /// Stops a distributed credential-stuffing run against one account that the per-IP
+    /// limiter alone would miss. Only failures are recorded, so a user who signs in
+    /// correctly is never throttled by their own successful logins.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// let limiter = RegistrationRateLimiter::login_account_default();
+    /// ```
+    pub fn login_account_default() -> Self {
+        Self::new(900, 10)
     }
 
     /// Normalise a raw IP string to a canonical rate-limit key.
@@ -202,6 +232,32 @@ impl RegistrationRateLimiter {
 
         decision
     }
+
+    /// Remove one call recorded at `at` for `ip` under `key` by [`Self::check_and_record`].
+    ///
+    /// Lets a caller reserve a slot up front (so concurrent requests can't all slip past the
+    /// limit) and give it back when the outcome shouldn't count — e.g. login reserves before
+    /// verifying and refunds on success.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// use rim_services::command::rate_limit::RateLimitDecision;
+    /// use chrono::Utc;
+    /// let limiter = RegistrationRateLimiter::new(60, 1);
+    /// let now = Utc::now();
+    /// limiter.check_and_record("1.2.3.4", "k", now);
+    /// limiter.refund("1.2.3.4", "k", now);
+    /// assert_eq!(limiter.check_and_record("1.2.3.4", "k", now), RateLimitDecision::Allowed);
+    /// ```
+    pub fn refund(&self, ip: &str, key: &str, at: DateTime<Utc>) {
+        let map_key = (Self::normalise_ip(ip), key.to_string());
+        if let Some(mut entry) = self.store.get_mut(&map_key)
+            && let Some(pos) = entry.iter().rposition(|&ts| ts == at)
+        {
+            entry.remove(pos);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +289,27 @@ mod tests {
             ),
             "31st call must be limited"
         );
+    }
+
+    #[test]
+    fn refund_releases_reserved_slot() {
+        let rl = RegistrationRateLimiter::new(300, 1);
+        let t = now();
+        assert_eq!(
+            rl.check_and_record("4.4.4.4", "k", t),
+            RateLimitDecision::Allowed
+        );
+        assert!(matches!(
+            rl.check_and_record("4.4.4.4", "k", t),
+            RateLimitDecision::Limited { .. }
+        ));
+        rl.refund("4.4.4.4", "k", t);
+        assert_eq!(
+            rl.check_and_record("4.4.4.4", "k", t),
+            RateLimitDecision::Allowed
+        );
+        // Refunding an unknown bucket or timestamp is a no-op.
+        rl.refund("5.5.5.5", "k", t);
     }
 
     #[test]

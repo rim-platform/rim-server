@@ -24,6 +24,7 @@ use rim_services::auth::dto::{
     JoinServerByInviteResultDto, LoginResultDto, SignupResultDto, WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
@@ -35,6 +36,9 @@ use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
 use crate::util::ensure_server_owner;
 
+/// Fixed "IP" slot for the per-account login limiter, whose buckets are keyed by username alone.
+const LOGIN_ACCOUNT_SCOPE: &str = "account";
+
 #[derive(Clone)]
 pub struct DefaultAuthService {
     repos: AuthRepos,
@@ -44,6 +48,8 @@ pub struct DefaultAuthService {
     observers: Observers,
     preview_rate_limiter: RegistrationRateLimiter,
     signup_rate_limiter: RegistrationRateLimiter,
+    login_ip_rate_limiter: RegistrationRateLimiter,
+    login_account_rate_limiter: RegistrationRateLimiter,
     email_sender: std::sync::Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
     /// invite emails fall back to the bare token (dev-only — see `docs/email.md`).
@@ -76,6 +82,8 @@ impl DefaultAuthService {
             observers,
             preview_rate_limiter: RegistrationRateLimiter::preview_default(),
             signup_rate_limiter: RegistrationRateLimiter::signup_default(),
+            login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
+            login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
             email_sender,
             public_base_url,
         }
@@ -110,6 +118,26 @@ impl DefaultAuthService {
         &self.signup_rate_limiter
     }
 
+    /// Replace the login rate limiters (per-IP attempts, per-username failures).
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let svc = DefaultAuthService::new(/* ... */).with_login_rate_limiters(
+    ///     RegistrationRateLimiter::new(300, 30),
+    ///     RegistrationRateLimiter::new(900, 10),
+    /// );
+    /// ```
+    #[allow(dead_code)]
+    pub fn with_login_rate_limiters(
+        mut self,
+        ip_limiter: RegistrationRateLimiter,
+        account_limiter: RegistrationRateLimiter,
+    ) -> Self {
+        self.login_ip_rate_limiter = ip_limiter;
+        self.login_account_rate_limiter = account_limiter;
+        self
+    }
+
     /// Construct with explicit rate limiters — for testing or custom deployments.
     ///
     /// # Examples
@@ -139,6 +167,8 @@ impl DefaultAuthService {
             observers,
             preview_rate_limiter,
             signup_rate_limiter,
+            login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
+            login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
             email_sender,
             public_base_url,
         }
@@ -269,6 +299,62 @@ impl DefaultAuthService {
             session_id: sess.id,
             expires_at: sess.expires_at,
         }
+    }
+
+    /// Look up `username` and verify `password`, creating a session on success.
+    ///
+    /// Returns `Unauthenticated` for both unknown user and wrong password; the caller counts
+    /// that outcome against the per-account login limiter.
+    async fn verify_login(&self, username: &str, password: &str) -> ServiceResult<LoginResultDto> {
+        let user = self
+            .repos
+            .user_repo
+            .find_by_username(username)
+            .await?
+            .ok_or_else(|| {
+                // H4 audit: log failed login (user not found) — same branch as
+                // wrong-password to preserve timing indistinguishability.
+                tracing::info!(
+                    target = "audit",
+                    event = "login_failure",
+                    username = %username,
+                    reason = "user_not_found",
+                    "login attempt failed: user not found"
+                );
+                ServiceError::Unauthenticated
+            })?;
+
+        let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
+        if !ok {
+            // H4 audit: wrong password.
+            tracing::info!(
+                target = "audit",
+                event = "login_failure",
+                user_id = %user.id,
+                username = %username,
+                reason = "wrong_password",
+                "login attempt failed: wrong password"
+            );
+            return Err(ServiceError::Unauthenticated);
+        }
+
+        let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
+
+        // H4 audit: successful login.
+        tracing::info!(
+            target = "audit",
+            event = "login_success",
+            user_id = %user.id,
+            session_id = %sess.id,
+            "login succeeded"
+        );
+
+        Ok(LoginResultDto {
+            user_id: user.id,
+            session: Self::to_session_dto(&sess),
+            session_token: raw_token,
+            csrf_token: csrf,
+        })
     }
 
     async fn create_session_for_user(
@@ -581,57 +667,54 @@ impl AuthService for DefaultAuthService {
 
     #[instrument(name = "auth.login", skip_all, fields(username = %cmd.username))]
     async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto> {
-        let LoginCmd { username, password } = cmd;
+        let LoginCmd {
+            username,
+            password,
+            remote_ip,
+        } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
-        let user = self
-            .repos
-            .user_repo
-            .find_by_username(username)
-            .await?
-            .ok_or_else(|| {
-                // H4 audit: log failed login (user not found) — same branch as
-                // wrong-password to preserve timing indistinguishability.
-                tracing::info!(
-                    target = "audit",
-                    event = "login_failure",
-                    username = %username,
-                    reason = "user_not_found",
-                    "login attempt failed: user not found"
-                );
-                ServiceError::Unauthenticated
-            })?;
 
-        let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
-        if !ok {
-            // H4 audit: wrong password.
-            tracing::info!(
+        // Both limits are checked before any lookup or Argon2 verify, so a throttled caller
+        // costs no hashing work and gets the same answer whether or not the username exists.
+        // The account slot is reserved up front (not recorded after a failure) so concurrent
+        // attempts can't all pass the check before any of them fails; it is refunded below
+        // unless the attempt turns out to be a failed login.
+        let now = Utc::now();
+        let account_key = username.to_lowercase();
+        let ip_decision = self
+            .login_ip_rate_limiter
+            .check_and_record(&remote_ip, "login", now);
+        let decision = match ip_decision {
+            RateLimitDecision::Allowed => self.login_account_rate_limiter.check_and_record(
+                LOGIN_ACCOUNT_SCOPE,
+                &account_key,
+                now,
+            ),
+            limited => limited,
+        };
+        if let RateLimitDecision::Limited {
+            retry_after_seconds,
+        } = decision
+        {
+            tracing::warn!(
                 target = "audit",
-                event = "login_failure",
-                user_id = %user.id,
+                event = "login_rate_limited",
                 username = %username,
-                reason = "wrong_password",
-                "login attempt failed: wrong password"
+                remote_ip = %remote_ip,
+                retry_after_seconds = %retry_after_seconds,
+                "login rate limited"
             );
-            return Err(ServiceError::Unauthenticated);
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            });
         }
 
-        let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
-
-        // H4 audit: successful login.
-        tracing::info!(
-            target = "audit",
-            event = "login_success",
-            user_id = %user.id,
-            session_id = %sess.id,
-            "login succeeded"
-        );
-
-        Ok(LoginResultDto {
-            user_id: user.id,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_token,
-            csrf_token: csrf,
-        })
+        let result = self.verify_login(username, password).await;
+        if !matches!(result, Err(ServiceError::Unauthenticated)) {
+            self.login_account_rate_limiter
+                .refund(LOGIN_ACCOUNT_SCOPE, &account_key, now);
+        }
+        result
     }
 
     #[instrument(name = "auth.logout", skip_all, fields(actor_id = %cmd.actor.user_id, session_id = %cmd.session_id))]

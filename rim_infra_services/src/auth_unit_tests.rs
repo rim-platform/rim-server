@@ -21,8 +21,8 @@ mod tests {
     use rim_core::user::model::{NewUser, User, UserId};
     use rim_core::user::repository::MockUserRepository;
     use rim_services::auth::command::{
-        AcceptInviteCmd, BootstrapCmd, CreateInstanceInviteCmd, CreateInviteCmd, LogoutCmd,
-        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
+        AcceptInviteCmd, BootstrapCmd, CreateInstanceInviteCmd, CreateInviteCmd, LoginCmd,
+        LogoutCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
         SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
@@ -2767,5 +2767,193 @@ mod tests {
         assert_eq!(email.len(), 255);
         let err = DefaultAuthService::validate_email(&email).unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    // ─── login rate limiting (S-H3) ─────────────────────────────────────────
+
+    /// Build a service for login tests with the given user/session repos and login limiters.
+    fn login_svc(
+        user_repo: MockUserRepository,
+        session_repo: MockSessionRepository,
+        ip_limiter: RegistrationRateLimiter,
+        account_limiter: RegistrationRateLimiter,
+    ) -> DefaultAuthService {
+        let (_, sr, smr, _, ir, cr) = repos();
+        DefaultAuthService::new(
+            make_auth_repos(user_repo, sr, smr, session_repo, ir, cr),
+            None,
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+        .with_login_rate_limiters(ip_limiter, account_limiter)
+    }
+
+    fn login_cmd(username: &str, password: &str, remote_ip: &str) -> LoginCmd {
+        LoginCmd {
+            username: username.to_string(),
+            password: password.to_string(),
+            remote_ip: remote_ip.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn login_succeeds_and_successes_do_not_count_against_account_limit() {
+        let user_id = UserId::new();
+        let mut user = make_user(user_id, "alice");
+        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(2)
+            .returning(move |_| Ok(Some(user.clone())));
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .times(2)
+            .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
+
+        // Account limit of 1 would block the second call if successes were recorded.
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 10),
+            RegistrationRateLimiter::new(900, 1),
+        );
+
+        for _ in 0..2 {
+            let res = svc
+                .login(login_cmd("alice", "correct-horse", "1.1.1.1"))
+                .await
+                .unwrap();
+            assert_eq!(res.user_id, user_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn login_unknown_user_is_unauthenticated() {
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::login_ip_default(),
+            RegistrationRateLimiter::login_account_default(),
+        );
+
+        let err = svc
+            .login(login_cmd("ghost", "whatever", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn login_is_rate_limited_per_ip_before_any_lookup() {
+        let mut user_repo = MockUserRepository::new();
+        // Only allowed attempts may reach the repository (and Argon2): two from the
+        // throttled IP plus one from the unaffected IP.
+        user_repo
+            .expect_find_by_username()
+            .times(3)
+            .returning(|_| Ok(None));
+
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 2),
+            RegistrationRateLimiter::new(900, 100),
+        );
+
+        for i in 0..2 {
+            let err = svc
+                .login(login_cmd(&format!("user{i}"), "pw", "9.9.9.9"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+        let err = svc
+            .login(login_cmd("user3", "pw", "9.9.9.9"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+
+        // A different source IP is unaffected.
+        let err = svc
+            .login(login_cmd("user4", "pw", "8.8.8.8"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn login_account_limit_spans_source_ips_and_ignores_username_case() {
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(2)
+            .returning(|_| Ok(None));
+
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 2),
+        );
+
+        // Two failures from two different IPs exhaust the account budget...
+        for (name, ip) in [("victim", "1.1.1.1"), ("Victim", "2.2.2.2")] {
+            let err = svc.login(login_cmd(name, "guess", ip)).await.unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+        // ...so a third IP is throttled without touching the repository.
+        let err = svc
+            .login(login_cmd("VICTIM", "guess", "3.3.3.3"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+    }
+
+    #[tokio::test]
+    async fn login_repo_error_does_not_count_against_account_limit() {
+        let mut user_repo = MockUserRepository::new();
+        let mut seq = mockall::Sequence::new();
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(RepoError::with_message(RepoErrorKind::Internal, "db down")));
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(None));
+
+        // Limit 1: if the infrastructure failure consumed the slot, the second attempt
+        // would be rate limited instead of reaching the repository.
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 1),
+        );
+
+        let err = svc
+            .login(login_cmd("alice", "pw", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(!matches!(
+            err,
+            ServiceError::Unauthenticated | ServiceError::RateLimited { .. }
+        ));
+        let err = svc
+            .login(login_cmd("alice", "pw", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
     }
 }
