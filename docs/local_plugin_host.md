@@ -191,6 +191,29 @@ The intended direction is:
 Manifest capabilities are not, by themselves, a complete OS sandbox. The host/broker model is the
 minimum security boundary, and stronger sandboxing can be layered later.
 
+### Install flow (git installs)
+
+Installing a plugin is the moment untrusted code first reaches the machine, so the host treats
+every input to it as hostile (rim-ui findings S-H2 and S-H3, fixed 2026-10-04):
+
+1. **URL and branch validation before git runs.** Only `https://`, `ssh://` and scp-like
+   `user@host:owner/repo` URLs are accepted. Remote-helper syntax (`ext::`, `fd::`, anything with
+   `::`), `file://`, `git://`, a leading `-`, and non-printable characters are rejected with
+   `INVALID_GIT_URL`; branch names use a conservative ref-name allowlist (`INVALID_GIT_BRANCH`).
+2. **Hardened git invocation.** Every git child runs with `GIT_ALLOW_PROTOCOL=https:ssh` and
+   `GIT_TERMINAL_PROMPT=0`, and every argv puts `--` before positional arguments. Updates use
+   `fetch` plus `merge --ff-only -- @{upstream}` rather than `pull`.
+3. **Dependency installs need explicit consent.** `npm install` / `pip install` execute code chosen
+   by the plugin author with the user's full privileges, so they never run implicitly. Install and
+   update first detect which steps would run; without `allowPostInstall: true` the operation stops
+   with `POST_INSTALL_CONSENT_REQUIRED` carrying the exact commands and directories, nothing is
+   moved into the plugins directory or executed, and a declined update leaves the installed copy
+   untouched. The client shows the commands verbatim and retries only on confirm.
+4. **Capability approval** follows, as before, before the plugin is enabled.
+
+The implementation lives in `rim-ui/src-tauri/src/plugin_host/` (`git_source.rs`,
+`post_install.rs`, `git_install.rs`).
+
 ## First Plugin Version Priority
 
 The first real plugin host should prioritize:
