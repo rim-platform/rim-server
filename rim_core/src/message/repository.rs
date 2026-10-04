@@ -91,6 +91,9 @@ pub trait MessageRepository: Send + Sync {
     /// messages. Ordered `(sent_at DESC, id DESC)` for stable cursor pagination; returns up to
     /// `params.limit + 1` rows so the caller can detect a next page — this method does not
     /// truncate or compute pagination cursors itself, that is the service layer's job.
+    /// With a cursor, the rows are the ones nearest it in `params.dir`, so the extra row is the
+    /// one farthest from the cursor: the **last** row for `After` (and for no cursor), the
+    /// **first** row for `Before`.
     async fn search_messages_fts(
         &self,
         params: MessageSearchParams,
