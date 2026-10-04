@@ -1,7 +1,7 @@
 # RIM — Product Vision
 
-_Last updated 2026-10-03 to match the incident-wedge strategy ratified in `ROADMAP.md`
-(2026-07-10). The roadmap owns sequencing; this document owns the product principles._
+_Last updated 2026-10-04 to match the general-purpose direction in `ROADMAP.md`. The
+roadmap owns sequencing; this document owns the product principles._
 
 ## What RIM Is
 
@@ -21,17 +21,23 @@ The closest analogies are not Slack or Discord. They are:
 RIM applies the same philosophy to team communication: the user builds their own
 workflow instead of adapting to the platform.
 
-## Where RIM Goes to Market
+## Who RIM Is For
 
-A programmable workspace is a platform, and platforms need a first job to do. RIM's is
-**incident response for self-hosting dev/SRE/platform teams**: alerts arrive, an incident is
-declared, on-call is paged and escalated, and responders — and an AI agent — work the
-incident through the same commands, macros, and pipelines as everything else.
+RIM is not trying to replace Discord, Slack or Matrix. It is for people who want something
+those platforms do not offer: a communication workspace they can program. Gaming communities,
+developer teams, friend groups and ops teams all fit, and each shapes the workspace
+differently through commands, keybinds, macros, pipelines and plugins, without RIM shipping a
+feature for each of them. A developer adds a panel that shows the pods in their Kubernetes
+cluster; a community adds its own commands and automations; a privacy-minded group runs it on
+their own box.
 
-Pitch: *Slack + incident.io in one self-hosted box, with an AI agent that can actually run
-the incident.* Incident vendors rent someone else's chat and can only *suggest* actions;
-RIM owns the substrate, so its agent *acts* — through the command registry, under a human
-confirmation gate. The programmable runtime is what makes that possible and hard to copy.
+Pitch: *the self-hosted communication workspace you program.* A bring-your-own-model AI agent
+acts through the same command registry under a human confirmation gate, so it can operate
+whatever a workspace has plugged in. Other products' AI suggests; RIM's acts.
+
+Two long-term commitments shape the architecture from today: **end-to-end encryption** in a
+future version, and **convergence toward a decentralized chat platform**. `ROADMAP.md` carries
+the guardrails and the sequencing.
 
 ## What RIM Is Not
 
@@ -63,14 +69,13 @@ These are the capabilities that no competing product offers together:
    Plugins are first-class citizens with a marketplace, capability-based permissions,
    and trust boundaries.
 
-5. **Native incident layer with an AI operator** — incidents, on-call schedules,
-   escalation policies, and alert ingestion are first-class objects in the workspace, not a
-   bot bolted onto someone else's chat. A bring-your-own-model agent drives them through the
-   command registry, with capability checks and per-action human confirmation for anything
-   mutating or dangerous.
+5. **An AI operator, not an AI summarizer** — a bring-your-own-model agent drives the
+   workspace through the command registry, with capability checks and per-action human
+   confirmation for anything mutating or dangerous. Because plugins register commands in the
+   same registry, the agent can operate whatever a workspace has plugged in.
 
-6. **Self-hosted and sovereign** — one box, your data, your model. Table stakes in this
-   segment rather than a differentiator on its own, but required by the buyers RIM targets.
+6. **Self-hosted, auditable, converging on private** — one box, your data, your model, your
+   audit log today; end-to-end encryption and decentralization as committed horizons.
 
 The Tauri v2 desktop runtime (smaller binary, lower memory than Electron) is a real
 engineering advantage, but users rarely choose a tool for it — treat it as a quality
@@ -85,8 +90,9 @@ RIM is built for people who:
 - Want to customize their tools (keybinds, macros, workflows).
 - Value extensibility and are willing to install or build plugins.
 - Care about performance and resource efficiency.
-- Work in technical teams (developers, DevOps, SRE, platform, security).
-- Run their own infrastructure and want their communication and incident tooling there too.
+- Run a community or a team and want to shape the tool around it: gamers, developers,
+  ops teams, friend groups.
+- Prefer to self-host their communication, or at least to be able to.
 
 RIM is not built for people who want the simplest possible chat experience or who
 need an enterprise platform with thousands of pre-built integrations.
@@ -111,14 +117,15 @@ PagerDuty/Opsgenie, and its agents cannot drive runbooks. See
 | Non-Electron desktop  | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
 | Text E2EE             | ❌    | ❌      | ❌         | ❌    | ✅      | ❌ *  |
 
-\* Deliberately not a headline: end-to-end encryption conflicts with server-side search, AI
-grounding, and incident indexing. If it ships, it is scoped to DMs (see the anti-roadmap in
-`ROADMAP.md`).
+\* Committed for a future version, DMs and private groups first. It conflicts with server-side
+search, pipelines and AI grounding, so those move to the client for encrypted conversations
+(see Track 7 and the architecture guardrails in `ROADMAP.md`).
 
 ## Product Positioning — One Sentence
 
-> RIM is a self-hosted, programmable communication workspace where teams build their own
-> workflows — starting with incident response run by people and an AI agent together.
+> RIM is the self-hosted communication workspace you program: commands, keybinds, macros,
+> pipelines, plugins and an AI operator on top of chat, built to become private and
+> decentralized.
 
 ## Inspirations
 
