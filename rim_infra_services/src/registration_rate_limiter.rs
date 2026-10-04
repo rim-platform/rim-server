@@ -26,7 +26,8 @@ type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 /// Used for:
 /// - `previewInviteToken`: 30 req / 5-min / IP (keyed `"preview_invite"`)
 /// - `signupWithInvite` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
-/// - `login`: 30 attempts / 5-min / IP, plus 10 failures / 15-min / username
+/// - `login`: 30 attempts / 5-min / IP, 10 failures / 15-min / (IP, username), and
+///   100 failures / hour / username from any IP
 ///
 /// Single-node only; DashMap-backed.
 ///
@@ -118,11 +119,31 @@ impl RegistrationRateLimiter {
         Self::new(300, 30)
     }
 
-    /// Construct the per-account login limiter (10 failures / 15 min / username).
+    /// Construct the per-(IP, username) login limiter (10 failures / 15 min).
     ///
-    /// Stops a distributed credential-stuffing run against one account that the per-IP
-    /// limiter alone would miss. Only failures are recorded, so a user who signs in
-    /// correctly is never throttled by their own successful logins.
+    /// The strict guessing limit. Keyed by source and account together, so an attacker
+    /// burning it throttles that account only from their own address (and anyone sharing it,
+    /// such as the same NAT or IPv6 /64), not from the owner's. Behind a proxy without
+    /// `RIM_TRUST_FORWARDED_HEADERS`, every client shares the proxy's address and this
+    /// degrades to a per-username limit. Only failures are recorded, so a user who signs in
+    /// correctly is never throttled by their own logins.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// let limiter = RegistrationRateLimiter::login_ip_account_default();
+    /// ```
+    pub fn login_ip_account_default() -> Self {
+        Self::new(900, 10)
+    }
+
+    /// Construct the per-account login limiter (100 failures / hour / username, any IP).
+    ///
+    /// A backstop against distributed credential stuffing that spreads guesses over many
+    /// addresses. Deliberately loose: every source counts here, so a tight limit would let
+    /// anyone lock an account's owner out. Each address can add at most 40 failures an hour
+    /// (the per-(IP, username) limit), so tripping it takes three or more addresses (or IPv6
+    /// /64s) guessing for up to an hour. Only failures are recorded.
     ///
     /// # Examples
     /// ```
@@ -130,7 +151,7 @@ impl RegistrationRateLimiter {
     /// let limiter = RegistrationRateLimiter::login_account_default();
     /// ```
     pub fn login_account_default() -> Self {
-        Self::new(900, 10)
+        Self::new(3600, 100)
     }
 
     /// Construct the per-IP password-reset limiter (10 requests / hour / IP).

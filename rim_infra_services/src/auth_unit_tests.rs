@@ -2771,11 +2771,13 @@ mod tests {
 
     // ─── login rate limiting (S-H3) ─────────────────────────────────────────
 
-    /// Build a service for login tests with the given user/session repos and login limiters.
+    /// Build a service for login tests with the given user/session repos and login limiters
+    /// (per IP, per (IP, username), per username).
     fn login_svc(
         user_repo: MockUserRepository,
         session_repo: MockSessionRepository,
         ip_limiter: RegistrationRateLimiter,
+        ip_account_limiter: RegistrationRateLimiter,
         account_limiter: RegistrationRateLimiter,
     ) -> DefaultAuthService {
         let (_, sr, smr, _, ir, cr) = repos();
@@ -2788,7 +2790,7 @@ mod tests {
             Arc::new(crate::email::LogEmailSender),
             None,
         )
-        .with_login_rate_limiters(ip_limiter, account_limiter)
+        .with_login_rate_limiters(ip_limiter, ip_account_limiter, account_limiter)
     }
 
     fn login_cmd(username: &str, password: &str, remote_ip: &str) -> LoginCmd {
@@ -2816,12 +2818,13 @@ mod tests {
             .times(2)
             .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
 
-        // Account limit of 1 would block the second call if successes were recorded.
+        // Failure limits of 1 would block the second call if successes were recorded.
         let svc = login_svc(
             user_repo,
             session_repo,
             RegistrationRateLimiter::new(300, 10),
             RegistrationRateLimiter::new(900, 1),
+            RegistrationRateLimiter::new(3600, 1),
         );
 
         for _ in 0..2 {
@@ -2842,6 +2845,7 @@ mod tests {
             user_repo,
             MockSessionRepository::new(),
             RegistrationRateLimiter::login_ip_default(),
+            RegistrationRateLimiter::login_ip_account_default(),
             RegistrationRateLimiter::login_account_default(),
         );
 
@@ -2867,6 +2871,7 @@ mod tests {
             MockSessionRepository::new(),
             RegistrationRateLimiter::new(300, 2),
             RegistrationRateLimiter::new(900, 100),
+            RegistrationRateLimiter::new(3600, 100),
         );
 
         for i in 0..2 {
@@ -2902,7 +2907,8 @@ mod tests {
             user_repo,
             MockSessionRepository::new(),
             RegistrationRateLimiter::new(300, 100),
-            RegistrationRateLimiter::new(900, 2),
+            RegistrationRateLimiter::new(900, 100),
+            RegistrationRateLimiter::new(3600, 2),
         );
 
         // Two failures from two different IPs exhaust the account budget...
@@ -2933,13 +2939,14 @@ mod tests {
             .in_sequence(&mut seq)
             .returning(|_| Ok(None));
 
-        // Limit 1: if the infrastructure failure consumed the slot, the second attempt
+        // Limits of 1: if the infrastructure failure consumed a slot, the second attempt
         // would be rate limited instead of reaching the repository.
         let svc = login_svc(
             user_repo,
             MockSessionRepository::new(),
             RegistrationRateLimiter::new(300, 100),
             RegistrationRateLimiter::new(900, 1),
+            RegistrationRateLimiter::new(3600, 1),
         );
 
         let err = svc
@@ -2950,6 +2957,152 @@ mod tests {
             err,
             ServiceError::Unauthenticated | ServiceError::RateLimited { .. }
         ));
+        let err = svc
+            .login(login_cmd("alice", "pw", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn login_pair_limit_locks_out_the_guesser_not_the_owner() {
+        let user_id = UserId::new();
+        let mut user = make_user(user_id, "victim");
+        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+
+        let mut user_repo = MockUserRepository::new();
+        // Two guesses from the attacker, one attempt on another account from the same
+        // address, then the owner's login; the throttled third guess never reaches the
+        // repository.
+        user_repo
+            .expect_find_by_username()
+            .times(4)
+            .returning(move |name| Ok((name.eq_ignore_ascii_case("victim")).then(|| user.clone())));
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .times(1)
+            .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
+
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 2),
+            RegistrationRateLimiter::new(3600, 100),
+        );
+
+        for _ in 0..2 {
+            let err = svc
+                .login(login_cmd("victim", "guess", "6.6.6.6"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+        let err = svc
+            .login(login_cmd("Victim", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+
+        // The limit is per account too: the same address can still try another username.
+        let err = svc
+            .login(login_cmd("bob", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+
+        // The owner, from their own address, still signs in.
+        let res = svc
+            .login(login_cmd("victim", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap();
+        assert_eq!(res.user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn login_account_backstop_rejection_does_not_consume_pair_budget() {
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        // Clones share their buckets, so the second service below sees this pair state.
+        let ip_account = RegistrationRateLimiter::new(900, 2);
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 100),
+            ip_account.clone(),
+            RegistrationRateLimiter::new(3600, 1),
+        );
+
+        // One failure from elsewhere exhausts the per-username backstop...
+        let err = svc
+            .login(login_cmd("alice", "pw", "2.2.2.2"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+        // ...so this IP is throttled by it, without charging its own pair budget.
+        let err = svc
+            .login(login_cmd("alice", "pw", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+
+        // Once the backstop clears (a fresh one here), the pair still has both slots.
+        let svc = login_svc(
+            {
+                let mut repo = MockUserRepository::new();
+                repo.expect_find_by_username().returning(|_| Ok(None));
+                repo
+            },
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 100),
+            ip_account,
+            RegistrationRateLimiter::new(3600, 100),
+        );
+        for _ in 0..2 {
+            let err = svc
+                .login(login_cmd("alice", "pw", "1.1.1.1"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+    }
+
+    #[tokio::test]
+    async fn login_pair_limited_attempt_does_not_charge_account_backstop() {
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(2)
+            .returning(|_| Ok(None));
+
+        let svc = login_svc(
+            user_repo,
+            MockSessionRepository::new(),
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 1),
+            RegistrationRateLimiter::new(3600, 2),
+        );
+
+        // One failure exhausts this address's pair budget...
+        let err = svc
+            .login(login_cmd("alice", "pw", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+        // ...and further throttled attempts from it don't spend the account's backstop...
+        for _ in 0..3 {
+            let err = svc
+                .login(login_cmd("alice", "pw", "6.6.6.6"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::RateLimited { .. }));
+        }
+        // ...so another address still gets the backstop's second slot.
         let err = svc
             .login(login_cmd("alice", "pw", "1.1.1.1"))
             .await

@@ -13,7 +13,7 @@
 |---|---|
 | S-H1 reset tokens in logs | **Fixed** (Track B3 — `LogEmailSender` logs recipient/subject only) |
 | S-H2 SSRF via DNS in link previews | **Fixed** (public-only DNS resolver on the fetch client) |
-| S-H3 no login rate limiting | **Fixed** (per-IP attempts + per-username failures) |
+| S-H3 no login rate limiting | **Fixed** (30 attempts/5 min per IP; failures limited to 10/15 min per (IP, username) and 100/hour per username across all IPs). A single source can no longer lock an owner out; a sustained lockout needs 3+ addresses (or IPv6 /64s) guessing for up to an hour. Trade-off: a distributed guesser gets up to 2,400 guesses/day on one account (was 960). Possible follow-up: let addresses that recently signed in to an account skip the per-username limit |
 | A-M1 `mockall` in production deps | **Fixed** (moved to `[dev-dependencies]`) |
 | S-M1 reset doesn't revoke sessions | **Fixed** (one transaction: atomic token claim, new password, other reset links spent, all sessions revoked). Gap: a WebSocket already open on a revoked session keeps streaming until it disconnects (auth is checked only at connect) |
 | S-M2 `workspacePresence` IDOR | **Fixed** (requires workspace membership) |
