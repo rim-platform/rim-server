@@ -1,3 +1,4 @@
+use rim_core::workspace_feature::model::WorkspaceFeature;
 use rim_services::command::dto::{
     CommandArgumentDto, CommandArgumentTypeDto, CommandDefinitionDto, CommandExecutionTargetDto,
     CommandSourceKindDto,
@@ -54,6 +55,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
+            feature: Some(WorkspaceFeature::Incidents),
         },
         CommandDefinitionDto {
             id: "oncall.take_shift".to_string(),
@@ -116,6 +118,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
+            feature: Some(WorkspaceFeature::Incidents),
         },
     ]
 }

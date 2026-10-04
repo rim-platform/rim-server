@@ -48,6 +48,7 @@ use rim_services::command::service::CommandService;
 use rim_services::conversation::service::MockConversationService;
 use rim_services::message::service::MockMessageService;
 use rim_services::read_state::service::MockReadStateService;
+use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
 fn ai_cmd(id: &str, ai_callable: bool, caps: &[&str]) -> CommandDefinitionDto {
@@ -72,6 +73,7 @@ fn ai_cmd(id: &str, ai_callable: bool, caps: &[&str]) -> CommandDefinitionDto {
         sensitivity: CommandSensitivityDto::Safe,
         typed_verb: rim_services::command::verb::TypedVerb::Other,
         rate_limit_per_minute: None,
+        feature: None,
     }
 }
 
@@ -147,6 +149,9 @@ fn build_service(
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         },
     )
@@ -312,6 +317,9 @@ async fn list_commands_palette_does_not_consult_capability_service() {
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         },
     );

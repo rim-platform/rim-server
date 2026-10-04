@@ -78,6 +78,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Toggle,
             rate_limit_per_minute: None,
+            feature: None,
         },
     ]
 }

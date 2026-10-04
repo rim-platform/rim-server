@@ -62,6 +62,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let message_attachment_service = runtime.message_attachment_service;
     let ingest_token_service = runtime.ingest_token_service;
     let incident_service = runtime.incident_service;
+    let workspace_feature_service = runtime.workspace_feature_service;
     let alert_rate_limiter = runtime.alert_rate_limiter;
     let alert_max_body_bytes =
         crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
@@ -137,6 +138,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
             .app_data(web::Data::new(Arc::clone(&ingest_token_service)))
             .app_data(web::Data::new(Arc::clone(&incident_service)))
+            .app_data(web::Data::new(Arc::clone(&workspace_feature_service)))
             .app_data(web::Data::new(Arc::clone(&alert_rate_limiter)))
             .app_data(web::Data::new(alert_max_body_bytes))
             .app_data(web::Data::new(handler_cfg))

@@ -49,5 +49,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         sensitivity: CommandSensitivityDto::Safe,
         typed_verb: TypedVerb::Read,
         rate_limit_per_minute: None,
+        feature: None,
     }]
 }

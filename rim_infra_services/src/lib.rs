@@ -52,6 +52,7 @@ pub mod storage;
 pub(crate) mod thread;
 pub mod typing;
 pub(crate) mod user;
+pub(crate) mod workspace_feature;
 pub(crate) mod workspace_state;
 
 pub(crate) mod url_encode;
@@ -113,4 +114,5 @@ pub use repos::{
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,
     ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
 };
+pub use workspace_feature::WorkspaceFeatureRepos;
 pub use workspace_state::WorkspaceStateRepos;

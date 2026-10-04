@@ -16,6 +16,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::workspace_feature::repository::MockWorkspaceFeatureRepository;
     use rim_services::oncall::command::{
         AddRotationLayerCmd, CreateOnCallOverrideCmd, CreateOnCallScheduleCmd,
         DeleteOnCallOverrideCmd, DeleteOnCallScheduleCmd, ListOnCallSchedulesQuery,
@@ -109,6 +110,9 @@ mod tests {
             rotation_participant_repo: Arc::new(participant_repo),
             on_call_override_repo: Arc::new(override_repo),
             server_member_repo: Arc::new(server_member_repo),
+            workspace_feature_repo: std::sync::Arc::new(
+                MockWorkspaceFeatureRepository::all_enabled(),
+            ),
         })
     }
 
@@ -1766,5 +1770,43 @@ mod tests {
         assert_eq!(shifts[1].user_id, Some(u1));
         assert_eq!(shifts[1].start_at, anchor + Duration::hours(1));
         assert_eq!(shifts[1].end_at, anchor + Duration::hours(2));
+    }
+
+    // ── Track 0.4: `incidents` workspace feature gate ────────────────────────
+
+    #[tokio::test]
+    async fn create_schedule_rejected_when_incidents_feature_disabled() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+        let (mut schedule_repo, layer_repo, participant_repo, override_repo) = empty_repos();
+        schedule_repo.expect_create().never();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(owner_member(server_id, actor_id))));
+
+        let svc = DefaultOnCallService::new(OnCallRepos {
+            on_call_schedule_repo: Arc::new(schedule_repo),
+            rotation_layer_repo: Arc::new(layer_repo),
+            rotation_participant_repo: Arc::new(participant_repo),
+            on_call_override_repo: Arc::new(override_repo),
+            server_member_repo: Arc::new(server_member_repo),
+            workspace_feature_repo: Arc::new(MockWorkspaceFeatureRepository::all_disabled()),
+        });
+
+        let err = svc
+            .create_schedule(CreateOnCallScheduleCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                name: "Primary".to_string(),
+                timezone: "America/Chicago".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::FeatureDisabled { feature } if feature == "incidents"),
+            "got {err:?}"
+        );
     }
 }

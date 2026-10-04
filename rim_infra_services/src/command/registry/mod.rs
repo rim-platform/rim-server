@@ -83,6 +83,30 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
 mod tests {
     use super::*;
 
+    /// Track 0.4: exactly the four incident/on-call builtins belong to the `incidents`
+    /// workspace feature; every other builtin is always available.
+    #[test]
+    fn only_incident_and_oncall_builtins_are_feature_gated() {
+        let commands = builtin_commands();
+        let mut gated: Vec<&str> = commands
+            .iter()
+            .filter(|c| {
+                c.feature == Some(rim_core::workspace_feature::model::WorkspaceFeature::Incidents)
+            })
+            .map(|c| c.id.as_str())
+            .collect();
+        gated.sort_unstable();
+        assert_eq!(
+            gated,
+            [
+                "incident.ack",
+                "incident.escalate",
+                "oncall.take_shift",
+                "oncall.who"
+            ]
+        );
+    }
+
     #[test]
     fn builtin_commands_ids_are_unique() {
         let commands = builtin_commands();

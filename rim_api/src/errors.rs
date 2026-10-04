@@ -52,8 +52,32 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::EmailTaken => Error::new("email already in use").extend_with(|_, e| {
             e.set("code", Value::from("EMAIL_TAKEN"));
         }),
+        // Track 0.4: the workspace has this optional module turned off. `feature` carries the
+        // snake_case feature name so the client can tell which module to point the owner at.
+        ServiceError::FeatureDisabled { feature } => {
+            Error::new(format!("workspace feature `{feature}` is disabled")).extend_with(|_, e| {
+                e.set("code", Value::from("FEATURE_DISABLED"));
+                e.set("feature", Value::from(feature.as_str()));
+            })
+        }
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feature_disabled_maps_to_feature_disabled_code_with_feature_name() {
+        let err = map_service_error(ServiceError::FeatureDisabled {
+            feature: "incidents".to_string(),
+        });
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("FEATURE_DISABLED")));
+        assert_eq!(ext.get("feature"), Some(&Value::from("incidents")));
+        assert_eq!(err.message, "workspace feature `incidents` is disabled");
     }
 }

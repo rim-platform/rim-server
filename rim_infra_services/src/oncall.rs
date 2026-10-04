@@ -16,7 +16,10 @@ use rim_core::oncall::repository::{
 use rim_core::oncall::resolve::{
     ResolvedLayer, ScheduleSnapshot, next_boundary, resolve_on_call, resolve_shifts,
 };
+use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::workspace_feature::model::WorkspaceFeature;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::ServiceError;
 use rim_services::ServiceResult;
 use rim_services::oncall::command::{
@@ -31,7 +34,7 @@ use rim_services::oncall::dto::{
 };
 use rim_services::oncall::service::OnCallService;
 
-use crate::util::ensure_server_owner_or_moderator;
+use crate::util::{ensure_feature_enabled, ensure_server_owner_or_moderator};
 
 #[derive(Clone)]
 pub struct OnCallRepos {
@@ -40,6 +43,8 @@ pub struct OnCallRepos {
     pub rotation_participant_repo: Arc<dyn RotationParticipantRepository>,
     pub on_call_override_repo: Arc<dyn OnCallOverrideRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    /// Track 0.4: the `incidents` feature gate for every write path.
+    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
 }
 
 pub struct DefaultOnCallService {
@@ -49,6 +54,18 @@ pub struct DefaultOnCallService {
 impl DefaultOnCallService {
     pub fn new(repos: OnCallRepos) -> Self {
         Self { repos }
+    }
+
+    /// Track 0.4 write gate: every mutation in this service requires the workspace's
+    /// `incidents` feature (which covers on-call and escalation). Called after the
+    /// authorization check so non-members never learn the flag's value. Reads stay open.
+    async fn ensure_incidents_enabled(&self, server_id: ServerId) -> ServiceResult<()> {
+        ensure_feature_enabled(
+            self.repos.workspace_feature_repo.as_ref(),
+            server_id,
+            WorkspaceFeature::Incidents,
+        )
+        .await
     }
 
     /// Validates an IANA timezone name, matching the constraint documented on
@@ -103,6 +120,7 @@ impl DefaultOnCallService {
             actor,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         Ok(layer)
     }
 
@@ -130,6 +148,7 @@ impl DefaultOnCallService {
             actor,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         Ok(over)
     }
 
@@ -353,6 +372,7 @@ impl OnCallService for DefaultOnCallService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(cmd.server_id).await?;
         Self::validate_timezone(&cmd.timezone)?;
 
         let schedule = self
@@ -384,6 +404,7 @@ impl OnCallService for DefaultOnCallService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         if let Some(timezone) = &cmd.timezone {
             Self::validate_timezone(timezone)?;
         }
@@ -409,6 +430,7 @@ impl OnCallService for DefaultOnCallService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         self.repos
             .on_call_schedule_repo
             .delete(cmd.schedule_id)
@@ -479,6 +501,7 @@ impl OnCallService for DefaultOnCallService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         Self::validate_kind(&cmd.kind)?;
 
         let layer = self
@@ -565,6 +588,7 @@ impl OnCallService for DefaultOnCallService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(schedule.server_id).await?;
         self.ensure_all_members(schedule.server_id, std::slice::from_ref(&cmd.user_id))
             .await?;
         if cmd.start_at >= cmd.end_at {

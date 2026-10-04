@@ -21,6 +21,7 @@ mod tests {
     use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
     use rim_services::message::service::MockMessageService;
+    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
     use rim_services::{Actor, ServiceError};
 
     use crate::CommandRepos;
@@ -103,6 +104,9 @@ mod tests {
                 ),
                 oncall_service: std::sync::Arc::new(
                     rim_services::oncall::service::MockOnCallService::new(),
+                ),
+                workspace_feature_service: std::sync::Arc::new(
+                    MockWorkspaceFeatureService::all_enabled(),
                 ),
             },
         )
@@ -335,6 +339,7 @@ mod tests {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: rim_services::command::verb::TypedVerb::Other,
             rate_limit_per_minute: None,
+            feature: None,
         }
     }
 
@@ -493,9 +498,10 @@ mod tests {
             .await
             .unwrap();
 
+        // Without a workspace context, feature-gated builtins (Track 0.4) are hidden.
         let expected_palette_count = registry::builtin_commands()
             .iter()
-            .filter(|c| c.visible_in_palette)
+            .filter(|c| c.visible_in_palette && c.feature.is_none())
             .count();
         assert_eq!(palette.len(), expected_palette_count);
         assert!(palette.iter().any(|c| c.id == "chat.post_message"));
@@ -537,10 +543,22 @@ mod tests {
             cap,
         );
 
+        // The four incident/on-call commands are feature-gated (Track 0.4): they only surface
+        // with a workspace context whose `incidents` feature is on (the mocked feature service
+        // reports every feature enabled).
         let ai = svc
             .list_commands(ListCommandsQuery {
                 actor,
-                context: None,
+                context: Some(CommandContextDto {
+                    workspace_id: Some(rim_core::server::model::ServerId::new()),
+                    conversation_id: None,
+                    thread_id: None,
+                    selected_text: None,
+                    selected_message_id: None,
+                    selected_message_ids: vec![],
+                    focused_surface: None,
+                    active_panel: None,
+                }),
                 surface: CommandSurfaceDto::Ai,
             })
             .await
@@ -982,6 +1000,7 @@ mod tests {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: rim_services::command::verb::TypedVerb::Read,
             rate_limit_per_minute: Some(limit),
+            feature: None,
         }
     }
 
@@ -1019,6 +1038,9 @@ mod tests {
                 ),
                 oncall_service: std::sync::Arc::new(
                     rim_services::oncall::service::MockOnCallService::new(),
+                ),
+                workspace_feature_service: std::sync::Arc::new(
+                    MockWorkspaceFeatureService::all_enabled(),
                 ),
             },
             vec![cmd_def],
@@ -1164,6 +1186,9 @@ mod tests {
                 ),
                 oncall_service: std::sync::Arc::new(
                     rim_services::oncall::service::MockOnCallService::new(),
+                ),
+                workspace_feature_service: std::sync::Arc::new(
+                    MockWorkspaceFeatureService::all_enabled(),
                 ),
             },
         );
@@ -1326,6 +1351,7 @@ mod tests {
                         sensitivity: CommandSensitivityDto::Safe,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
+                        feature: None,
                     }])
                 })
             });
@@ -1499,6 +1525,7 @@ mod tests {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
+            feature: None,
         };
 
         DefaultCommandService::with_extra_builtins(
@@ -1535,6 +1562,9 @@ mod tests {
                 ),
                 oncall_service: std::sync::Arc::new(
                     rim_services::oncall::service::MockOnCallService::new(),
+                ),
+                workspace_feature_service: std::sync::Arc::new(
+                    MockWorkspaceFeatureService::all_enabled(),
                 ),
             },
             vec![mutating_cmd],
@@ -1684,6 +1714,7 @@ mod tests {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
+            feature: None,
         };
 
         assert!(
@@ -1740,6 +1771,7 @@ mod tests {
                         sensitivity: CommandSensitivityDto::Safe,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
+                        feature: None,
                     }])
                 })
             });
