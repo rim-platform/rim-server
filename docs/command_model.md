@@ -148,6 +148,31 @@ Each command should expose the following metadata.
 - `dangerous`
 - `supports_preview`
 - `supports_dry_run`
+- `feature` — the optional workspace module the command belongs to (see below), or none
+
+### `feature` (workspace feature gate, Track 0.4)
+
+`CommandDefinitionDto.feature: Option<WorkspaceFeature>` (GraphQL `Command.feature:
+WorkspaceFeature`, nullable) names the optional per-workspace module a command depends on.
+Today the only feature is `incidents` (GraphQL `INCIDENTS`), set on `incident.ack`,
+`incident.escalate`, `oncall.who` and `oncall.take_shift`. Every other builtin, every
+user-defined command and every macro has `feature = None` and is always available.
+
+- `list_commands` (and therefore `command_discover`, the AI surface and the keybind picker)
+  drops a command whose feature is off for `context.workspace_id`, with a single feature lookup
+  for the whole list. Without a workspace context, feature-gated commands are hidden: they
+  cannot run without one.
+- `execute_command` rejects a gated command with `ServiceError::FeatureDisabled` (GraphQL code
+  `FEATURE_DISABLED`, extension `feature: "incidents"`) when the feature is off for the
+  context's workspace or there is no workspace context. The gate (F1) runs after the capability
+  and confirmation gates and before the rate limiter, inside the audit wrapper, so the
+  rejection is audited and never consumes a rate-limit slot.
+- Nested dispatch hits the same gate: a user-command step or a pipe stage that reaches a gated
+  builtin fails with `FeatureDisabled`; a macro step goes through `execute_command` and fails
+  the same way.
+
+Feature state is managed per workspace by its Owner (`setWorkspaceFeature`); see
+`docs/specs/track-0-4-optional-incident-module.md`.
 
 ## Arguments
 
@@ -332,6 +357,7 @@ A command may be:
 - available only in certain contexts
 - available only on certain platforms
 - available only when a required capability is granted
+- available only when the workspace has the command's optional module (`feature`) turned on
 
 Examples:
 
