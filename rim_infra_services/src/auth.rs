@@ -7,7 +7,7 @@ use subtle::ConstantTimeEq;
 use tracing::{info, instrument, warn};
 
 use rim_auth::csrf::generate_csrf_token;
-use rim_auth::password::{hash_password, verify_password};
+use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInstanceInvite, NewInvite, NewSession};
 use rim_core::conversation::model::ConversationType;
@@ -306,23 +306,20 @@ impl DefaultAuthService {
     /// Returns `Unauthenticated` for both unknown user and wrong password; the caller counts
     /// that outcome against the per-account login limiter.
     async fn verify_login(&self, username: &str, password: &str) -> ServiceResult<LoginResultDto> {
-        let user = self
-            .repos
-            .user_repo
-            .find_by_username(username)
-            .await?
-            .ok_or_else(|| {
-                // H4 audit: log failed login (user not found) — same branch as
-                // wrong-password to preserve timing indistinguishability.
-                tracing::info!(
-                    target = "audit",
-                    event = "login_failure",
-                    username = %username,
-                    reason = "user_not_found",
-                    "login attempt failed: user not found"
-                );
-                ServiceError::Unauthenticated
-            })?;
+        let Some(user) = self.repos.user_repo.find_by_username(username).await? else {
+            // Pay the same Argon2 cost as a wrong password, so response time doesn't reveal
+            // whether the username exists.
+            verify_dummy_password(password).map_err(ServiceError::internal)?;
+            // H4 audit: log failed login (user not found).
+            tracing::info!(
+                target = "audit",
+                event = "login_failure",
+                username = %username,
+                reason = "user_not_found",
+                "login attempt failed: user not found"
+            );
+            return Err(ServiceError::Unauthenticated);
+        };
 
         let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
         if !ok {

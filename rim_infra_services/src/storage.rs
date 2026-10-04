@@ -2,20 +2,30 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::server::model::ServerId;
 use rim_core::storage::{StorageBackend, StorageError, StoredFile};
+use rim_services::message_attachment::{MAX_ATTACHMENT_BYTES, UPLOAD_TICKET_TTL_MINUTES};
 use rim_services::storage::service::{QuotaUsage, StorageService};
 use rim_services::{ServiceError, ServiceResult};
 
 pub struct DefaultStorageService {
     backend: Arc<dyn StorageBackend>,
+    /// Source of per-workspace usage: attachments are the only per-workspace uploads large
+    /// enough to need a quota.
+    attachment_repo: Arc<dyn MessageAttachmentRepository>,
     max_workspace_storage_bytes: u64,
 }
 
 impl DefaultStorageService {
-    pub fn new(backend: Arc<dyn StorageBackend>, max_workspace_storage_bytes: u64) -> Self {
+    pub fn new(
+        backend: Arc<dyn StorageBackend>,
+        attachment_repo: Arc<dyn MessageAttachmentRepository>,
+        max_workspace_storage_bytes: u64,
+    ) -> Self {
         Self {
             backend,
+            attachment_repo,
             max_workspace_storage_bytes,
         }
     }
@@ -91,13 +101,21 @@ impl StorageService for DefaultStorageService {
         self.backend.delete(key).await.map_err(map_storage_error)
     }
 
-    async fn get_quota_usage(&self, _workspace_id: ServerId) -> ServiceResult<QuotaUsage> {
-        // Quota tracking is not yet backed by a persistent store.
-        // Return the configured limit with zero usage for now.
+    async fn get_quota_usage(&self, workspace_id: ServerId) -> ServiceResult<QuotaUsage> {
+        let pending_since =
+            chrono::Utc::now() - chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES);
+        let usage = self
+            .attachment_repo
+            .usage_for_server(
+                workspace_id,
+                pending_since,
+                i64::try_from(MAX_ATTACHMENT_BYTES).unwrap_or(i64::MAX),
+            )
+            .await?;
         Ok(QuotaUsage {
-            used_bytes: 0,
+            used_bytes: usage.total_bytes,
             max_bytes: Some(self.max_workspace_storage_bytes),
-            file_count: 0,
+            file_count: usage.count,
         })
     }
 }
@@ -106,14 +124,23 @@ impl StorageService for DefaultStorageService {
 mod tests {
     use super::*;
     use crate::file_storage::LocalFileStorage;
+    use rim_core::message_attachment::model::AttachmentUsage;
+    use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
     use tempfile::TempDir;
+
+    fn service(backend: Arc<dyn StorageBackend>, usage: AttachmentUsage) -> DefaultStorageService {
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_usage_for_server()
+            .returning(move |_, _, _| Box::pin(async move { Ok(usage) }));
+        DefaultStorageService::new(backend, Arc::new(repo), 1_073_741_824)
+    }
 
     #[tokio::test]
     async fn upload_and_download() {
         let tmp = TempDir::new().unwrap();
         let backend: Arc<dyn StorageBackend> =
             Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
-        let svc = DefaultStorageService::new(backend, 1_073_741_824);
+        let svc = service(backend, AttachmentUsage::default());
 
         let stored = svc
             .upload_file("test/hello.txt", b"hello world", "text/plain")
@@ -131,7 +158,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let backend: Arc<dyn StorageBackend> =
             Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
-        let svc = DefaultStorageService::new(backend, 1_073_741_824);
+        let svc = service(backend, AttachmentUsage::default());
 
         svc.upload_file("to_delete.txt", b"bye", "text/plain")
             .await
@@ -143,15 +170,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quota_usage_returns_defaults() {
+    async fn quota_usage_reports_attachment_usage() {
         let tmp = TempDir::new().unwrap();
         let backend: Arc<dyn StorageBackend> =
             Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
-        let svc = DefaultStorageService::new(backend, 1_073_741_824);
+        let svc = service(
+            backend,
+            AttachmentUsage {
+                total_bytes: 4096,
+                count: 3,
+            },
+        );
 
         let usage = svc.get_quota_usage(ServerId::new()).await.unwrap();
-        assert_eq!(usage.used_bytes, 0);
+        assert_eq!(usage.used_bytes, 4096);
         assert_eq!(usage.max_bytes, Some(1_073_741_824));
-        assert_eq!(usage.file_count, 0);
+        assert_eq!(usage.file_count, 3);
     }
 }

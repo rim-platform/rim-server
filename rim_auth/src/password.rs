@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
@@ -73,6 +75,31 @@ pub fn verify_password(password: &str, password_hash: &str) -> AuthResult<bool> 
     // params when a PHC string embeds its own — so old low-param hashes still verify.
     let argon2 = production_argon2()?;
     Ok(argon2.verify_password(password.as_bytes(), &parsed).is_ok())
+}
+
+/// Run a full Argon2 verify of `password` against a fixed internal hash, discarding the result.
+///
+/// Call this on a "no such account" branch so it costs the same as a wrong password against a
+/// real account; otherwise the missing hash work tells a caller which usernames exist. The
+/// dummy hash is built once, with the production parameters, on first use; call this once at
+/// startup so no request pays that extra cost.
+///
+/// # Errors
+/// - [`AuthError::PasswordHash`] if the dummy hash cannot be built.
+///
+/// # Examples
+/// ```ignore
+/// verify_dummy_password("whatever the caller sent")?;
+/// ```
+pub fn verify_dummy_password(password: &str) -> AuthResult<()> {
+    static DUMMY_HASH: OnceLock<Option<String>> = OnceLock::new();
+    // `get_or_init` blocks concurrent first callers, so the hash is built exactly once.
+    let hash = DUMMY_HASH
+        .get_or_init(|| hash_password("rim-dummy-password-for-timing").ok())
+        .as_deref()
+        .ok_or(AuthError::PasswordHash)?;
+    verify_password(password, hash)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -185,6 +212,12 @@ mod tests {
     #[test]
     fn short_password_is_rejected() {
         assert!(hash_password("1234567").is_err()); // 7 chars
+    }
+
+    #[test]
+    fn verify_dummy_password_succeeds_for_any_input() {
+        assert!(verify_dummy_password("").is_ok());
+        assert!(verify_dummy_password("anything at all").is_ok());
     }
 
     #[test]

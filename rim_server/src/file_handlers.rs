@@ -45,8 +45,8 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
     }
 }
 
-/// Maximum upload size: 25 MB.
-const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
+/// Maximum upload size: 25 MB, the same cap the attachment service puts on declared sizes.
+const MAX_UPLOAD_BYTES: u64 = rim_services::message_attachment::MAX_ATTACHMENT_BYTES;
 
 /// Maximum avatar size: 2 MB.
 const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
@@ -214,7 +214,6 @@ async fn read_multipart_fields(
 pub async fn handle_file_upload(
     req: HttpRequest,
     payload: Multipart,
-    storage_service: web::Data<Arc<dyn StorageService>>,
     attachment_service: web::Data<Arc<dyn MessageAttachmentService>>,
 ) -> HttpResponse {
     if let Err(resp) = require_csrf(&req) {
@@ -263,38 +262,32 @@ pub async fn handle_file_upload(
         }
     };
 
-    // Store the file first.
-    let unique_id = uuid::Uuid::now_v7();
-    let storage_key = format!("uploads/{}/{}_{}", user_id, unique_id, upload.filename);
-
-    let stored = match storage_service
-        .upload_file(&storage_key, &upload.data, &upload.content_type)
-        .await
-    {
-        Ok(stored) => stored,
-        Err(e) => {
-            tracing::error!(error = %e, "file upload failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "upload failed"}));
-        }
-    };
-
+    // The service checks the token, ownership and declared size before it writes anything.
     let cmd = rim_services::message_attachment::command::CompleteUploadCmd {
         actor_user_id: user_id,
         attachment_id,
         upload_token,
-        storage_key: stored.key.clone(),
         uploaded_filename: upload.filename,
+        content_type: upload.content_type,
+        data: upload.data,
     };
-    if let Err(e) = attachment_service.complete_upload(cmd).await {
-        tracing::error!(error = %e, "failed to complete upload via service");
-        return map_service_error_to_response(e);
-    }
+    let attachment = match attachment_service.complete_upload(cmd).await {
+        Ok(attachment) => attachment,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to complete upload via service");
+            return map_service_error_to_response(e);
+        }
+    };
+    let Some(storage_key) = attachment.storage_key else {
+        tracing::error!(attachment_id = %attachment.id, "completed upload has no storage key");
+        return HttpResponse::InternalServerError()
+            .json(serde_json::json!({"error": "upload failed"}));
+    };
 
     HttpResponse::Ok().json(serde_json::json!({
-        "path": stored.key,
-        "size_bytes": stored.size_bytes,
-        "url": format!("/api/files/{}", stored.key),
+        "path": storage_key,
+        "size_bytes": attachment.size_bytes,
+        "url": format!("/api/files/{}", storage_key),
     }))
 }
 
@@ -457,7 +450,14 @@ pub async fn handle_avatar_upload(
             .json(serde_json::json!({"error": "avatar must be an image (png, jpeg, gif, webp)"}));
     }
 
-    let ext = upload.filename.rsplit('.').next().unwrap_or("png");
+    // Extension from the vetted content type, never the client filename, so each user has at
+    // most one avatar file per allowed type instead of one per invented extension.
+    let content_type = upload.content_type.to_lowercase();
+    let ext = ALLOWED_AVATAR_MIMES
+        .iter()
+        .find(|mime| content_type.starts_with(**mime))
+        .and_then(|mime| mime.strip_prefix("image/"))
+        .unwrap_or("png");
     let storage_key = format!("avatars/{}/avatar.{}", user_id, ext);
 
     match storage_service

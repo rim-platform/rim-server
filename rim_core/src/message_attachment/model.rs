@@ -24,3 +24,10 @@ pub struct NewMessageAttachment {
     pub mime_type: String,
     pub metadata: Option<serde_json::Value>,
 }
+
+/// Bytes and number of attachments counted against one workspace's storage quota.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AttachmentUsage {
+    pub total_bytes: u64,
+    pub count: u64,
+}

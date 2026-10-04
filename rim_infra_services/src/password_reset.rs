@@ -2,28 +2,42 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
+use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
 use rim_auth::password::hash_password;
 use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_core::auth::repository::SessionRepository;
 use rim_core::password_reset::model::NewPasswordResetToken;
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::user::repository::UserRepository;
+use rim_infra_db::begin_transaction;
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::password_reset::command::{RequestPasswordResetCmd, ResetPasswordCmd};
 use rim_services::password_reset::service::PasswordResetService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::email::{EmailSender, templates};
+use crate::registration_rate_limiter::RegistrationRateLimiter;
+use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
+
+/// Fixed "IP" slot for the per-username reset limiter, whose buckets are keyed by username alone.
+const RESET_ACCOUNT_SCOPE: &str = "account";
 
 #[derive(Clone)]
 pub struct PasswordResetRepos {
     pub user_repo: Arc<dyn UserRepository>,
     pub password_reset_token_repo: Arc<dyn PasswordResetTokenRepository>,
+    pub session_repo: Arc<dyn SessionRepository>,
 }
 
 pub struct DefaultPasswordResetService {
     repos: PasswordResetRepos,
+    /// When set, `reset_password` runs its writes in one transaction.
+    db: Option<DatabaseConnection>,
+    ip_rate_limiter: RegistrationRateLimiter,
+    account_rate_limiter: RegistrationRateLimiter,
     email_sender: Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/reset-password/{token}` link. If
     /// unset, the email falls back to the bare token (dev-only — see `docs/email.md`).
@@ -33,14 +47,30 @@ pub struct DefaultPasswordResetService {
 impl DefaultPasswordResetService {
     pub fn new(
         repos: PasswordResetRepos,
+        db: Option<DatabaseConnection>,
         email_sender: Arc<dyn EmailSender>,
         public_base_url: Option<String>,
     ) -> Self {
         Self {
             repos,
+            db,
+            ip_rate_limiter: RegistrationRateLimiter::password_reset_ip_default(),
+            account_rate_limiter: RegistrationRateLimiter::password_reset_account_default(),
             email_sender,
             public_base_url,
         }
+    }
+
+    /// Replace the request limiters (per-IP requests, per-username requests).
+    #[cfg(test)]
+    fn with_rate_limiters(
+        mut self,
+        ip_limiter: RegistrationRateLimiter,
+        account_limiter: RegistrationRateLimiter,
+    ) -> Self {
+        self.ip_rate_limiter = ip_limiter;
+        self.account_rate_limiter = account_limiter;
+        self
     }
 
     fn generate_reset_token() -> String {
@@ -74,44 +104,89 @@ impl DefaultPasswordResetService {
 impl PasswordResetService for DefaultPasswordResetService {
     #[instrument(name = "password_reset.request", skip_all, fields(username = %cmd.username))]
     async fn request_reset(&self, cmd: RequestPasswordResetCmd) -> ServiceResult<()> {
-        let user = self.repos.user_repo.find_by_username(&cmd.username).await?;
+        let RequestPasswordResetCmd {
+            username,
+            remote_ip,
+        } = cmd;
+        let now = Utc::now();
+
+        // A caller over the per-IP limit is told so; it is the one making the requests.
+        if let RateLimitDecision::Limited {
+            retry_after_seconds,
+        } = self
+            .ip_rate_limiter
+            .check_and_record(&remote_ip, "password_reset", now)
+        {
+            warn!(
+                target = "audit",
+                event = "password_reset_rate_limited",
+                remote_ip = %remote_ip,
+                retry_after_seconds = %retry_after_seconds,
+                "password reset request rate limited by IP"
+            );
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+
+        // Over the per-username limit, succeed silently without a new token or email: the
+        // account holder already has the earlier, still-valid links, and an error here would
+        // only let a third party block their resets. The limit applies whether or not the
+        // username exists, so it reveals nothing either.
+        if let RateLimitDecision::Limited { .. } = self.account_rate_limiter.check_and_record(
+            RESET_ACCOUNT_SCOPE,
+            &username.to_lowercase(),
+            now,
+        ) {
+            info!(
+                target = "audit",
+                event = "password_reset_suppressed",
+                username = %username,
+                "password reset request over the per-username limit; no email sent"
+            );
+            return Ok(());
+        }
+
+        let user = self.repos.user_repo.find_by_username(&username).await?;
 
         let Some(user) = user else {
             // Don't reveal whether user exists — silently succeed.
-            info!(username = %cmd.username, "password reset requested for unknown user");
+            info!(username = %username, "password reset requested for unknown user");
             return Ok(());
         };
 
         let raw_token = Self::generate_reset_token();
         let token_hash = hash_token(&raw_token);
-        let expires_at = Utc::now() + Duration::hours(1);
-
-        self.repos
-            .password_reset_token_repo
-            .create(NewPasswordResetToken {
-                user_id: user.id,
-                token_hash,
-                expires_at,
-            })
-            .await?;
-
+        let expires_at = now + Duration::hours(1);
         let link = self.build_reset_link(&raw_token);
         let message = templates::password_reset(&user.email, &link);
 
-        // Spawned rather than awaited: awaiting the SMTP round-trip (plus retry/backoff on
-        // transient failure — up to several seconds, see email/smtp.rs) here would make the
-        // known-user response measurably slower than the unknown-user early return above,
-        // letting a caller infer account existence from response timing. Fire-and-forget keeps
-        // this response path's cost near-constant regardless of whether `username` exists.
-        // Send failures remain non-fatal — logged, never surfaced to the caller.
+        // Token creation and the email send are spawned rather than awaited, so a known
+        // username returns after the same single lookup as an unknown one. Awaiting the insert,
+        // or the SMTP round-trip with its retry/backoff (up to several seconds, see
+        // email/smtp.rs), would let a caller infer account existence from response timing.
+        // Failures are logged, never surfaced to the caller.
+        let token_repo = Arc::clone(&self.repos.password_reset_token_repo);
         let email_sender = Arc::clone(&self.email_sender);
+        let user_id = user.id;
         tokio::spawn(async move {
+            let created = token_repo
+                .create(NewPasswordResetToken {
+                    user_id,
+                    token_hash,
+                    expires_at,
+                })
+                .await;
+            if let Err(e) = created {
+                warn!(error = %e, user_id = %user_id, "failed to create password reset token");
+                return;
+            }
+            info!(user_id = %user_id, "password reset token created");
             if let Err(e) = email_sender.send(message).await {
                 warn!(error = %e, "failed to send password reset email");
             }
         });
 
-        info!(user_id = %user.id, "password reset token created");
         Ok(())
     }
 
@@ -142,17 +217,57 @@ impl PasswordResetService for DefaultPasswordResetService {
 
         let password_hash = hash_password(&cmd.new_password).map_err(ServiceError::internal)?;
 
-        self.repos
+        // Claim the token, set the password, and cut off every other way back into the account
+        // (outstanding reset links, existing sessions) in one transaction when a DB is available.
+        let scope = match &self.db {
+            Some(db) => Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(&s.handle()).for_password_reset(),
+            None => self.repos.clone(),
+        };
+
+        // Atomic claim: a concurrent redemption of the same token gets `false` here and the
+        // transaction rolls back on drop.
+        if !repos
+            .password_reset_token_repo
+            .try_mark_used(record.id)
+            .await?
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        repos
             .user_repo
             .update_password(record.user_id, password_hash)
             .await?;
 
-        self.repos
+        let invalidated_tokens = repos
             .password_reset_token_repo
-            .mark_used(record.id)
+            .invalidate_unused_for_user(record.user_id)
+            .await?;
+        let revoked_sessions = repos
+            .session_repo
+            .revoke_all_for_user(record.user_id)
             .await?;
 
-        info!(user_id = %record.user_id, "password reset completed");
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        info!(
+            target = "audit",
+            event = "password_reset_completed",
+            user_id = %record.user_id,
+            revoked_sessions,
+            invalidated_tokens,
+            "password reset completed"
+        );
         Ok(())
     }
 }
@@ -160,6 +275,8 @@ impl PasswordResetService for DefaultPasswordResetService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rim_core::auth::repository::MockSessionRepository;
+    use rim_core::password_reset::model::{PasswordResetToken, PasswordResetTokenId};
     use rim_core::password_reset::repository::MockPasswordResetTokenRepository;
     use rim_core::user::model::{User, UserId};
     use rim_core::user::repository::MockUserRepository;
@@ -188,14 +305,50 @@ mod tests {
         email_sender: crate::email::MockEmailSender,
         public_base_url: Option<String>,
     ) -> DefaultPasswordResetService {
+        build_service_with_sessions(
+            user_repo,
+            token_repo,
+            MockSessionRepository::new(),
+            email_sender,
+            public_base_url,
+        )
+    }
+
+    fn build_service_with_sessions(
+        user_repo: MockUserRepository,
+        token_repo: MockPasswordResetTokenRepository,
+        session_repo: MockSessionRepository,
+        email_sender: crate::email::MockEmailSender,
+        public_base_url: Option<String>,
+    ) -> DefaultPasswordResetService {
         DefaultPasswordResetService::new(
             PasswordResetRepos {
                 user_repo: Arc::new(user_repo),
                 password_reset_token_repo: Arc::new(token_repo),
+                session_repo: Arc::new(session_repo),
             },
+            None,
             Arc::new(email_sender),
             public_base_url,
         )
+    }
+
+    fn reset_cmd(username: &str) -> RequestPasswordResetCmd {
+        RequestPasswordResetCmd {
+            username: username.to_string(),
+            remote_ip: "1.2.3.4".to_string(),
+        }
+    }
+
+    fn token_record(user_id: UserId) -> PasswordResetToken {
+        PasswordResetToken {
+            id: PasswordResetTokenId::new(),
+            user_id,
+            token_hash: hash_token("rim_rst_valid"),
+            expires_at: Utc::now() + Duration::hours(1),
+            used_at: None,
+            created_at: Utc::now(),
+        }
     }
 
     #[tokio::test]
@@ -237,11 +390,7 @@ mod tests {
             Some("https://rim.example.com".to_string()),
         );
 
-        let result = svc
-            .request_reset(RequestPasswordResetCmd {
-                username: "alice".to_string(),
-            })
-            .await;
+        let result = svc.request_reset(reset_cmd("alice")).await;
         assert!(result.is_ok());
 
         // The send is spawned, not awaited inline (timing side-channel fix) — give the spawned
@@ -262,11 +411,7 @@ mod tests {
 
         let svc = build_service(user_repo, token_repo, email_sender, None);
 
-        let result = svc
-            .request_reset(RequestPasswordResetCmd {
-                username: "nobody".to_string(),
-            })
-            .await;
+        let result = svc.request_reset(reset_cmd("nobody")).await;
         assert!(
             result.is_ok(),
             "must not reveal whether the user exists via an error"
@@ -300,11 +445,7 @@ mod tests {
 
         let svc = build_service(user_repo, token_repo, email_sender, None);
 
-        let result = svc
-            .request_reset(RequestPasswordResetCmd {
-                username: "alice".to_string(),
-            })
-            .await;
+        let result = svc.request_reset(reset_cmd("alice")).await;
         assert!(
             result.is_ok(),
             "email send failure must not fail the request"
@@ -357,17 +498,15 @@ mod tests {
             PasswordResetRepos {
                 user_repo: Arc::new(user_repo),
                 password_reset_token_repo: Arc::new(token_repo),
+                session_repo: Arc::new(MockSessionRepository::new()),
             },
+            None,
             Arc::new(SlowEmailSender),
             None,
         );
 
         let start = std::time::Instant::now();
-        let result = svc
-            .request_reset(RequestPasswordResetCmd {
-                username: "alice".to_string(),
-            })
-            .await;
+        let result = svc.request_reset(reset_cmd("alice")).await;
         let elapsed = start.elapsed();
 
         assert!(result.is_ok());
@@ -401,5 +540,160 @@ mod tests {
             None,
         );
         assert_eq!(svc.build_reset_link("rim_rst_abc123"), "rim_rst_abc123");
+    }
+
+    #[tokio::test]
+    async fn request_reset_over_ip_limit_is_rate_limited() {
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let svc = build_service(
+            user_repo,
+            MockPasswordResetTokenRepository::new(),
+            crate::email::MockEmailSender::new(),
+            None,
+        )
+        .with_rate_limiters(
+            RegistrationRateLimiter::new(3600, 1),
+            RegistrationRateLimiter::new(3600, 100),
+        );
+
+        assert!(svc.request_reset(reset_cmd("first")).await.is_ok());
+        let err = svc.request_reset(reset_cmd("second")).await.unwrap_err();
+        assert!(
+            matches!(err, ServiceError::RateLimited { .. }),
+            "expected RateLimited, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_reset_over_username_limit_succeeds_without_sending() {
+        let user_id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        // Only the first request reaches the lookup; the second is suppressed before it.
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .returning(move |_| Ok(Some(make_user(user_id, "alice", "alice@example.com"))));
+
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo.expect_create().times(1).returning(|new| {
+            Ok(PasswordResetToken {
+                id: PasswordResetTokenId::new(),
+                user_id: new.user_id,
+                token_hash: new.token_hash,
+                expires_at: new.expires_at,
+                used_at: None,
+                created_at: Utc::now(),
+            })
+        });
+
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().times(1).returning(|_| Ok(()));
+
+        let svc = build_service(user_repo, token_repo, email_sender, None).with_rate_limiters(
+            RegistrationRateLimiter::new(3600, 100),
+            RegistrationRateLimiter::new(3600, 1),
+        );
+
+        assert!(svc.request_reset(reset_cmd("alice")).await.is_ok());
+        // Case-insensitive: "ALICE" shares alice's bucket.
+        assert!(
+            svc.request_reset(reset_cmd("ALICE")).await.is_ok(),
+            "the per-username limit must not surface an error"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn reset_password_revokes_sessions_and_other_tokens() {
+        let user_id = UserId::new();
+        let record = token_record(user_id);
+        let record_id = record.id;
+
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(record.clone())));
+        token_repo
+            .expect_try_mark_used()
+            .withf(move |id| *id == record_id)
+            .times(1)
+            .returning(|_| Ok(true));
+        token_repo
+            .expect_invalidate_unused_for_user()
+            .withf(move |id| *id == user_id)
+            .times(1)
+            .returning(|_| Ok(2));
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_update_password()
+            .withf(move |id, _| *id == user_id)
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_revoke_all_for_user()
+            .withf(move |id| *id == user_id)
+            .times(1)
+            .returning(|_| Ok(3));
+
+        let svc = build_service_with_sessions(
+            user_repo,
+            token_repo,
+            session_repo,
+            crate::email::MockEmailSender::new(),
+            None,
+        );
+
+        svc.reset_password(ResetPasswordCmd {
+            token: "rim_rst_valid".to_string(),
+            new_password: "new-password-123".to_string(),
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reset_password_losing_the_token_claim_changes_nothing() {
+        let user_id = UserId::new();
+        let record = token_record(user_id);
+
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(record.clone())));
+        // A concurrent redemption claimed the token first.
+        token_repo.expect_try_mark_used().returning(|_| Ok(false));
+        token_repo.expect_invalidate_unused_for_user().never();
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_update_password().never();
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_revoke_all_for_user().never();
+
+        let svc = build_service_with_sessions(
+            user_repo,
+            token_repo,
+            session_repo,
+            crate::email::MockEmailSender::new(),
+            None,
+        );
+
+        let err = svc
+            .reset_password(ResetPasswordCmd {
+                token: "rim_rst_valid".to_string(),
+                new_password: "new-password-123".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
     }
 }

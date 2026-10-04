@@ -133,6 +133,30 @@ impl RegistrationRateLimiter {
         Self::new(900, 10)
     }
 
+    /// Construct the per-IP password-reset limiter (10 requests / hour / IP).
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// let limiter = RegistrationRateLimiter::password_reset_ip_default();
+    /// ```
+    pub fn password_reset_ip_default() -> Self {
+        Self::new(3600, 10)
+    }
+
+    /// Construct the per-username password-reset limiter (3 requests / hour / username).
+    ///
+    /// Bounds how many reset emails one address can receive, whoever asks for them.
+    ///
+    /// # Examples
+    /// ```
+    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
+    /// let limiter = RegistrationRateLimiter::password_reset_account_default();
+    /// ```
+    pub fn password_reset_account_default() -> Self {
+        Self::new(3600, 3)
+    }
+
     /// Normalise a raw IP string to a canonical rate-limit key.
     ///
     /// - **IPv4**: returned unchanged (full /32 precision).

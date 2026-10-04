@@ -5,7 +5,9 @@ mod support;
 use rim_core::conversation::model::ConversationType;
 use rim_core::message::model::NewMessage;
 use rim_core::message::repository::MessageRepository;
-use rim_core::message_attachment::model::{MessageAttachmentId, NewMessageAttachment};
+use rim_core::message_attachment::model::{
+    AttachmentUsage, MessageAttachmentId, NewMessageAttachment,
+};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
@@ -187,4 +189,177 @@ async fn get_attachments_for_messages_empty_slice() {
 
     let map = repo.get_attachments_for_messages(&[]).await.unwrap();
     assert!(map.is_empty());
+}
+
+const MAX_FILE: i64 = 25 * 1024 * 1024;
+
+/// An attachment id whose embedded creation time is `minutes_ago` in the past.
+fn id_from_minutes_ago(minutes_ago: i64) -> MessageAttachmentId {
+    let at = chrono::Utc::now() - chrono::Duration::minutes(minutes_ago);
+    MessageAttachmentId::from(uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
+        uuid::NoContext,
+        at.timestamp() as u64,
+        0,
+    )))
+}
+
+fn window_start() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::minutes(15)
+}
+
+fn attachment_for(
+    message_id: rim_core::message::model::MessageId,
+    storage_url: &str,
+    file_size: i64,
+    status: &str,
+) -> NewMessageAttachment {
+    NewMessageAttachment {
+        id: MessageAttachmentId::new(),
+        message_id,
+        storage_url: storage_url.to_owned(),
+        file_name: "f.bin".to_owned(),
+        file_size,
+        mime_type: "application/octet-stream".to_owned(),
+        metadata: Some(serde_json::json!({ "status": status })),
+    }
+}
+
+#[tokio::test]
+async fn usage_for_server_counts_stored_and_live_pending_only() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+
+    let user = ctx.create_user("usage-user").await;
+    let server = ctx.create_server("usage").await;
+    let other_server = ctx.create_server("other").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let other_conv = ctx
+        .create_conversation(other_server.id, ConversationType::Group)
+        .await;
+    let msg = ctx.create_message(conv.id, user.id, "m").await;
+    let other_msg = ctx.create_message(other_conv.id, user.id, "o").await;
+
+    assert_eq!(
+        repo.usage_for_server(server.id, window_start(), MAX_FILE)
+            .await
+            .unwrap(),
+        AttachmentUsage::default()
+    );
+
+    repo.add_attachment(attachment_for(msg.id, "uploads/a", 100, "ready"))
+        .await
+        .unwrap();
+    repo.add_attachment(attachment_for(msg.id, "pending://t1", 20, "pending_upload"))
+        .await
+        .unwrap();
+    // A reservation the stale cleanup failed before any file arrived holds no storage.
+    repo.add_attachment(attachment_for(msg.id, "pending://t2", 5_000, "failed"))
+        .await
+        .unwrap();
+    // A reservation whose ticket lapsed without an upload holds no storage either.
+    let mut expired = attachment_for(msg.id, "pending://t3", 7_000, "pending_upload");
+    expired.id = id_from_minutes_ago(16);
+    repo.add_attachment(expired).await.unwrap();
+    // A stored file older than the window still counts, clamped to the per-file maximum.
+    let mut legacy = attachment_for(msg.id, "uploads/legacy", i64::MAX, "ready");
+    legacy.id = id_from_minutes_ago(60 * 24);
+    repo.add_attachment(legacy).await.unwrap();
+    repo.add_attachment(attachment_for(other_msg.id, "uploads/b", 7, "ready"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.usage_for_server(server.id, window_start(), MAX_FILE)
+            .await
+            .unwrap(),
+        AttachmentUsage {
+            total_bytes: 120 + MAX_FILE as u64,
+            count: 3,
+        }
+    );
+}
+
+#[tokio::test]
+async fn try_complete_upload_succeeds_once_per_token() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+
+    let user = ctx.create_user("complete-user").await;
+    let server = ctx.create_server("complete").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let msg = ctx.create_message(conv.id, user.id, "m").await;
+    let att = repo
+        .add_attachment(attachment_for(
+            msg.id,
+            "pending://tok",
+            50,
+            "pending_upload",
+        ))
+        .await
+        .unwrap();
+
+    let done = repo
+        .try_complete_upload(
+            att.id,
+            "pending://tok".to_string(),
+            window_start(),
+            "uploads/first".to_string(),
+            42,
+            Some(serde_json::json!({ "status": "uploaded" })),
+        )
+        .await
+        .unwrap()
+        .expect("first completion wins");
+    assert_eq!(done.storage_url, "uploads/first");
+    assert_eq!(done.file_size, 42);
+
+    let second = repo
+        .try_complete_upload(
+            att.id,
+            "pending://tok".to_string(),
+            window_start(),
+            "uploads/second".to_string(),
+            42,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(second.is_none(), "the token is spent after one completion");
+    let stored = repo.get_by_id(att.id).await.unwrap().unwrap();
+    assert_eq!(stored.storage_url, "uploads/first");
+}
+
+#[tokio::test]
+async fn try_complete_upload_refuses_an_expired_reservation() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+
+    let user = ctx.create_user("expired-user").await;
+    let server = ctx.create_server("expired").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let msg = ctx.create_message(conv.id, user.id, "m").await;
+    let mut pending = attachment_for(msg.id, "pending://late", 50, "pending_upload");
+    pending.id = id_from_minutes_ago(16);
+    let att = repo.add_attachment(pending).await.unwrap();
+
+    let res = repo
+        .try_complete_upload(
+            att.id,
+            "pending://late".to_string(),
+            window_start(),
+            "uploads/late".to_string(),
+            50,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(res.is_none(), "a lapsed reservation can't be filled");
+    let stored = repo.get_by_id(att.id).await.unwrap().unwrap();
+    assert_eq!(stored.storage_url, "pending://late");
 }

@@ -158,10 +158,8 @@ impl DefaultAppServiceProvider {
         );
         let password_reset_service: Arc<dyn PasswordResetService> =
             Arc::new(crate::password_reset::DefaultPasswordResetService::new(
-                crate::password_reset::PasswordResetRepos {
-                    user_repo: Arc::clone(&repos.user_repo),
-                    password_reset_token_repo: Arc::clone(&repos.password_reset_token_repo),
-                },
+                repos.for_password_reset(),
+                Some(db.clone()),
                 Arc::clone(&email_sender),
                 public_base_url.clone(),
             ));

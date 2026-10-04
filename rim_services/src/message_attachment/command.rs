@@ -43,14 +43,28 @@ pub struct GetAttachmentQuery {
 }
 
 /// Completes a pending upload: validates the upload token, checks that the
-/// attachment is in pending state, and updates the storage key.
-#[derive(Debug, Clone)]
+/// attachment is in pending state and that `data` fits its declared size, then
+/// stores `data` and records the storage key.
 pub struct CompleteUploadCmd {
     pub actor_user_id: rim_core::user::model::UserId,
     pub attachment_id: MessageAttachmentId,
     pub upload_token: String,
-    pub storage_key: String,
     pub uploaded_filename: String,
+    pub content_type: String,
+    pub data: Vec<u8>,
+}
+
+impl std::fmt::Debug for CompleteUploadCmd {
+    // Hand-written so a debug log never dumps the file contents.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompleteUploadCmd")
+            .field("actor_user_id", &self.actor_user_id)
+            .field("attachment_id", &self.attachment_id)
+            .field("uploaded_filename", &self.uploaded_filename)
+            .field("content_type", &self.content_type)
+            .field("data_len", &self.data.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Authorize a download: verify the requesting user has access to the

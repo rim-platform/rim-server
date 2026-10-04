@@ -8,6 +8,7 @@
 /// is absent or does not look like a test database, rather than silently
 /// skipping the test (matches the pattern used by
 /// `rim_infra_db/tests/support/mod.rs`).
+#[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 
 use std::env;
@@ -354,6 +355,7 @@ pub async fn build_test_schema(
     ));
     let storage_service: Arc<dyn StorageService> = Arc::new(DefaultStorageService::new(
         Arc::clone(&storage_backend) as Arc<dyn rim_core::storage::StorageBackend>,
+        Arc::clone(&repos.message_attachment_repo),
         1_073_741_824,
     ));
 
