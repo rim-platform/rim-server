@@ -1,211 +1,261 @@
 # Roadmap
 
-_Rebuilt 2026-07-08 (Fable review + Doctor Strange market recon). Supersedes the
-2026-04-25 roadmap; its phase history and shipped-state ledger are preserved below.
-See `docs/vision.md` for product vision, `fable-notes.md` (both repos) for the
-architecture review this roadmap incorporates._
+_Rebuilt 2026-10-04 for the general-purpose direction. Supersedes the 2026-07-08 roadmap
+(incident-wedge bet). The shipped-state ledger from that roadmap is preserved below and was
+re-verified against both repositories on 2026-10-04. See `docs/vision.md` for product
+principles and `docs/next-steps-2026-10-04.md` for the verified state of the code._
 
-## Strategic Thesis — updated 2026-07-08
+## Strategic Thesis — updated 2026-10-04
 
-RIM is a programmable communication workspace. That thesis is unchanged and the market
-has moved *toward* it: Slack turned Slackbot into an AI teammate, Mattermost shipped
-Agents V2 (sovereign self-hosted AI with grounded citations, June 2026), Rocket.Chat
-runs local LLMs, and every incident-tooling vendor (incident.io, Rootly, Grafana IRM)
-ships "AI SRE" that *suggests* actions inside chat it doesn't own. FireHydrant was
-absorbed into Freshworks (Jan 2026) — the incident category is consolidating into
-expensive SaaS exactly as self-hosted teams' compliance needs rise.
+RIM is a **programmable communication workspace for everyone**: gaming communities,
+developer teams, friend groups, and ops teams alike. Chat is the substrate. The product is
+what sits on top of it and is shared by every audience: a command palette, user-defined
+keybinds, chainable macros, reactive pipelines, workspace state, capability-gated client
+plugins, and a bring-your-own-model AI agent that operates the workspace through the same
+command registry under a human confirmation gate.
 
-Two consequences:
+The July 2026 roadmap bet the whole product on incident response for SRE teams. That built a
+good vertical, but it narrowed the story to one buyer and started to shape the core around
+that buyer (incident commands as the only AI-callable commands, docs and README written for
+on-call teams). The correction:
 
-1. **"Sovereign / BYO-model AI" is no longer a differentiator — it's table stakes** in
-   the self-hosted segment. Mattermost and Rocket.Chat already sell it. Keep it, market
-   it, but don't bet the roadmap on it.
-2. **What nobody has is the combination RIM already owns in code:** a chat substrate +
-   programmable commands/pipelines/macros + a *native* incident layer + a
-   capability-gated AI agent with dangerous-command confirmation that can *operate* the
-   workspace, not just summarize it. incident.io can't copy this (they rent Slack's
-   substrate); Mattermost is closest (Playbooks + Agents V2) but has no programmable
-   command/pipeline fusion and no confirmation-gated operator.
+1. **The runtime is the product; verticals are packs on top of it.** Incidents and on-call
+   become the first *pack*: a bundle of commands, pipelines, macros, lenses and panels that a
+   workspace turns on. A gaming community or a friend group never sees SEV levels. The same
+   packaging primitive then ships a developer pack and a gaming pack. Packs are also the
+   proof that the runtime is general: if a vertical needs a core change, the core was wrong.
+2. **General-purpose chat parity is now a gate, not a distraction.** Private channels, real
+   roles and moderation, notification rules, mobile reach and rich messages are what every
+   audience expects before they notice the runtime. The July roadmap deferred these; this one
+   front-loads them.
+3. **Bots and webhooks are the developer story.** The server already models bot and webhook
+   principals and has an incoming-webhook transport; finishing that (bot accounts, tokens,
+   post-as-bot, outgoing webhooks, pipeline actions) serves developers directly and is what
+   gaming communities build on too.
+4. **The agent stays the differentiator, generalized.** Everyone else's AI summarizes; RIM's
+   acts, under a gate, through the same registry a user's keybind uses. That is true for
+   "catch me up on this channel and draft a reply" as much as for "run the failover runbook".
+5. **Self-hosted, keyboard-first, non-Electron** stays the posture. Table stakes for the
+   self-hosting segment; a quality attribute everywhere else.
 
-**Headline bet: RIM is "Slack + incident.io in one self-hosted box, with an AI agent
-that can actually run the incident."** The incident wedge is the go-to-market story;
-the programmable runtime (commands, macros, pipelines, plugins, agent) is the moat
-underneath it. Target buyer: self-hosting dev/SRE/platform teams.
-
-**The wedge is gated by three missing table stakes:** alert ingestion, real full-text
-search, and on-call reachability (mobile/push). Fix the gates, then deepen the wedge.
-
-Prior strategic priorities (Falcon recon 2026-04-22) are folded in, not discarded:
-- **P1 AI Agent Reframe** — agent speaks the command registry. Still the spine; Track D
-  is its continuation.
-- **P2 Skill Macros + intent routing** — becomes the runbook primitive in Track D.
-- **P3 RIM CLI v1** — moved to Track E; still zero-competitor whitespace, no longer
-  ahead of the wedge.
-- **P4 MCP host/server bridge** — Track E; `OutOfBand` ConfirmationProof remains the
-  forward-compat scaffolding.
+**One sentence:** *RIM is the self-hosted chat workspace you program: commands, keybinds,
+macros, pipelines, plugins and an AI operator, with packs for incidents, development and
+gaming on top.*
 
 ## Where We Are Now
 
-_Last verified against git history 2026-07-08. Both repos idle since 2026-04-29;
-the ledger below reflects last known state — **first action item is to re-verify the
-Reframe Phase 5 task statuses before resuming.**_
+_Verified against code and GitHub on 2026-10-04 (both repositories)._
 
-**Shipped and solid** (Phases 0–4 of the original roadmap, condensed):
-- **Communication core**: servers/channels/DMs/groups, threads, attachments, reactions,
-  pins, mentions, read state, presence, typing, link previews, custom emoji, invites +
-  operator-bootstrap registration (redesigned 2026-04-28), password reset.
-- **Programmable runtime**: command registry + palette, typed args, user commands,
-  chained macros with piping (pre-validation, per-stage results), 19 default keybinds
-  (context-aware, customizable), workspace state machine (KV + TTL + events), reactive
-  pipelines (v1), channel lenses.
-- **Plugin system**: manifest, separate-process local host, capability prompts, panels,
-  context actions, sandboxed rendering over `rim-plugin://` with locked CSP.
-- **Incident Mode v1**: phases (Detection→…→Postmortem), severity SEV1–4, phase notes,
-  action items, AI postmortem draft from transcript, `listIncidents` history query.
-- **AI agent**: BYO-key (OS keyring, Rust-side proxy, `Zeroizing`), tool calling routed
-  through the unified command dispatcher (Reframe Phase 4 shipped 2026-04-24),
-  sensitivity tiers + confirmation proofs (TOCTOU-hardened), capability default-deny.
-- **Power-user UX**: Zen mode, compact/density modes, COMPOSE/NAVIGATE vim-style modes,
-  `j/k` message actions, status bar, spatial navigation, layout presets, emoji picker.
-- **Quality**: CI (fmt, clippy -D warnings, 95% coverage gate, cargo audit, Docker),
-  ~350+ backend tests, 900+ frontend tests, WS reconnect hardening.
+**Shipped and solid:**
+- **Communication core**: workspaces, channels, DMs, group DMs, threads, edit/delete/forward,
+  attachments and avatars with quotas, reactions, pins, mentions, read state, unread counts,
+  inbox, mute, presence, typing, link previews, custom emoji, Postgres full-text search,
+  channel lenses, invite-only registration with operator bootstrap, password reset, SMTP.
+- **Programmable runtime**: command registry (~50 builtins, four surfaces, typed args,
+  sensitivity tiers, per-command rate limits), user commands, macros with piping, 18 default
+  keybinds with layers and overrides, workspace state (KV, TTL, atomic increment, events),
+  pipelines v1 (six triggers, one action), capability registry with default-deny, audit log,
+  confirmation proofs, skill-tier progressive disclosure, `command.discover`.
+- **AI agent**: client-side, Anthropic and OpenAI, keys in the OS keyring, tool calls through
+  the unified dispatcher, confirmation modal, audit emission, agent-visible command surface.
+- **Plugin system (client)**: separate-process local host, manifest validation, capability
+  broker with real enforcement, panels over a locked scheme, git install, trust badges,
+  plugin AI consent.
+- **Incident and on-call vertical**: incidents with phases, severity, timeline, action items,
+  AI postmortem draft; on-call schedules, rotations, overrides; escalation policies with
+  timers and boot recovery; alert webhooks (generic, Alertmanager, Grafana); incident and
+  on-call commands AI-callable with timeline transcript.
+- **Desktop shell**: side rail, workspace rail, tool panel, docked thread pane, status bar,
+  spatial navigation, layout presets, zen mode, density modes, 15 settings tabs.
+- **Quality**: server CI (fmt, clippy `-D warnings`, single-threaded tests, 75% line
+  coverage gate with 95% target, audit, Docker); client CI (ESLint, Prettier, tsc, 1,348
+  tests, build, Docker). Server type-checks and client builds and tests green on fresh clones.
 
-**In flight / unverified** — Reframe Phase 5 (audit DB, typed_verb, Skill Macros AI
-exposure, plugin AI consent, keyring Option B, per-actor rate limits,
-`command.discover` ship gate). Last known: tasks #1/#7/#11 at Hawkeye gate, rest
-blocked behind them. The 2026-04-27→29 commits ("macros + refactoring", "security
-hardening + rate limits") likely landed part of this. **Re-ledger before anything else.**
+**Known debt (carried, still open on 2026-10-04):**
+- Client: three RCE-class desktop findings open (`rim-ui/fable-findings.md` S-H1..S-H3):
+  unguarded terminal spawn, `git clone` with unvalidated URL, package-manager install before
+  consent. The embedded terminal feature the April roadmap killed is still shipped.
+- Client: reconnect refetch storm, hardcoded endpoint in several files, two error boundaries,
+  `MessageItem.tsx` god file, no tests for pipelines/lenses/disclosure, two Czech labels.
+- Server: no through-the-stack messaging e2e (paginator rework unverified end to end),
+  resolver god files (`types.rs` 3.7k, `mutation.rs` 2.8k lines), audit retention job never
+  scheduled, dead `rim_services/plugin_host` module, `cargo audit` advisory-only.
+- Both: `rim-ui` `master` is still the initial commit; all code is on `feature/initial-code`.
 
-**Known debt** (Fable review 2026-07-08, see `fable-notes.md` in each repo):
-- `mocks` feature compiled into production deps (rim_api/rim_server/rim_infra_services
-  Cargo.toml) — trivial fix, do immediately.
-- Command↔macro two-phase construction leaves two live command-service instances
-  (`provider.rs`) — fragile invariant, fix before more code grows around it.
-- Schema/repo wiring duplicated (`build_schema` vs `export_sdl`; `app.rs` vs
-  `AppRepos::with_handle`).
-- God files: `types.rs` 2.8k, `mutation.rs` 2.4k lines — split via `MergedObject`.
-- UI: blanket `invalidateQueries()` on WS reconnect (refetch storm); hardcoded endpoint
-  in ≥5 files; only 2 error boundaries; `MessageItem.tsx` 938 lines; no ESLint gate;
-  `pipelines/`/`lenses/`/`disclosure/` untested.
-- Carried from Phase 5 parking lot: shared `rim_plugin_validation` crate, plugin_host
-  clippy errors (#64), multi-node confirmation store, embedding-based discover ranking.
+## Competitive Snapshot — late 2026, general-purpose framing
 
-## Competitive Snapshot — mid-2026
-
-| Threat | What they have | RIM's answer |
+| Who | What they own | Where RIM is different |
 |---|---|---|
-| **Mattermost** (closest) | Agents V2: sovereign AI, grounded+cited answers; Playbooks (checklist incident response); self-hosted | Fuse incidents with programmable pipelines + operator agent; verify Playbooks overlap before Track C commits |
-| Slack + incident.io/Rootly | Best-in-class incident UX, AI SRE suggestions — all SaaS, no self-host, rising TCO | Own the substrate: incident-native chat, one box, your model |
-| Rocket.Chat | On-prem AI (local Llama), clearance-aware search | Match grounded recall (Track B/D); beat on programmability |
-| Element/Matrix | E2EE + federation, government traction | Don't compete there (see anti-roadmap) |
-| Zulip | Topic threading, E2EE mobile push (12.0) | Threading parity not required; note their mobile bar |
-| Campfire/ONCE | Own-the-code simplicity, one-time price | Pricing/packaging lesson, not a feature threat |
+| **Discord** | Gaming communities, voice, rich presence, bots, roles | Self-hosted, programmable client, AI operator; voice is the gap (decision below) |
+| **Slack** | Team chat UX, integrations, Workflow Builder, AI teammate | Open runtime instead of a closed workflow builder; your model, your box |
+| **Mattermost / Rocket.Chat** | Self-hosted team chat, Playbooks, sovereign AI | Client-side plugins, keybinds, macros; packs instead of one vertical |
+| **Element / Matrix** | Federation, E2EE, government | Not competing on federation or E2EE (anti-roadmap) |
+| **Revolt / Guilded** | Open or indie Discord alternatives | Same audience overlap for gamers; RIM wins on programmability, loses on voice until decided |
+| **Zulip** | Topic threading, mobile push | Threading parity not needed; their mobile reach is the bar |
 
 ## The Plan
 
-Five tracks, roughly sequential with overlap. Effort: S < 1w, M = 1–3w, L = 1–2mo, XL > 2mo.
+Six tracks. Effort: S < 1w, M = 1–3w, L = 1–2mo, XL > 2mo. Tracks 0 and 1 come first;
+the rest overlap. Every track lands as reviewable milestones with spec → implement → review.
 
-### Track A — Foundations (unblocks everything) — S/M total
+### Track 0 — Safety and realignment (first, S/M total)
 
-1. Re-verify and land the **Reframe Phase 5 ship gate** (`command.discover` green) —
-   the ledger above is 10 weeks stale.
-2. **`mocks` → dev-dependencies** (S, same day).
-3. **Fix WS-reconnect refetch storm** — scope invalidation to active-workspace keys
-   (S); "resume since cursor" on `workspaceEvents` follows in Track B.
-4. **Centralize UI endpoint config** behind `getGraphqlEndpoint()` (S).
-5. **Break the command↔macro init cycle** — single command-service instance (M).
-6. **Plugin-host install hardening** (fable-findings RCE-class items) — prerequisite
-   for any third-party plugin story (M).
-7. ESLint + Prettier gate in rim-ui CI; per-surface error boundaries (S).
+1. **Close the three desktop RCE findings** (M): gate terminal creation behind an explicit
+   confirmation and a shell allowlist; validate plugin install URLs (scheme allowlist, no
+   `ext::`, `--` separator, `GIT_ALLOW_PROTOCOL`); no `npm`/`pip` install without a consent
+   step that names it as code execution.
+2. **Terminal decision** (S): remove the embedded terminal from the product, or keep it as a
+   capability-gated desktop feature. Default recommendation: remove the feature and its
+   settings tab; keep the PTY code only if a plugin needs it later. See decisions.
+3. **Pack toggle** (M): a per-workspace feature-pack setting that filters the command
+   registry, settings tabs, side-rail entries and AI surface. Incidents and on-call become
+   the `incidents` pack, off by default for new workspaces. This is the architectural change
+   that makes "for everyone" true in the UI.
+4. **Repo hygiene** (S): merge `rim-ui` `feature/initial-code` to `master`; make
+   `cargo audit` blocking; close stale issues; schedule the audit retention job once the
+   variant is picked; delete the dead server-side `plugin_host` module.
+5. **Docs** (S): README, vision and this roadmap aligned (done with this rewrite); retire
+   incident-first wording from onboarding copy.
 
-### Track B — Table-Stakes Gates (adoption blockers for the wedge) — M/L total
+### Track 1 — Chat for everyone (the parity gate, L total)
 
-1. **Full-text search** (M): Postgres FTS (tsvector + GIN) replacing LIKE; search
-   syntax (`from:`, `in:`, `has:link`, date ranges) reusing the lens filter model.
-   Prerequisite for grounded AI recall.
-2. **Alert ingestion** (M): webhook receivers — generic JSON + Alertmanager + Grafana
-   formats — as a new non-GraphQL transport (FL2 pattern). Alerts create/update
-   incidents via pipelines; dedup + severity mapping rules.
-3. **Email delivery** (S/M): finish the email sender stub; notification digest +
-   incident-page fallback.
-4. **Slack import** (M): workspace/channel/user/message import from Slack export zips.
-   Adoption door-opener; do after 1–3.
-5. **Subscription resume-since-cursor** (M): replay missed `workspaceEvents` on
-   reconnect instead of cache nuke. Pairs with A3.
+1. **Channels** (M): private channels with membership; channel browse and join/leave;
+   channel ordering and categories; archive. Also guard the subscription visibility check,
+   which today assumes every channel is visible to all workspace members.
+2. **Roles and moderation** (M/L): a plain `Member` role between Moderator and Guest;
+   per-channel permission overrides; kick, ban, timeout; delete others' messages; slow mode;
+   message reports to moderators; moderation audit using the existing audit log.
+3. **Notification rules** (M): per-conversation level (all, mentions, nothing), keyword
+   alerts, do-not-disturb schedule, per-workspace defaults; delivery through desktop
+   notifications now and push once Track 5 lands; email digest reusing the SMTP sender.
+4. **Rich messages** (M): embeds for images, video and GIFs; code blocks with language
+   hints; message quoting; polls; message content model on the server so clients agree on
+   rendering (markdown stays the format, DOMPurify stays the backstop).
+5. **People** (S/M): user search and directory inside a workspace; profile pages; status
+   with expiry (exists) plus custom status emoji.
+6. **Messaging e2e** (S): the through-the-stack pagination test from the review, landed with
+   the first channel change so the paginator rework is finally verified.
 
-### Track C — The Incident Wedge (the product story) — L
+### Track 2 — Bots, webhooks and the developer platform (L)
 
-_RATIFIED by Jakub 2026-07-10, re-scoped per the Mattermost Playbooks teardown
-(docs/research/mattermost-playbooks-teardown-2026-07-10.md). Mattermost owns
-checklists and already has grounded cited recall; it has NO native on-call/escalation
-(delegates to PagerDuty/Opsgenie) and its agents can't drive runbooks. Weighting
-below reflects that._
+1. **Bot accounts** (M): create a bot in a workspace, issue and revoke tokens, post and read
+   as the bot principal, bot avatar and badge. Unblocks the seeded system user that
+   escalation and agent actions should author as.
+2. **Incoming webhooks, generalized** (S/M): the alert receivers become one webhook
+   transport with per-channel webhook URLs, templates, and a GitHub/GitLab/CI preset set.
+3. **Outgoing webhooks and pipeline actions** (M): pipelines gain `PostMessage`,
+   `CallWebhook`, `SetState`, and conditional branches; this is the "Slack Workflow Builder
+   done right" story from the old roadmap, moved up because bots need it.
+4. **Bot-registered commands** (M): a bot can register palette commands backed by its
+   webhook or by a plugin, with the same typed args and sensitivity tiers as builtins.
+5. **RIM CLI v1** (M): `rim send`, `rim search`, `rim watch`, `rim macro run`; doubles as
+   the GraphQL contract test. Design exists in `docs/design/cli-v1-design-2026-04-22.md`.
+6. **MCP bridge** (M): MCP servers as plugins and RIM as an MCP server, so external agents
+   drive the same registry under `OutOfBand` confirmations. Sketch exists.
 
-1. **SPEARHEAD — On-call schedules + escalation policies** as first-class objects
-   (rotations, overrides, escalation timers → mention/email/push chain). The
-   strongest structural gap vs Mattermost: "incident.io in the box."
-2. **Incident lifecycle in the palette** — declare/ack/escalate/resolve as commands,
-   composable into macros/pipelines. Build tightly coupled with Track D's operator:
-   the commands+agent fusion is the moat, not lifecycle commands alone.
-3. **AI postmortem v2** (parity-plus, not the story): draft from the tagged timeline
-   with citations; action items → trackable objects.
-4. **Grounded recall** (explicit catch-up to Agents V2 parity — defense, not wedge):
-   cited answers over the workspace via the BYO model. Needs B1 (shipped).
-5. **Incident metrics** (parity): MTTA/MTTR, incident history/archive view (backend
-   query already shipped).
+### Track 3 — Runtime depth (the moat, M/L each)
 
-### Track D — The Agent as Operator (the moat) — M/L
+1. **Skill macros and intent routing**: macros as natural-language-routable units; the
+   agent dispatches by intent with per-step `ai_callable` enforcement and rollup.
+2. **Agentic macros (generalized runbooks)**: the agent walks a macro step by step, pausing
+   at each Mutating/Dangerous step for a fresh human decision, with a visible transcript.
+   The incident pack uses it as "runbooks"; a community uses it as "run the weekly event
+   setup". The spec questions from the July handoff still apply (stepwise execution API,
+   transcript target).
+3. **Agent for everyday chat**: catch-me-up summaries over a channel or thread with
+   citations (needs FTS, shipped), draft replies, find-and-link, schedule reminders. Parity
+   with Slack AI and Mattermost Agents V2, but acting through commands.
+4. **Shareable profiles**: export and import keybind sets, macros and pipelines as a
+   profile ("gamer", "dev", "minimal"); the primitive packs reuse.
+5. **Plugin marketplace v0** (after Track 0.1): git-backed curated manifest, signed; install
+   from the palette. Economics deferred.
+6. **Pipelines GA**: JSON transforms, error handling, run history and retries.
 
-The differentiated version of "AI SRE": everyone else *suggests*, RIM *acts* under a
-human gate.
+### Track 4 — Packs (verticals built only with Tracks 1–3 primitives)
 
-1. **Skill Macros + intent routing** (old P2): macros as NL-routable units; agent
-   dispatches by intent with per-step `ai_callable` enforcement + sensitivity rollup.
-2. **Agentic runbooks**: runbook = macro/pipeline the agent walks step-by-step; each
-   Mutating/Dangerous step goes through the confirmation flow; execution transcript
-   lands in the incident timeline.
-3. **Runbook plugins**: teams package runbooks + panels as plugins (needs A6 hardening
-   first).
-4. **On-call reachability** (L, scope decision needed): thin PWA on the existing web
-   build — push notification, ack/escalate, read incident channel. Full native mobile
-   stays out of scope; vision/iron-man to validate PWA push viability per platform.
+1. **Incidents pack** (exists; S to finish): C5 incident metrics (MTTA/MTTR, history view),
+   channel escalation-policy read query, `setMyTimezone`. Then maintenance only.
+2. **Developer pack** (M): GitHub/GitLab webhook presets rendering PR, issue and CI cards;
+   standup and release macros; `/pr`, `/issue`, `/deploy-status` commands; code-block
+   first message rendering; CLI shortcuts.
+3. **Gaming pack** (M): looking-for-group and party commands backed by workspace state;
+   game status presence via a client plugin API; stream-live alerts via webhooks (Twitch,
+   YouTube presets); event scheduling with reminders; scoreboard panels as plugin panels.
+4. **Community pack** (S/M): welcome flows and auto-roles as pipelines, rules acceptance
+   gate, announcement channels with reactions-only mode.
 
-### Track E — Ecosystem (post-wedge) — M/L each
+Each pack ships as a bundle definition (commands, pipelines, macros, lenses, panels) that
+the pack toggle from Track 0.3 installs. A pack must not require a core schema change
+beyond what Track 1 and 2 add; if it does, the gap goes to the core track, not the pack.
 
-1. **RIM CLI v1** (old P3): `rim send/search/watch/macro run` — scriptable, CI-friendly;
-   doubles as a live GraphQL contract validator. TUI later.
-2. **MCP host/server bridge** (old P4): MCP servers install as plugins; Claude
-   Desktop/Cursor can drive RIM via the same command registry + OutOfBand confirmations.
-3. **Plugin marketplace v0** (old P6): git-backed curated manifest, signed;
-   `rim plugin install github:user/plugin`. Economics deferred until there's a network.
-4. **Reactive Pipelines GA** (old P5): branching, JSON transforms, error handling —
-   the "Slack Workflow Builder done right" story.
+### Track 5 — Reach (M/L)
+
+1. **Mobile PWA** (L): the existing web build made installable; push notifications via web
+   push for mentions, DMs and pack events (the on-call page); narrow-layout shell per
+   `docs/ui-shell.md` "Narrow Window Behavior". Native stays out of scope.
+2. **Web client parity** (M): the capability matrix already gates features by platform;
+   close the gaps that make the web build second class (keybinds, agent without the Rust
+   proxy via a server-side relay option).
+3. **Deployment** (S/M): one docker compose for server, client and Postgres; backup and
+   restore runbook; first-run wizard replacing the CLI bootstrap for operators who want it.
+4. **Internationalization and themes** (M): an i18n layer (the Czech labels show it is
+   needed now), light theme, accessibility pass on the shell and composer.
+
+### Voice — a decision, not a track yet
+
+For gaming communities voice is table stakes; for everyone else it is a nice-to-have. The
+July anti-roadmap ruled out building a native stack, and that still holds: media servers
+are commodity. The open choice is whether to integrate a self-hosted open-source SFU
+(LiveKit or similar) as voice rooms with the same self-hosted posture, delivered as a
+first-party plugin so the core stays media-free. Recommendation: decide after Track 1,
+prototype as a plugin during Track 3, and only then size it (likely L). See decisions.
 
 ## Anti-Roadmap — explicitly not building
 
-- **Native voice/video/screen share** — commodity; integrate a Jitsi/Element Call
-  bridge for incident calls via plugin if demand materializes. (Carried: deferred
-  indefinitely 2026-04-22.)
-- **Embedded terminal sessions** — KILLED 2026-04-22 (Warp owns it). Stands.
-- **Federation** — Matrix owns it; not what dev/SRE self-hosters ask for.
-- **Marketplace monetization** — chicken-and-egg; build primitives, defer economics.
-- **Integration-directory breadth / enterprise agent platform** — losing battle vs
-  Salesforce/Microsoft by definition; out of thesis.
-- **E2EE as a headline** — it directly conflicts with server-side search, AI grounding,
-  and incident indexing (the wedge). If/when shipped, scope to DMs; do not promise it
-  for the incident/AI surface. One story: *sovereign, searchable, AI-operable*.
+- **A native media stack**: no own SFU, codecs or TURN; integrate if voice is approved.
+- **Federation**: Matrix owns it; not what any of the target audiences ask for first.
+- **E2EE as a headline**: conflicts with server-side search, AI grounding and pipelines. If
+  it ships, DMs only.
+- **Integration-directory breadth** and an enterprise agent platform.
+- **Marketplace monetization** before there is a network.
+- **Embedded terminal as a product feature** (pending the Track 0 decision).
 
-## Open Decisions (for Kuba)
+## Sequencing (proposed)
 
-Carried from Phase 5 (still unratified as of last ledger):
-1. Plugin reframe to client-side architecture (#5) — CTO call was yes; ratify.
-2. Audit retention: Variant A (90d/365d) vs B (365/365).
-3. Tauri audit event destination: GraphQL→server (recommended) vs local-log only.
-4. Audit rows for `command.discover` Safe-tier reads.
+| Phase | Weeks | Content |
+|---|---|---|
+| 1 | 1–6 | Track 0 complete; Track 1.1 channels, 1.2 roles/moderation, 1.6 e2e |
+| 2 | 7–14 | Track 1.3 notifications, 1.4 rich messages, 1.5 people; Track 2.1 bots, 2.2 webhooks |
+| 3 | 15–24 | Track 2.3 pipeline actions, 2.4 bot commands; Track 5.1 PWA + push; Track 3.1–3.3 agent depth; voice decision |
+| 4 | 25+ | Track 4 developer and gaming packs; Track 2.5 CLI, 2.6 MCP; Track 3.4–3.6; Track 5.2–5.4 |
+
+The incidents pack is finished (Track 4.1) whenever an S-sized slot opens; it is not on the
+critical path.
+
+## Open Decisions (for Jakub)
 
 New with this roadmap:
-5. ~~Ratify the incident-wedge bet~~ — RATIFIED 2026-07-10 (re-scoped: C1 spearhead,
-   C2 coupled to Track D, C3/C5 parity, C4 catch-up).
-6. Mobile scope: PWA-first (recommended) vs native — gates Track D4.
-7. ~~Mattermost Playbooks/Agents V2 teardown~~ — DONE 2026-07-10, see
-   docs/research/mattermost-playbooks-teardown-2026-07-10.md.
+1. **Ratify the general-purpose direction** as written here (packs on the runtime, parity
+   first, incidents demoted to a pack).
+2. **Voice**: integrate a self-hosted SFU as a plugin (recommended, timing per above), or
+   stay text-only for now.
+3. **Embedded terminal**: remove (recommended) or keep capability-gated.
+4. **Incidents pack default**: off for new workspaces (recommended) or on.
+5. **Roles model depth**: a simple role ladder with per-channel overrides (recommended), or
+   Discord-style arbitrary roles with permission bitfields from the start.
+6. **Mobile**: PWA-first (recommended) or native.
+
+Carried, still unratified:
+7. Audit retention: Variant A (90d/365d) vs B (365/365); the job is unscheduled until then.
+8. `oncall.take_shift` authorization: self-service or owner/moderator gated.
+9. `.env` history purge: run the runbook or skip given rotation.
+10. Plugin reframe to client-side architecture: ratify formally (it is the de facto state).
+
+## Ledger — what the previous roadmaps shipped
+
+For history. Phases 0–4 of the April 2026 roadmap (communication core, command system,
+keybinds, plugins, incident mode v1, AI agent reframe phases 1–5) and Tracks A, B, C1, C2
+of the July 2026 roadmap (foundations, search/alerts/email, on-call and escalation,
+agent-operator fusion) are all merged on `rim-server` `master` (PR #11, 2026-10-04) and on
+`rim-ui` `feature/initial-code` (`d907c86`). Point-in-time specs live in `docs/specs/`,
+`docs/design/`, `docs/plans/` (rim-ui) and `docs/research/`.

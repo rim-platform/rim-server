@@ -1,7 +1,7 @@
 # RIM — Product Vision
 
-_Last updated 2026-10-03 to match the incident-wedge strategy ratified in `ROADMAP.md`
-(2026-07-10). The roadmap owns sequencing; this document owns the product principles._
+_Last updated 2026-10-04 to match the general-purpose direction in `ROADMAP.md`. The
+roadmap owns sequencing; this document owns the product principles._
 
 ## What RIM Is
 
@@ -21,17 +21,19 @@ The closest analogies are not Slack or Discord. They are:
 RIM applies the same philosophy to team communication: the user builds their own
 workflow instead of adapting to the platform.
 
-## Where RIM Goes to Market
+## Who RIM Is For
 
-A programmable workspace is a platform, and platforms need a first job to do. RIM's is
-**incident response for self-hosting dev/SRE/platform teams**: alerts arrive, an incident is
-declared, on-call is paged and escalated, and responders — and an AI agent — work the
-incident through the same commands, macros, and pipelines as everything else.
+RIM is for everyone who lives in a chat tool and wants it to work their way: gaming
+communities, developer teams, friend groups, and ops teams. The runtime is the same for all
+of them; what differs is the **pack** a workspace turns on. Incidents and on-call were the
+first pack and remain a complete one. Developer and gaming packs follow, built only from the
+same commands, pipelines, macros, lenses and panels any user can author.
 
-Pitch: *Slack + incident.io in one self-hosted box, with an AI agent that can actually run
-the incident.* Incident vendors rent someone else's chat and can only *suggest* actions;
-RIM owns the substrate, so its agent *acts* — through the command registry, under a human
-confirmation gate. The programmable runtime is what makes that possible and hard to copy.
+Pitch: *the self-hosted chat workspace you program.* Commands, keybinds, macros, pipelines
+and plugins turn conversations into workflows, and a bring-your-own-model AI agent acts
+through the same command registry under a human confirmation gate. Other products' AI
+suggests; RIM's acts, and it acts the same way whether the task is "catch me up and draft a
+reply" or "run the failover runbook".
 
 ## What RIM Is Not
 
@@ -63,11 +65,11 @@ These are the capabilities that no competing product offers together:
    Plugins are first-class citizens with a marketplace, capability-based permissions,
    and trust boundaries.
 
-5. **Native incident layer with an AI operator** — incidents, on-call schedules,
-   escalation policies, and alert ingestion are first-class objects in the workspace, not a
-   bot bolted onto someone else's chat. A bring-your-own-model agent drives them through the
-   command registry, with capability checks and per-action human confirmation for anything
-   mutating or dangerous.
+5. **An AI operator, not an AI summarizer** — a bring-your-own-model agent drives the
+   workspace through the command registry, with capability checks and per-action human
+   confirmation for anything mutating or dangerous. Packs (incidents first, developer and
+   gaming next) are bundles of commands, pipelines and panels on that runtime, not features
+   bolted onto the core.
 
 6. **Self-hosted and sovereign** — one box, your data, your model. Table stakes in this
    segment rather than a differentiator on its own, but required by the buyers RIM targets.
@@ -85,8 +87,9 @@ RIM is built for people who:
 - Want to customize their tools (keybinds, macros, workflows).
 - Value extensibility and are willing to install or build plugins.
 - Care about performance and resource efficiency.
-- Work in technical teams (developers, DevOps, SRE, platform, security).
-- Run their own infrastructure and want their communication and incident tooling there too.
+- Run a community or a team and want to shape the tool around it: gamers, developers,
+  ops teams, friend groups.
+- Prefer to self-host their communication, or at least to be able to.
 
 RIM is not built for people who want the simplest possible chat experience or who
 need an enterprise platform with thousands of pre-built integrations.
@@ -117,8 +120,8 @@ grounding, and incident indexing. If it ships, it is scoped to DMs (see the anti
 
 ## Product Positioning — One Sentence
 
-> RIM is a self-hosted, programmable communication workspace where teams build their own
-> workflows — starting with incident response run by people and an AI agent together.
+> RIM is the self-hosted chat workspace you program: commands, keybinds, macros, pipelines,
+> plugins and an AI operator, with packs for incidents, development and gaming on top.
 
 ## Inspirations
 
