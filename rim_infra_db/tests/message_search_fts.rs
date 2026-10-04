@@ -434,3 +434,58 @@ async fn search_messages_fts_excludes_deleted_messages() {
         "a soft-deleted message must never appear in search results, even on an exact-term match"
     );
 }
+
+/// `Before` (toward newer) selects the rows nearest the cursor (finding A-H1), still returned
+/// `(sent_at DESC, id DESC)`, so the `limit + 1` overflow row is the **first** one — the newest,
+/// farthest from the cursor. The pre-fix query returned the newest rows overall and skipped the
+/// ones just after the cursor.
+#[tokio::test]
+async fn search_messages_fts_before_selects_rows_nearest_the_cursor() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("fts-user-before").await;
+
+    // Oldest first.
+    let base = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut msgs = Vec::new();
+    for i in 0..5u32 {
+        let m = ctx
+            .create_message(conv.id, user.id, "pagination marker text")
+            .await;
+        let sent_at = base + Duration::minutes(i64::from(i));
+        set_sent_at(&ctx.db, m.id, sent_at).await;
+        msgs.push((m.id, sent_at));
+    }
+    let cursor_at = |i: usize| rim_core::message::repository::MessageCursor {
+        sent_at: msgs[i].1,
+        message_id: msgs[i].0,
+    };
+    let before = |cursor| {
+        repo.search_messages_fts(MessageSearchParams {
+            tsquery: "pagination".to_string(),
+            limit: 2,
+            cursor: Some(cursor),
+            dir: PageDir::Before,
+            ..base_params(vec![conv.id])
+        })
+    };
+
+    let page1 = before(cursor_at(0)).await.unwrap();
+    assert_eq!(
+        page1.iter().map(|h| h.message.id).collect::<Vec<_>>(),
+        vec![msgs[3].0, msgs[2].0, msgs[1].0],
+        "the three rows just newer than the cursor, newest first (overflow row first)"
+    );
+
+    let page2 = before(cursor_at(2)).await.unwrap();
+    assert_eq!(
+        page2.iter().map(|h| h.message.id).collect::<Vec<_>>(),
+        vec![msgs[4].0, msgs[3].0],
+        "final page has no overflow row"
+    );
+}

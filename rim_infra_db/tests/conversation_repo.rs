@@ -251,3 +251,117 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
         .unwrap();
     assert_eq!(after.items.len(), 1);
 }
+
+/// `Before` pages hold the inbox conversations adjacent to the cursor (finding A-H1). Endpoint
+/// order is `last_activity_at DESC`, so `Before` walks toward more recently active ones.
+#[tokio::test]
+async fn list_inbox_before_returns_conversations_adjacent_to_cursor() {
+    let ctx = support::TestCtx::new().await;
+
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let u = ctx.create_user("u").await.id;
+
+    // convs[i] is the i-th least recently active.
+    let base = chrono::Utc::now();
+    let mut convs = Vec::new();
+    for i in 0..5 {
+        let c = conv_repo
+            .create_conversation(NewConversation {
+                server_id: server.id,
+                conversation_type: ConversationType::Group,
+                title: None,
+            })
+            .await
+            .unwrap();
+        member_repo.add_member(c.id, u).await.unwrap();
+        conv_repo
+            .touch_last_activity_at(c.id, base + chrono::Duration::seconds(i))
+            .await
+            .unwrap();
+        convs.push(conv_repo.get_by_id(c.id).await.unwrap().unwrap());
+    }
+    let cursor_of = |i: usize| ConversationActivityCursor {
+        last_activity_at: convs[i].last_activity_at,
+        conversation_id: convs[i].id,
+    };
+    let ids = |idx: &[usize]| idx.iter().map(|&i| convs[i].id).collect::<Vec<_>>();
+
+    let page1 = conv_repo
+        .list_inbox_conversations_for_user(u, server.id, 2, PageDir::Before, Some(cursor_of(0)))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        ids(&[2, 1])
+    );
+    assert_eq!(page1.next, Some(cursor_of(2)));
+    assert_eq!(page1.prev, Some(cursor_of(1)));
+
+    let page2 = conv_repo
+        .list_inbox_conversations_for_user(u, server.id, 2, PageDir::Before, page1.next)
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        ids(&[4, 3])
+    );
+    assert_eq!(page2.next, None);
+    assert_eq!(page2.prev, Some(cursor_of(3)));
+}
+
+/// `Before` pages hold the channels adjacent to the cursor (finding A-H1). Endpoint order is
+/// `created_at ASC`, so `Before` walks toward older channels.
+#[tokio::test]
+async fn list_channels_before_returns_channels_adjacent_to_cursor() {
+    let ctx = support::TestCtx::new().await;
+
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let u = ctx.create_user("u").await.id;
+
+    let mut channels = Vec::new();
+    for i in 0..5 {
+        let c = conv_repo
+            .create_conversation(NewConversation {
+                server_id: server.id,
+                conversation_type: ConversationType::Channel,
+                title: Some(format!("channel-{i}")),
+            })
+            .await
+            .unwrap();
+        channels.push(c);
+    }
+    // channels[i] is the i-th oldest by the endpoint's (created_at, id) key.
+    channels.sort_by_key(|c| (c.created_at, uuid::Uuid::from(c.id)));
+    let cursor_of = |i: usize| ConversationCreatedCursor {
+        created_at: channels[i].created_at,
+        conversation_id: channels[i].id,
+    };
+    let ids = |idx: &[usize]| idx.iter().map(|&i| channels[i].id).collect::<Vec<_>>();
+
+    let page1 = conv_repo
+        .list_channels_for_user(u, server.id, 2, PageDir::Before, Some(cursor_of(4)))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        ids(&[2, 3])
+    );
+    assert_eq!(page1.next, Some(cursor_of(2)));
+    assert_eq!(page1.prev, Some(cursor_of(3)));
+
+    let page2 = conv_repo
+        .list_channels_for_user(u, server.id, 2, PageDir::Before, page1.next)
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        ids(&[0, 1])
+    );
+    assert_eq!(page2.next, None);
+    assert_eq!(page2.prev, Some(cursor_of(1)));
+}

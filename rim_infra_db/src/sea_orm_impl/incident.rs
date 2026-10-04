@@ -177,9 +177,18 @@ impl IncidentRepository for SeaOrmIncidentRepository {
         }
 
         // Fixed ordering: most recent first.
-        q = q
-            .order_by_desc(incident::Column::CreatedAt)
-            .order_by_desc(incident::Column::Id);
+        // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in the
+        // endpoint order, so fetch them nearest-first (reversed order) and flip the page back
+        // below; fetching in endpoint order would return the far end of the range and skip
+        // everything between it and the cursor (finding A-H1).
+        let fetch_reversed = has_cursor && dir == PageDir::Before;
+        q = if fetch_reversed {
+            q.order_by_asc(incident::Column::CreatedAt)
+                .order_by_asc(incident::Column::Id)
+        } else {
+            q.order_by_desc(incident::Column::CreatedAt)
+                .order_by_desc(incident::Column::Id)
+        };
 
         let mut items = q
             .limit((limit + 1) as u64)
@@ -193,6 +202,9 @@ impl IncidentRepository for SeaOrmIncidentRepository {
         let has_more_in_dir = items.len() > limit as usize;
         if has_more_in_dir {
             items.truncate(limit as usize);
+        }
+        if fetch_reversed {
+            items.reverse();
         }
 
         // DESC ordering: first item is max, last is min.
