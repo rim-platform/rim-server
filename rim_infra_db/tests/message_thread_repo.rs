@@ -213,3 +213,55 @@ async fn get_thread_ids_by_root_messages_batch() {
     assert_eq!(map[&msg1.id], t1.id);
     assert_eq!(map[&msg2.id], t2.id);
 }
+
+/// `Before` pages hold the threads adjacent to the cursor (finding A-H1). Endpoint order is
+/// `last_message_at DESC`, so `Before` walks toward more recently active threads.
+#[tokio::test]
+async fn list_threads_before_returns_threads_adjacent_to_cursor() {
+    let ctx = support::TestCtx::new().await;
+
+    let repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+
+    // threads[i] is the i-th least recently active.
+    let base = chrono::Utc::now();
+    let mut threads = Vec::new();
+    for i in 0..5 {
+        let t = repo.create_thread(conv.id).await.unwrap();
+        repo.touch_last_message_at(t.id, base + chrono::Duration::seconds(i))
+            .await
+            .unwrap();
+        threads.push(repo.get_by_id(t.id).await.unwrap().unwrap());
+    }
+    let cursor_of = |i: usize| rim_core::message_thread::repository::ThreadCursor {
+        last_message_at: threads[i].last_message_at,
+        thread_id: threads[i].id,
+    };
+    let ids = |idx: &[usize]| idx.iter().map(|&i| threads[i].id).collect::<Vec<_>>();
+
+    let page1 = repo
+        .list_threads_for_conversation(conv.id, 2, PageDir::Before, Some(cursor_of(0)))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|t| t.id).collect::<Vec<_>>(),
+        ids(&[2, 1])
+    );
+    assert_eq!(page1.next, Some(cursor_of(2)));
+    assert_eq!(page1.prev, Some(cursor_of(1)));
+
+    let page2 = repo
+        .list_threads_for_conversation(conv.id, 2, PageDir::Before, page1.next)
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.items.iter().map(|t| t.id).collect::<Vec<_>>(),
+        ids(&[4, 3])
+    );
+    assert_eq!(page2.next, None);
+    assert_eq!(page2.prev, Some(cursor_of(3)));
+}

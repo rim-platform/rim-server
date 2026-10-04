@@ -4,7 +4,7 @@ mod support;
 
 use rim_core::conversation::model::ConversationType;
 use rim_core::message::model::{MessageId, NewMessage};
-use rim_core::message::repository::{ListMessagesParams, MessageRepository};
+use rim_core::message::repository::{ListMessagesParams, MessageCursor, MessageRepository};
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{PageDir, SortOrder};
@@ -345,4 +345,88 @@ async fn set_has_attachments_updates_flag() {
 
     let fetched = repo.get_by_id(msg.id).await.unwrap().unwrap();
     assert!(!fetched.has_attachments);
+}
+
+/// `Before` pages hold the rows adjacent to the cursor (finding A-H1): walking `Before` from one
+/// end of the list, following `next`, visits every other row exactly once, nearest first. The
+/// pre-fix query returned the far end of the range and skipped the rows next to the cursor.
+#[tokio::test]
+async fn before_pagination_returns_rows_adjacent_to_cursor() {
+    let ctx = support::TestCtx::new().await;
+
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-before").await;
+
+    let mut msgs = Vec::new();
+    for i in 0..5 {
+        msgs.push(ctx.create_message(conv.id, user.id, &format!("m{i}")).await);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    msgs.sort_by_key(|m| (m.sent_at, uuid::Uuid::from(m.id)));
+    let cursor_of = |m: &rim_core::message::model::Message| MessageCursor {
+        sent_at: m.sent_at,
+        message_id: m.id,
+    };
+    let ids = |idx: &[usize]| idx.iter().map(|&i| msgs[i].id).collect::<Vec<_>>();
+
+    let list = |order: SortOrder, cursor: Option<MessageCursor>| {
+        repo.list_messages(ListMessagesParams {
+            conversation_id: conv.id,
+            thread_id: None,
+            limit: 2,
+            dir: PageDir::Before,
+            cursor,
+            include_deleted: false,
+            order,
+        })
+    };
+
+    // DESC endpoint: `Before` = newer. From the oldest row: [2,1], then [4,3].
+    let page1 = list(SortOrder::Desc, Some(cursor_of(&msgs[0])))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|m| m.id).collect::<Vec<_>>(),
+        ids(&[2, 1])
+    );
+    assert_eq!(page1.next, Some(cursor_of(&msgs[2])));
+    assert_eq!(page1.prev, Some(cursor_of(&msgs[1])));
+    let page2 = list(SortOrder::Desc, page1.next).await.unwrap();
+    assert_eq!(
+        page2.items.iter().map(|m| m.id).collect::<Vec<_>>(),
+        ids(&[4, 3])
+    );
+    assert_eq!(page2.next, None, "no row is newer than the newest");
+    assert_eq!(page2.prev, Some(cursor_of(&msgs[3])));
+
+    // ASC endpoint: `Before` = older. From the newest row: [2,3], then [0,1].
+    let page1 = list(SortOrder::Asc, Some(cursor_of(&msgs[4])))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|m| m.id).collect::<Vec<_>>(),
+        ids(&[2, 3])
+    );
+    assert_eq!(page1.next, Some(cursor_of(&msgs[2])));
+    assert_eq!(page1.prev, Some(cursor_of(&msgs[3])));
+    let page2 = list(SortOrder::Asc, page1.next).await.unwrap();
+    assert_eq!(
+        page2.items.iter().map(|m| m.id).collect::<Vec<_>>(),
+        ids(&[0, 1])
+    );
+    assert_eq!(page2.next, None, "no row is older than the oldest");
+    assert_eq!(page2.prev, Some(cursor_of(&msgs[1])));
+
+    // A cursorless `Before` page still starts at the head of the endpoint order (callers use it
+    // for "most recent"), unchanged by the fix.
+    let head = list(SortOrder::Desc, None).await.unwrap();
+    assert_eq!(
+        head.items.iter().map(|m| m.id).collect::<Vec<_>>(),
+        ids(&[4, 3])
+    );
 }

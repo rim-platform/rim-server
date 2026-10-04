@@ -8,6 +8,8 @@
 /// is absent or does not look like a test database, rather than silently
 /// skipping the test (matches the pattern used by
 /// `rim_infra_db/tests/support/mod.rs`).
+#[allow(dead_code)] // Not every test binary that includes `support` uses the GraphQL helpers.
+pub mod graphql;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 
@@ -18,6 +20,8 @@ use std::sync::OnceLock;
 use migration::MigratorTrait;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
 
+use rim_core::auth::model::{NewSession, SessionId};
+use rim_core::auth::repository::SessionRepository;
 use rim_core::server::model::Server;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
@@ -27,6 +31,7 @@ use rim_core::user::repository::UserRepository;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
+use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
 use rim_services::events::{NoopBroadcaster, Observers};
@@ -167,10 +172,33 @@ impl TestCtx {
 
     /// Add `user` as `Owner` of `server`.
     pub async fn add_owner(&self, server: &Server, user: &User) {
+        self.add_member(server, user, ServerMemberRole::Owner).await;
+    }
+
+    /// Add `user` to `server` with the given `role`.
+    pub async fn add_member(&self, server: &Server, user: &User, role: ServerMemberRole) {
         let repo = SeaOrmServerMemberRepository::new(self.db.clone());
-        repo.add_member(server.id, user.id, ServerMemberRole::Owner)
+        repo.add_member(server.id, user.id, role)
             .await
             .expect("add_member failed");
+    }
+
+    /// Create a live (unexpired, unrevoked) session row for `user` and return its id.
+    ///
+    /// Pair with [`graphql::Caller`] to execute GraphQL as that user: the HTTP layer would
+    /// resolve the session cookie to exactly this `(user_id, session_id)` pair.
+    pub async fn create_session(&self, user: &User) -> SessionId {
+        let repo = SeaOrmSessionRepository::new(self.db.clone());
+        repo.create_session(NewSession {
+            user_id: user.id,
+            token_hash: format!("e2e-session-{}", user.id),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+            user_agent: None,
+            ip: None,
+        })
+        .await
+        .expect("create_session failed")
+        .id
     }
 
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
