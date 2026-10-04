@@ -447,3 +447,74 @@ async fn duplicate_active_fingerprint_on_same_server_violates_unique_index() {
         rim_core::repository::error::RepoErrorKind::Conflict
     );
 }
+
+/// `Before` pages hold the incidents adjacent to the cursor (finding A-H1). Endpoint order is
+/// `created_at DESC`, so `Before` walks toward newer incidents — the "previous page" button of
+/// the incident history view.
+#[tokio::test]
+async fn list_incidents_before_returns_incidents_adjacent_to_cursor() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmIncidentRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let user = ctx.create_user("u").await;
+
+    let mut created = Vec::new();
+    for n in 0..5 {
+        // One conversation per incident: at most one active incident per conversation.
+        let conv = ctx
+            .create_conversation(server.id, ConversationType::Channel)
+            .await;
+        let inc = repo
+            .create(NewIncident {
+                server_id: server.id,
+                conversation_id: conv.id,
+                started_by: user.id,
+                severity: Some(IncidentSeverity::Sev2),
+                title: format!("incident-{n}"),
+                original_topic: None,
+                alert_fingerprint: None,
+                source: "manual".to_string(),
+                escalation_policy_id: None,
+            })
+            .await
+            .unwrap();
+        created.push(inc);
+    }
+    // created[i] is the i-th oldest by the endpoint's (created_at, id) key.
+    created.sort_by_key(|i| (i.created_at, uuid::Uuid::from(i.id)));
+    let cursor_of = |i: usize| rim_core::incident::repository::IncidentListCursor {
+        created_at: created[i].created_at,
+        incident_id: created[i].id,
+    };
+    let ids = |idx: &[usize]| idx.iter().map(|&i| created[i].id).collect::<Vec<_>>();
+
+    let page1 = repo
+        .list_incidents(
+            server.id,
+            None,
+            None,
+            2,
+            PageDir::Before,
+            Some(cursor_of(0)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        ids(&[2, 1])
+    );
+    assert_eq!(page1.next, Some(cursor_of(2)));
+    assert_eq!(page1.prev, Some(cursor_of(1)));
+
+    let page2 = repo
+        .list_incidents(server.id, None, None, 2, PageDir::Before, page1.next)
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        ids(&[4, 3])
+    );
+    assert_eq!(page2.next, None);
+    assert_eq!(page2.prev, Some(cursor_of(3)));
+}

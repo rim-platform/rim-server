@@ -172,7 +172,16 @@ impl MessageRepository for SeaOrmMessageRepository {
             q = q.filter(cond);
         }
 
-        q = match order {
+        // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in
+        // `order`, so fetch them nearest-first (reversed order) and flip the page back below;
+        // fetching in `order` would return the far end of the range and skip everything between
+        // it and the cursor (finding A-H1).
+        let fetch_reversed = has_cursor && dir == PageDir::Before;
+        let fetch_order = match (order, fetch_reversed) {
+            (SortOrder::Asc, false) | (SortOrder::Desc, true) => SortOrder::Asc,
+            (SortOrder::Desc, false) | (SortOrder::Asc, true) => SortOrder::Desc,
+        };
+        q = match fetch_order {
             SortOrder::Asc => q
                 .order_by_asc(message::Column::SentAt)
                 .order_by_asc(message::Column::Id),
@@ -193,6 +202,9 @@ impl MessageRepository for SeaOrmMessageRepository {
         let has_more_in_dir = items.len() > limit as usize;
         if has_more_in_dir {
             items.truncate(limit as usize);
+        }
+        if fetch_reversed {
+            items.reverse();
         }
 
         let (min, max) = match order {
@@ -285,6 +297,11 @@ impl MessageRepository for SeaOrmMessageRepository {
             PageDir::After => "<",
             PageDir::Before => ">",
         };
+        // Select the rows nearest the cursor: `Before` rows are newer than it, so fetch them
+        // oldest-first and flip them back to (sent_at DESC, id DESC) below. Fetching newest-first
+        // would return the far end of the range and skip the rows next to the cursor (A-H1).
+        let fetch_reversed = cursor.is_some() && dir == PageDir::Before;
+        let fetch_dir = if fetch_reversed { "ASC" } else { "DESC" };
 
         let sql = format!(
             r#"SELECT m.id, m.conversation_id, m.thread_id, m.parent_message_id,
@@ -305,7 +322,7 @@ impl MessageRepository for SeaOrmMessageRepository {
                  AND ($7::timestamptz IS NULL OR m.sent_at < $7)
                  AND ($8::timestamptz IS NULL
                       OR (m.sent_at {op} $8 OR (m.sent_at = $8 AND m.id {op} $9)))
-               ORDER BY m.sent_at DESC, m.id DESC
+               ORDER BY m.sent_at {fetch_dir}, m.id {fetch_dir}
                LIMIT $10"#
         );
 
@@ -329,7 +346,11 @@ impl MessageRepository for SeaOrmMessageRepository {
         .await
         .map_err(map_db_err)?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        let mut hits: Vec<MessageSearchHit> = rows.into_iter().map(Into::into).collect();
+        if fetch_reversed {
+            hits.reverse();
+        }
+        Ok(hits)
     }
 
     async fn update_message_text(

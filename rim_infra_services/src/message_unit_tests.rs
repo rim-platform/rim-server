@@ -718,6 +718,105 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
+    /// The repository returns `limit + 1` search rows nearest the cursor, newest first, so the
+    /// overflow row (farthest from the cursor) is the last one for `After` but the first one for
+    /// `Before`. The service must drop that row — not the one next to the cursor (finding A-H1).
+    #[tokio::test]
+    async fn search_messages_drops_the_overflow_row_farthest_from_the_cursor() {
+        use rim_core::message::repository::MessageSearchHit;
+        use rim_services::message::dto::MessagePageCursor;
+
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv_id = ConversationId::new();
+        let base = chrono::Utc::now();
+        // Newest first, as the repository returns them.
+        let msgs: Vec<Message> = (0..3)
+            .map(|i| Message {
+                sent_at: base - chrono::Duration::minutes(i),
+                ..message(actor_id, conv_id)
+            })
+            .collect();
+        let key = |m: &Message| (m.sent_at, m.id);
+        let cursor_key = |c: Option<MessagePageCursor>| c.map(|c| (c.sent_at, c.message_id));
+
+        for (dir, want) in [
+            (PageDir::After, vec![msgs[0].id, msgs[1].id]),
+            (PageDir::Before, vec![msgs[1].id, msgs[2].id]),
+        ] {
+            let mut server_member_repo = MockServerMemberRepository::new();
+            server_member_repo
+                .expect_is_member()
+                .returning(|_sid, _uid| Ok(true));
+            let mut conversation_repo = MockConversationRepository::new();
+            conversation_repo
+                .expect_list_accessible_conversation_ids()
+                .returning(move |_sid, _uid| Box::pin(async move { Ok(vec![conv_id]) }));
+            let mut message_repo = MockMessageRepository::new();
+            let hits: Vec<MessageSearchHit> = msgs
+                .iter()
+                .map(|m| MessageSearchHit {
+                    message: m.clone(),
+                    rank: 0.1,
+                    headline: None,
+                })
+                .collect();
+            message_repo
+                .expect_search_messages_fts()
+                .return_once(move |_params| Box::pin(async move { Ok(hits) }));
+            let mut attachment_repo = MockMessageAttachmentRepository::new();
+            attachment_repo
+                .expect_get_attachments_for_messages()
+                .return_once(|_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+            let mut thread_repo = MockMessageThreadRepository::new();
+            thread_repo
+                .expect_get_thread_ids_by_root_messages()
+                .return_once(|_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+
+            let svc = DefaultMessageService::new(
+                MessageRepos {
+                    conversation_repo: Arc::new(conversation_repo),
+                    conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                    message_repo: Arc::new(message_repo),
+                    message_attachment_repo: Arc::new(attachment_repo),
+                    message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                    message_thread_repo: Arc::new(thread_repo),
+                    server_member_repo: Arc::new(server_member_repo),
+                    user_repo: Arc::new(MockUserRepository::new()),
+                },
+                None,
+                test_observers(),
+            );
+
+            // The mock ignores the cursor; the service only needs to know one was sent.
+            let cursor = MessagePageCursor {
+                sent_at: base - chrono::Duration::minutes(10),
+                message_id: MessageId::new(),
+            };
+            let page = svc
+                .search_messages(SearchMessagesQuery {
+                    actor: Actor::new(actor_id),
+                    server_id,
+                    conversation_id: None,
+                    query: "needle".to_string(),
+                    limit: 2,
+                    cursor: Some(cursor),
+                    dir,
+                })
+                .await
+                .unwrap();
+
+            let got: Vec<MessageId> = page.items.iter().map(|hit| hit.message.id).collect();
+            assert_eq!(got, want, "{dir:?}: kept rows");
+            let (next, prev) = match dir {
+                PageDir::After => (key(&msgs[1]), key(&msgs[0])),
+                PageDir::Before => (key(&msgs[1]), key(&msgs[2])),
+            };
+            assert_eq!(cursor_key(page.next), Some(next), "{dir:?}: next");
+            assert_eq!(cursor_key(page.prev), Some(prev), "{dir:?}: prev");
+        }
+    }
+
     #[tokio::test]
     async fn get_message_not_found_when_message_not_in_conversation() {
         let actor_id = UserId::new();

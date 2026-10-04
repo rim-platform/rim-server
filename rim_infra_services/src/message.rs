@@ -898,7 +898,13 @@ impl MessageService for DefaultMessageService {
         let has_cursor = query.cursor.is_some();
         let has_more_in_dir = hits.len() > clamped_limit as usize;
         if has_more_in_dir {
-            hits.truncate(clamped_limit as usize);
+            // Drop the extra row, which is the one farthest from the cursor (see
+            // `MessageRepository::search_messages_fts`): the newest one for `Before`.
+            if has_cursor && query.dir == PageDir::Before {
+                hits.remove(0);
+            } else {
+                hits.truncate(clamped_limit as usize);
+            }
         }
 
         let to_cursor = |hit: &rim_core::message::repository::MessageSearchHit| MessagePageCursor {
