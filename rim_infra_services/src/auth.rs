@@ -49,6 +49,7 @@ pub struct DefaultAuthService {
     preview_rate_limiter: RegistrationRateLimiter,
     signup_rate_limiter: RegistrationRateLimiter,
     login_ip_rate_limiter: RegistrationRateLimiter,
+    login_ip_account_rate_limiter: RegistrationRateLimiter,
     login_account_rate_limiter: RegistrationRateLimiter,
     email_sender: std::sync::Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
@@ -83,6 +84,7 @@ impl DefaultAuthService {
             preview_rate_limiter: RegistrationRateLimiter::preview_default(),
             signup_rate_limiter: RegistrationRateLimiter::signup_default(),
             login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
+            login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
             login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
             email_sender,
             public_base_url,
@@ -118,22 +120,26 @@ impl DefaultAuthService {
         &self.signup_rate_limiter
     }
 
-    /// Replace the login rate limiters (per-IP attempts, per-username failures).
+    /// Replace the login rate limiters (per-IP attempts, per-(IP, username) failures,
+    /// per-username failures from any IP).
     ///
     /// # Examples
     /// ```ignore
     /// let svc = DefaultAuthService::new(/* ... */).with_login_rate_limiters(
     ///     RegistrationRateLimiter::new(300, 30),
     ///     RegistrationRateLimiter::new(900, 10),
+    ///     RegistrationRateLimiter::new(3600, 100),
     /// );
     /// ```
     #[allow(dead_code)]
     pub fn with_login_rate_limiters(
         mut self,
         ip_limiter: RegistrationRateLimiter,
+        ip_account_limiter: RegistrationRateLimiter,
         account_limiter: RegistrationRateLimiter,
     ) -> Self {
         self.login_ip_rate_limiter = ip_limiter;
+        self.login_ip_account_rate_limiter = ip_account_limiter;
         self.login_account_rate_limiter = account_limiter;
         self
     }
@@ -168,6 +174,7 @@ impl DefaultAuthService {
             preview_rate_limiter,
             signup_rate_limiter,
             login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
+            login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
             login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
             email_sender,
             public_base_url,
@@ -671,24 +678,34 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
-        // Both limits are checked before any lookup or Argon2 verify, so a throttled caller
+        // Every limit is checked before any lookup or Argon2 verify, so a throttled caller
         // costs no hashing work and gets the same answer whether or not the username exists.
-        // The account slot is reserved up front (not recorded after a failure) so concurrent
-        // attempts can't all pass the check before any of them fails; it is refunded below
-        // unless the attempt turns out to be a failed login.
+        // The strict failure limit is per (IP, username), so one source exhausting it can't
+        // lock the account's owner out; the per-username limit across all IPs is a loose
+        // backstop against distributed guessing (tripping it needs several addresses). Failure slots are reserved up front (not recorded
+        // after a failure) so concurrent attempts can't all pass the check before any of them
+        // fails; they are refunded below unless the attempt turns out to be a failed login.
         let now = Utc::now();
         let account_key = username.to_lowercase();
-        let ip_decision = self
+        let mut decision = self
             .login_ip_rate_limiter
             .check_and_record(&remote_ip, "login", now);
-        let decision = match ip_decision {
-            RateLimitDecision::Allowed => self.login_account_rate_limiter.check_and_record(
-                LOGIN_ACCOUNT_SCOPE,
-                &account_key,
-                now,
-            ),
-            limited => limited,
-        };
+        if decision == RateLimitDecision::Allowed {
+            decision =
+                self.login_ip_account_rate_limiter
+                    .check_and_record(&remote_ip, &account_key, now);
+            if decision == RateLimitDecision::Allowed {
+                decision = self.login_account_rate_limiter.check_and_record(
+                    LOGIN_ACCOUNT_SCOPE,
+                    &account_key,
+                    now,
+                );
+                if decision != RateLimitDecision::Allowed {
+                    self.login_ip_account_rate_limiter
+                        .refund(&remote_ip, &account_key, now);
+                }
+            }
+        }
         if let RateLimitDecision::Limited {
             retry_after_seconds,
         } = decision
@@ -708,6 +725,8 @@ impl AuthService for DefaultAuthService {
 
         let result = self.verify_login(username, password).await;
         if !matches!(result, Err(ServiceError::Unauthenticated)) {
+            self.login_ip_account_rate_limiter
+                .refund(&remote_ip, &account_key, now);
             self.login_account_rate_limiter
                 .refund(LOGIN_ACCOUNT_SCOPE, &account_key, now);
         }
