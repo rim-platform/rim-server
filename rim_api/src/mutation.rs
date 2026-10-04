@@ -380,10 +380,7 @@ impl Mutation {
     async fn login(&self, ctx: &Context<'_>, input: LoginInput) -> Result<LoginPayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         // Remote IP for rate limiting — service enforces the limit.
-        let remote_ip = ctx
-            .data::<crate::auth_context::RemoteIp>()
-            .map(|r| r.0.clone())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let remote_ip = crate::auth_context::remote_ip(ctx);
         let res = auth
             .login(LoginCmd {
                 username: input.username,
@@ -613,10 +610,7 @@ impl Mutation {
                     ctx.data::<std::sync::Arc<rim_services::auth::dto::SignupRateLimiterToken>>();
 
                 // Remote IP for rate limiting — service enforces the limit.
-                let remote_ip = ctx
-                    .data::<crate::auth_context::RemoteIp>()
-                    .map(|r| r.0.clone())
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let remote_ip = crate::auth_context::remote_ip(ctx);
 
                 let normalised_email_open = input.email.trim().to_lowercase();
                 let res = auth
@@ -1327,18 +1321,7 @@ impl Mutation {
         let conversation_id =
             parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
 
-        // Verify membership
-        let member_svc = ctx
-            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
-            )?;
-        member_svc
-            .get_member(rim_services::server_member::command::GetServerMemberQuery {
-                actor: Actor::new(actor),
-                server_id,
-                user_id: actor,
-            })
-            .await
-            .map_err(map_service_error)?;
+        crate::auth_context::require_server_member(ctx, actor, server_id).await?;
 
         let typing_tracker =
             ctx.data::<std::sync::Arc<dyn rim_services::typing::TypingService>>()?;
@@ -1383,18 +1366,7 @@ impl Mutation {
 
         let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
 
-        // Verify membership.
-        let member_svc = ctx
-            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
-            )?;
-        member_svc
-            .get_member(rim_services::server_member::command::GetServerMemberQuery {
-                actor: Actor::new(actor),
-                server_id: workspace_id,
-                user_id: actor,
-            })
-            .await
-            .map_err(map_service_error)?;
+        crate::auth_context::require_server_member(ctx, actor, workspace_id).await?;
 
         let presence_mgr =
             ctx.data::<std::sync::Arc<dyn rim_services::presence::PresenceService>>()?;
@@ -1461,7 +1433,10 @@ impl Mutation {
             .data::<std::sync::Arc<dyn rim_services::password_reset::service::PasswordResetService>>(
             )?;
         svc.request_reset(
-            rim_services::password_reset::command::RequestPasswordResetCmd { username },
+            rim_services::password_reset::command::RequestPasswordResetCmd {
+                username,
+                remote_ip: crate::auth_context::remote_ip(ctx),
+            },
         )
         .await
         .map_err(map_service_error)?;

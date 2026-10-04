@@ -22,6 +22,32 @@ impl RemoteIp {
     }
 }
 
+/// Fail unless `actor` is a member of `server_id`.
+pub(crate) async fn require_server_member(
+    ctx: &Context<'_>,
+    actor: rim_core::user::model::UserId,
+    server_id: rim_core::server::model::ServerId,
+) -> Result<(), Error> {
+    let member_svc = ctx
+        .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>()?;
+    member_svc
+        .get_member(rim_services::server_member::command::GetServerMemberQuery {
+            actor: rim_services::Actor::new(actor),
+            server_id,
+            user_id: actor,
+        })
+        .await
+        .map_err(crate::errors::map_service_error)?;
+    Ok(())
+}
+
+/// The caller's IP for rate limiting, or `"unknown"` if the handler did not inject one.
+pub(crate) fn remote_ip(ctx: &Context<'_>) -> String {
+    ctx.data::<RemoteIp>()
+        .map(|r| r.0.clone())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 #[derive(Default, Clone)]
 pub struct AuthActorCtx {
     actor: Option<rim_core::user::model::UserId>,

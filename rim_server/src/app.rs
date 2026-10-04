@@ -46,6 +46,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // production UoW path without hand-duplicating the 31-repo literal.
     let repos = AppRepos::with_handle(&db);
 
+    // Build the dummy hash that unknown-username logins verify against now, so the first such
+    // login doesn't pay an extra Argon2 hash and stand out by its timing. Refuse to start
+    // without it: those logins would otherwise fail differently from wrong passwords.
+    rim_auth::password::verify_dummy_password("").map_err(|e| {
+        std::io::Error::other(format!("failed to prepare dummy password hash: {e}"))
+    })?;
+
     // Phase 1 §3.3 — closes Black Widow C1. Seed builtin capabilities into
     // the registry SYNCHRONOUSLY before the HTTP listener binds, so the
     // capability gate cannot deny a legitimate first-request `chat.write`
@@ -84,6 +91,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let storage_service: Arc<dyn StorageService> =
         Arc::new(rim_infra_services::storage::DefaultStorageService::new(
             Arc::clone(&storage_backend),
+            Arc::clone(&repos.message_attachment_repo),
             max_workspace_bytes,
         ));
 

@@ -8,6 +8,7 @@ use rim_services::message_attachment::command::{
 };
 use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus, UploadTicketDto};
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::message_attachment::{MAX_ATTACHMENT_BYTES, UPLOAD_TICKET_TTL_MINUTES};
 use rim_services::storage::service::StorageService;
 use rim_services::{ServiceError, ServiceResult};
 
@@ -20,6 +21,11 @@ use crate::util::{
 pub struct DefaultMessageAttachmentService {
     repos: AttachmentRepos,
     storage_service: Arc<dyn StorageService>,
+    /// Serializes the quota check and the insert in `create_attachment`, so concurrent
+    /// requests can't all pass the check before any of them is counted. One lock for every
+    /// workspace is enough: the critical section is two short queries, and the server runs
+    /// as a single process (presence and typing state are in-memory too).
+    quota_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl DefaultMessageAttachmentService {
@@ -30,7 +36,7 @@ impl DefaultMessageAttachmentService {
 
     /// Attachments in `PendingUpload` or `Uploaded` status older than this
     /// threshold are considered stale and reported as `Failed`.
-    const STALE_THRESHOLD_MINUTES: i64 = 15;
+    const STALE_THRESHOLD_MINUTES: i64 = UPLOAD_TICKET_TTL_MINUTES;
 
     fn sanitize_filename(name: &str) -> Option<String> {
         rim_core::util::sanitize_filename(name)
@@ -40,6 +46,7 @@ impl DefaultMessageAttachmentService {
         Self {
             repos,
             storage_service,
+            quota_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -107,6 +114,13 @@ impl DefaultMessageAttachmentService {
             &self.repos.conversation_repo,
             &self.repos.conversation_member_repo,
         )
+    }
+
+    /// Best-effort delete of a stored file that no attachment will reference.
+    async fn discard_upload(&self, key: &str) {
+        if let Err(e) = self.storage_service.delete_file(key).await {
+            tracing::warn!(error = %e, key = %key, "failed to delete orphaned upload");
+        }
     }
 
     /// Verifies the actor is a member of the conversation (via the full 3-step
@@ -199,10 +213,11 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
                 "attachment size must be greater than zero".to_string(),
             ));
         }
-        if cmd.size_bytes > i64::MAX as u64 {
-            return Err(ServiceError::Validation(
-                "attachment size is too large".to_string(),
-            ));
+        if cmd.size_bytes > MAX_ATTACHMENT_BYTES {
+            return Err(ServiceError::Validation(format!(
+                "attachment is too large: {} bytes (max {MAX_ATTACHMENT_BYTES} bytes)",
+                cmd.size_bytes
+            )));
         }
 
         let attachment_id = rim_core::message_attachment::model::MessageAttachmentId::new();
@@ -221,11 +236,24 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             mime_type: cmd.content_type.trim().to_owned(),
             metadata,
         };
-        let attachment = self
-            .repos
-            .message_attachment_repo
-            .add_attachment(new_attachment)
-            .await?;
+        // The declared size is reserved against the workspace quota now, while the upload is
+        // still pending; `complete_upload` refuses any file larger than what was declared.
+        let attachment = {
+            let _quota_guard = self.quota_lock.lock().await;
+            let usage = self.storage_service.get_quota_usage(cmd.server_id).await?;
+            if let Some(max) = usage.max_bytes
+                && usage.used_bytes.saturating_add(cmd.size_bytes) > max
+            {
+                return Err(ServiceError::Validation(format!(
+                    "storage quota exceeded: {} of {} bytes used",
+                    usage.used_bytes, max
+                )));
+            }
+            self.repos
+                .message_attachment_repo
+                .add_attachment(new_attachment)
+                .await?
+        };
 
         self.repos
             .message_repo
@@ -236,7 +264,9 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             attachment_id: attachment.id,
             upload_token,
             max_size_bytes: Some(cmd.size_bytes),
-            expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(15)),
+            expires_at: Some(
+                chrono::Utc::now() + chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES),
+            ),
         })
     }
 
@@ -355,6 +385,15 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             ));
         }
 
+        // Once the ticket lapses its quota reservation is released, so it can't be filled.
+        let reserved_since =
+            chrono::Utc::now() - chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES);
+        if Self::created_at_from_id(attachment.id) < reserved_since {
+            return Err(ServiceError::Validation(
+                "upload ticket expired".to_string(),
+            ));
+        }
+
         // Derive server_id from message → conversation, then enforce full
         // 3-step access gate (server membership + conv-in-server + conv access).
         let message = self
@@ -384,18 +423,66 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             return Err(ServiceError::PermissionDenied);
         }
 
+        let uploaded_size = cmd.data.len() as u64;
+        if uploaded_size == 0 {
+            return Err(ServiceError::Validation(
+                "uploaded file is empty".to_string(),
+            ));
+        }
+        if uploaded_size > u64::try_from(attachment.file_size).unwrap_or(0) {
+            return Err(ServiceError::Validation(format!(
+                "uploaded file is {uploaded_size} bytes, larger than the {} bytes declared",
+                attachment.file_size
+            )));
+        }
+
+        // Every attempt gets its own key, so a request that loses the completion race below
+        // can't overwrite the winner's file; it deletes its own instead.
+        let key_filename =
+            Self::sanitize_filename(&cmd.uploaded_filename).unwrap_or_else(|| "file".to_string());
+        let storage_key = format!(
+            "uploads/{}/{}_{}",
+            cmd.actor_user_id,
+            uuid::Uuid::now_v7(),
+            key_filename
+        );
+        let stored = self
+            .storage_service
+            .upload_file(&storage_key, &cmd.data, &cmd.content_type)
+            .await?;
+
         let uploaded_metadata = json!({
             "status": Self::UPLOADED_STATUS,
             "storage_filename": cmd.uploaded_filename,
         });
 
-        let updated = self
+        let completed = self
             .repos
             .message_attachment_repo
-            .update_attachment(cmd.attachment_id, cmd.storage_key, Some(uploaded_metadata))
-            .await?;
+            .try_complete_upload(
+                cmd.attachment_id,
+                expected_storage_url,
+                // Re-read the clock: the ticket may have lapsed while the file was written.
+                chrono::Utc::now() - chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES),
+                stored.key.clone(),
+                stored.size_bytes as i64,
+                Some(uploaded_metadata),
+            )
+            .await;
 
-        Ok(Self::attachment_dto(updated))
+        match completed {
+            Ok(Some(updated)) => Ok(Self::attachment_dto(updated)),
+            Ok(None) => {
+                self.discard_upload(&stored.key).await;
+                Err(ServiceError::Validation(
+                    "upload token already used or invalid".to_string(),
+                ))
+            }
+            Err(e) => {
+                self.discard_upload(&stored.key).await;
+                Err(e.into())
+            }
+        }
     }
 
     async fn authorize_download(

@@ -89,6 +89,7 @@ impl SessionRepository for SeaOrmSessionRepository {
         let now: DateTime<Utc> = Utc::now();
         let res = session::Entity::update_many()
             .filter(session::Column::UserId.eq(sea_orm::Value::Uuid(Some(user_id.into()))))
+            .filter(session::Column::RevokedAt.is_null())
             .col_expr(session::Column::RevokedAt, Expr::value(now))
             .exec(&self.db)
             .await

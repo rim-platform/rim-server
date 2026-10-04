@@ -850,10 +850,11 @@ impl Query {
         ctx: &Context<'_>,
         workspace_id: ID,
     ) -> Result<Vec<UserPresenceGql>> {
-        let _actor = require_actor(ctx)?;
+        let actor = require_actor(ctx)?;
         let presence_mgr =
             ctx.data::<std::sync::Arc<dyn rim_services::presence::PresenceService>>()?;
         let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&workspace_id)?;
+        crate::auth_context::require_server_member(ctx, actor, workspace_id).await?;
 
         let entries = presence_mgr.get_workspace_presence(workspace_id);
         Ok(entries.into_iter().map(Into::into).collect())
@@ -1380,10 +1381,7 @@ impl Query {
                     .extend_with(|_, e| e.set("code", "INTERNAL"))
             })?;
 
-        let remote_ip = ctx
-            .data::<crate::auth_context::RemoteIp>()
-            .map(|r| r.0.clone())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let remote_ip = crate::auth_context::remote_ip(ctx);
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
 

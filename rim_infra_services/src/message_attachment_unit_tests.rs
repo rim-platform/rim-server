@@ -17,19 +17,22 @@ mod tests {
         ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
     };
     use rim_core::message_attachment::model::{
-        MessageAttachment, MessageAttachmentId, NewMessageAttachment,
+        AttachmentUsage, MessageAttachment, MessageAttachmentId, NewMessageAttachment,
     };
     use rim_core::repository::error::RepoResult;
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::storage::StoredFile;
     use rim_core::user::model::UserId;
+    use rim_services::message_attachment::MAX_ATTACHMENT_BYTES;
+    use rim_services::message_attachment::command::CompleteUploadCmd;
     use rim_services::message_attachment::command::{
         CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd, GetAttachmentQuery,
     };
     use rim_services::message_attachment::dto::AttachmentStatus;
     use rim_services::message_attachment::service::MessageAttachmentService;
-    use rim_services::storage::service::MockStorageService;
+    use rim_services::storage::service::{MockStorageService, QuotaUsage};
     use rim_services::{Actor, ServiceError};
 
     use crate::message_attachment::DefaultMessageAttachmentService;
@@ -60,7 +63,22 @@ mod tests {
                 storage_url: String,
                 metadata: Option<serde_json::Value>,
             ) -> RepoResult<MessageAttachment>;
+            async fn try_complete_upload(
+                &self,
+                id: MessageAttachmentId,
+                expected_storage_url: String,
+                reserved_since: chrono::DateTime<chrono::Utc>,
+                storage_url: String,
+                file_size: i64,
+                metadata: Option<serde_json::Value>,
+            ) -> RepoResult<Option<MessageAttachment>>;
             async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()>;
+            async fn usage_for_server(
+                &self,
+                server_id: ServerId,
+                pending_since: chrono::DateTime<chrono::Utc>,
+                max_file_size: i64,
+            ) -> RepoResult<AttachmentUsage>;
             async fn find_ids_with_status_before(
                 &self,
                 statuses: Vec<String>,
@@ -270,7 +288,372 @@ mod tests {
         }
     }
 
+    fn quota(used_bytes: u64, max_bytes: u64) -> QuotaUsage {
+        QuotaUsage {
+            used_bytes,
+            max_bytes: Some(max_bytes),
+            file_count: 0,
+        }
+    }
+
+    /// A service whose create-attachment access checks all pass for `actor_id` on a message they
+    /// sent in `conversation_id` of `server_id`.
+    fn create_ready_service(
+        server_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        actor_id: UserId,
+        message_attachment_repo: MockMessageAttachmentRepository,
+        storage: MockStorageService,
+    ) -> DefaultMessageAttachmentService {
+        let mut msg = message(message_id, conversation_id);
+        msg.sent_by = actor_id;
+        let msg_for_set = msg.clone();
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id, conversation_id))));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(msg.clone())));
+        message_repo
+            .expect_set_has_attachments()
+            .returning(move |_, _| Ok(msg_for_set.clone()));
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            Arc::new(storage),
+        )
+    }
+
+    fn create_cmd(
+        server_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        actor_id: UserId,
+        size_bytes: u64,
+    ) -> CreateAttachmentCmd {
+        CreateAttachmentCmd {
+            actor: Actor::new(actor_id),
+            server_id,
+            conversation_id,
+            message_id: Some(message_id),
+            filename: "f.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            size_bytes,
+        }
+    }
+
+    /// A service whose upload access checks all pass for `actor_id` completing the pending
+    /// attachment `attachment_id` (declared at 10 bytes, token `"tok"`).
+    fn upload_ready_service(
+        attachment_id: MessageAttachmentId,
+        actor_id: UserId,
+        mut message_attachment_repo: MockMessageAttachmentRepository,
+        storage: MockStorageService,
+    ) -> DefaultMessageAttachmentService {
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+
+        let mut att = attachment(attachment_id);
+        att.message_id = message_id;
+        att.storage_url = "pending://tok".to_string();
+        att.metadata = Some(serde_json::json!({ "status": "pending_upload" }));
+        message_attachment_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(att.clone())));
+
+        let mut msg = message(message_id, conversation_id);
+        msg.sent_by = actor_id;
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id, conversation_id))));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(msg.clone())));
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            Arc::new(storage),
+        )
+    }
+
+    fn upload_cmd(
+        attachment_id: MessageAttachmentId,
+        actor_id: UserId,
+        data: &[u8],
+    ) -> CompleteUploadCmd {
+        CompleteUploadCmd {
+            actor_user_id: actor_id,
+            attachment_id,
+            upload_token: "tok".to_string(),
+            uploaded_filename: "f.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            data: data.to_vec(),
+        }
+    }
+
+    fn storing_storage() -> MockStorageService {
+        let mut storage = MockStorageService::new();
+        storage.expect_upload_file().returning(|key, data, _| {
+            let stored = StoredFile {
+                key: key.to_string(),
+                size_bytes: data.len() as u64,
+            };
+            Box::pin(async move { Ok(stored) })
+        });
+        storage
+    }
+
     // ── Tests ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_attachment_rejects_upload_over_workspace_quota() {
+        let (server_id, conversation_id, message_id, actor_id) = (
+            ServerId::new(),
+            ConversationId::new(),
+            MessageId::new(),
+            UserId::new(),
+        );
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_add_attachment().never();
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_get_quota_usage()
+            .returning(|_| Box::pin(async { Ok(quota(995, 1_000)) }));
+
+        let svc = create_ready_service(
+            server_id,
+            conversation_id,
+            message_id,
+            actor_id,
+            repo,
+            storage,
+        );
+        let err = svc
+            .create_attachment(create_cmd(
+                server_id,
+                conversation_id,
+                message_id,
+                actor_id,
+                10,
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("quota")),
+            "expected quota error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_attachment_accepts_upload_that_exactly_fills_quota() {
+        let (server_id, conversation_id, message_id, actor_id) = (
+            ServerId::new(),
+            ConversationId::new(),
+            MessageId::new(),
+            UserId::new(),
+        );
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_add_attachment().times(1).returning(|new| {
+            Ok(MessageAttachment {
+                id: new.id,
+                message_id: new.message_id,
+                storage_url: new.storage_url,
+                file_name: new.file_name,
+                file_size: new.file_size,
+                mime_type: new.mime_type,
+                metadata: new.metadata,
+            })
+        });
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_get_quota_usage()
+            .returning(|_| Box::pin(async { Ok(quota(990, 1_000)) }));
+
+        let svc = create_ready_service(
+            server_id,
+            conversation_id,
+            message_id,
+            actor_id,
+            repo,
+            storage,
+        );
+        svc.create_attachment(create_cmd(
+            server_id,
+            conversation_id,
+            message_id,
+            actor_id,
+            10,
+        ))
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_attachment_rejects_declared_size_over_upload_limit() {
+        let (server_id, conversation_id, message_id, actor_id) = (
+            ServerId::new(),
+            ConversationId::new(),
+            MessageId::new(),
+            UserId::new(),
+        );
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_add_attachment().never();
+
+        let svc = create_ready_service(
+            server_id,
+            conversation_id,
+            message_id,
+            actor_id,
+            repo,
+            MockStorageService::new(),
+        );
+        let err = svc
+            .create_attachment(create_cmd(
+                server_id,
+                conversation_id,
+                message_id,
+                actor_id,
+                MAX_ATTACHMENT_BYTES + 1,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_stores_file_and_records_actual_size() {
+        let attachment_id = MessageAttachmentId::new();
+        let actor_id = UserId::new();
+
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_try_complete_upload()
+            .withf(|_, expected, _, key, size, _| {
+                expected == "pending://tok" && key.starts_with("uploads/") && *size == 5
+            })
+            .times(1)
+            .returning(|id, _, _, key, size, metadata| {
+                Ok(Some(MessageAttachment {
+                    id,
+                    message_id: MessageId::new(),
+                    storage_url: key,
+                    file_name: "f.txt".to_string(),
+                    file_size: size,
+                    mime_type: "text/plain".to_string(),
+                    metadata,
+                }))
+            });
+
+        let svc = upload_ready_service(attachment_id, actor_id, repo, storing_storage());
+        let dto = svc
+            .complete_upload(upload_cmd(attachment_id, actor_id, b"hello"))
+            .await
+            .unwrap();
+        assert_eq!(dto.size_bytes, 5);
+        assert!(dto.storage_key.is_some_and(|k| k.ends_with("_f.txt")));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_rejects_file_larger_than_declared_without_storing() {
+        let attachment_id = MessageAttachmentId::new();
+        let actor_id = UserId::new();
+
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_try_complete_upload().never();
+        let mut storage = MockStorageService::new();
+        storage.expect_upload_file().never();
+
+        let svc = upload_ready_service(attachment_id, actor_id, repo, storage);
+        // Declared at 10 bytes; 11 arrive.
+        let err = svc
+            .complete_upload(upload_cmd(attachment_id, actor_id, b"hello world"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_rejects_expired_ticket_without_storing() {
+        // An attachment created 16 minutes ago: its 15-minute ticket has lapsed.
+        let created = chrono::Utc::now() - chrono::Duration::minutes(16);
+        let attachment_id = MessageAttachmentId::from(uuid::Uuid::new_v7(
+            uuid::Timestamp::from_unix(uuid::NoContext, created.timestamp() as u64, 0),
+        ));
+        let actor_id = UserId::new();
+
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_try_complete_upload().never();
+        let mut storage = MockStorageService::new();
+        storage.expect_upload_file().never();
+
+        let svc = upload_ready_service(attachment_id, actor_id, repo, storage);
+        let err = svc
+            .complete_upload(upload_cmd(attachment_id, actor_id, b"hello"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("expired")),
+            "expected expiry error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_upload_losing_the_race_deletes_its_file() {
+        let attachment_id = MessageAttachmentId::new();
+        let actor_id = UserId::new();
+
+        let mut repo = MockMessageAttachmentRepository::new();
+        // Another request completed the attachment between our checks and our update.
+        repo.expect_try_complete_upload()
+            .returning(|_, _, _, _, _, _| Ok(None));
+        let mut storage = storing_storage();
+        storage
+            .expect_delete_file()
+            .withf(|key| key.starts_with("uploads/"))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let svc = upload_ready_service(attachment_id, actor_id, repo, storage);
+        let err = svc
+            .complete_upload(upload_cmd(attachment_id, actor_id, b"hello"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
 
     #[tokio::test]
     async fn get_attachment_denies_non_member() {
@@ -724,6 +1107,9 @@ mod tests {
         storage
             .expect_delete_file()
             .returning(|_key| Box::pin(async { Ok(()) }));
+        storage
+            .expect_get_quota_usage()
+            .returning(|_| Box::pin(async { Ok(quota(0, 1_000)) }));
 
         let svc = DefaultMessageAttachmentService::new(
             AttachmentRepos {
@@ -835,8 +1221,9 @@ mod tests {
                     actor_user_id: actor_id,
                     attachment_id,
                     upload_token,
-                    storage_key: "uploads/f.txt".to_string(),
                     uploaded_filename: "f.txt".to_string(),
+                    content_type: "text/plain".to_string(),
+                    data: b"hello".to_vec(),
                 },
             )
             .await
@@ -904,8 +1291,9 @@ mod tests {
                     actor_user_id: actor_id,
                     attachment_id,
                     upload_token,
-                    storage_key: "uploads/f.txt".to_string(),
                     uploaded_filename: "f.txt".to_string(),
+                    content_type: "text/plain".to_string(),
+                    data: b"hello".to_vec(),
                 },
             )
             .await
@@ -942,8 +1330,9 @@ mod tests {
                     actor_user_id: UserId::new(),
                     attachment_id,
                     upload_token: "wrong-token".to_string(),
-                    storage_key: "uploads/f.txt".to_string(),
                     uploaded_filename: "f.txt".to_string(),
+                    content_type: "text/plain".to_string(),
+                    data: b"hello".to_vec(),
                 },
             )
             .await

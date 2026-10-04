@@ -88,6 +88,10 @@ async fn touch_and_revoke_are_idempotent_and_revoke_all_counts() {
 
     let affected = session_repo.revoke_all_for_user(u1.id).await.unwrap();
     assert_eq!(affected, 2);
+
+    // Already-revoked sessions keep their original revocation time and aren't recounted.
+    let again = session_repo.revoke_all_for_user(u1.id).await.unwrap();
+    assert_eq!(again, 0);
 }
 
 #[tokio::test]

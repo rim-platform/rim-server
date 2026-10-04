@@ -295,6 +295,14 @@ impl AppRepos {
         }
     }
 
+    pub fn for_password_reset(&self) -> crate::password_reset::PasswordResetRepos {
+        crate::password_reset::PasswordResetRepos {
+            user_repo: Arc::clone(&self.user_repo),
+            password_reset_token_repo: Arc::clone(&self.password_reset_token_repo),
+            session_repo: Arc::clone(&self.session_repo),
+        }
+    }
+
     pub fn for_command(&self) -> CommandRepos {
         CommandRepos {
             user_command_repo: Arc::clone(&self.user_command_repo),
