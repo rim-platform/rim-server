@@ -1,0 +1,17 @@
+# Configuration for `cargo audit` (https://github.com/rustsec/rustsec).
+#
+# RUSTSEC-2023-0071 — Marvin Attack timing sidechannel in the `rsa` crate.
+# `rsa` is not a direct dependency of this workspace. It is pulled in
+# transitively only via `sqlx-mysql` (a `sqlx` feature), and every crate in
+# this workspace that depends on `sqlx`/`sea-orm` enables only the
+# `sqlx-postgres` feature — `cargo tree -i rsa` confirms `rsa` is not
+# reachable from any resolved build target. The vulnerable RSA decryption
+# code path is therefore never compiled into, or exercised by, this
+# application. No upstream fix is available yet (tracked upstream in the
+# `rsa` crate and in `sqlx`). Revisit and remove this ignore once `sqlx`
+# and/or `rsa` ship a fix, or if `sqlx-mysql`/MySQL support is ever added to
+# this workspace (at which point this advisory would become a live risk).
+[advisories]
+ignore = [
+    "RUSTSEC-2023-0071",
+]

@@ -1,0 +1,39 @@
+use crate::repository::error::RepoResult;
+use crate::server::model::ServerId;
+use crate::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+use crate::user::model::UserId;
+use async_trait::async_trait;
+#[cfg(any(test, feature = "mocks"))]
+use mockall::automock;
+
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+#[async_trait]
+pub trait ServerMemberRepository: Send + Sync {
+    async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
+
+    async fn get_member(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Option<ServerMember>>;
+
+    async fn add_member(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        role: ServerMemberRole,
+    ) -> RepoResult<ServerMember>;
+
+    async fn change_member_role(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        role: ServerMemberRole,
+    ) -> RepoResult<()>;
+
+    async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
+
+    async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
+
+    async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+}

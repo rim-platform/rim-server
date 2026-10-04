@@ -1,0 +1,589 @@
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use mockall::mock;
+
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, NewConversation,
+    };
+    use rim_core::conversation::repository::{
+        ConversationActivityCursor, ConversationCreatedCursor,
+    };
+    use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+    use rim_core::message::model::{Message, MessageId, NewMessage};
+    use rim_core::message::repository::{
+        ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
+    };
+    use rim_core::message_thread::model::{MessageThread, MessageThreadId};
+    use rim_core::message_thread::repository::ThreadCursor;
+    use rim_core::repository::error::RepoResult;
+    use rim_core::repository::pagination::{Page, PageDir};
+    use rim_core::server::model::ServerId;
+    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::user::model::UserId;
+    use rim_services::message_thread::command::{
+        CreateThreadCmd, GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
+    };
+    use rim_services::message_thread::service::ThreadService;
+    use rim_services::{Actor, ServiceError};
+
+    use crate::repos::ThreadRepos;
+    use crate::thread::DefaultThreadService;
+
+    // ── Inline mock definitions ──────────────────────────────────────────
+
+    mock! {
+        ConversationRepository {}
+        #[async_trait]
+        impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
+            async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
+            async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
+            async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
+            async fn create_conversation_with_members(
+                &self,
+                conversation_type: ConversationType,
+                server_id: ServerId,
+                title: Option<String>,
+                member_ids: &[UserId],
+            ) -> RepoResult<Conversation>;
+            async fn find_direct_between_users(
+                &self,
+                server_id: ServerId,
+                user_a: UserId,
+                user_b: UserId,
+            ) -> RepoResult<Option<Conversation>>;
+            async fn list_inbox_conversations_for_user(
+                &self,
+                user_id: UserId,
+                server_id: ServerId,
+                limit: u32,
+                dir: PageDir,
+                cursor: Option<ConversationActivityCursor>,
+            ) -> RepoResult<Page<Conversation, ConversationActivityCursor>>;
+            async fn list_channels_for_user(
+                &self,
+                user_id: UserId,
+                server_id: ServerId,
+                limit: u32,
+                dir: PageDir,
+                cursor: Option<ConversationCreatedCursor>,
+            ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>>;
+            async fn exists_channel_by_title(
+                &self,
+                server_id: ServerId,
+                title: &str,
+            ) -> RepoResult<bool>;
+            async fn get_channel_by_title(
+                &self,
+                server_id: ServerId,
+                title: &str,
+            ) -> RepoResult<Option<Conversation>>;
+            async fn list_accessible_conversation_ids(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
+            async fn touch_last_activity_at(
+                &self,
+                conversation_id: ConversationId,
+                at: chrono::DateTime<chrono::Utc>,
+            ) -> RepoResult<()>;
+            async fn update_topic(
+                &self,
+                conversation_id: ConversationId,
+                topic: Option<String>,
+            ) -> RepoResult<Conversation>;
+        }
+    }
+
+    mock! {
+        ConversationMemberRepository {}
+        #[async_trait]
+        impl rim_core::conversation_member::repository::ConversationMemberRepository for ConversationMemberRepository {
+            async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
+            async fn add_member(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<ConversationMember>;
+            async fn remove_member(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<()>;
+            async fn get_members_for_conversation(
+                &self,
+                conversation_id: ConversationId,
+            ) -> RepoResult<Vec<ConversationMember>>;
+            async fn is_member(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<bool>;
+            async fn list_member_ids(
+                &self,
+                conversation_id: ConversationId,
+            ) -> RepoResult<Vec<UserId>>;
+            async fn list_member_ids_for_conversations(
+                &self,
+                conversation_ids: &[ConversationId],
+            ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>>;
+        }
+    }
+
+    mock! {
+        MessageRepository {}
+        #[async_trait]
+        impl rim_core::message::repository::MessageRepository for MessageRepository {
+            async fn get_by_id(&self, id: MessageId) -> RepoResult<Option<Message>>;
+            async fn get_by_ids(&self, ids: &[MessageId]) -> RepoResult<std::collections::HashMap<MessageId, Message>>;
+            async fn create_message(&self, new_message: &NewMessage) -> RepoResult<Message>;
+            async fn list_messages(
+                &self,
+                params: ListMessagesParams,
+            ) -> RepoResult<Page<Message, MessageCursor>>;
+            async fn search_messages_fts(
+                &self,
+                params: MessageSearchParams,
+            ) -> RepoResult<Vec<MessageSearchHit>>;
+            async fn update_message_text(
+                &self,
+                message_id: MessageId,
+                new_text: String,
+            ) -> RepoResult<Message>;
+            async fn set_has_attachments(
+                &self,
+                message_id: MessageId,
+                has_attachments: bool,
+            ) -> RepoResult<Message>;
+            async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+        }
+    }
+
+    mock! {
+        MessageThreadRepository {}
+        #[async_trait]
+        impl rim_core::message_thread::repository::MessageThreadRepository for MessageThreadRepository {
+            async fn get_by_id(&self, id: MessageThreadId) -> RepoResult<Option<MessageThread>>;
+            async fn get_by_ids(&self, ids: &[MessageThreadId]) -> RepoResult<Vec<MessageThread>>;
+            async fn get_by_root_message(&self, message_id: MessageId) -> RepoResult<Option<MessageThread>>;
+            async fn get_thread_ids_by_root_messages(
+                &self,
+                message_ids: &[MessageId],
+            ) -> RepoResult<std::collections::HashMap<MessageId, MessageThreadId>>;
+            async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread>;
+            async fn create_thread_for_root(
+                &self,
+                conversation_id: ConversationId,
+                message_id: MessageId,
+            ) -> RepoResult<MessageThread>;
+            async fn set_first_message(
+                &self,
+                thread_id: MessageThreadId,
+                message_id: MessageId,
+            ) -> RepoResult<()>;
+            async fn touch_last_message_at(
+                &self,
+                thread_id: MessageThreadId,
+                at: chrono::DateTime<chrono::Utc>,
+            ) -> RepoResult<()>;
+            async fn list_threads_for_conversation(
+                &self,
+                conversation_id: ConversationId,
+                limit: u32,
+                dir: PageDir,
+                cursor: Option<ThreadCursor>,
+            ) -> RepoResult<Page<MessageThread, ThreadCursor>>;
+        }
+    }
+
+    mock! {
+        ServerMemberRepository {}
+        #[async_trait]
+        impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepository {
+            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
+            async fn get_member(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Option<ServerMember>>;
+            async fn add_member(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+                role: ServerMemberRole,
+            ) -> RepoResult<ServerMember>;
+            async fn change_member_role(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+                role: ServerMemberRole,
+            ) -> RepoResult<()>;
+            async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
+            async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
+            async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    fn conversation(server_id: ServerId) -> Conversation {
+        Conversation {
+            id: ConversationId::new(),
+            server_id,
+            conversation_type: ConversationType::Channel,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+        }
+    }
+
+    fn thread(conv_id: ConversationId) -> MessageThread {
+        let now = chrono::Utc::now();
+        MessageThread {
+            id: MessageThreadId::new(),
+            conversation_id: conv_id,
+            first_message_id: None,
+            created_at: now,
+            last_message_at: now,
+        }
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_thread_denies_non_member() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let conversation_repo = MockConversationRepository::new();
+        let conversation_member_repo = MockConversationMemberRepository::new();
+        let message_repo = MockMessageRepository::new();
+        let message_thread_repo = MockMessageThreadRepository::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(false));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let err = svc
+            .get_thread(GetThreadQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: ConversationId::new(),
+                thread_id: MessageThreadId::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn create_thread_creates_or_returns_existing_thread_for_timeline_message() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let root_message_id = MessageId::new();
+        let root_message = Message {
+            id: root_message_id,
+            conversation_id: conv_id,
+            thread_id: None,
+            sent_by: actor_id,
+            text: Some("root".to_string()),
+            has_attachments: false,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            is_deleted: false,
+            sent_at: chrono::Utc::now(),
+        };
+        let created_thread = thread(conv_id);
+
+        let mut conversation_repo = MockConversationRepository::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_cid, _uid| Ok(true));
+
+        let mut message_repo = MockMessageRepository::new();
+        let root_for_repo = root_message.clone();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(root_for_repo.clone())));
+
+        let mut message_thread_repo = MockMessageThreadRepository::new();
+        message_thread_repo
+            .expect_get_by_root_message()
+            .return_once(move |_mid| Ok(None));
+        let thread_for_create = created_thread.clone();
+        message_thread_repo
+            .expect_create_thread_for_root()
+            .return_once(move |_cid, _mid| Ok(thread_for_create.clone()));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let dto = svc
+            .create_thread(CreateThreadCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                root_message_id,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(dto.id, created_thread.id);
+        assert_eq!(dto.root_message_id, created_thread.first_message_id);
+    }
+
+    #[tokio::test]
+    async fn get_thread_by_root_message_returns_existing_thread() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let root_message_id = MessageId::new();
+        let root_message = Message {
+            id: root_message_id,
+            conversation_id: conv_id,
+            thread_id: None,
+            sent_by: actor_id,
+            text: Some("root".to_string()),
+            has_attachments: false,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            is_deleted: false,
+            sent_at: chrono::Utc::now(),
+        };
+        let existing_thread = thread(conv_id);
+
+        let mut conversation_repo = MockConversationRepository::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conv_for_repo.clone())));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let mut message_repo = MockMessageRepository::new();
+        let root_for_repo = root_message.clone();
+        message_repo
+            .expect_get_by_id()
+            .return_once(move |_| Ok(Some(root_for_repo.clone())));
+
+        let mut message_thread_repo = MockMessageThreadRepository::new();
+        let existing_for_repo = existing_thread.clone();
+        message_thread_repo
+            .expect_get_by_root_message()
+            .return_once(move |_| Ok(Some(existing_for_repo.clone())));
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let dto = svc
+            .get_thread_by_root_message(GetThreadByRootMessageQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                root_message_id,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(dto.id, existing_thread.id);
+    }
+
+    #[tokio::test]
+    async fn list_threads_maps_page() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let root_id = MessageId::new();
+        let mut t = thread(conv_id);
+        t.first_message_id = Some(root_id);
+        let t_id = t.id;
+
+        let mut conversation_repo = MockConversationRepository::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_cid, _uid| Ok(true));
+
+        let mut message_repo = MockMessageRepository::new();
+        message_repo.expect_get_by_ids().return_once(move |ids| {
+            let mut out = std::collections::HashMap::new();
+            if ids.contains(&root_id) {
+                out.insert(
+                    root_id,
+                    Message {
+                        id: root_id,
+                        conversation_id: conv_id,
+                        thread_id: None,
+                        sent_by: actor_id,
+                        text: Some("root".to_string()),
+                        has_attachments: false,
+                        parent_message_id: None,
+                        forwarded_from_message_id: None,
+                        is_deleted: false,
+                        sent_at: chrono::Utc::now(),
+                    },
+                );
+            }
+            Ok(out)
+        });
+
+        let mut message_thread_repo = MockMessageThreadRepository::new();
+        let t_for_repo = t.clone();
+        message_thread_repo
+            .expect_list_threads_for_conversation()
+            .returning(move |_cid, _limit, _dir, _cursor| {
+                Ok(Page::new(vec![t_for_repo.clone()], None, None))
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let page = svc
+            .list_threads(ListThreadsQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                limit: 10,
+                dir: PageDir::After,
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, t_id);
+    }
+
+    #[tokio::test]
+    async fn get_thread_not_found_when_wrong_conversation() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+
+        let mut conversation_repo = MockConversationRepository::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_cid, _uid| Ok(true));
+
+        let message_repo = MockMessageRepository::new();
+
+        let other_conv_id = ConversationId::new();
+        let now = chrono::Utc::now();
+        let mut message_thread_repo = MockMessageThreadRepository::new();
+        message_thread_repo
+            .expect_get_by_id()
+            .returning(move |_id| {
+                Ok(Some(MessageThread {
+                    id: MessageThreadId::new(),
+                    conversation_id: other_conv_id,
+                    first_message_id: None,
+                    created_at: now,
+                    last_message_at: now,
+                }))
+            });
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(conversation_member_repo),
+            message_repo: Arc::new(message_repo),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(server_member_repo),
+        });
+
+        let err = svc
+            .get_thread(GetThreadQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv.id,
+                thread_id: MessageThreadId::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound));
+
+        let _ = Message {
+            // keep Message type referenced so imports stay stable under coverage
+            id: MessageId::new(),
+            conversation_id: conv.id,
+            thread_id: Some(MessageThreadId::new()),
+            sent_by: UserId::new(),
+            text: None,
+            has_attachments: false,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            is_deleted: false,
+            sent_at: now,
+        };
+    }
+}
