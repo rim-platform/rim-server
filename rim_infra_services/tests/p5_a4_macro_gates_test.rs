@@ -182,6 +182,7 @@ fn stub_command_definition(sensitivity: CommandSensitivityDto) -> CommandDefinit
         sensitivity,
         typed_verb: TypedVerb::Other,
         rate_limit_per_minute: None,
+        feature: None,
     }
 }
 

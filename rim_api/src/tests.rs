@@ -46,6 +46,7 @@ mod tests {
     use rim_services::skill_profile::service::MockSkillProfileService;
     use rim_services::storage::service::MockStorageService;
     use rim_services::user::service::MockUserService;
+    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
     use rim_services::workspace_state::service::MockWorkspaceStateService;
 
     use crate::auth_context::AuthActorCtx;
@@ -125,6 +126,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -177,6 +179,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -226,6 +229,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -281,6 +285,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -332,6 +337,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(oncall),
                 escalation_policy: Arc::new(
@@ -383,6 +389,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(escalation_policy),
@@ -611,6 +618,8 @@ mod tests {
         ingest_token: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
         skill_profile: Arc<dyn rim_services::skill_profile::service::SkillProfileService>,
         workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
+        workspace_feature:
+            Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService>,
         pipeline: Arc<dyn rim_services::pipeline::service::PipelineService>,
         oncall: Arc<dyn rim_services::oncall::service::OnCallService>,
         escalation_policy: Arc<dyn rim_services::escalation::service::EscalationPolicyService>,
@@ -782,6 +791,12 @@ mod tests {
             Arc::clone(&self.workspace_state)
         }
 
+        fn workspace_feature_service(
+            &self,
+        ) -> Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService> {
+            Arc::clone(&self.workspace_feature)
+        }
+
         fn pipeline_service(&self) -> Arc<dyn rim_services::pipeline::service::PipelineService> {
             Arc::clone(&self.pipeline)
         }
@@ -832,6 +847,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -887,6 +903,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -936,6 +953,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -1097,6 +1115,7 @@ mod tests {
                     sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                     typed_verb: rim_services::command::verb::TypedVerb::Other,
                     rate_limit_per_minute: None,
+                    feature: None,
                 }])
             })
         });
@@ -1145,6 +1164,7 @@ mod tests {
                     sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                     typed_verb: rim_services::command::verb::TypedVerb::Other,
                     rate_limit_per_minute: None,
+                    feature: None,
                 }))
             })
         });
@@ -1245,6 +1265,7 @@ mod tests {
                     sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                     typed_verb: rim_services::command::verb::TypedVerb::Other,
                     rate_limit_per_minute: None,
+                    feature: None,
                 }])
             })
         });
@@ -3183,6 +3204,7 @@ mod tests {
                 ingest_token: Arc::new(MockIngestTokenService::new()),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(
@@ -3338,6 +3360,7 @@ mod tests {
                                 rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                             typed_verb: rim_services::command::verb::TypedVerb::Other,
                             rate_limit_per_minute: None,
+                            feature: None,
                         },
                         rim_services::command::dto::CommandDefinitionDto {
                             id: "chat.post_message".to_string(),
@@ -3362,6 +3385,7 @@ mod tests {
                                 rim_services::command::sensitivity::CommandSensitivityDto::Mutating,
                             typed_verb: rim_services::command::verb::TypedVerb::Other,
                             rate_limit_per_minute: None,
+                            feature: None,
                         },
                     ])
                 })
@@ -3539,6 +3563,7 @@ mod tests {
             ingest_token: Arc::new(MockIngestTokenService::new()),
             skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
+            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -3614,6 +3639,7 @@ mod tests {
                 ingest_token: Arc::new(ingest_token),
                 skill_profile: Arc::new(MockSkillProfileService::new()),
                 workspace_state: Arc::new(MockWorkspaceStateService::new()),
+                workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
                 pipeline: Arc::new(MockPipelineService::new()),
                 oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
                 escalation_policy: Arc::new(

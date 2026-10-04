@@ -62,6 +62,7 @@ use rim_services::command::service::CommandService;
 use rim_services::conversation::service::MockConversationService;
 use rim_services::message::service::MockMessageService;
 use rim_services::read_state::service::MockReadStateService;
+use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
 // ---------------------------------------------------------------------------
@@ -155,6 +156,9 @@ fn build_service(
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
             ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
+            ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,
     );
@@ -195,6 +199,9 @@ fn build_service_with_audit(
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,

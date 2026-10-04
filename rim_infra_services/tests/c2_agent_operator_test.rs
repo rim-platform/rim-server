@@ -26,7 +26,7 @@ use rim_services::Actor;
 use rim_services::auth::service::MockAuthService;
 use rim_services::capability::service::MockCapabilityService;
 use rim_services::command::confirmation::ConfirmationProof;
-use rim_services::command::dto::{CommandResultStatusDto, CommandSurfaceDto};
+use rim_services::command::dto::{CommandContextDto, CommandResultStatusDto, CommandSurfaceDto};
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, ListCommandsQuery};
 use rim_services::command::service::CommandService;
@@ -41,7 +41,25 @@ use rim_services::pin::service::MockPinService;
 use rim_services::read_state::service::MockReadStateService;
 use rim_services::server_member::service::MockServerMemberService;
 use rim_services::user::service::MockUserService;
+use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
+
+/// A fixed workspace context. The four C2 commands belong to the `incidents` workspace feature
+/// (Track 0.4), so they only list/execute with a workspace context; the mocked feature service
+/// reports every feature enabled. Fixed (not random) so a confirmation proof issued for one call
+/// verifies against the identical context on the retry.
+fn workspace_ctx() -> Option<CommandContextDto> {
+    Some(CommandContextDto {
+        workspace_id: Some(ServerId::from(uuid::Uuid::from_u128(1))),
+        conversation_id: None,
+        thread_id: None,
+        selected_text: None,
+        selected_message_id: None,
+        selected_message_ids: vec![],
+        focused_surface: None,
+        active_panel: None,
+    })
+}
 
 fn actor() -> Actor {
     Actor::new(UserId::new())
@@ -76,6 +94,9 @@ fn build_service(
             audit_log_service: None,
             incident_service: Arc::new(incident_service),
             oncall_service: Arc::new(oncall_service),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
+            ),
         },
     )
 }
@@ -136,7 +157,7 @@ async fn ai_surface_lists_all_four_c2_commands_with_no_capability_grants() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: workspace_ctx(),
             surface: CommandSurfaceDto::Ai,
         })
         .await
@@ -186,7 +207,7 @@ async fn oncall_who_agent_initiator_is_one_shot_no_challenge() {
             actor: actor(),
             command_id: "oncall.who".to_string(),
             args: Some(serde_json::json!({ "schedule_id": schedule_id.to_string() })),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -232,7 +253,7 @@ async fn incident_ack_agent_initiator_requires_confirmation_then_succeeds_with_v
             actor: a,
             command_id: "incident.ack".to_string(),
             args: args.clone(),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -258,7 +279,7 @@ async fn incident_ack_agent_initiator_requires_confirmation_then_succeeds_with_v
             actor: a,
             command_id: "incident.ack".to_string(),
             args,
-            context: None,
+            context: workspace_ctx(),
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -299,7 +320,7 @@ async fn incident_escalate_agent_initiator_requires_confirmation_then_succeeds_w
             actor: a,
             command_id: "incident.escalate".to_string(),
             args: args.clone(),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -325,7 +346,7 @@ async fn incident_escalate_agent_initiator_requires_confirmation_then_succeeds_w
             actor: a,
             command_id: "incident.escalate".to_string(),
             args,
-            context: None,
+            context: workspace_ctx(),
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -381,7 +402,7 @@ async fn oncall_take_shift_agent_initiator_requires_confirmation_then_succeeds_w
             actor: a,
             command_id: "oncall.take_shift".to_string(),
             args: args.clone(),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -407,7 +428,7 @@ async fn oncall_take_shift_agent_initiator_requires_confirmation_then_succeeds_w
             actor: a,
             command_id: "oncall.take_shift".to_string(),
             args,
-            context: None,
+            context: workspace_ctx(),
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
@@ -446,7 +467,7 @@ async fn incident_ack_palette_initiator_is_one_shot_regression_guard() {
             actor: actor(),
             command_id: "incident.ack".to_string(),
             args: Some(serde_json::json!({ "incident_id": incident_id.to_string() })),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
@@ -485,7 +506,7 @@ async fn incident_ack_keybind_initiator_is_one_shot_regression_guard() {
             actor: actor(),
             command_id: "incident.ack".to_string(),
             args: Some(serde_json::json!({ "incident_id": incident_id.to_string() })),
-            context: None,
+            context: workspace_ctx(),
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Keybind,

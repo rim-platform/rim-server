@@ -33,6 +33,7 @@ use crate::setting::service::SettingService;
 use crate::skill_profile::service::SkillProfileService;
 use crate::storage::service::StorageService;
 use crate::user::service::UserService;
+use crate::workspace_feature::service::WorkspaceFeatureService;
 use crate::workspace_state::service::WorkspaceStateService;
 
 pub trait AppServiceProvider: Send + Sync {
@@ -68,6 +69,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn storage_service(&self) -> Arc<dyn StorageService>;
     fn thread_service(&self) -> Arc<dyn ThreadService>;
     fn user_service(&self) -> Arc<dyn UserService>;
+    fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService>;
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService>;
     fn pipeline_service(&self) -> Arc<dyn PipelineService>;
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator>;

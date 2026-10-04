@@ -19,6 +19,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::workspace_feature::repository::MockWorkspaceFeatureRepository;
     use rim_services::escalation::command::{CreateEscalationPolicyCmd, UpdateEscalationPolicyCmd};
     use rim_services::escalation::dto::EscalationStepInput;
     use rim_services::escalation::service::EscalationPolicyService;
@@ -84,6 +85,9 @@ mod tests {
             server_member_repo: Arc::new(server_member_repo),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             on_call_schedule_repo: Arc::new(on_call_schedule_repo),
+            workspace_feature_repo: std::sync::Arc::new(
+                MockWorkspaceFeatureRepository::all_enabled(),
+            ),
         })
     }
 
@@ -276,5 +280,46 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    // ── Track 0.4: `incidents` workspace feature gate ────────────────────────
+
+    #[tokio::test]
+    async fn create_policy_rejected_when_incidents_feature_disabled() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(owner_member(server_id, actor_id))));
+        let mut escalation_policy_repo = MockEscalationPolicyRepository::new();
+        escalation_policy_repo.expect_create().never();
+
+        let svc = DefaultEscalationPolicyService::new(EscalationPolicyRepos {
+            escalation_policy_repo: Arc::new(escalation_policy_repo),
+            escalation_step_repo: Arc::new(MockEscalationStepRepository::new()),
+            conversation_escalation_policy_repo: Arc::new(
+                MockConversationEscalationPolicyRepository::new(),
+            ),
+            server_member_repo: Arc::new(server_member_repo),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            on_call_schedule_repo: Arc::new(MockOnCallScheduleRepository::new()),
+            workspace_feature_repo: Arc::new(MockWorkspaceFeatureRepository::all_disabled()),
+        });
+
+        let err = svc
+            .create_policy(CreateEscalationPolicyCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                name: "Primary".to_string(),
+                steps: one_step(EscalationTarget::User(actor_id)),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::FeatureDisabled { feature } if feature == "incidents"),
+            "got {err:?}"
+        );
     }
 }

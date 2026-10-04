@@ -27,6 +27,7 @@ use rim_services::command::service::CommandService;
 use rim_services::conversation::service::MockConversationService;
 use rim_services::message::service::MockMessageService;
 use rim_services::read_state::service::MockReadStateService;
+use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
 mod fixtures {
@@ -67,6 +68,9 @@ mod fixtures {
                 ),
                 oncall_service: std::sync::Arc::new(
                     rim_services::oncall::service::MockOnCallService::new(),
+                ),
+                workspace_feature_service: std::sync::Arc::new(
+                    MockWorkspaceFeatureService::all_enabled(),
                 ),
             },
         )
@@ -201,6 +205,9 @@ async fn execute_command_proceeds_when_capability_check_passes() {
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         },
     );
