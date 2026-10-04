@@ -70,7 +70,9 @@ Configuration is read from the environment (or a local, untracked `.env`) — se
 `RIM_SERVER_PORT`, and `RIM_LOG_LEVEL`. Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
 without it, emails are logged (recipient and subject only) instead of sent. Behind a reverse
 proxy, set `RIM_TRUST_FORWARDED_HEADERS=true` (and make the proxy the only entry point);
-otherwise per-IP limits on login and signup see every client as the proxy's address.
+otherwise per-IP limits on login, signup and password-reset requests see every client as the
+proxy's address. Attachments count against a per-workspace quota,
+`RIM_MAX_WORKSPACE_STORAGE_BYTES` (default 1 GiB), reserved when an upload is declared.
 
 ## Development
 

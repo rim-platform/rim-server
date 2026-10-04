@@ -7,7 +7,7 @@
 
 ---
 
-## Status (re-checked against code 2026-10-03)
+## Status (re-checked against code 2026-10-04)
 
 | Finding | Status |
 |---|---|
@@ -15,11 +15,12 @@
 | S-H2 SSRF via DNS in link previews | **Fixed** (public-only DNS resolver on the fetch client) |
 | S-H3 no login rate limiting | **Fixed** (per-IP attempts + per-username failures) |
 | A-M1 `mockall` in production deps | **Fixed** (moved to `[dev-dependencies]`) |
-| S-M1 reset doesn't revoke sessions | Open |
-| S-M2 `workspacePresence` IDOR | Open |
-| S-M3 login timing oracle | Open (comment in `verify_login` still claims indistinguishability) |
-| S-M4 no rate limit on `requestPasswordReset` | Open |
-| S-M5 storage quota not enforced | Open |
+| S-M1 reset doesn't revoke sessions | **Fixed** (one transaction: atomic token claim, new password, other reset links spent, all sessions revoked). Gap: a WebSocket already open on a revoked session keeps streaming until it disconnects (auth is checked only at connect) |
+| S-M2 `workspacePresence` IDOR | **Fixed** (requires workspace membership) |
+| S-M3 login timing oracle | **Fixed** (dummy Argon2 verify for unknown usernames; reset requests do one lookup either way) |
+| S-M4 no rate limit on `requestPasswordReset` | **Fixed** (10/hour per IP; 3/hour per username, over which requests silently send nothing) |
+| S-M5 storage quota not enforced | **Fixed** (declared size reserved for the 15-minute upload ticket; uploads validated before any write and capped at the declared size) |
+| S-L5 reset token check-then-mark not atomic | **Fixed** (with S-M1: conditional `UPDATE ... WHERE used_at IS NULL`) |
 | A-H1 `BEFORE` pagination | Paginator reworked; not re-verified end to end |
 
 Everything not listed has not been re-checked. Update this table when fixing a finding.
