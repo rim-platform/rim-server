@@ -10,6 +10,8 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::ingest_token::model::NewIngestToken;
 use rim_core::ingest_token::repository::IngestTokenRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::workspace_feature::model::WorkspaceFeature;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::ingest_token::command::{
     CreateIngestTokenCmd, ListIngestTokensQuery, RevokeIngestTokenCmd,
 };
@@ -17,7 +19,10 @@ use rim_services::ingest_token::dto::{CreateIngestTokenResultDto, IngestTokenDto
 use rim_services::ingest_token::service::IngestTokenService;
 use rim_services::{ServiceError, ServiceResult};
 
-use crate::util::{ensure_conversation_access, ensure_conversation_in_server, ensure_server_owner};
+use crate::util::{
+    ensure_conversation_access, ensure_conversation_in_server, ensure_feature_enabled,
+    ensure_server_owner,
+};
 
 #[derive(Clone)]
 pub struct IngestTokenRepos {
@@ -25,6 +30,9 @@ pub struct IngestTokenRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    /// Track 0.4: creating a token requires the `incidents` feature. Listing and revoking stay
+    /// open so an owner can always audit and kill existing tokens.
+    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
 }
 
 pub struct DefaultIngestTokenService {
@@ -52,6 +60,12 @@ impl IngestTokenService for DefaultIngestTokenService {
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
             cmd.actor.user_id,
+        )
+        .await?;
+        ensure_feature_enabled(
+            self.repos.workspace_feature_repo.as_ref(),
+            cmd.server_id,
+            WorkspaceFeature::Incidents,
         )
         .await?;
 
@@ -193,6 +207,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::workspace_feature::repository::MockWorkspaceFeatureRepository;
     use rim_services::Actor;
 
     fn owner_member(server_id: ServerId, user_id: UserId) -> ServerMember {
@@ -227,6 +242,9 @@ mod tests {
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(server_member_repo),
+            workspace_feature_repo: std::sync::Arc::new(
+                MockWorkspaceFeatureRepository::all_enabled(),
+            ),
         }
     }
 
@@ -584,5 +602,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn create_token_rejected_when_incidents_feature_disabled() {
+        let actor_id = UserId::new();
+        let server_id = ServerId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(owner_member(server_id, actor_id))));
+        let mut ingest_token_repo = MockIngestTokenRepository::new();
+        ingest_token_repo.expect_create().never();
+
+        let mut repos = repos(
+            server_member_repo,
+            MockConversationRepository::new(),
+            ingest_token_repo,
+        );
+        repos.workspace_feature_repo = Arc::new(MockWorkspaceFeatureRepository::all_disabled());
+        let svc = DefaultIngestTokenService::new(repos, None);
+
+        let err = svc
+            .create_token(CreateIngestTokenCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: ConversationId::new(),
+                label: "prom".to_string(),
+                severity_default: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::FeatureDisabled { feature } if feature == "incidents"),
+            "got {err:?}"
+        );
     }
 }

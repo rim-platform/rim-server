@@ -11,6 +11,31 @@ four lifecycle builtin commands), both landed 2026-07-10. The full GraphQL surfa
 frontend are **Track C1c** — see "Escalation wiring" below for exactly what is and isn't exposed
 via GraphQL yet.
 
+## Workspace feature gate (Track 0.4)
+
+On-call schedules, escalation policies and incidents together form the optional per-workspace
+**`incidents`** module (`docs/specs/track-0-4-optional-incident-module.md`). New workspaces have
+it off by default; workspaces that existed before the `add_workspace_feature` migration were
+switched on by its data step. Only the server Owner can toggle it (`setWorkspaceFeature`,
+audited). With the feature off:
+
+- **Writes are rejected** with `FEATURE_DISABLED`: every on-call schedule / rotation layer /
+  participant / override mutation, every escalation policy mutation (including
+  `setChannelEscalationPolicy`), and every incident mutation (start, status, phase, tag,
+  postmortem, resolve, acknowledge, escalate now, alert ingest). The gate runs after the
+  authorization check, so a non-member still gets `NOT_FOUND` and never learns the flag.
+- **Reads of existing data stay allowed** (schedules, layers, shifts, `whoIsOnCall`, policies,
+  incident history and timelines), so history still renders after the module is turned off.
+  The exception is the active-incident lookup for a conversation, which returns `null` so the
+  incident banner disappears.
+- The four builtins `incident.ack`, `incident.escalate`, `oncall.who` and `oncall.take_shift`
+  are hidden from the palette, keybind picker, context menu and AI surface, and rejected at
+  execution (see `docs/command_model.md`, "`feature`").
+- A due escalation step pages nobody: `fire_escalation_step` logs and skips it, leaving the run
+  `Active` and untouched. It is not re-armed until the next boot-time recovery sweep.
+
+No data is deleted when the feature is turned off; turning it back on restores everything.
+
 ## Model
 
 - **`OnCallSchedule`** — a named, timezone-scoped on-call rotation for a server. `timezone` is an

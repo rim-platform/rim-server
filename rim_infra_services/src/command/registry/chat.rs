@@ -52,6 +52,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.create_channel".to_string(),
@@ -110,6 +111,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.mark_as_read".to_string(),
@@ -151,6 +153,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.mark_all_as_read".to_string(),
@@ -181,6 +184,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.search_messages".to_string(),
@@ -250,6 +254,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.get_recent_messages".to_string(),
@@ -309,6 +314,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
+            feature: None,
         },
     ]
 }

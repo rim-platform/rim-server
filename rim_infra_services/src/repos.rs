@@ -38,6 +38,7 @@ use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::skill_profile::repository::SkillProfileRepository;
 use rim_core::user::repository::UserRepository;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_infra_db::DbHandle;
 
@@ -83,6 +84,7 @@ pub struct AppRepos {
     pub escalation_step_repo: Arc<dyn EscalationStepRepository>,
     pub conversation_escalation_policy_repo: Arc<dyn ConversationEscalationPolicyRepository>,
     pub escalation_run_repo: Arc<dyn EscalationRunRepository>,
+    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
 }
 
 #[derive(Clone)]
@@ -403,6 +405,7 @@ impl AppRepos {
             rotation_layer_repo: Arc::clone(&self.rotation_layer_repo),
             rotation_participant_repo: Arc::clone(&self.rotation_participant_repo),
             on_call_override_repo: Arc::clone(&self.on_call_override_repo),
+            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
         }
     }
 
@@ -416,6 +419,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             on_call_schedule_repo: Arc::clone(&self.on_call_schedule_repo),
+            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
         }
     }
 
@@ -424,6 +428,14 @@ impl AppRepos {
             ingest_token_repo: Arc::clone(&self.ingest_token_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
+        }
+    }
+
+    pub fn for_workspace_feature(&self) -> crate::workspace_feature::WorkspaceFeatureRepos {
+        crate::workspace_feature::WorkspaceFeatureRepos {
+            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
@@ -455,6 +467,7 @@ impl AppRepos {
             rotation_participant_repo: Arc::clone(&self.rotation_participant_repo),
             on_call_override_repo: Arc::clone(&self.on_call_override_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
         }
     }
 
@@ -611,6 +624,11 @@ impl AppRepos {
             ),
             escalation_run_repo: Arc::new(
                 sea_orm_impl::escalation_run::SeaOrmEscalationRunRepository::new(handle.clone()),
+            ),
+            workspace_feature_repo: Arc::new(
+                sea_orm_impl::workspace_feature::SeaOrmWorkspaceFeatureRepository::new(
+                    handle.clone(),
+                ),
             ),
         }
     }

@@ -81,6 +81,23 @@ rate limiter in this codebase (Phase-1 single-node posture).
 Request bodies are capped at 256 KiB by default (`RIM_ALERT_MAX_BODY_BYTES`); oversize
 requests get `413`.
 
+## Workspace feature gate
+
+Alert ingestion is part of the workspace's optional **`incidents`** module (Track 0.4, see
+`docs/specs/track-0-4-optional-incident-module.md`). New workspaces have it **off** by default;
+workspaces that existed before feature flags were introduced were switched on by the
+`add_workspace_feature` migration. An Owner toggles it with `setWorkspaceFeature`.
+
+Order of checks on every webhook request: body size cap → token authentication (`401`) →
+per-token rate limit (`429`) → feature gate. When the token's workspace has `incidents` off
+the response is a bare **`404 Not Found` with an empty body**, exactly as for an unknown route,
+so the response never reveals that the token itself is valid. Nothing is ingested.
+
+Minting a new ingest token (`createIngestToken`) also requires the feature
+(`FEATURE_DISABLED`); listing and revoking existing tokens stay available so an owner can always
+audit and kill tokens while the module is off. No tokens or incidents are deleted when the
+feature is turned off; turning it back on restores everything.
+
 ## Payload formats
 
 ### Generic (`/api/hooks/alerts/generic`)

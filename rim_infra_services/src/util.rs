@@ -8,6 +8,8 @@ use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
+use rim_core::workspace_feature::model::WorkspaceFeature;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::{ServiceError, ServiceResult};
 
 /// Minimum repo set needed by [`ensure_conversation_member_access`].
@@ -158,6 +160,23 @@ pub async fn ensure_conversation_access(
         return Err(ServiceError::PermissionDenied);
     }
     Ok(())
+}
+
+/// Feature gate (Track 0.4): `Err(FeatureDisabled)` unless `feature` is enabled for
+/// `server_id`. A missing row resolves to the feature's default.
+pub async fn ensure_feature_enabled(
+    workspace_feature_repo: &dyn WorkspaceFeatureRepository,
+    server_id: ServerId,
+    feature: WorkspaceFeature,
+) -> ServiceResult<()> {
+    if workspace_feature_repo
+        .is_enabled(server_id, feature)
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(ServiceError::feature_disabled(feature))
+    }
 }
 
 #[cfg(test)]

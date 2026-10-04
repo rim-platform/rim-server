@@ -38,4 +38,5 @@ pub mod session;
 pub mod skill_profile;
 pub mod user;
 pub mod user_command;
+pub mod workspace_feature;
 pub mod workspace_state;

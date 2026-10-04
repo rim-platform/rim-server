@@ -69,6 +69,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Send,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.reply_to_selected_message".to_string(),
@@ -103,6 +104,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Send,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.delete_message".to_string(),
@@ -129,6 +131,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Restricted,
             typed_verb: TypedVerb::Delete,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.copy_message_text".to_string(),
@@ -151,6 +154,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.open_thread".to_string(),
@@ -198,6 +202,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.edit_message".to_string(),
@@ -232,6 +237,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.scroll_to_bottom".to_string(),
@@ -254,6 +260,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
+            feature: None,
         },
         CommandDefinitionDto {
             id: "chat.scroll_to_top".to_string(),
@@ -276,6 +283,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
+            feature: None,
         },
     ]
 }

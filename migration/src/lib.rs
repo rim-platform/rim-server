@@ -63,6 +63,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_111731_create_escalation_policies::Migration),
             Box::new(m20260710_111818_create_escalation_run::Migration),
             Box::new(m20260710_111818_add_incident_escalation_and_ack_fields::Migration),
+            Box::new(m20261004_220805_add_workspace_feature::Migration),
         ]
     }
 }
@@ -123,3 +124,4 @@ mod m20260710_094331_add_user_timezone;
 mod m20260710_111731_create_escalation_policies;
 mod m20260710_111818_add_incident_escalation_and_ack_fields;
 mod m20260710_111818_create_escalation_run;
+mod m20261004_220805_add_workspace_feature;

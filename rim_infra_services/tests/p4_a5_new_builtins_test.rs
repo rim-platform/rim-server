@@ -58,6 +58,7 @@ use rim_services::server_member::dto::ServerMemberDto;
 use rim_services::server_member::service::MockServerMemberService;
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::MockUserService;
+use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
 fn actor_with_id(user_id: UserId) -> Actor {
@@ -123,6 +124,9 @@ fn build_service_with_store(mocks: Mocks) -> (DefaultCommandService, Arc<dyn Con
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         },
         Arc::clone(&store),

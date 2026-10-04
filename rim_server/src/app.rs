@@ -29,6 +29,8 @@ pub struct AppRuntime {
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub ingest_token_service: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
     pub incident_service: Arc<dyn rim_services::incident::service::IncidentService>,
+    pub workspace_feature_service:
+        Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService>,
     pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
     pub alert_max_body_bytes: usize,
     pub shutdown_tx: watch::Sender<bool>,
@@ -257,6 +259,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let message_attachment_service = service_provider.message_attachment_service();
     let ingest_token_service = service_provider.ingest_token_service();
     let incident_service = service_provider.incident_service();
+    let workspace_feature_service = service_provider.workspace_feature_service();
 
     // Track B2 — alert-ingest rate limiting is keyed per ingest-token id, not IP (a token is
     // the trusted principal here; see `AlertRateLimiter`'s doc comment). Window is fixed at
@@ -315,6 +318,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_attachment_service,
         ingest_token_service,
         incident_service,
+        workspace_feature_service,
         alert_rate_limiter,
         alert_max_body_bytes,
         shutdown_tx,

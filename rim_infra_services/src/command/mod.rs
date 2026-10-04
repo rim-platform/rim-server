@@ -35,6 +35,7 @@ use rim_services::incident::service::IncidentService;
 use rim_services::macro_def::service::MacroService;
 use rim_services::message::service::MessageService;
 use rim_services::oncall::service::OnCallService;
+use rim_services::workspace_feature::service::WorkspaceFeatureService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
@@ -62,6 +63,9 @@ pub struct CommandServices {
     /// C1b: `oncall.who`/`oncall.take_shift` dispatch to the same `OnCallService` methods as
     /// their GraphQL query/mutation (§10.1).
     pub oncall_service: std::sync::Arc<dyn OnCallService>,
+    /// Track 0.4: hides feature-gated builtins from `list_commands` and rejects their
+    /// execution with `FeatureDisabled` when the workspace has the feature off.
+    pub workspace_feature_service: std::sync::Arc<dyn WorkspaceFeatureService>,
     /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target="audit")`
@@ -193,6 +197,7 @@ impl CommandService for DefaultCommandService {
     ) -> ServiceResult<Vec<CommandDefinitionDto>> {
         let context = query.context.as_ref();
         let mut commands = Self::builtin_commands();
+        self.retain_enabled_features(&mut commands, context).await?;
         let user_commands = self
             .repos
             .user_command_repo
