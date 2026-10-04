@@ -24,6 +24,7 @@ pub(crate) mod ingest_token;
 pub(crate) mod integration;
 pub(crate) mod keybind;
 pub(crate) mod link_preview;
+pub(crate) mod login_sources;
 pub mod macro_def;
 pub(crate) mod mention;
 pub(crate) mod message;

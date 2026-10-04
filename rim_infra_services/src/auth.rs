@@ -31,6 +31,7 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
 use crate::email::{EmailSender, templates};
+use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
@@ -51,6 +52,8 @@ pub struct DefaultAuthService {
     login_ip_rate_limiter: RegistrationRateLimiter,
     login_ip_account_rate_limiter: RegistrationRateLimiter,
     login_account_rate_limiter: RegistrationRateLimiter,
+    /// Sources that recently signed in to an account; they skip the per-username backstop.
+    login_known_sources: KnownLoginSources,
     email_sender: std::sync::Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
     /// invite emails fall back to the bare token (dev-only — see `docs/email.md`).
@@ -86,6 +89,7 @@ impl DefaultAuthService {
             login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
             login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
             login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
+            login_known_sources: KnownLoginSources::login_default(),
             email_sender,
             public_base_url,
         }
@@ -144,6 +148,13 @@ impl DefaultAuthService {
         self
     }
 
+    /// Share the store of recent successful login sources, so other services (password
+    /// reset) can forget an account's sources.
+    pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
+        self.login_known_sources = sources;
+        self
+    }
+
     /// Construct with explicit rate limiters — for testing or custom deployments.
     ///
     /// # Examples
@@ -176,6 +187,7 @@ impl DefaultAuthService {
             login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
             login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
             login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
+            login_known_sources: KnownLoginSources::login_default(),
             email_sender,
             public_base_url,
         }
@@ -682,11 +694,18 @@ impl AuthService for DefaultAuthService {
         // costs no hashing work and gets the same answer whether or not the username exists.
         // The strict failure limit is per (IP, username), so one source exhausting it can't
         // lock the account's owner out; the per-username limit across all IPs is a loose
-        // backstop against distributed guessing (tripping it needs several addresses). Failure slots are reserved up front (not recorded
-        // after a failure) so concurrent attempts can't all pass the check before any of them
-        // fails; they are refunded below unless the attempt turns out to be a failed login.
+        // backstop against distributed guessing (tripping it needs several addresses). A
+        // source that signed in to this account recently skips the backstop, so even a
+        // distributed attack can't lock the owner out of their usual address. Failure slots
+        // are reserved up front (not recorded after a failure) so concurrent attempts can't
+        // all pass the check before any of them fails; they are refunded below unless the
+        // attempt turns out to be a failed login.
         let now = Utc::now();
         let account_key = username.to_lowercase();
+        // Known sources are keyed by the exact username, which is what the lookup resolves
+        // (usernames are case-sensitive); the failure limits use the folded key, which errs
+        // toward sharing a budget between case variants.
+        let known_source = self.login_known_sources.is_known(&remote_ip, username, now);
         let mut decision = self
             .login_ip_rate_limiter
             .check_and_record(&remote_ip, "login", now);
@@ -694,7 +713,7 @@ impl AuthService for DefaultAuthService {
             decision =
                 self.login_ip_account_rate_limiter
                     .check_and_record(&remote_ip, &account_key, now);
-            if decision == RateLimitDecision::Allowed {
+            if decision == RateLimitDecision::Allowed && !known_source {
                 decision = self.login_account_rate_limiter.check_and_record(
                     LOGIN_ACCOUNT_SCOPE,
                     &account_key,
@@ -727,8 +746,16 @@ impl AuthService for DefaultAuthService {
         if !matches!(result, Err(ServiceError::Unauthenticated)) {
             self.login_ip_account_rate_limiter
                 .refund(&remote_ip, &account_key, now);
-            self.login_account_rate_limiter
-                .refund(LOGIN_ACCOUNT_SCOPE, &account_key, now);
+            // A known source never reserved a backstop slot; refunding would free someone
+            // else's slot recorded at the same instant.
+            if !known_source {
+                self.login_account_rate_limiter
+                    .refund(LOGIN_ACCOUNT_SCOPE, &account_key, now);
+            }
+        }
+        if result.is_ok() {
+            self.login_known_sources
+                .record(&remote_ip, username, Utc::now());
         }
         result
     }

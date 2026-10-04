@@ -204,7 +204,10 @@ impl RegistrationRateLimiter {
     /// assert_ne!(a, c);
     /// ```
     pub fn normalise_ip(ip: &str) -> String {
-        match IpAddr::from_str(ip) {
+        // `to_canonical` turns IPv4-mapped IPv6 (`::ffff:a.b.c.d`, as seen on a dual-stack
+        // listener) back into the IPv4 address; masking it to /64 would lump every IPv4 client
+        // into one bucket.
+        match IpAddr::from_str(ip).map(|addr| addr.to_canonical()) {
             Ok(IpAddr::V6(v6)) => {
                 // Keep only the top 64 bits (network prefix).
                 let octets = v6.octets();
@@ -215,8 +218,9 @@ impl RegistrationRateLimiter {
                 ];
                 std::net::Ipv6Addr::from(prefix).to_string()
             }
-            // IPv4 or unparseable: use as-is.
-            Ok(IpAddr::V4(_)) | Err(_) => ip.to_string(),
+            Ok(IpAddr::V4(v4)) => v4.to_string(),
+            // Unparseable: use as-is.
+            Err(_) => ip.to_string(),
         }
     }
 
@@ -407,6 +411,19 @@ mod tests {
         assert_eq!(
             RegistrationRateLimiter::normalise_ip("192.168.100.200"),
             "192.168.100.200"
+        );
+    }
+
+    /// IPv4-mapped IPv6 addresses normalise to the IPv4 address, not to a shared `::` /64.
+    #[test]
+    fn normalise_ip_unmaps_ipv4_mapped_ipv6() {
+        assert_eq!(
+            RegistrationRateLimiter::normalise_ip("::ffff:1.2.3.4"),
+            "1.2.3.4"
+        );
+        assert_ne!(
+            RegistrationRateLimiter::normalise_ip("::ffff:1.2.3.4"),
+            RegistrationRateLimiter::normalise_ip("::ffff:5.6.7.8")
         );
     }
 
