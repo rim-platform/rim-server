@@ -52,9 +52,11 @@ The local manifest file should be:
 
 - `rim-plugin.json`
 
-Shared manifest contracts now exist in:
+The manifest contract and its install-time validation live in the desktop plugin host:
 
-- `rim_services::plugin_host::manifest`
+- `rim-ui/src-tauri/src/plugin_host/manifest.rs` and `validation.rs`
+
+The backend does not define plugin manifest types.
 
 The manifest describes:
 
@@ -70,9 +72,9 @@ The manifest describes:
 
 ## Runtime Protocol
 
-Shared runtime protocol contracts exist in:
+The runtime protocol is implemented by the desktop plugin host:
 
-- `rim_services::plugin_host::runtime`
+- `rim-ui/src-tauri/src/plugin_host/` (`handshake.rs`, `wire.rs`, `broker.rs`)
 
 ### Wire Protocol (Neovim-inspired)
 
