@@ -1,17 +1,18 @@
 # RIM
 
-RIM is a self-hosted, programmable communication workspace for everyone: gaming communities,
-developer teams, friend groups, and ops teams.
+RIM is a self-hosted communication workspace you can program. It is not a Discord, Slack or
+Matrix replacement; it is for people who want what those do not offer.
 
 Chat is the substrate. On top of it sits a programmable runtime — a command palette, typed
 commands, chainable macros, reactive pipelines, user-defined keybinds, workspace state, and
 capability-gated client plugins. A bring-your-own-model AI agent speaks the same command
 registry, so it can *operate* the workspace with every mutating step behind a human
-confirmation. Verticals ship as packs on that runtime; the incident and on-call pack is the
-first one, with developer and gaming packs planned.
+confirmation. Plugins extend the application itself (panels, commands, context actions), so a
+developer can show their Kubernetes pods next to the conversation and a community can add its
+own automations. The incident and on-call layer is the first showcase of what the platform can
+host. End-to-end encryption and decentralization are committed long-term directions.
 
-The one-sentence version is **"the self-hosted chat workspace you program."** See `ROADMAP.md`
-for the strategy and `docs/vision.md` for the product principles.
+See `ROADMAP.md` for the strategy and `docs/vision.md` for the product principles.
 
 This repository is the Rust backend (Actix Web + async-graphql + SeaORM on PostgreSQL 17). The
 Tauri v2 desktop client lives in the separate `rim-ui` repository.

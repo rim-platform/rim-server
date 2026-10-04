@@ -23,17 +23,21 @@ workflow instead of adapting to the platform.
 
 ## Who RIM Is For
 
-RIM is for everyone who lives in a chat tool and wants it to work their way: gaming
-communities, developer teams, friend groups, and ops teams. The runtime is the same for all
-of them; what differs is the **pack** a workspace turns on. Incidents and on-call were the
-first pack and remain a complete one. Developer and gaming packs follow, built only from the
-same commands, pipelines, macros, lenses and panels any user can author.
+RIM is not trying to replace Discord, Slack or Matrix. It is for people who want something
+those platforms do not offer: a communication workspace they can program. Gaming communities,
+developer teams, friend groups and ops teams all fit, and each shapes the workspace
+differently through commands, keybinds, macros, pipelines and plugins, without RIM shipping a
+feature for each of them. A developer adds a panel that shows the pods in their Kubernetes
+cluster; a community adds its own commands and automations; a privacy-minded group runs it on
+their own box.
 
-Pitch: *the self-hosted chat workspace you program.* Commands, keybinds, macros, pipelines
-and plugins turn conversations into workflows, and a bring-your-own-model AI agent acts
-through the same command registry under a human confirmation gate. Other products' AI
-suggests; RIM's acts, and it acts the same way whether the task is "catch me up and draft a
-reply" or "run the failover runbook".
+Pitch: *the self-hosted communication workspace you program.* A bring-your-own-model AI agent
+acts through the same command registry under a human confirmation gate, so it can operate
+whatever a workspace has plugged in. Other products' AI suggests; RIM's acts.
+
+Two long-term commitments shape the architecture from today: **end-to-end encryption** in a
+future version, and **convergence toward a decentralized chat platform**. `ROADMAP.md` carries
+the guardrails and the sequencing.
 
 ## What RIM Is Not
 
@@ -67,12 +71,11 @@ These are the capabilities that no competing product offers together:
 
 5. **An AI operator, not an AI summarizer** — a bring-your-own-model agent drives the
    workspace through the command registry, with capability checks and per-action human
-   confirmation for anything mutating or dangerous. Packs (incidents first, developer and
-   gaming next) are bundles of commands, pipelines and panels on that runtime, not features
-   bolted onto the core.
+   confirmation for anything mutating or dangerous. Because plugins register commands in the
+   same registry, the agent can operate whatever a workspace has plugged in.
 
-6. **Self-hosted and sovereign** — one box, your data, your model. Table stakes in this
-   segment rather than a differentiator on its own, but required by the buyers RIM targets.
+6. **Self-hosted, auditable, converging on private** — one box, your data, your model, your
+   audit log today; end-to-end encryption and decentralization as committed horizons.
 
 The Tauri v2 desktop runtime (smaller binary, lower memory than Electron) is a real
 engineering advantage, but users rarely choose a tool for it — treat it as a quality
@@ -114,14 +117,15 @@ PagerDuty/Opsgenie, and its agents cannot drive runbooks. See
 | Non-Electron desktop  | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
 | Text E2EE             | ❌    | ❌      | ❌         | ❌    | ✅      | ❌ *  |
 
-\* Deliberately not a headline: end-to-end encryption conflicts with server-side search, AI
-grounding, and incident indexing. If it ships, it is scoped to DMs (see the anti-roadmap in
-`ROADMAP.md`).
+\* Committed for a future version, DMs and private groups first. It conflicts with server-side
+search, pipelines and AI grounding, so those move to the client for encrypted conversations
+(see Track 7 and the architecture guardrails in `ROADMAP.md`).
 
 ## Product Positioning — One Sentence
 
-> RIM is the self-hosted chat workspace you program: commands, keybinds, macros, pipelines,
-> plugins and an AI operator, with packs for incidents, development and gaming on top.
+> RIM is the self-hosted communication workspace you program: commands, keybinds, macros,
+> pipelines, plugins and an AI operator on top of chat, built to become private and
+> decentralized.
 
 ## Inspirations
 
