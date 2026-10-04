@@ -168,7 +168,7 @@ Generated code:
 ## CI Notes
 
 - CI runs tests single-threaded: `cargo test --all -- --test-threads=1` (helps with shared DB).
-- CI also runs `cargo audit` (non-blocking) to report vulnerable dependencies.
+- CI also runs `cargo audit` (blocking) to catch vulnerable dependencies; ignored advisories, each with a justification, live in `.cargo/audit.toml`.
 - If you want to reproduce locally:
   - `cargo install --locked cargo-audit`
   - `cargo audit`

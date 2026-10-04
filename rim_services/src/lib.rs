@@ -26,7 +26,6 @@ pub mod oncall;
 pub mod password_reset;
 pub mod pin;
 pub mod pipeline;
-pub mod plugin_host;
 pub mod presence;
 pub mod provider;
 pub mod read_state;

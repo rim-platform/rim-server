@@ -1,5 +1,7 @@
 # Plugin-Backend Validation + MCP Verdict + Marketplace Discovery
 
+> **Note (2026-10-04):** the server-side `rim_services::plugin_host` module discussed below was removed on 2026-10-04 as unused. The plugin host and its manifest validation live in the desktop client (`rim-ui/src-tauri/src/plugin_host/`).
+
 - **Author:** iron-man (Tony Stark, backend architect)
 - **Date:** 2026-04-29
 - **For:** nick-fury

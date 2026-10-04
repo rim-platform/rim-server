@@ -11,7 +11,24 @@
 # `rsa` crate and in `sqlx`). Revisit and remove this ignore once `sqlx`
 # and/or `rsa` ship a fix, or if `sqlx-mysql`/MySQL support is ever added to
 # this workspace (at which point this advisory would become a live risk).
+#
+# RUSTSEC-2026-0235 — insufficient archive validation in `rkyv` 0.7 (fix only
+# in 0.8.17+). `rkyv` is an optional dependency of `rust_decimal` that is in
+# Cargo.lock but not enabled: `cargo tree -i rkyv --workspace --all-features
+# --target all` prints nothing, so it is never compiled. Revisit if anything
+# enables `rust_decimal`'s `rkyv` features.
+#
+# RUSTSEC-2026-0258 — unbounded empty DATA frames in `h2` 0.3 (fix only in
+# 0.4.16+). `h2` 0.3 is pulled in by `actix-http` 3.x (actix-web 4's `http2`
+# feature, also enabled by `async-graphql-actix-web`); there is no fixed 0.3
+# release and actix-web 4 cannot move to `h2` 0.4. It is compiled but not
+# reachable: `rim_server/src/server.rs` uses `HttpServer::bind` (plain TCP,
+# HTTP/1.1 only — no TLS/ALPN and no `bind_auto_h2c`), so the server never
+# speaks HTTP/2. Revisit if the server ever binds with TLS or h2c, or once
+# actix-http ships on `h2` 0.4.
 [advisories]
 ignore = [
     "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0235",
+    "RUSTSEC-2026-0258",
 ]
