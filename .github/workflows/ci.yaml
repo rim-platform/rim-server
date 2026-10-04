@@ -88,13 +88,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # Prebuilt binary: compiling cargo-audit from source took ~4 minutes per run.
       - uses: taiki-e/install-action@cargo-audit
+      # Blocking: ignored advisories (each with a justification) live in .cargo/audit.toml.
       - name: Cargo Audit
-        id: audit
         run: cargo audit
-        continue-on-error: true
-      - name: Warning on audit
-        if: ${{ steps.audit.outcome == 'failure' }}
-        run: echo "::warning::cargo audit found vulnerabilities (non-blocking). Check logs above."
 
   docker_build:
     name: Docker Build

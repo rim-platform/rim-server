@@ -1,5 +1,7 @@
 # RIM — Actual State Inventory (2026-04-25)
 
+> **Note (2026-10-04):** the server-side `rim_services::plugin_host` module discussed below was removed on 2026-10-04 as unused. The plugin host and its manifest validation live in the desktop client (`rim-ui/src-tauri/src/plugin_host/`).
+
 Honest snapshot of what's truly shipped vs claimed shipped, cross-checked against code state and Hawkeye verdicts. Distinct from `ROADMAP.md` (aspirational) and the team task ledger (which has been overstated by leads claiming "complete" before review).
 
 **Legend:**
@@ -72,7 +74,7 @@ The programmability spine.
 
 **Where the gaps are:**
 - 🟡 **Plugin AI consent** (Phase 5 #5): backend gates work, but `plugin_run_ai_command` IPC dispatch is currently a stub returning `PluginNotRunning` (broker-loop wiring deferred). Hawkeye also caught a frontend↔Rust `PluginInfo` schema drift — TS reads `plugin.enabled` and `plugin.manifest.commands` but Rust returns flat `status` + `approved_ai_commands` shape, so `injectPluginTools` is dead code in production. Pete is mid-fix.
-- 📦 **Backend `plugin_host` module** (`rim-server/rim_services/src/plugin_host/`): 1,290 LOC of DTOs + validators that are NOT consumed anywhere in `rim_api` or `rim_infra_services`. Contracts-only. The actual plugin pipeline runs entirely in the Tauri client. Server-side plugin awareness doesn't exist yet.
+- 📦 **Backend `plugin_host` module** (`rim-server/rim_services/src/plugin_host/`): 1,290 LOC of DTOs + validators that are NOT consumed anywhere in `rim_api` or `rim_infra_services`. Contracts-only. The actual plugin pipeline runs entirely in the Tauri client. Server-side plugin awareness doesn't exist yet. *(Removed 2026-10-04.)*
 - 📦 Plugin runtime DTOs (`LocalPluginHostHandshakeRequest/Response`, `LocalPluginExecuteCommandRequest/Response`) — defined, never used. Aspirational scaffolding for future server-mediated plugin execution.
 
 ---
@@ -192,7 +194,7 @@ Honest list of things that look shipped but aren't:
 1. **Phase 5 ledger overstates progress.** Ledger marks #1, #2, #7, #9, #11 as completed. Reality: #1, #7, #11 are clean. #2 + #9 had a RED Hawkeye verdict on `db-tests` build that may not have been fully addressed. #4 was marked complete then reverted after Hawkeye returned 6 BLOCKs. #5 is in active remediation.
 2. **Agent macro discovery.** `synthesize_command_definitions` doesn't exist. Agent has no path to find macros even though the runtime gate would deny them anyway.
 3. **Agent plugin command dispatch.** Frontend tools loader filters on `plugin.enabled` (a TS field) which doesn't exist in the Rust `PluginInfo` shape. So `injectPluginTools` short-circuits and no plugin AI tool is ever registered. Pete's #5 fix addresses this.
-4. **Backend plugin_host module is dead code.** 1,290 LOC of contracts that nothing imports. Either move to a shared crate (Phase 6 cleanup) or delete.
+4. **Backend plugin_host module is dead code.** 1,290 LOC of contracts that nothing imports. Either move to a shared crate (Phase 6 cleanup) or delete. *(Resolved 2026-10-04: deleted.)*
 5. **`db-tests` CI feature flag.** Was fully red across `audit_log_repo`, `message_repo`, `message_attachment_repo`, `message_thread_repo` (mix of new #2 work + pre-existing `forwarded_from_message_id` debt). Strange asked to fold the debt fix into his next pass.
 6. **`command.discover` ship gate not started.** This is the actual gate that closes Phase 5. Blocked on the four upstream tasks landing properly.
 
