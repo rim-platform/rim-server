@@ -1,0 +1,17 @@
+[package]
+name = "rim_auth"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argon2 = "0.5.3"
+base64 = "0.22.1"
+getrandom = "0.3.4"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+tracing = "0.1"
+
+[dependencies.rand_core]
+version = "0.6.4"
+features = ["getrandom"]

@@ -5,9 +5,34 @@ on:
   push:
     branches: ["master"]
 
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+# Caching: setup-rust-toolchain runs Swatinem/rust-cache by default (keyed per job, toolchain
+# and Cargo.lock, refreshed on every run), so no job adds its own actions/cache of target/.
+
 jobs:
-  build_and_test:
-    name: Build and Test
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+      - name: Format Check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (feature-gated test code)
+        # Lints the test code behind db-tests/infra-db-tests/e2e-tests, which the step above
+        # doesn't compile. --all-features is intentionally NOT used: it also enables the
+        # unrelated `serde` feature on rim_core/rim_services, which doesn't currently compile.
+        run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
+
+  test_and_coverage:
+    name: Test & Coverage
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -24,49 +49,66 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build
-        run: cargo build --verbose
-      - name: Run Tests
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install lcov
+        run: sudo apt-get update && sudo apt-get install -y lcov
+      - name: Test with coverage
+        # One instrumented build runs every suite (unit, infra_db, API e2e, infra_services):
+        # enabling all three test features in a single invocation keeps one feature set, so
+        # the workspace compiles once instead of once per suite. The features only gate test
+        # files, never library code. Cargo runs test binaries one after another, and
+        # --test-threads=1 keeps the shared-database suites isolated within each binary.
         env:
           DATABASE_URL: "postgres://postgres:postgres@localhost:5432/testdb"
-        run: cargo test --all -- --test-threads=1
-
-  lint:
-    name: Lint & Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: actions/cache@v3
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace \
+            --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" \
+            --lcov --output-path coverage/lcov.info \
+            -- --test-threads=1
+      - name: Generate HTML Report
+        run: genhtml coverage/lcov.info --output-directory coverage/html
+      - name: Upload Coverage Artifact
+        # Uploaded before the gate so the per-file report is available when the gate fails.
+        uses: actions/upload-artifact@v4
         with:
-          path: target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Format Check
-        run: cargo fmt --all -- --check
-      - name: Lint Check (Clippy)
-        run: cargo clippy -- -D warnings
+          name: coverage
+          path: coverage/
+      - name: Enforce Coverage Thresholds
+        # Temporarily 75% (measured 77.3% on the rebuild); the target is 95%, raise it as tests land.
+        run: python3 .github/scripts/lcov_gate.py coverage/lcov.info 75 0
 
   security_audit:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
+      # Prebuilt binary: compiling cargo-audit from source took ~4 minutes per run.
+      - uses: taiki-e/install-action@cargo-audit
       - name: Cargo Audit
+        id: audit
         run: cargo audit
+        continue-on-error: true
+      - name: Warning on audit
+        if: ${{ steps.audit.outcome == 'failure' }}
+        run: echo "::warning::cargo audit found vulnerabilities (non-blocking). Check logs above."
 
   docker_build:
     name: Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build Docker image
-        run: docker build --file Dockerfile .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: rim-server:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

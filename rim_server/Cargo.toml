@@ -1,0 +1,38 @@
+[package]
+name = "rim_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rim_api = {path = "../rim_api" }
+rim_core = { path = "../rim_core" }
+rim_infra_db = { path = "../rim_infra_db" }
+rim_infra_services = { path = "../rim_infra_services" }
+rim_services = { path = "../rim_services" }
+sea-orm = "2.0.0-rc.20"
+chrono = "0.4.42"
+rim_auth = { path = "../rim_auth" }
+http = "1.4.0"
+log = "0.4.28"
+actix-web = "4.11.0"
+actix-cors = "0.7"
+rim_logging = {path = "../rim_logging" }
+dotenvy = "0.15.7"
+config = "0.15.18"
+serde = { version = "1.0.228", features = ["derive"] }
+async-graphql-actix-web = "7.0.17"
+async-graphql = "7.0.17"
+async-graphql-parser = "7.0.17"
+async-trait = "0.1.89"
+tracing = "0.1.41"
+uuid = { version = "1.19.0", features = ["v7"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio-stream = "0.1"
+futures-util = "0.3"
+actix-multipart = "0.7"
+serde_json = "1"
+mime_guess = "2"
+mime = "0.3"
+
+[dev-dependencies]
+rim_services = { path = "../rim_services", features = ["mocks"] }
