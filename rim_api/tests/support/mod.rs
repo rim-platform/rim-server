@@ -201,6 +201,12 @@ impl TestCtx {
         .id
     }
 
+    /// Build the real [`AppServiceProvider`] over the test database, for tests that need to
+    /// reach a service the GraphQL schema does not expose (e.g. the alert-webhook path).
+    pub fn build_provider(&self) -> std::sync::Arc<dyn AppServiceProvider> {
+        build_test_provider(&self.conn).0
+    }
+
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
     /// and the test database.
     ///
@@ -227,6 +233,38 @@ pub async fn build_test_schema(
     use std::sync::Arc;
 
     use rim_api::RegistrationContext;
+    use rim_services::auth::dto::{PreviewInviteRateLimiterToken, SignupRateLimiterToken};
+
+    let (service_provider, observers) = build_test_provider(conn);
+
+    let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
+        Arc::new(observers.clone()),
+    ));
+    let typing_tracker = Arc::new(rim_infra_services::typing::TypingTracker::new());
+    let observers_arc = Arc::new(observers);
+
+    let broadcaster = rim_api::broadcast::InMemoryBroadcaster::new(16);
+
+    rim_api::build_schema(
+        service_provider,
+        broadcaster,
+        presence_manager as Arc<dyn rim_services::presence::PresenceService>,
+        typing_tracker as Arc<dyn rim_services::typing::TypingService>,
+        observers_arc,
+        RegistrationContext {
+            registration_mode: Arc::new(registration_mode),
+            preview_rate_limiter: Arc::new(PreviewInviteRateLimiterToken),
+            signup_rate_limiter: Arc::new(SignupRateLimiterToken),
+        },
+    )
+}
+
+/// Build the real service provider (and the observers it was wired with) over `conn`.
+pub fn build_test_provider(
+    conn: &DatabaseConnection,
+) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
+    use std::sync::Arc;
+
     use rim_infra_db::sea_orm_impl::{
         bootstrap_token::SeaOrmBootstrapTokenRepository,
         instance_invite::SeaOrmInstanceInviteRepository, invite::SeaOrmInviteRepository,
@@ -235,7 +273,6 @@ pub async fn build_test_schema(
         user::SeaOrmUserRepository, user_command::SeaOrmUserCommandRepository,
     };
     use rim_infra_services::storage::DefaultStorageService;
-    use rim_services::auth::dto::{PreviewInviteRateLimiterToken, SignupRateLimiterToken};
     use rim_services::storage::service::StorageService;
 
     let db: DbHandle = conn.clone().into();
@@ -373,6 +410,11 @@ pub async fn build_test_schema(
                 db.clone(),
             ),
         ),
+        workspace_feature_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::workspace_feature::SeaOrmWorkspaceFeatureRepository::new(
+                db.clone(),
+            ),
+        ),
     };
 
     // No-op storage backend — file upload is not exercised here.
@@ -403,24 +445,5 @@ pub async fn build_test_schema(
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
     ));
 
-    let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
-        Arc::new(observers.clone()),
-    ));
-    let typing_tracker = Arc::new(rim_infra_services::typing::TypingTracker::new());
-    let observers_arc = Arc::new(observers);
-
-    let broadcaster = rim_api::broadcast::InMemoryBroadcaster::new(16);
-
-    rim_api::build_schema(
-        service_provider,
-        broadcaster,
-        presence_manager as Arc<dyn rim_services::presence::PresenceService>,
-        typing_tracker as Arc<dyn rim_services::typing::TypingService>,
-        observers_arc,
-        RegistrationContext {
-            registration_mode: Arc::new(registration_mode),
-            preview_rate_limiter: Arc::new(PreviewInviteRateLimiterToken),
-            signup_rate_limiter: Arc::new(SignupRateLimiterToken),
-        },
-    )
+    (service_provider, observers)
 }

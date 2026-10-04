@@ -39,6 +39,7 @@ use rim_services::setting::service::SettingService;
 use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
+use rim_services::workspace_feature::service::WorkspaceFeatureService;
 use rim_services::workspace_state::service::WorkspaceStateService;
 use sea_orm::DatabaseConnection;
 
@@ -78,6 +79,7 @@ pub struct DefaultAppServiceProvider {
     storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
+    workspace_feature_service: Arc<dyn WorkspaceFeatureService>,
     workspace_state_service: Arc<dyn WorkspaceStateService>,
     pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
@@ -210,6 +212,12 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&audit_log_repo),
                 Arc::clone(&capability_service),
             ));
+        let workspace_feature_service: Arc<dyn WorkspaceFeatureService> = Arc::new(
+            crate::workspace_feature::DefaultWorkspaceFeatureService::new(
+                repos.for_workspace_feature(),
+            )
+            .with_audit_log_service(Arc::clone(&audit_log_service)),
+        );
         // Shared confirmation store — same instance used by command_service and
         // macro_service so that a proof issued by command_service can be verified
         // by macro_service (and vice versa, once macro-level challenge issuance lands).
@@ -254,6 +262,7 @@ impl DefaultAppServiceProvider {
             audit_log_service: Some(Arc::clone(&audit_log_service)),
             incident_service: Arc::clone(&incident_service),
             oncall_service: Arc::clone(&oncall_service),
+            workspace_feature_service: Arc::clone(&workspace_feature_service),
         };
         let command_service_concrete = Arc::new(
             crate::command::DefaultCommandService::with_confirmation_store(
@@ -354,6 +363,7 @@ impl DefaultAppServiceProvider {
             storage_service,
             thread_service,
             user_service,
+            workspace_feature_service,
             workspace_state_service,
             pipeline_service,
             request_authenticator,
@@ -457,6 +467,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn user_service(&self) -> Arc<dyn UserService> {
         Arc::clone(&self.user_service)
+    }
+    fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService> {
+        Arc::clone(&self.workspace_feature_service)
     }
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService> {
         Arc::clone(&self.workspace_state_service)

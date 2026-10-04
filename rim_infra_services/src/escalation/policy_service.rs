@@ -10,7 +10,10 @@ use rim_core::escalation::repository::{
     ConversationEscalationPolicyRepository, EscalationPolicyRepository, EscalationStepRepository,
 };
 use rim_core::oncall::repository::OnCallScheduleRepository;
+use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::workspace_feature::model::WorkspaceFeature;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::ServiceError;
 use rim_services::ServiceResult;
 use rim_services::escalation::command::{
@@ -22,7 +25,9 @@ use rim_services::escalation::dto::{
 };
 use rim_services::escalation::service::EscalationPolicyService;
 
-use crate::util::{ensure_conversation_in_server, ensure_server_owner_or_moderator};
+use crate::util::{
+    ensure_conversation_in_server, ensure_feature_enabled, ensure_server_owner_or_moderator,
+};
 
 #[derive(Clone)]
 pub struct EscalationPolicyRepos {
@@ -35,6 +40,8 @@ pub struct EscalationPolicyRepos {
     /// persisted (§3) — a dangling schedule id would otherwise silently page nobody at fire
     /// time instead of failing loudly at authoring time.
     pub on_call_schedule_repo: Arc<dyn OnCallScheduleRepository>,
+    /// Track 0.4: the `incidents` feature gate for every write path.
+    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
 }
 
 pub struct DefaultEscalationPolicyService {
@@ -44,6 +51,18 @@ pub struct DefaultEscalationPolicyService {
 impl DefaultEscalationPolicyService {
     pub fn new(repos: EscalationPolicyRepos) -> Self {
         Self { repos }
+    }
+
+    /// Track 0.4 write gate: every mutation in this service requires the workspace's
+    /// `incidents` feature (which covers on-call and escalation). Called after the
+    /// authorization check so non-members never learn the flag's value. Reads stay open.
+    async fn ensure_incidents_enabled(&self, server_id: ServerId) -> ServiceResult<()> {
+        ensure_feature_enabled(
+            self.repos.workspace_feature_repo.as_ref(),
+            server_id,
+            WorkspaceFeature::Incidents,
+        )
+        .await
     }
 
     /// Validates a step input list against §3's invariants: at least one step, each with at
@@ -156,6 +175,7 @@ impl EscalationPolicyService for DefaultEscalationPolicyService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(cmd.server_id).await?;
         self.validate_steps(cmd.server_id, &cmd.steps).await?;
 
         let policy = self
@@ -193,6 +213,7 @@ impl EscalationPolicyService for DefaultEscalationPolicyService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(policy.server_id).await?;
 
         if let Some(steps) = &cmd.steps {
             self.validate_steps(policy.server_id, steps).await?;
@@ -227,6 +248,7 @@ impl EscalationPolicyService for DefaultEscalationPolicyService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(policy.server_id).await?;
         self.repos
             .escalation_policy_repo
             .delete(cmd.policy_id)
@@ -241,6 +263,7 @@ impl EscalationPolicyService for DefaultEscalationPolicyService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(cmd.server_id).await?;
         ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             cmd.conversation_id,

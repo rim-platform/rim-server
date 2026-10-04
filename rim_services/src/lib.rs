@@ -36,6 +36,7 @@ pub mod skill_profile;
 pub mod storage;
 pub mod typing;
 pub mod user;
+pub mod workspace_feature;
 pub mod workspace_state;
 
 use rim_core::principal::model::Principal;
@@ -127,6 +128,12 @@ pub enum ServiceError {
     #[error("email already in use")]
     EmailTaken,
 
+    /// The workspace has the named optional module turned off (Track 0.4). `feature` is the
+    /// stable snake_case name (`rim_core::workspace_feature::model::WorkspaceFeature::as_str`).
+    /// Surfaced as the `FEATURE_DISABLED` GraphQL error code.
+    #[error("workspace feature `{feature}` is disabled")]
+    FeatureDisabled { feature: String },
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }
@@ -134,6 +141,13 @@ pub enum ServiceError {
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
 impl ServiceError {
+    /// Shorthand for [`ServiceError::FeatureDisabled`] from a typed feature.
+    pub fn feature_disabled(feature: rim_core::workspace_feature::model::WorkspaceFeature) -> Self {
+        Self::FeatureDisabled {
+            feature: feature.as_str().to_string(),
+        }
+    }
+
     pub fn internal<E>(err: E) -> Self
     where
         E: Into<anyhow::Error>,

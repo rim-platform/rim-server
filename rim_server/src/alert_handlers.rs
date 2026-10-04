@@ -2,17 +2,23 @@
 //!
 //! Machine-to-machine only: no session cookie, no CSRF. Auth is a per-workspace ingest token
 //! presented in a header (never a cookie, so CSRF doesn't apply — see `docs/alerts.md`).
-//! Depends on `rim_services` traits only (`IngestTokenService`, `IncidentService`), never on
-//! `rim_infra_services` impls, per CLAUDE.md's FL2 pattern.
+//! Depends on `rim_services` traits only (`IngestTokenService`, `IncidentService`,
+//! `WorkspaceFeatureService`), never on `rim_infra_services` impls, per CLAUDE.md's FL2 pattern.
+//!
+//! Track 0.4: a workspace with the `incidents` feature off answers `404 Not Found` with an empty
+//! body, after token authentication and rate limiting, so the response does not reveal that the
+//! token itself is valid.
 
 use std::sync::Arc;
 
 use actix_web::{HttpRequest, HttpResponse, web};
+use rim_core::workspace_feature::model::WorkspaceFeature;
 use rim_infra_services::AlertRateLimiter;
 use rim_services::alert::{self, AlertEvent, AlertSource};
 use rim_services::incident::command::{IngestAlertCmd, IngestAlertOutcome};
 use rim_services::incident::service::IncidentService;
 use rim_services::ingest_token::service::IngestTokenService;
+use rim_services::workspace_feature::service::WorkspaceFeatureService;
 use rim_services::{Actor, ServiceError};
 
 use crate::file_handlers::map_service_error_to_response;
@@ -82,6 +88,7 @@ impl OutcomeCounts {
 struct IngestDeps<'a> {
     tokens: &'a dyn IngestTokenService,
     incidents: &'a dyn IncidentService,
+    features: &'a dyn WorkspaceFeatureService,
     limiter: &'a AlertRateLimiter,
     max_body_bytes: usize,
 }
@@ -108,6 +115,7 @@ async fn ingest_common(
     let IngestDeps {
         tokens,
         incidents,
+        features,
         limiter,
         max_body_bytes,
     } = deps;
@@ -137,6 +145,17 @@ async fn ingest_common(
                 retry_after_seconds,
             });
         }
+    }
+
+    // Track 0.4 gate, after the rate limiter: a disabled workspace looks exactly like an
+    // unknown route (bare 404, no body), never like a valid token.
+    match features
+        .is_enabled(token.server_id, WorkspaceFeature::Incidents)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return HttpResponse::NotFound().finish(),
+        Err(e) => return map_service_error_to_response(e),
     }
 
     let mut events = match parse(&body) {
@@ -180,6 +199,7 @@ pub async fn ingest_generic(
     body: web::Bytes,
     tokens: web::Data<Arc<dyn IngestTokenService>>,
     incidents: web::Data<Arc<dyn IncidentService>>,
+    features: web::Data<Arc<dyn WorkspaceFeatureService>>,
     limiter: web::Data<Arc<AlertRateLimiter>>,
     max_body_bytes: web::Data<AlertMaxBodyBytes>,
 ) -> HttpResponse {
@@ -189,6 +209,7 @@ pub async fn ingest_generic(
         IngestDeps {
             tokens: tokens.as_ref().as_ref(),
             incidents: incidents.as_ref().as_ref(),
+            features: features.as_ref().as_ref(),
             limiter: limiter.as_ref().as_ref(),
             max_body_bytes: max_body_bytes.as_ref().0,
         },
@@ -204,6 +225,7 @@ pub async fn ingest_alertmanager(
     body: web::Bytes,
     tokens: web::Data<Arc<dyn IngestTokenService>>,
     incidents: web::Data<Arc<dyn IncidentService>>,
+    features: web::Data<Arc<dyn WorkspaceFeatureService>>,
     limiter: web::Data<Arc<AlertRateLimiter>>,
     max_body_bytes: web::Data<AlertMaxBodyBytes>,
 ) -> HttpResponse {
@@ -213,6 +235,7 @@ pub async fn ingest_alertmanager(
         IngestDeps {
             tokens: tokens.as_ref().as_ref(),
             incidents: incidents.as_ref().as_ref(),
+            features: features.as_ref().as_ref(),
             limiter: limiter.as_ref().as_ref(),
             max_body_bytes: max_body_bytes.as_ref().0,
         },
@@ -228,6 +251,7 @@ pub async fn ingest_grafana(
     body: web::Bytes,
     tokens: web::Data<Arc<dyn IngestTokenService>>,
     incidents: web::Data<Arc<dyn IncidentService>>,
+    features: web::Data<Arc<dyn WorkspaceFeatureService>>,
     limiter: web::Data<Arc<AlertRateLimiter>>,
     max_body_bytes: web::Data<AlertMaxBodyBytes>,
 ) -> HttpResponse {
@@ -237,6 +261,7 @@ pub async fn ingest_grafana(
         IngestDeps {
             tokens: tokens.as_ref().as_ref(),
             incidents: incidents.as_ref().as_ref(),
+            features: features.as_ref().as_ref(),
             limiter: limiter.as_ref().as_ref(),
             max_body_bytes: max_body_bytes.as_ref().0,
         },
@@ -345,6 +370,7 @@ mod tests {
     use rim_services::incident::service::MockIncidentService;
     use rim_services::ingest_token::dto::IngestTokenDto;
     use rim_services::ingest_token::service::MockIngestTokenService;
+    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 
     fn dummy_token_dto() -> IngestTokenDto {
         IngestTokenDto {
@@ -386,6 +412,15 @@ mod tests {
 
     macro_rules! test_app {
         ($tokens:expr, $incidents:expr, $limiter:expr, $max_bytes:expr) => {
+            test_app!(
+                $tokens,
+                $incidents,
+                MockWorkspaceFeatureService::all_enabled(),
+                $limiter,
+                $max_bytes
+            )
+        };
+        ($tokens:expr, $incidents:expr, $features:expr, $limiter:expr, $max_bytes:expr) => {
             actix_test::init_service(
                 App::new()
                     .service(
@@ -398,6 +433,8 @@ mod tests {
                     .app_data(web::Data::new(
                         std::sync::Arc::new($incidents) as std::sync::Arc<dyn IncidentService>
                     ))
+                    .app_data(web::Data::new(std::sync::Arc::new($features)
+                        as std::sync::Arc<dyn WorkspaceFeatureService>))
                     .app_data(web::Data::new(std::sync::Arc::new($limiter)))
                     .app_data(web::Data::new(AlertMaxBodyBytes($max_bytes))),
             )
@@ -540,5 +577,92 @@ mod tests {
         let body: serde_json::Value = actix_test::read_body_json(resp).await;
         assert_eq!(body["received"], 1);
         assert_eq!(body["created"], 1);
+    }
+
+    #[actix_web::test]
+    async fn returns_bare_404_when_incidents_feature_disabled() {
+        let token = dummy_token_dto();
+        let server_id = token.server_id;
+        let mut tokens = MockIngestTokenService::new();
+        tokens.expect_authenticate_token().returning(move |_| {
+            let token = token.clone();
+            Box::pin(async move { Ok(token) })
+        });
+
+        let mut features = MockWorkspaceFeatureService::new();
+        features
+            .expect_is_enabled()
+            .withf(move |s, f| *s == server_id && *f == WorkspaceFeature::Incidents)
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        // No expectation on the incident service: nothing may be ingested.
+        let app = test_app!(
+            tokens,
+            MockIncidentService::new(),
+            features,
+            AlertRateLimiter::new(60, 120),
+            262_144
+        );
+
+        let req = actix_test::TestRequest::post()
+            .uri("/api/hooks/alerts/generic")
+            .insert_header(("Authorization", "Bearer rim_ingest_ok"))
+            .set_json(serde_json::json!({"title": "disk full"}))
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+        let body = actix_test::read_body(resp).await;
+        assert!(body.is_empty(), "404 must carry no body detail");
+    }
+
+    #[actix_web::test]
+    async fn feature_disabled_from_ingest_maps_to_bare_404() {
+        // Race: the feature is turned off between the handler's gate and the service-level
+        // gate inside `ingest_alert`. The response must still be the bare 404.
+        let mut tokens = MockIngestTokenService::new();
+        tokens
+            .expect_authenticate_token()
+            .returning(|_| Box::pin(async { Ok(dummy_token_dto()) }));
+        let mut incidents = MockIncidentService::new();
+        incidents.expect_ingest_alert().returning(|_| {
+            Box::pin(async { Err(ServiceError::feature_disabled(WorkspaceFeature::Incidents)) })
+        });
+
+        let app = test_app!(tokens, incidents, AlertRateLimiter::new(60, 120), 262_144);
+
+        let req = actix_test::TestRequest::post()
+            .uri("/api/hooks/alerts/generic")
+            .insert_header(("Authorization", "Bearer rim_ingest_ok"))
+            .set_json(serde_json::json!({"title": "disk full"}))
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+        let body = actix_test::read_body(resp).await;
+        assert!(body.is_empty(), "404 must carry no body detail");
+    }
+
+    #[actix_web::test]
+    async fn rate_limit_applies_before_feature_gate() {
+        let mut tokens = MockIngestTokenService::new();
+        tokens
+            .expect_authenticate_token()
+            .returning(|_| Box::pin(async { Ok(dummy_token_dto()) }));
+
+        // The feature service has no expectations: a rate-limited request never reaches it.
+        let app = test_app!(
+            tokens,
+            MockIncidentService::new(),
+            MockWorkspaceFeatureService::new(),
+            AlertRateLimiter::new(60, 0),
+            262_144
+        );
+
+        let req = actix_test::TestRequest::post()
+            .uri("/api/hooks/alerts/generic")
+            .insert_header(("Authorization", "Bearer rim_ingest_ok"))
+            .set_json(serde_json::json!({"title": "x"}))
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 429);
     }
 }

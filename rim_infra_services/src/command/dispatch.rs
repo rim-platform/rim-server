@@ -433,6 +433,10 @@ impl DefaultCommandService {
         }
 
         if let Some(definition) = Self::builtin_definition(command_id) {
+            // Feature gate for nested dispatch: user-command steps and pipe stages reach
+            // builtins here without passing the top-level gate in `execute_command_inner`.
+            self.ensure_command_feature_enabled(&definition, ctx.context.as_ref())
+                .await?;
             if definition.requires_confirmation_for_initiator(ctx.initiator)
                 && !ctx.confirmed_dangerous
             {
@@ -520,13 +524,24 @@ impl DefaultCommandService {
             }
         }
 
-        // ── R1: rate-limit gate (runs after capability + confirmation) ───
-        if !cmd.is_pipe
-            && let Some(def) = self
-                .resolve_command_definition(cmd.actor, &cmd.command_id)
+        // ── F1: workspace feature gate (Track 0.4) ─────────────────────
+        // Before the rate limiter so a disabled command never consumes a slot; the audit
+        // wrapper in `execute_command` still records the rejection.
+        let top_level_def = if cmd.is_pipe {
+            None
+        } else {
+            self.resolve_command_definition(cmd.actor, &cmd.command_id)
                 .await
                 .ok()
                 .flatten()
+        };
+        if let Some(def) = &top_level_def {
+            self.ensure_command_feature_enabled(def, cmd.context.as_ref())
+                .await?;
+        }
+
+        // ── R1: rate-limit gate (runs after capability + confirmation) ───
+        if let Some(def) = &top_level_def
             && let Some(limit) = def.rate_limit_per_minute
         {
             let decision = self.rate_limiter.check_and_record(

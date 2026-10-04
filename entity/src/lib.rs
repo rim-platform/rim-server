@@ -81,6 +81,8 @@ mod user_command_mapper;
 mod user_mapper;
 pub mod user_skill_profile;
 mod user_skill_profile_mapper;
+pub mod workspace_feature;
+mod workspace_feature_mapper;
 pub mod workspace_ingest_token;
 mod workspace_ingest_token_mapper;
 pub mod workspace_state;

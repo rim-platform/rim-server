@@ -38,6 +38,9 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
                 "error": "rate limit exceeded",
                 "retryAfterSeconds": retry_after_seconds,
             })),
+        // Track 0.4: a disabled workspace module looks like an unknown route on REST
+        // transports (bare 404, no body), matching the alert-webhook feature gate.
+        rim_services::ServiceError::FeatureDisabled { .. } => HttpResponse::NotFound().finish(),
         _ => {
             tracing::error!(error = %err, "service error in file handler");
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "internal error"}))

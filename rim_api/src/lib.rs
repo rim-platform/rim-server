@@ -117,6 +117,7 @@ fn wire_common_schema_data(
         .data(service_provider.channel_lens_service())
         .data(service_provider.skill_profile_service())
         .data(service_provider.workspace_state_service())
+        .data(service_provider.workspace_feature_service())
         .data(service_provider.pipeline_service())
         .data(service_provider.oncall_service())
         .data(service_provider.escalation_policy_service())

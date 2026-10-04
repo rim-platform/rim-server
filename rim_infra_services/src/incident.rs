@@ -31,6 +31,8 @@ use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
+use rim_core::workspace_feature::model::WorkspaceFeature;
+use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::alert::AlertStatus;
 use rim_services::escalation::scheduler::EscalationScheduler;
@@ -52,7 +54,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::oncall::{OnCallRepos, resolve_on_call_now_for_schedule};
 use crate::repos::AppRepos;
-use crate::util::{ensure_conversation_in_server, ensure_server_member};
+use crate::util::{ensure_conversation_in_server, ensure_feature_enabled, ensure_server_member};
 
 #[derive(Clone)]
 pub struct IncidentRepos {
@@ -79,6 +81,9 @@ pub struct IncidentRepos {
     pub rotation_layer_repo: Arc<dyn RotationLayerRepository>,
     pub rotation_participant_repo: Arc<dyn RotationParticipantRepository>,
     pub on_call_override_repo: Arc<dyn OnCallOverrideRepository>,
+    /// Track 0.4: the `incidents` feature gate for every write path (see
+    /// `docs/specs/track-0-4-optional-incident-module.md`).
+    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
 }
 
 pub struct DefaultIncidentService {
@@ -102,6 +107,18 @@ pub struct DefaultIncidentService {
 }
 
 impl DefaultIncidentService {
+    /// Track 0.4 write gate: every mutation in this service requires the workspace's
+    /// `incidents` feature. Called after the authorization check so non-members never learn
+    /// the flag's value.
+    async fn ensure_incidents_enabled(&self, server_id: ServerId) -> ServiceResult<()> {
+        ensure_feature_enabled(
+            self.repos.workspace_feature_repo.as_ref(),
+            server_id,
+            WorkspaceFeature::Incidents,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         repos: IncidentRepos,
@@ -327,6 +344,7 @@ impl DefaultIncidentService {
                     rotation_participant_repo: Arc::clone(&repos.rotation_participant_repo),
                     on_call_override_repo: Arc::clone(&repos.on_call_override_repo),
                     server_member_repo: Arc::clone(&repos.server_member_repo),
+                    workspace_feature_repo: Arc::clone(&repos.workspace_feature_repo),
                 };
                 let resolved =
                     resolve_on_call_now_for_schedule(&on_call_repos, schedule_id, Utc::now())
@@ -541,6 +559,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(cmd.server_id).await?;
 
         // Validate conversation belongs to this server
         ensure_conversation_in_server(
@@ -650,6 +669,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         // Validate status transition
         match (&incident.status, &cmd.status) {
@@ -707,6 +727,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         if incident.status == IncidentStatus::Resolved {
             return Err(ServiceError::Validation(
@@ -750,6 +771,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         // Determine current phase
         let current_phase = self
@@ -788,6 +810,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         let phases = self
             .repos
@@ -866,6 +889,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         if incident.status == IncidentStatus::Resolved {
             return Err(ServiceError::Validation(
@@ -938,6 +962,18 @@ impl IncidentService for DefaultIncidentService {
             query.server_id,
         )
         .await?;
+
+        // Track 0.4: with the `incidents` feature off, no conversation has an active incident
+        // as far as the UI is concerned (the banner disappears). The row is untouched and
+        // reappears when the feature is turned back on.
+        if !self
+            .repos
+            .workspace_feature_repo
+            .is_enabled(query.server_id, WorkspaceFeature::Incidents)
+            .await?
+        {
+            return Ok(None);
+        }
 
         let incident = self
             .repos
@@ -1030,6 +1066,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(cmd.server_id).await?;
         let conversation = ensure_conversation_in_server(
             self.repos.conversation_repo.as_ref(),
             cmd.conversation_id,
@@ -1235,6 +1272,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         // Idempotent: acking an already-acked incident is a no-op success, not an error or a
         // re-page. Also covers acking a Resolved incident (a no-op-ish return per §4, since
@@ -1328,6 +1366,7 @@ impl IncidentService for DefaultIncidentService {
             cmd.actor.user_id,
         )
         .await?;
+        self.ensure_incidents_enabled(incident.server_id).await?;
 
         let Some(run) = self
             .repos
@@ -1390,6 +1429,24 @@ impl IncidentService for DefaultIncidentService {
             tracing::warn!(run_id = %run_id, incident_id = %run.incident_id, "fire_escalation_step: incident not found, no-op");
             return Ok(());
         };
+
+        // Track 0.4: a workspace that turned the `incidents` feature off pages nobody. The run
+        // stays `Active` and untouched (no data changes while the feature is off); it is not
+        // re-armed here, so it resumes only through the boot-time recovery sweep.
+        if !self
+            .repos
+            .workspace_feature_repo
+            .is_enabled(incident.server_id, WorkspaceFeature::Incidents)
+            .await?
+        {
+            tracing::info!(
+                run_id = %run_id,
+                incident_id = %incident.id,
+                server_id = %incident.server_id,
+                "fire_escalation_step: incidents feature disabled for workspace, skipping step"
+            );
+            return Ok(());
+        }
 
         let steps = self
             .repos

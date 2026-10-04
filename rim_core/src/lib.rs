@@ -36,6 +36,7 @@ pub mod skill_profile;
 pub mod storage;
 pub mod user;
 pub mod util;
+pub mod workspace_feature;
 pub mod workspace_state;
 
 #[cfg(test)]

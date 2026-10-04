@@ -1,5 +1,6 @@
-use rim_services::ServiceResult;
+use rim_services::command::dto::{CommandContextDto, CommandDefinitionDto};
 use rim_services::command::request::ExecuteCommandCmd;
+use rim_services::{ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
 use super::pipe_parser;
@@ -68,5 +69,57 @@ impl DefaultCommandService {
             return Ok(false);
         };
         Ok(def.requires_confirmation_for_initiator(cmd.initiator))
+    }
+}
+
+impl DefaultCommandService {
+    /// Track 0.4 list filter: drops every command whose `feature` is not enabled for the
+    /// context's workspace, with one feature lookup for the whole list. Without a workspace
+    /// context every feature-gated command is dropped (it could not run anyway).
+    pub(super) async fn retain_enabled_features(
+        &self,
+        commands: &mut Vec<CommandDefinitionDto>,
+        context: Option<&CommandContextDto>,
+    ) -> ServiceResult<()> {
+        if commands.iter().all(|c| c.feature.is_none()) {
+            return Ok(());
+        }
+        let enabled = match context.and_then(|c| c.workspace_id) {
+            Some(server_id) => {
+                self.services
+                    .workspace_feature_service
+                    .enabled_features(server_id)
+                    .await?
+            }
+            None => Vec::new(),
+        };
+        commands.retain(|c| c.feature.is_none_or(|f| enabled.contains(&f)));
+        Ok(())
+    }
+
+    /// Track 0.4 execution gate: `Err(FeatureDisabled)` when `definition` belongs to a feature
+    /// that is off for the context's workspace, or when there is no workspace context at all.
+    pub(super) async fn ensure_command_feature_enabled(
+        &self,
+        definition: &CommandDefinitionDto,
+        context: Option<&CommandContextDto>,
+    ) -> ServiceResult<()> {
+        let Some(feature) = definition.feature else {
+            return Ok(());
+        };
+        let enabled = match context.and_then(|c| c.workspace_id) {
+            Some(server_id) => {
+                self.services
+                    .workspace_feature_service
+                    .is_enabled(server_id, feature)
+                    .await?
+            }
+            None => false,
+        };
+        if enabled {
+            Ok(())
+        } else {
+            Err(ServiceError::feature_disabled(feature))
+        }
     }
 }

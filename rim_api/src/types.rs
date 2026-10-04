@@ -365,6 +365,74 @@ impl Server {
             .map(Into::into)
             .map_err(|e| Error::new(format!("failed to parse member role: {e}")))
     }
+
+    /// Per-workspace optional modules and whether each is on (Track 0.4). One entry per known
+    /// feature, defaults filled in. Resolved with one service call per server, like
+    /// `viewerRole`; `myServers` lists few servers per user, so no DataLoader.
+    async fn features(&self, ctx: &Context<'_>) -> Result<Vec<WorkspaceFeatureState>> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<
+                dyn rim_services::workspace_feature::service::WorkspaceFeatureService,
+            >>()?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&self.id)?;
+
+        let states = svc
+            .list(
+                rim_services::workspace_feature::command::ListWorkspaceFeaturesQuery {
+                    actor: rim_services::Actor::new(actor),
+                    server_id,
+                },
+            )
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(states.into_iter().map(Into::into).collect())
+    }
+}
+
+/// An optional workspace module (Track 0.4). `INCIDENTS` covers incidents, on-call schedules,
+/// escalation policies and alert ingestion together.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum WorkspaceFeature {
+    Incidents,
+}
+
+impl From<rim_core::workspace_feature::model::WorkspaceFeature> for WorkspaceFeature {
+    fn from(value: rim_core::workspace_feature::model::WorkspaceFeature) -> Self {
+        match value {
+            rim_core::workspace_feature::model::WorkspaceFeature::Incidents => Self::Incidents,
+        }
+    }
+}
+
+impl From<WorkspaceFeature> for rim_core::workspace_feature::model::WorkspaceFeature {
+    fn from(value: WorkspaceFeature) -> Self {
+        match value {
+            WorkspaceFeature::Incidents => Self::Incidents,
+        }
+    }
+}
+
+/// Whether one optional module is on for one workspace. `updatedAt` is null when the value is
+/// the feature's default (never explicitly set for this workspace).
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WorkspaceFeatureState {
+    pub feature: WorkspaceFeature,
+    pub enabled: bool,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<rim_services::workspace_feature::dto::WorkspaceFeatureStateDto>
+    for WorkspaceFeatureState
+{
+    fn from(value: rim_services::workspace_feature::dto::WorkspaceFeatureStateDto) -> Self {
+        Self {
+            feature: value.feature.into(),
+            enabled: value.enabled,
+            updated_at: value.updated_at,
+        }
+    }
 }
 
 impl From<rim_services::server::dto::ServerDto> for Server {
@@ -513,6 +581,10 @@ pub struct Command {
     /// Classification tier driving audit verbosity, mutating-call caps, and
     /// the UX confirm-modal placement.
     pub sensitivity: CommandSensitivity,
+    /// The optional workspace module this command belongs to (Track 0.4), or null when the
+    /// command is always available. The server already omits commands whose feature is off
+    /// from `commands`; this lets clients group or explain gated commands.
+    pub feature: Option<WorkspaceFeature>,
 }
 
 impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
@@ -535,6 +607,7 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
             intent_samples: value.intent_samples,
             ai_callable: value.ai_callable,
             sensitivity: value.sensitivity.into(),
+            feature: value.feature.map(Into::into),
         }
     }
 }

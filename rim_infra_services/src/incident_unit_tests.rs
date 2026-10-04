@@ -26,6 +26,7 @@ mod tests {
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_core::user::repository::MockUserRepository;
+    use rim_core::workspace_feature::repository::MockWorkspaceFeatureRepository;
     use rim_services::command::initiator::CommandInitiator;
     use rim_services::escalation::scheduler::MockEscalationScheduler;
     use rim_services::events::Observers;
@@ -80,12 +81,26 @@ mod tests {
         incident_repo: MockIncidentRepository,
         server_member_repo: MockServerMemberRepository,
     ) -> DefaultIncidentService {
+        build_service_with(
+            incident_repo,
+            server_member_repo,
+            MockConversationRepository::new(),
+            MockWorkspaceFeatureRepository::all_enabled(),
+        )
+    }
+
+    fn build_service_with(
+        incident_repo: MockIncidentRepository,
+        server_member_repo: MockServerMemberRepository,
+        conversation_repo: MockConversationRepository,
+        workspace_feature_repo: MockWorkspaceFeatureRepository,
+    ) -> DefaultIncidentService {
         DefaultIncidentService::new(
             IncidentRepos {
                 incident_repo: Arc::new(incident_repo),
                 incident_phase_repo: Arc::new(MockIncidentPhaseRepository::new()),
                 incident_message_tag_repo: Arc::new(MockIncidentMessageTagRepository::new()),
-                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
                 user_repo: Arc::new(MockUserRepository::new()),
@@ -99,6 +114,7 @@ mod tests {
                 rotation_layer_repo: Arc::new(MockRotationLayerRepository::new()),
                 rotation_participant_repo: Arc::new(MockRotationParticipantRepository::new()),
                 on_call_override_repo: Arc::new(MockOnCallOverrideRepository::new()),
+                workspace_feature_repo: Arc::new(workspace_feature_repo),
             },
             None,
             Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
@@ -281,6 +297,9 @@ mod tests {
                 rotation_layer_repo: Arc::new(MockRotationLayerRepository::new()),
                 rotation_participant_repo: Arc::new(MockRotationParticipantRepository::new()),
                 on_call_override_repo: Arc::new(MockOnCallOverrideRepository::new()),
+                workspace_feature_repo: std::sync::Arc::new(
+                    MockWorkspaceFeatureRepository::all_enabled(),
+                ),
             },
             None,
             Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
@@ -644,6 +663,9 @@ mod tests {
                 rotation_layer_repo: Arc::new(MockRotationLayerRepository::new()),
                 rotation_participant_repo: Arc::new(MockRotationParticipantRepository::new()),
                 on_call_override_repo: Arc::new(MockOnCallOverrideRepository::new()),
+                workspace_feature_repo: std::sync::Arc::new(
+                    MockWorkspaceFeatureRepository::all_enabled(),
+                ),
             },
             None,
             Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
@@ -962,6 +984,9 @@ mod tests {
                 rotation_layer_repo: Arc::new(MockRotationLayerRepository::new()),
                 rotation_participant_repo: Arc::new(MockRotationParticipantRepository::new()),
                 on_call_override_repo: Arc::new(MockOnCallOverrideRepository::new()),
+                workspace_feature_repo: std::sync::Arc::new(
+                    MockWorkspaceFeatureRepository::all_enabled(),
+                ),
             },
             None,
             Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
@@ -2482,5 +2507,116 @@ mod tests {
             .await
             .expect("must succeed");
         assert!(result.is_none());
+    }
+
+    // ── Track 0.4: `incidents` workspace feature gate ────────────────────────
+
+    #[tokio::test]
+    async fn start_incident_rejected_when_incidents_feature_disabled() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut incident_repo = MockIncidentRepository::new();
+        incident_repo.expect_create().never();
+
+        let svc = build_service_with(
+            incident_repo,
+            server_member_repo,
+            MockConversationRepository::new(),
+            MockWorkspaceFeatureRepository::all_disabled(),
+        );
+
+        let err = svc
+            .start_incident(rim_services::incident::command::StartIncidentCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: ConversationId::new(),
+                title: "db down".to_string(),
+                severity: Some(IncidentSeverity::Sev1),
+                escalation_policy_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::FeatureDisabled { feature } if feature == "incidents"),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_incident_checks_membership_before_feature_gate() {
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(false));
+        // No expectation on the feature repo: a non-member must not learn the flag's value.
+        let svc = build_service_with(
+            MockIncidentRepository::new(),
+            server_member_repo,
+            MockConversationRepository::new(),
+            MockWorkspaceFeatureRepository::new(),
+        );
+
+        let err = svc
+            .start_incident(rim_services::incident::command::StartIncidentCmd {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+                conversation_id: ConversationId::new(),
+                title: "db down".to_string(),
+                severity: None,
+                escalation_policy_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn get_active_incident_returns_none_when_incidents_feature_disabled() {
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            Box::pin(async move {
+                Ok(Some(rim_core::conversation::model::Conversation {
+                    id: conversation_id,
+                    server_id,
+                    conversation_type: rim_core::conversation::model::ConversationType::Channel,
+                    title: Some("ops".to_string()),
+                    topic: None,
+                    created_at: Utc::now(),
+                    last_activity_at: Utc::now(),
+                }))
+            })
+        });
+        // The active incident row still exists; the gate hides it without reading it.
+        let mut incident_repo = MockIncidentRepository::new();
+        incident_repo.expect_find_active_by_conversation().never();
+
+        let svc = build_service_with(
+            incident_repo,
+            server_member_repo,
+            conversation_repo,
+            MockWorkspaceFeatureRepository::all_disabled(),
+        );
+
+        let active = svc
+            .get_active_incident(rim_services::incident::command::GetActiveIncidentQuery {
+                actor: Actor::new(UserId::new()),
+                server_id,
+                conversation_id,
+            })
+            .await
+            .unwrap();
+        assert!(active.is_none());
     }
 }

@@ -69,6 +69,7 @@ mod tests {
     use rim_services::server_member::dto::ServerMemberDto;
     use rim_services::server_member::service::MockServerMemberService;
     use rim_services::user::service::MockUserService;
+    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
     use rim_services::workspace_state::service::MockWorkspaceStateService;
 
     use crate::command::CommandServices;
@@ -110,6 +111,9 @@ mod tests {
             ),
             oncall_service: std::sync::Arc::new(
                 rim_services::oncall::service::MockOnCallService::new(),
+            ),
+            workspace_feature_service: std::sync::Arc::new(
+                MockWorkspaceFeatureService::all_enabled(),
             ),
         }
     }
