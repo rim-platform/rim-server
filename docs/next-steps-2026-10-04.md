@@ -55,8 +55,8 @@ workspace-shared plugins) is the main investment; Track 1 is a bounded "enough c
 
 ## Decisions needed (Jakub)
 
-See `ROADMAP.md` "Open Decisions" for the full list (direction, voice, terminal, pack default,
-roles model, mobile). Carried items:
+See `ROADMAP.md` "Open Decisions" for the full list (terminal, incidents-as-plugin, web plugin runtime, E2EE scope,
+decentralization model, roles depth, mobile). Carried items:
 
 1. **`oncall.take_shift` authorization**: genuinely self-service for one's own shift, or stay
    Owner/Moderator gated. Affects agentic macros that include it.
