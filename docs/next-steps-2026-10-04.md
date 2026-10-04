@@ -45,12 +45,13 @@ Still open from the reviews (confirmed still true today):
 
 ## Plan
 
-Superseded the same day: Jakub redirected the product from the incident wedge to the
-general-purpose direction. The plan now lives in `ROADMAP.md` (rebuilt 2026-10-04). Its Track 0
-(desktop RCE fixes, terminal decision, per-workspace pack toggle, repo hygiene) is the first
-job; Track 1 (private channels, roles and moderation, notification rules, rich messages) is the
-first feature work. The incident pack is finished opportunistically (Track 4.1) and is no longer
-on the critical path. The "Known debt" list above is folded into the roadmap's debt section.
+Superseded the same day: Jakub reset the direction from the incident wedge to a programmable
+communication workspace that is not a Discord or Slack replacement, with end-to-end encryption
+and decentralization as committed horizons. The plan now lives in `ROADMAP.md` (rebuilt
+2026-10-04). Track 0 (desktop RCE fixes, terminal decision, repo hygiene, optional incident
+module) is the first job; Track 2 (plugin SDK, the Kubernetes pods panel, web-capable and
+workspace-shared plugins) is the main investment; Track 1 is a bounded "enough chat" list. The
+"Known debt" list above is folded into the roadmap's debt section.
 
 ## Decisions needed (Jakub)
 
