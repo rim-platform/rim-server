@@ -155,7 +155,8 @@ pub fn sanitize_nl_text(input: &str, max_len: usize) -> Result<String, SanitizeE
 ///
 /// Intended call sites:
 /// - `rim_infra_services::command::registry` at built-in registration
-/// - `rim_services::plugin_host::manifest` at plugin install
+/// - plugin install (the plugin host lives client-side in
+///   `rim-ui/src-tauri/src/plugin_host/`; not yet wired to this helper)
 /// - Phase 2 generator when synthesizing `ai_callable: true` definitions
 ///   from declarative manifests
 ///

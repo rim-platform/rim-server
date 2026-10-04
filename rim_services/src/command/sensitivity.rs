@@ -121,14 +121,16 @@ impl CommandSensitivityDto {
     /// that has not yet been audited per-command (Phase 1 default policy):
     /// `dangerous: true` → `Restricted`, `dangerous: false` → `Safe`.
     ///
-    /// Three call sites depend on this mapping:
+    /// Two call sites depend on this mapping:
     ///
-    /// 1. `LocalPluginManifestCommandDto::as_command_definition` (plugin path)
-    /// 2. `UserCommandDto::as_command_definition_with_metadata` (user macro path)
-    /// 3. Built-in `registry.rs` literals (still hand-written so Phase 4 can
+    /// 1. `UserCommandDto::as_command_definition_with_metadata` (user macro path)
+    /// 2. Built-in `registry.rs` literals (still hand-written so Phase 4 can
     ///    diverge per-command without touching this helper)
     ///
-    /// Per Hawkeye Gate 2 strong WARN — drift between three copies of the
+    /// (Plugin manifests are mapped client-side by the plugin host in
+    /// `rim-ui/src-tauri/src/plugin_host/`.)
+    ///
+    /// Per Hawkeye Gate 2 strong WARN — drift between copies of the
     /// same if/else is exactly the failure mode this helper exists to prevent.
     /// Phase 4 will tune per-command tiers and the call sites here will start
     /// to override; that override happens at the call site, not in this helper.

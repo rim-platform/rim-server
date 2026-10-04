@@ -22,6 +22,8 @@
 | S-M5 storage quota not enforced | **Fixed** (declared size reserved for the 15-minute upload ticket; uploads validated before any write and capped at the declared size) |
 | S-L5 reset token check-then-mark not atomic | **Fixed** (with S-M1: conditional `UPDATE ... WHERE used_at IS NULL`) |
 | A-H1 `BEFORE` pagination | Paginator reworked; not re-verified end to end |
+| A-L11 dead `rim_services/plugin_host` | **Fixed** for the dead-code part (module deleted 2026-10-04); the `actual_state.md` doc-drift parts were not re-checked |
+| CI `cargo audit` warning-only (strengths honesty note) | **Fixed** (`security_audit` job is blocking; ignores with justifications in `.cargo/audit.toml`) |
 
 Everything not listed has not been re-checked. Update this table when fixing a finding.
 
