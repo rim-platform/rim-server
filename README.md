@@ -87,7 +87,8 @@ cargo test -p rim_api --features e2e-tests -- --test-threads=1
 cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 ```
 
-CI runs fmt, clippy, the full test suite single-threaded, a 95% line-coverage gate,
+CI runs fmt, clippy, the full test suite single-threaded, a 75% line-coverage gate
+(temporarily lowered from 95%),
 `cargo audit`, and a Docker build. See `CLAUDE.md` for migration and entity-generation rules.
 
 ## Docs
