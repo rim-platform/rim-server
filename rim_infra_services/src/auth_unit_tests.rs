@@ -2977,7 +2977,7 @@ mod tests {
         user_repo
             .expect_find_by_username()
             .times(4)
-            .returning(move |name| Ok((name.eq_ignore_ascii_case("victim")).then(|| user.clone())));
+            .returning(move |name| Ok((name == "victim").then(|| user.clone())));
         let mut session_repo = MockSessionRepository::new();
         session_repo
             .expect_create_session()
@@ -3108,5 +3108,178 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    /// Mocks for login tests against one real account `victim` / `correct-horse`; any other
+    /// username is unknown.
+    fn victim_login_mocks(user_id: UserId) -> (MockUserRepository, MockSessionRepository) {
+        let mut user = make_user(user_id, "victim");
+        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+        let mut user_repo = MockUserRepository::new();
+        // Exact match, like the real repository: usernames are case-sensitive.
+        user_repo
+            .expect_find_by_username()
+            .returning(move |name| Ok((name == "victim").then(|| user.clone())));
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
+        (user_repo, session_repo)
+    }
+
+    #[tokio::test]
+    async fn login_known_source_skips_tripped_account_backstop() {
+        let user_id = UserId::new();
+        let (user_repo, session_repo) = victim_login_mocks(user_id);
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 100),
+            RegistrationRateLimiter::new(3600, 2),
+        );
+
+        // The owner signs in from home, making it a known source.
+        svc.login(login_cmd("victim", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap();
+
+        // A distributed guesser trips the per-username backstop...
+        for ip in ["6.6.6.1", "6.6.6.2"] {
+            let err = svc
+                .login(login_cmd("victim", "guess", ip))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+        let err = svc
+            .login(login_cmd("victim", "guess", "6.6.6.3"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+        // ...which also holds back the owner on a new address...
+        let err = svc
+            .login(login_cmd("victim", "correct-horse", "7.7.7.7"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+
+        // ...but not from home.
+        let res = svc
+            .login(login_cmd("victim", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap();
+        assert_eq!(res.user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn login_known_source_still_has_pair_limit_and_spares_backstop() {
+        let user_id = UserId::new();
+        let (user_repo, session_repo) = victim_login_mocks(user_id);
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 2),
+            RegistrationRateLimiter::new(3600, 1),
+        );
+
+        svc.login(login_cmd("victim", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap();
+
+        // Failures from a known source are still held to the strict pair limit...
+        for _ in 0..2 {
+            let err = svc
+                .login(login_cmd("victim", "typo", "1.1.1.1"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Unauthenticated));
+        }
+        let err = svc
+            .login(login_cmd("victim", "typo", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+
+        // ...but didn't spend the backstop, so another address still gets its one slot.
+        let err = svc
+            .login(login_cmd("victim", "guess", "2.2.2.2"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn login_failure_does_not_make_a_source_known() {
+        let (user_repo, session_repo) = victim_login_mocks(UserId::new());
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 100),
+            RegistrationRateLimiter::new(3600, 1),
+        );
+
+        // A failed attempt from 6.6.6.6 spends the single backstop slot...
+        let err = svc
+            .login(login_cmd("victim", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+        // ...and doesn't earn that address the bypass.
+        let err = svc
+            .login(login_cmd("victim", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }));
+    }
+
+    #[tokio::test]
+    async fn login_to_a_case_variant_account_does_not_exempt_the_other() {
+        let mut victim = make_user(UserId::new(), "alice");
+        victim.password_hash = rim_auth::password::hash_password("victim-pass").unwrap();
+        let mut attacker = make_user(UserId::new(), "Alice");
+        attacker.password_hash = rim_auth::password::hash_password("attacker-pass").unwrap();
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .returning(move |name| match name {
+                "alice" => Ok(Some(victim.clone())),
+                "Alice" => Ok(Some(attacker.clone())),
+                _ => Ok(None),
+            });
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
+
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 100),
+            RegistrationRateLimiter::new(900, 100),
+            RegistrationRateLimiter::new(3600, 1),
+        );
+
+        // The attacker signs in to their own "Alice" account from 6.6.6.6...
+        svc.login(login_cmd("Alice", "attacker-pass", "6.6.6.6"))
+            .await
+            .unwrap();
+        // ...which must not exempt 6.6.6.6 from alice's backstop.
+        let err = svc
+            .login(login_cmd("alice", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated));
+        let err = svc
+            .login(login_cmd("alice", "guess", "6.6.6.6"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::RateLimited { .. }),
+            "6.6.6.6 must still be held to alice's backstop"
+        );
     }
 }

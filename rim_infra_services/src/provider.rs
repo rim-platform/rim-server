@@ -102,15 +102,20 @@ impl DefaultAppServiceProvider {
         escalation_scheduler: Arc<dyn EscalationScheduler>,
     ) -> Self {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
-        let auth_service: Arc<dyn AuthService> = Arc::new(crate::auth::DefaultAuthService::new(
-            repos.for_auth(),
-            Some(db.clone()),
-            bootstrap_secret,
-            session_ttl,
-            observers.clone(),
-            Arc::clone(&email_sender),
-            public_base_url.clone(),
-        ));
+        // Shared so a password reset can forget the sources login exempts from its backstop.
+        let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
+        let auth_service: Arc<dyn AuthService> = Arc::new(
+            crate::auth::DefaultAuthService::new(
+                repos.for_auth(),
+                Some(db.clone()),
+                bootstrap_secret,
+                session_ttl,
+                observers.clone(),
+                Arc::clone(&email_sender),
+                public_base_url.clone(),
+            )
+            .with_known_login_sources(known_login_sources.clone()),
+        );
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
         );
@@ -156,13 +161,15 @@ impl DefaultAppServiceProvider {
                 repos.for_notification_preference(),
             ),
         );
-        let password_reset_service: Arc<dyn PasswordResetService> =
-            Arc::new(crate::password_reset::DefaultPasswordResetService::new(
+        let password_reset_service: Arc<dyn PasswordResetService> = Arc::new(
+            crate::password_reset::DefaultPasswordResetService::new(
                 repos.for_password_reset(),
                 Some(db.clone()),
                 Arc::clone(&email_sender),
                 public_base_url.clone(),
-            ));
+            )
+            .with_known_login_sources(known_login_sources),
+        );
         let pin_service: Arc<dyn PinService> = Arc::new(crate::pin::DefaultPinService::new(
             repos.for_pin(),
             pin_observers,

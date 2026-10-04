@@ -18,6 +18,7 @@ use rim_services::password_reset::service::PasswordResetService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::email::{EmailSender, templates};
+use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
@@ -42,6 +43,8 @@ pub struct DefaultPasswordResetService {
     /// e.g. `https://rim.example.com`. Used to build the `/reset-password/{token}` link. If
     /// unset, the email falls back to the bare token (dev-only — see `docs/email.md`).
     public_base_url: Option<String>,
+    /// Login's store of recent successful sources; a completed reset forgets the account's.
+    known_login_sources: Option<KnownLoginSources>,
 }
 
 impl DefaultPasswordResetService {
@@ -58,7 +61,15 @@ impl DefaultPasswordResetService {
             account_rate_limiter: RegistrationRateLimiter::password_reset_account_default(),
             email_sender,
             public_base_url,
+            known_login_sources: None,
         }
+    }
+
+    /// Forget the account's recent login sources on each completed reset, so addresses an
+    /// attacker signed in from with the old password lose their login-limit exemption.
+    pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
+        self.known_login_sources = Some(sources);
+        self
     }
 
     /// Replace the request limiters (per-IP requests, per-username requests).
@@ -258,6 +269,19 @@ impl PasswordResetService for DefaultPasswordResetService {
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        // The reset is committed, so a failure here only leaves the old sources exempt.
+        if let Some(sources) = &self.known_login_sources {
+            match self.repos.user_repo.get_by_id(record.user_id).await {
+                Ok(Some(user)) => sources.forget(&user.username),
+                Ok(None) => {}
+                Err(e) => warn!(
+                    error = %e,
+                    user_id = %record.user_id,
+                    "could not forget login sources after password reset"
+                ),
+            }
         }
 
         info!(
@@ -636,6 +660,11 @@ mod tests {
             .withf(move |id, _| *id == user_id)
             .times(1)
             .returning(|_, _| Ok(()));
+        user_repo
+            .expect_get_by_id()
+            .withf(move |id| *id == user_id)
+            .times(1)
+            .returning(move |id| Ok(Some(make_user(id, "alice", "alice@example.com"))));
 
         let mut session_repo = MockSessionRepository::new();
         session_repo
@@ -644,13 +673,18 @@ mod tests {
             .times(1)
             .returning(|_| Ok(3));
 
+        let known = KnownLoginSources::login_default();
+        let now = Utc::now();
+        known.record("6.6.6.6", "alice", now);
+        known.record("1.1.1.1", "bob", now);
         let svc = build_service_with_sessions(
             user_repo,
             token_repo,
             session_repo,
             crate::email::MockEmailSender::new(),
             None,
-        );
+        )
+        .with_known_login_sources(known.clone());
 
         svc.reset_password(ResetPasswordCmd {
             token: "rim_rst_valid".to_string(),
@@ -658,6 +692,12 @@ mod tests {
         })
         .await
         .unwrap();
+
+        assert!(
+            !known.is_known("6.6.6.6", "alice", now),
+            "a reset must forget the account's login sources"
+        );
+        assert!(known.is_known("1.1.1.1", "bob", now));
     }
 
     #[tokio::test]
