@@ -138,6 +138,7 @@ TRUNCATE TABLE
   user_command,
   user_skill_profile,
   "user",
+  workspace_feature,
   workspace_ingest_token,
   workspace_state
 RESTART IDENTITY CASCADE;
