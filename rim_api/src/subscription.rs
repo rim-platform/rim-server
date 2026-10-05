@@ -203,6 +203,17 @@ fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) 
             .iter()
             .any(|id| id.to_string() == user_id),
 
+        // NotificationDue (Track 1.3) is for its one recipient: both the serialized `user_id`
+        // and the scoping list (`[user_id]`) must name the subscriber, guest or not.
+        WorkspaceEvent::NotificationDue {
+            user_id: event_user_id,
+            member_user_ids,
+            ..
+        } => {
+            event_user_id.to_string() == user_id
+                && member_user_ids.iter().any(|id| id.to_string() == user_id)
+        }
+
         // WorkspaceStateChanged: server-scope visible to all, user-scope only to owning user
         WorkspaceEvent::WorkspaceStateChanged {
             scope,
@@ -733,5 +744,80 @@ mod tests {
                 ]
             )
         );
+    }
+
+    // ── Track 1.3: NotificationDue ──
+
+    fn notification_due(recipient: UserId) -> WorkspaceEvent {
+        WorkspaceEvent::NotificationDue {
+            workspace_id: ServerId::new(),
+            user_id: recipient,
+            notification_id: rim_core::notification::model::UserNotificationId::new(),
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+            reason: "mention".to_string(),
+            quiet: true,
+            member_user_ids: vec![recipient],
+        }
+    }
+
+    /// A per-user event reaches its recipient only: not other members, not guests, not even
+    /// conversation members of the message's conversation.
+    #[test]
+    fn notification_due_reaches_only_its_recipient() {
+        let recipient = UserId::new();
+        let other = UserId::new();
+        let event = notification_due(recipient);
+        assert!(user_can_see_event(&event, &recipient.to_string()));
+        assert!(user_can_see_event_as(&event, &recipient.to_string(), true));
+        assert!(!user_can_see_event(&event, &other.to_string()));
+        assert!(!user_can_see_event_as(&event, &other.to_string(), true));
+        assert_eq!(event.member_user_ids(), Some(&[recipient][..]));
+    }
+
+    /// Defence in depth: a malformed event whose scoping list disagrees with `user_id` is
+    /// delivered to nobody else.
+    #[test]
+    fn notification_due_requires_user_id_and_scope_to_agree() {
+        let recipient = UserId::new();
+        let intruder = UserId::new();
+        let event = WorkspaceEvent::NotificationDue {
+            workspace_id: ServerId::new(),
+            user_id: recipient,
+            notification_id: rim_core::notification::model::UserNotificationId::new(),
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+            reason: "all".to_string(),
+            quiet: false,
+            member_user_ids: vec![intruder],
+        };
+        assert!(!user_can_see_event(&event, &intruder.to_string()));
+        assert!(!user_can_see_event(&event, &recipient.to_string()));
+    }
+
+    /// The wire shape documented in `docs/messaging.md`; the scoping list never reaches it.
+    #[test]
+    fn notification_due_wire_shape() {
+        let recipient = UserId::new();
+        let json = serde_json::to_value(notification_due(recipient)).expect("serialize");
+        let mut keys: Vec<String> = json.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "conversation_id",
+                "message_id",
+                "notification_id",
+                "quiet",
+                "reason",
+                "type",
+                "user_id",
+                "workspace_id",
+            ]
+        );
+        assert_eq!(json["type"], "NotificationDue");
+        assert_eq!(json["reason"], "mention");
+        assert_eq!(json["quiet"], true);
+        assert_eq!(json["user_id"], recipient.to_string());
     }
 }

@@ -181,6 +181,78 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
 
+## Notification Rules (Track 1.3)
+
+The server decides, once per message, who is told about it (`docs/specs/track-1-3-notification-rules.md`).
+For every recipient it stores a notification (the inbox, the bell badge and the email digest) and
+sends that user a private `NotificationDue` event; clients only render what the server decided.
+Sound and preview stay device-local client settings.
+
+### Settings
+
+- **Per-conversation level** (`setConversationNotificationLevel`, `Conversation.notificationLevel`):
+  `ALL`, `MENTIONS` or `NONE`; null inherits the workspace default.
+  `Conversation.effectiveNotificationLevel` is what applies now: `NONE` while a timed mute is in
+  effect, else the conversation level, else the workspace default.
+- **Workspace settings** (`myNotificationSettings`, `updateNotificationSettings`), per user and
+  workspace: `defaultLevel` (default `ALL`), `keywords` (at most 20, each 2 to 40 characters after
+  trimming, stored lower-cased and deduplicated), a daily do-not-disturb window `dnd`
+  (`start`/`end` as `"HH:MM"` in an IANA `timezone`; crosses midnight when `end < start`; `start`
+  must differ from `end`), and `digest` (`OFF`, `HOURLY`, `DAILY`; `docs/email.md`).
+- **Do-not-disturb pause** (`setDoNotDisturb`, command `notifications.dnd`): on until turned off,
+  or until an instant (`dndPaused`, `dndPausedUntil`). It is separate from the daily window and
+  `updateNotificationSettings` leaves it alone.
+- **Mutes** keep working: `muteConversation` with `mutedUntil` is a timed `NONE` (it clears a
+  `NONE` level so the mute really ends; another level stays); without `mutedUntil` it sets level
+  `NONE`. `unmuteConversation` clears `mutedUntil` and a `NONE` level. `isMuted` is true for a
+  timed mute in effect or level `NONE`; `mutedConversations` lists rows with level `NONE` or any
+  `mutedUntil`.
+
+### The decision, per member except the author
+
+1. Candidates are the conversation's members (the list its events go to): a private channel
+   never notifies a non-member, and a public-channel reader who has not joined is not notified.
+   A timeout does not affect receiving.
+2. A timed mute in effect yields nothing.
+3. Effective level = conversation level, else workspace default. `NONE` yields nothing, direct
+   messages and mentions included.
+4. Reason, strongest first: `direct` (a Direct conversation), `mention` (`<@user>` naming the
+   member, or `@channel` / `@here` as a whole word), `keyword` (a keyword as a whole word,
+   case-insensitive, outside `<@…>` tokens), `thread_reply` (a reply in a thread whose root the
+   member wrote or where they replied), else `all`.
+5. `MENTIONS` admits every reason but `all`; `ALL` admits everything.
+6. Inside the do-not-disturb window (in the user's timezone) or pause the notification is still
+   stored, but the event carries `quiet: true` so clients neither toast nor play a sound.
+
+One message yields at most one notification per user (unique `(user, message)`). Notifications
+are created after the message commits (`sendMessage`, `replyToMessage`, and forwards into the
+target conversation) and best-effort: a failure is logged and never fails the send. Edits do not
+notify again. Deleting a message deletes its unread notifications (read ones stay).
+`UserMentioned` is still emitted for the mentions view.
+
+### Inbox
+
+- `myNotifications(serverId, unreadOnly, dir, cursor, limit)`: newest first (`createdAt DESC,
+  id DESC`, standard cursors; `AFTER` goes to older ones). Each item has `reason`, `createdAt`,
+  `readAt` and nested `conversation` / `message`, which are null once the viewer can no longer
+  read the conversation.
+- `myUnreadNotificationCount(serverId)`; `markNotificationsRead(serverId, ids | allBefore)`
+  (exactly one; returns how many changed; ids of other users are ignored).
+- `markAsRead` on a conversation also marks its notifications for messages sent up to `readAt`
+  read, in the same transaction; `markAllAsRead` marks every notification of the workspace read.
+- Notifications older than 90 days are deleted hourly.
+
+### `NotificationDue` event
+
+```json
+{"type": "NotificationDue", "workspace_id": "…", "user_id": "…", "notification_id": "…",
+ "conversation_id": "…", "message_id": "…", "reason": "mention", "quiet": false}
+```
+
+`reason` is `direct`, `mention`, `keyword`, `thread_reply` or `all`. The event is delivered only
+to `user_id` (the server-side scope list is `[user_id]`), guests included; it is a new variant and
+no existing event changed.
+
 ## Titles
 
 - `Channel` and `Group` conversations may have an optional `title`.
