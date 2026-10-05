@@ -1,13 +1,169 @@
 use serde_json::Value;
 
-use rim_services::conversation::command::CreateConversationCmd;
+use rim_services::conversation::command::{
+    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, JoinChannelCmd,
+    LeaveConversationCmd, RemoveConversationMemberCmd,
+};
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::{Actor, ServiceResult};
 
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 
-use super::{optional_string_arg, parse_uuid_array_arg, resolve_workspace_id};
+use super::{
+    optional_string_arg, parse_uuid_arg, parse_uuid_array_arg, resolve_conversation_id,
+    resolve_workspace_id,
+};
+
+fn success(message: &str, payload: serde_json::Value) -> CommandResultDto {
+    CommandResultDto {
+        status: CommandResultStatusDto::Success,
+        message: message.to_string(),
+        payload: Some(payload),
+        follow_up_commands: vec![],
+        pipeline_stages: None,
+        confirmation_required: None,
+    }
+}
+
+/// The `(server_id, conversation_id)` pair every membership command targets, each from its arg
+/// or, when omitted, from the focused workspace/conversation in `context`.
+fn resolve_target(
+    args: &serde_json::Map<String, Value>,
+    context: Option<&CommandContextDto>,
+) -> ServiceResult<(
+    rim_core::server::model::ServerId,
+    rim_core::conversation::model::ConversationId,
+)> {
+    Ok((
+        resolve_workspace_id(args, context, "server_id")?,
+        resolve_conversation_id(args, context, "conversation_id")?,
+    ))
+}
+
+pub(super) async fn join_channel(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    let conversation = services
+        .conversation_service
+        .join_channel(JoinChannelCmd {
+            actor,
+            server_id,
+            conversation_id,
+        })
+        .await?;
+    Ok(success(
+        "joined channel",
+        serde_json::json!({ "conversation_id": conversation.id.to_string() }),
+    ))
+}
+
+pub(super) async fn leave_conversation(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    services
+        .conversation_service
+        .leave_conversation(LeaveConversationCmd {
+            actor,
+            server_id,
+            conversation_id,
+        })
+        .await?;
+    Ok(success(
+        "left conversation",
+        serde_json::json!({ "conversation_id": conversation_id.to_string() }),
+    ))
+}
+
+pub(super) async fn invite_to_conversation(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    let user_ids = parse_uuid_array_arg::<rim_core::user::model::UserId>(&args, "user_ids")?;
+    let conversation = services
+        .conversation_service
+        .add_conversation_members(AddConversationMembersCmd {
+            actor,
+            server_id,
+            conversation_id,
+            user_ids,
+        })
+        .await?;
+    Ok(success(
+        "members added",
+        serde_json::json!({
+            "conversation_id": conversation.id.to_string(),
+            "member_count": conversation.member_count(),
+        }),
+    ))
+}
+
+pub(super) async fn set_channel_archived(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+    archived: bool,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    let conversation = services
+        .conversation_service
+        .set_conversation_archived(ArchiveConversationCmd {
+            actor,
+            server_id,
+            conversation_id,
+            archived,
+        })
+        .await?;
+    Ok(success(
+        if archived {
+            "channel archived"
+        } else {
+            "channel unarchived"
+        },
+        serde_json::json!({
+            "conversation_id": conversation.id.to_string(),
+            "archived": conversation.is_archived(),
+        }),
+    ))
+}
+
+pub(super) async fn remove_conversation_member(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    let user_id = parse_uuid_arg::<rim_core::user::model::UserId>(&args, "user_id")?;
+    services
+        .conversation_service
+        .remove_conversation_member(RemoveConversationMemberCmd {
+            actor,
+            server_id,
+            conversation_id,
+            user_id,
+        })
+        .await?;
+    Ok(success(
+        "member removed",
+        serde_json::json!({
+            "conversation_id": conversation_id.to_string(),
+            "user_id": user_id.to_string(),
+        }),
+    ))
+}
 
 pub(super) async fn create_group(
     services: &CommandServices,
@@ -28,6 +184,7 @@ pub(super) async fn create_group(
             server_id,
             participants: ConversationParticipants::Group { member_ids },
             title: optional_string_arg(&args, "title"),
+            is_private: false,
         })
         .await?;
 
@@ -118,6 +275,9 @@ mod tests {
             title: None,
             topic: None,
             member_ids: vec![],
+            is_private: false,
+            archived_at: None,
+            created_by: None,
         }
     }
 
@@ -218,5 +378,173 @@ mod tests {
             assert!(msg.contains("server_id"));
             assert!(msg.contains("context.workspace_id"));
         }
+    }
+
+    // ── Track 1.1 membership/archive commands ──
+
+    fn ctx_with_conversation(ws: ServerId, conversation_id: ConversationId) -> CommandContextDto {
+        CommandContextDto {
+            conversation_id: Some(conversation_id),
+            ..ctx_with(ws)
+        }
+    }
+
+    fn channel_dto(ws: ServerId, id: ConversationId) -> ConversationDto {
+        ConversationDto {
+            id,
+            conversation_type: ConversationType::Channel,
+            ..fake_group(ws)
+        }
+    }
+
+    /// Palette/keybind path: the focused conversation comes from the context.
+    #[tokio::test]
+    async fn join_channel_uses_context_conversation() {
+        let ws = ServerId::new();
+        let cid = ConversationId::new();
+        let mut conv = MockConversationService::new();
+        conv.expect_join_channel()
+            .withf(move |cmd| cmd.server_id == ws && cmd.conversation_id == cid)
+            .return_once(move |_| Box::pin(async move { Ok(channel_dto(ws, cid)) }));
+        let svc = make_services(conv);
+        let result = super::join_channel(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_with_conversation(ws, cid)),
+        )
+        .await
+        .expect("join");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        assert_eq!(
+            result.payload.expect("payload")["conversation_id"],
+            cid.to_string()
+        );
+    }
+
+    /// Agent path: an explicit `conversation_id` arg wins over the context.
+    #[tokio::test]
+    async fn leave_conversation_arg_wins_over_context() {
+        let ws = ServerId::new();
+        let arg_cid = ConversationId::new();
+        let mut conv = MockConversationService::new();
+        conv.expect_leave_conversation()
+            .withf(move |cmd| cmd.conversation_id == arg_cid)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+        let svc = make_services(conv);
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "conversation_id".to_string(),
+            serde_json::Value::String(arg_cid.to_string()),
+        );
+        super::leave_conversation(
+            &svc,
+            actor(),
+            args,
+            Some(ctx_with_conversation(ws, ConversationId::new())),
+        )
+        .await
+        .expect("leave");
+    }
+
+    #[tokio::test]
+    async fn membership_command_without_conversation_is_validation() {
+        let svc = make_services(MockConversationService::new());
+        let err = super::join_channel(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_with(ServerId::new())),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, rim_services::ServiceError::Validation(msg) if msg.contains("conversation_id")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invite_to_conversation_passes_user_ids() {
+        let ws = ServerId::new();
+        let cid = ConversationId::new();
+        let users = vec![UserId::new(), UserId::new()];
+        let expected = users.clone();
+        let mut conv = MockConversationService::new();
+        conv.expect_add_conversation_members()
+            .withf(move |cmd| cmd.conversation_id == cid && cmd.user_ids == expected)
+            .return_once(move |_| Box::pin(async move { Ok(channel_dto(ws, cid)) }));
+        let svc = make_services(conv);
+        let mut args = serde_json::Map::new();
+        args.insert("user_ids".to_string(), member_ids_arg(&users));
+        super::invite_to_conversation(&svc, actor(), args, Some(ctx_with_conversation(ws, cid)))
+            .await
+            .expect("invite");
+    }
+
+    #[tokio::test]
+    async fn archive_and_unarchive_pass_the_flag() {
+        for archived in [true, false] {
+            let ws = ServerId::new();
+            let cid = ConversationId::new();
+            let mut conv = MockConversationService::new();
+            conv.expect_set_conversation_archived()
+                .withf(move |cmd| cmd.archived == archived && cmd.conversation_id == cid)
+                .return_once(move |_| {
+                    Box::pin(async move {
+                        Ok(ConversationDto {
+                            archived_at: archived.then(chrono::Utc::now),
+                            ..channel_dto(ws, cid)
+                        })
+                    })
+                });
+            let svc = make_services(conv);
+            let result = super::set_channel_archived(
+                &svc,
+                actor(),
+                serde_json::Map::new(),
+                Some(ctx_with_conversation(ws, cid)),
+                archived,
+            )
+            .await
+            .expect("archive flag");
+            assert_eq!(result.payload.expect("payload")["archived"], archived);
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_conversation_member_requires_user_id() {
+        let ws = ServerId::new();
+        let cid = ConversationId::new();
+        let target = UserId::new();
+        let svc = make_services(MockConversationService::new());
+        let err = super::remove_conversation_member(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_with_conversation(ws, cid)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, rim_services::ServiceError::Validation(_)));
+
+        let mut conv = MockConversationService::new();
+        conv.expect_remove_conversation_member()
+            .withf(move |cmd| cmd.user_id == target && cmd.conversation_id == cid)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+        let svc = make_services(conv);
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "user_id".to_string(),
+            serde_json::Value::String(target.to_string()),
+        );
+        super::remove_conversation_member(
+            &svc,
+            actor(),
+            args,
+            Some(ctx_with_conversation(ws, cid)),
+        )
+        .await
+        .expect("remove");
     }
 }

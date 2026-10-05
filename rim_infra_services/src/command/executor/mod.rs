@@ -50,6 +50,22 @@ pub(super) async fn execute_builtin_command(
         }
         "chat.edit_message" => chat_messages::edit_message(services, actor, args, context).await,
         "chat.create_group" => conversation::create_group(services, actor, args, context).await,
+        "chat.join_channel" => conversation::join_channel(services, actor, args, context).await,
+        "chat.leave_conversation" => {
+            conversation::leave_conversation(services, actor, args, context).await
+        }
+        "chat.invite_to_conversation" => {
+            conversation::invite_to_conversation(services, actor, args, context).await
+        }
+        "chat.archive_channel" => {
+            conversation::set_channel_archived(services, actor, args, context, true).await
+        }
+        "chat.unarchive_channel" => {
+            conversation::set_channel_archived(services, actor, args, context, false).await
+        }
+        "chat.remove_conversation_member" => {
+            conversation::remove_conversation_member(services, actor, args, context).await
+        }
         "chat.list_channels" => chat::list_channels(services, actor, args, context).await,
         "chat.create_channel" => chat::create_channel(services, actor, args, context).await,
         "chat.mark_as_read" => chat::mark_as_read(services, actor, args, context).await,
@@ -118,6 +134,16 @@ pub(super) fn optional_integer_arg(map: &serde_json::Map<String, Value>, key: &s
     match map.get(key)? {
         Value::Number(n) => n.as_i64(),
         Value::String(s) => s.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+/// Parse an optional boolean arg that may arrive as a JSON bool (preferred) or the strings
+/// `"true"`/`"false"` (agent providers that stringify tool arguments). Anything else is `None`.
+pub(super) fn optional_bool_arg(map: &serde_json::Map<String, Value>, key: &str) -> Option<bool> {
+    match map.get(key)? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => s.trim().parse::<bool>().ok(),
         _ => None,
     }
 }
@@ -224,6 +250,29 @@ where
     Err(ServiceError::Validation(format!(
         "missing workspace id: provide `{arg_name}` arg or `context.workspace_id`"
     )))
+}
+
+/// Like [`resolve_workspace_id`], for the conversation: a present, non-blank `arg_name` arg is
+/// parsed strictly; otherwise the focused conversation (`context.conversation_id`) is used, so a
+/// palette or keybind invocation acts on the conversation the user is looking at.
+pub(super) fn resolve_conversation_id(
+    args: &serde_json::Map<String, Value>,
+    context: Option<&CommandContextDto>,
+    arg_name: &str,
+) -> ServiceResult<rim_core::conversation::model::ConversationId> {
+    if let Some(raw) = args.get(arg_name).and_then(|v| v.as_str()) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let uuid = uuid::Uuid::parse_str(trimmed)
+                .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{arg_name}`")))?;
+            return Ok(uuid.into());
+        }
+    }
+    context.and_then(|c| c.conversation_id).ok_or_else(|| {
+        ServiceError::Validation(format!(
+            "missing conversation id: provide `{arg_name}` arg or `context.conversation_id`"
+        ))
+    })
 }
 
 pub(super) fn parse_uuid_array_arg<T>(

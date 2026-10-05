@@ -89,6 +89,27 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     default_value: None,
                     allowed_values: None,
                 },
+                CommandArgumentDto {
+                    name: "is_private".to_string(),
+                    title: "Private".to_string(),
+                    description: "Only invited members can see the channel. Cannot be changed \
+                                  later. Defaults to false."
+                        .to_string(),
+                    argument_type: CommandArgumentTypeDto::Boolean,
+                    required: false,
+                    default_value: Some(serde_json::Value::Bool(false)),
+                    allowed_values: None,
+                },
+                CommandArgumentDto {
+                    name: "member_ids".to_string(),
+                    title: "Members".to_string(),
+                    description: "Optional user ids to add as members right after creation."
+                        .to_string(),
+                    argument_type: CommandArgumentTypeDto::String,
+                    required: false,
+                    default_value: None,
+                    allowed_values: None,
+                },
             ],
             required_context: vec![],
             required_capabilities: vec!["chat.write".to_string()],
@@ -98,7 +119,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             dangerous: false,
             user_command_id: None,
             nl_description: Some(
-                "Create a new channel in the workspace. \
+                "Create a new channel in the workspace, public by default or private \
+                 (members only, set is_private) with optional initial members. \
                  Use when the user asks to create a new channel or start a new topic."
                     .to_string(),
             ),
@@ -106,6 +128,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "make a channel for the migration project".to_string(),
                 "create #incident-2026-04-24".to_string(),
                 "start a new channel called design-reviews".to_string(),
+                "create a private channel for the hiring committee".to_string(),
             ],
             ai_callable: true,
             sensitivity: CommandSensitivityDto::Mutating,

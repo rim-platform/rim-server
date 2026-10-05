@@ -89,6 +89,22 @@ RIM should support the following command sources.
 - Stable and documented.
 - Usually available in the command palette.
 
+Channel membership and archive builtins (Track 1.1, `docs/specs/track-1-1-private-channels.md`).
+All are `Backend`, `Mutating`, `chat.write`, palette- and keybind-visible. `conversation_id`
+falls back to the focused conversation (`context.conversation_id`). Authorization (membership,
+private-channel visibility, Owner/Moderator) lives in `ConversationService`, so the agent can
+never do more than the user it acts for.
+
+| Id | Args | AI-callable | Dangerous | Notes |
+|---|---|---|---|---|
+| `chat.create_channel` | `server_id`, `name`, `description?`, `is_private?` (default false), `member_ids?` | yes | no | Members are added right after creation; privacy cannot change later |
+| `chat.join_channel` | `server_id`, `conversation_id` | yes | no | Public, unarchived channels only; idempotent |
+| `chat.leave_conversation` | `server_id`, `conversation_id` | yes | no | Channels and groups, not DMs |
+| `chat.invite_to_conversation` | `server_id`, `conversation_id`, `user_ids` | yes | no | Caller must be a member |
+| `chat.archive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
+| `chat.unarchive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
+| `chat.remove_conversation_member` | `server_id`, `conversation_id`, `user_id` | no | yes | Owner/Moderator, or yourself; confirmation required |
+
 ### Plugin-Provided Commands
 
 - Registered by plugins.
