@@ -31,6 +31,9 @@ pub(crate) mod message;
 pub(crate) mod message_attachment;
 pub(crate) mod message_reaction;
 pub(crate) mod moderation;
+// pub(crate) promoted to pub: the notification digest/retention jobs are constructed directly
+// by the composition root (rim_server/src/app.rs), mirroring the escalation driver above.
+pub mod notification;
 pub(crate) mod notification_preference;
 // pub(crate) promoted to pub: DefaultOnCallService is constructed directly by the
 // who_is_on_call_matches_pure_resolver integration test (rim_infra_services/tests/oncall_db_test.rs)
@@ -81,6 +84,9 @@ mod message_unit_tests;
 mod moderation_unit_tests;
 
 #[cfg(test)]
+mod notification_unit_tests;
+
+#[cfg(test)]
 mod server_unit_tests;
 
 #[cfg(test)]
@@ -108,6 +114,7 @@ pub use custom_emoji::CustomEmojiRepos;
 pub use escalation::{EscalationPolicyRepos, InMemoryEscalationScheduler};
 pub use incident::IncidentRepos;
 pub use macro_def::MacroRepos;
+pub use notification::NotificationRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use oncall::OnCallRepos;
 pub use pipeline::PipelineRepos;
