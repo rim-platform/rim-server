@@ -9,6 +9,8 @@ pub struct Invite {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Role granted on join: `MEMBER` or `GUEST` (Track 1.2).
+    pub role: super::ServerMemberRoleGql,
 }
 
 impl From<rim_services::auth::dto::InviteDto> for Invite {
@@ -21,6 +23,7 @@ impl From<rim_services::auth::dto::InviteDto> for Invite {
             max_uses: value.max_uses,
             use_count: value.use_count,
             revoked_at: value.revoked_at,
+            role: value.role.into(),
         }
     }
 }

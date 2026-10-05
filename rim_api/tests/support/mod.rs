@@ -415,6 +415,9 @@ pub fn build_test_provider(
                 db.clone(),
             ),
         ),
+        moderation_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::moderation::SeaOrmModerationRepository::new(db.clone()),
+        ),
     };
 
     // No-op storage backend — file upload is not exercised here.

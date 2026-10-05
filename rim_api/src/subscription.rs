@@ -48,14 +48,24 @@ fn conversation_event_visible(
         || member_user_ids.iter().any(|id| id.to_string() == user_id)
 }
 
+/// [`user_can_see_event_as`] for a subscriber who is not a guest.
+#[cfg(test)]
+fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
+    user_can_see_event_as(event, user_id, false)
+}
+
 /// Check whether a subscriber should see a given workspace event.
 ///
-/// - Public channel events are visible to all workspace members.
+/// - Public channel events are visible to all workspace members, except guests (Track 1.2),
+///   who see a public channel's events only as its conversation members, as for a private
+///   channel.
 /// - Private channel, DM and group events are only visible to conversation members.
 /// - Conversation membership events (MemberAddedToConversation,
 ///   MemberRemovedFromConversation) are visible to the conversation's members (plus the removed
-///   user); MemberJoined and PresenceChanged to all workspace members.
-fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
+///   user); MemberJoined, MemberLeft, MemberRoleChanged and PresenceChanged to all workspace
+///   members. A guest, who has no full member directory, sees MemberJoined, MemberLeft and
+///   MemberRoleChanged only about themselves.
+fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) -> bool {
     match event {
         // Conversation-scoped events — public channel, else membership.
         WorkspaceEvent::NewMessage {
@@ -149,7 +159,12 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
             is_private,
             member_user_ids,
             ..
-        } => conversation_event_visible(conversation_type, *is_private, member_user_ids, user_id),
+        } => conversation_event_visible(
+            conversation_type,
+            *is_private || is_guest,
+            member_user_ids,
+            user_id,
+        ),
 
         // ReadStateUpdated — only visible to the owning user
         WorkspaceEvent::ReadStateUpdated {
@@ -158,7 +173,20 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
         } => event_user_id.to_string() == user_id,
 
         // Workspace-level events: visible to all workspace members
-        WorkspaceEvent::MemberJoined { .. } | WorkspaceEvent::PresenceChanged { .. } => true,
+        WorkspaceEvent::PresenceChanged { .. } => true,
+        // Directory events: everyone but guests, who only learn about themselves.
+        WorkspaceEvent::MemberJoined {
+            user_id: event_user_id,
+            ..
+        }
+        | WorkspaceEvent::MemberLeft {
+            user_id: event_user_id,
+            ..
+        }
+        | WorkspaceEvent::MemberRoleChanged {
+            user_id: event_user_id,
+            ..
+        } => !is_guest || event_user_id.to_string() == user_id,
 
         // Conversation membership events: only visible to conversation members
         WorkspaceEvent::MemberAddedToConversation {
@@ -222,13 +250,15 @@ impl Subscription {
             )?;
         let server_id =
             crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&workspace_id)?;
-        svc.get_member(rim_services::server_member::command::GetServerMemberQuery {
-            actor: rim_services::Actor::new(actor),
-            server_id,
-            user_id: actor,
-        })
-        .await
-        .map_err(crate::errors::map_service_error)?;
+        let me = svc
+            .get_member(rim_services::server_member::command::GetServerMemberQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+                user_id: actor,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        let initially_guest = me.member_role.is_guest();
 
         let presence = ctx.data::<Arc<dyn PresenceService>>()?;
         let broadcaster = ctx.data::<InMemoryBroadcaster>()?;
@@ -240,14 +270,33 @@ impl Subscription {
         // BroadcastStream ends on Lagged, so we use the raw receiver directly.
         let inner = async_stream::stream! {
             let mut rx = rx;
+            // Track 1.2: the subscriber's guest status follows their role changes, and the
+            // stream ends once they are removed from the workspace (kick/ban), after delivering
+            // the `MemberLeft` that tells their client.
+            let mut is_guest = initially_guest;
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if event.workspace_id() == ws_id
-                            && user_can_see_event(&event, &subscriber_user_id)
+                        if event.workspace_id() != ws_id {
+                            continue;
+                        }
+                        if let WorkspaceEvent::MemberRoleChanged { user_id, role, .. } = &event
+                            && user_id.to_string() == subscriber_user_id
+                        {
+                            is_guest = role == rim_core::server_member::model::ServerMemberRole::Guest.as_str();
+                        }
+                        let removed_self = matches!(
+                            &event,
+                            WorkspaceEvent::MemberLeft { user_id, .. }
+                                if user_id.to_string() == subscriber_user_id
+                        );
+                        if user_can_see_event_as(&event, &subscriber_user_id, is_guest)
                             && let Ok(json) = serde_json::to_string(&event) {
                                 yield json;
                             }
+                        if removed_self {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("WS subscriber lagged, skipped {n} events");
@@ -585,5 +634,104 @@ mod tests {
         let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["conversation_id", "type", "workspace_id"]);
+    }
+
+    // ── Track 1.2: guests and the new directory events ──
+
+    fn directory_events(workspace_id: ServerId, about: UserId) -> Vec<WorkspaceEvent> {
+        vec![
+            WorkspaceEvent::MemberJoined {
+                workspace_id,
+                user_id: about,
+                username: "sam".to_string(),
+            },
+            WorkspaceEvent::MemberLeft {
+                workspace_id,
+                user_id: about,
+            },
+            WorkspaceEvent::MemberRoleChanged {
+                workspace_id,
+                user_id: about,
+                role: "guest".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn directory_events_reach_members_and_only_self_for_guests() {
+        let subject = UserId::new();
+        let other = UserId::new();
+        for event in directory_events(ServerId::new(), subject) {
+            assert!(
+                user_can_see_event_as(&event, &other.to_string(), false),
+                "{event:?}"
+            );
+            assert!(
+                user_can_see_event_as(&event, &subject.to_string(), false),
+                "{event:?}"
+            );
+            assert!(
+                !user_can_see_event_as(&event, &other.to_string(), true),
+                "guest learned about someone else: {event:?}"
+            );
+            assert!(
+                user_can_see_event_as(&event, &subject.to_string(), true),
+                "{event:?}"
+            );
+        }
+    }
+
+    /// A guest sees a public channel's events only as one of its members.
+    #[test]
+    fn guest_sees_public_channel_events_only_as_member() {
+        let member = UserId::new();
+        let guest = UserId::new();
+        for event in conversation_scoped_events("Channel", false, vec![member]) {
+            assert!(
+                !user_can_see_event_as(&event, &guest.to_string(), true),
+                "public channel event leaked to a non-member guest: {event:?}"
+            );
+        }
+        for event in conversation_scoped_events("Channel", false, vec![guest]) {
+            assert!(
+                user_can_see_event_as(&event, &guest.to_string(), true),
+                "{event:?}"
+            );
+        }
+    }
+
+    /// The wire shape of the new variants (documented in `docs/messaging.md`).
+    #[test]
+    fn new_directory_variants_wire_shape() {
+        let keys = |event: &WorkspaceEvent| {
+            let json = serde_json::to_value(event).expect("serialize");
+            let mut keys: Vec<String> = json.as_object().expect("object").keys().cloned().collect();
+            keys.sort();
+            (json["type"].clone(), keys)
+        };
+        let events = directory_events(ServerId::new(), UserId::new());
+        assert_eq!(
+            keys(&events[1]),
+            (
+                serde_json::json!("MemberLeft"),
+                vec![
+                    "type".to_string(),
+                    "user_id".to_string(),
+                    "workspace_id".to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            keys(&events[2]),
+            (
+                serde_json::json!("MemberRoleChanged"),
+                vec![
+                    "role".to_string(),
+                    "type".to_string(),
+                    "user_id".to_string(),
+                    "workspace_id".to_string()
+                ]
+            )
+        );
     }
 }

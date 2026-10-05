@@ -201,6 +201,16 @@ This is especially important for:
 Full admin policy enforcement does not need to be implemented in the first version of this spec, but
 the roadmap should assume it will exist.
 
+## Command Execution Gate Order
+
+`execute_command` checks, in order: C1 capability (every required capability, workspace
+membership included) → H1 confirmation (dangerous commands) → F1 workspace feature (Track 0.4)
+→ T1 timeout (Track 1.2: a timed-out actor cannot run `Mutating`/`Restricted` commands in that
+workspace) → R1 rate limit. Every rejection is audited. F1 and T1 also run on nested dispatch
+(user-command steps, pipe stages). Workspace roles (Owner, Moderator, Member, Guest) are not
+capabilities: they are enforced by the services the commands call (`docs/messaging.md`, Roles
+And Moderation), so a command can never do more than the same action through GraphQL.
+
 ## Trust Boundaries
 
 RIM should make trust boundaries visible.

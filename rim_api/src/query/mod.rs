@@ -33,6 +33,7 @@ pub(crate) mod invite;
 pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
+pub(crate) mod moderation;
 pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod platform;
@@ -105,4 +106,5 @@ pub(crate) struct QueryGroup6(
     invite::RegistrationQueries,
     oncall::OnCallQueries,
     escalation::EscalationQueries,
+    moderation::ModerationQueries,
 );

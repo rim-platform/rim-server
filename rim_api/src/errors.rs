@@ -66,6 +66,14 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("code", Value::from("CONVERSATION_ARCHIVED"));
             })
         }
+        // Track 1.2: the actor is timed out in this workspace. `until` (RFC 3339) lets the
+        // client show when writing becomes possible again.
+        ServiceError::TimedOut { until } => {
+            Error::new(format!("timed out until {}", until.to_rfc3339())).extend_with(|_, e| {
+                e.set("code", Value::from("TIMED_OUT"));
+                e.set("until", Value::from(until.to_rfc3339()));
+            })
+        }
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
@@ -85,6 +93,15 @@ mod tests {
         assert_eq!(ext.get("code"), Some(&Value::from("FEATURE_DISABLED")));
         assert_eq!(ext.get("feature"), Some(&Value::from("incidents")));
         assert_eq!(err.message, "workspace feature `incidents` is disabled");
+    }
+
+    #[test]
+    fn timed_out_maps_to_timed_out_code_with_until() {
+        let until = chrono::Utc::now();
+        let err = map_service_error(ServiceError::TimedOut { until });
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("TIMED_OUT")));
+        assert_eq!(ext.get("until"), Some(&Value::from(until.to_rfc3339())));
     }
 
     #[test]
