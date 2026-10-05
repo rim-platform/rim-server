@@ -5,7 +5,7 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
-use rim_core::server_member::model::ServerMemberRole;
+use rim_core::server_member::model::{ServerMember, ServerMemberRole};
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_core::workspace_feature::model::WorkspaceFeature;
@@ -93,6 +93,44 @@ pub async fn ensure_server_member(
     }
 
     Ok(())
+}
+
+/// The one way a user becomes a workspace member: inserts the `server_member` row, then joins
+/// the user to every public, unarchived channel of the workspace (Track 1.1), skipping channels
+/// they are already in, so a member who arrives after the channel back-fill does not start with
+/// an empty joined-channel list. Private channels still need an invitation.
+///
+/// Every server-membership write (bootstrap, server creation, invite acceptance, join by invite,
+/// owner adding a member) goes through here, with the caller's repos — so inside the caller's
+/// transaction when it has one. Emits no events: callers announce the new member with
+/// `MemberJoined` after they commit, and clients refetch their channel list on joining a
+/// workspace.
+pub async fn add_workspace_member(
+    server_member_repo: &dyn ServerMemberRepository,
+    conversation_repo: &dyn ConversationRepository,
+    conversation_member_repo: &dyn ConversationMemberRepository,
+    server_id: ServerId,
+    user_id: UserId,
+    role: ServerMemberRole,
+) -> ServiceResult<ServerMember> {
+    let member = server_member_repo
+        .add_member(server_id, user_id, role)
+        .await?;
+
+    // Checked one by one rather than tolerating a unique-index conflict: inside a Postgres
+    // transaction a failed insert would abort the whole transaction.
+    for conversation_id in conversation_repo.list_public_channel_ids(server_id).await? {
+        if !conversation_member_repo
+            .is_member(conversation_id, user_id)
+            .await?
+        {
+            conversation_member_repo
+                .add_member(conversation_id, user_id)
+                .await?;
+        }
+    }
+
+    Ok(member)
 }
 
 pub async fn ensure_server_owner(
@@ -450,6 +488,21 @@ mod tests {
         }
 
         async fn list_accessible_conversation_ids(
+            &self,
+            _server_id: ServerId,
+            _user_id: UserId,
+        ) -> RepoResult<Vec<ConversationId>> {
+            Ok(vec![])
+        }
+
+        async fn list_public_channel_ids(
+            &self,
+            _server_id: ServerId,
+        ) -> RepoResult<Vec<ConversationId>> {
+            Ok(vec![])
+        }
+
+        async fn list_joined_conversation_ids(
             &self,
             _server_id: ServerId,
             _user_id: UserId,
@@ -859,5 +912,99 @@ mod tests {
             ensure_not_archived(&conversation),
             Err(ServiceError::ConversationArchived)
         ));
+    }
+
+    // ── add_workspace_member: Track 1.1 auto-join ──
+
+    #[tokio::test]
+    async fn add_workspace_member_joins_public_channels_skipping_existing() {
+        use rim_core::conversation::repository::MockConversationRepository;
+        use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+        use rim_core::conversation_member::repository::MockConversationMemberRepository;
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        let server_id = ServerId::new();
+        let user_id = UserId::new();
+        let already = ConversationId::new();
+        let fresh = ConversationId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_add_member()
+            .withf(move |sid, uid, role| {
+                *sid == server_id && *uid == user_id && *role == ServerMemberRole::Guest
+            })
+            .times(1)
+            .returning(|sid, uid, role| {
+                Ok(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id: sid,
+                    user_id: uid,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                })
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_list_public_channel_ids()
+            .withf(move |sid| *sid == server_id)
+            .returning(move |_| Box::pin(async move { Ok(vec![already, fresh]) }));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(move |cid, _| Box::pin(async move { Ok(cid == already) }));
+        conversation_member_repo
+            .expect_add_member()
+            .withf(move |cid, uid| *cid == fresh && *uid == user_id)
+            .times(1)
+            .returning(|cid, uid| {
+                Box::pin(async move {
+                    Ok(ConversationMember {
+                        id: ConversationMemberId::new(),
+                        user_id: uid,
+                        conversation_id: cid,
+                        joined_at: chrono::Utc::now(),
+                    })
+                })
+            });
+
+        let member = add_workspace_member(
+            &server_member_repo,
+            &conversation_repo,
+            &conversation_member_repo,
+            server_id,
+            user_id,
+            ServerMemberRole::Guest,
+        )
+        .await
+        .expect("add workspace member");
+        assert_eq!(member.user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn add_workspace_member_joins_nothing_when_membership_insert_fails() {
+        use rim_core::conversation::repository::MockConversationRepository;
+        use rim_core::conversation_member::repository::MockConversationMemberRepository;
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_add_member()
+            .returning(|_, _, _| Err(RepoError::new(RepoErrorKind::Conflict)));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_list_public_channel_ids().never();
+        let conversation_member_repo = MockConversationMemberRepository::new();
+
+        let err = add_workspace_member(
+            &server_member_repo,
+            &conversation_repo,
+            &conversation_member_repo,
+            ServerId::new(),
+            UserId::new(),
+            ServerMemberRole::Guest,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)));
     }
 }

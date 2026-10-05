@@ -396,6 +396,43 @@ mod tests {
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
+    /// Track 1.1: an archived channel is read-only, so alert ingestion is refused before any
+    /// incident is opened or updated (the webhook maps this to 409).
+    #[tokio::test]
+    async fn ingest_alert_refuses_archived_channel() {
+        let server_id = ServerId::new();
+        let actor_id = UserId::new();
+        let conversation_id = ConversationId::new();
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let mut channel = make_channel(server_id, conversation_id);
+            channel.archived_at = Some(Utc::now());
+            Box::pin(async move { Ok(Some(channel)) })
+        });
+        let mut incident_repo = MockIncidentRepository::new();
+        incident_repo.expect_find_by_fingerprint().never();
+        incident_repo.expect_create().never();
+
+        let svc = build_ingest_service(
+            incident_repo,
+            MockIncidentPhaseRepository::new(),
+            conversation_repo,
+            server_member_repo,
+        );
+
+        let event = make_alert_event("fp-archived", rim_services::alert::AlertStatus::Firing);
+        let err = svc
+            .ingest_alert(ingest_cmd(actor_id, server_id, conversation_id, event))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::ConversationArchived), "{err:?}");
+    }
+
     #[tokio::test]
     async fn ingest_alert_creates_new_incident_for_new_fingerprint() {
         let server_id = ServerId::new();

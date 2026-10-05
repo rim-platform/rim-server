@@ -102,6 +102,20 @@ pub trait ConversationRepository: Send + Sync {
         user_id: UserId,
     ) -> RepoResult<Vec<ConversationId>>;
 
+    /// Public, unarchived channels of a server — the channels a new workspace member joins
+    /// automatically (see `add_workspace_member` in `rim_infra_services`).
+    async fn list_public_channel_ids(&self, server_id: ServerId)
+    -> RepoResult<Vec<ConversationId>>;
+
+    /// Conversations in a server the user is a `conversation_member` of: joined public channels,
+    /// private channels, DMs and groups (not public channels they merely can read). Scopes the
+    /// unread counts.
+    async fn list_joined_conversation_ids(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Vec<ConversationId>>;
+
     /// Update the conversation activity timestamp.
     /// Intended to be called when a new message is persisted.
     async fn touch_last_activity_at(

@@ -713,3 +713,80 @@ async fn migration_backfill_makes_workspace_members_channel_members() {
         vec![alice]
     );
 }
+
+fn sorted(mut ids: Vec<ConversationId>) -> Vec<ConversationId> {
+    ids.sort_by_key(|id| uuid::Uuid::from(*id));
+    ids
+}
+
+/// The auto-join set: public, unarchived channels of this server only.
+#[tokio::test]
+async fn public_channel_ids_exclude_private_archived_and_other_servers() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
+    let other = ctx.create_server("other").await;
+
+    let public = channel(&repo, server.id, "public", false, None).await;
+    channel(&repo, server.id, "private", true, None).await;
+    let archived = channel(&repo, server.id, "archived", false, None).await;
+    repo.set_archived(archived.id, Some(chrono::Utc::now()))
+        .await
+        .unwrap();
+    channel(&repo, other.id, "elsewhere", false, None).await;
+    repo.create_conversation(NewConversation {
+        server_id: server.id,
+        conversation_type: ConversationType::Group,
+        title: None,
+        is_private: false,
+        created_by: None,
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        repo.list_public_channel_ids(server.id).await.unwrap(),
+        vec![public.id]
+    );
+}
+
+/// The unread-count scope: only conversations with a membership row, in this server.
+#[tokio::test]
+async fn joined_conversation_ids_cover_membership_rows_only() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
+    let other = ctx.create_server("other").await;
+    let alice = ctx.create_user("joined-alice").await.id;
+
+    let joined_public = channel(&repo, server.id, "joined", false, None).await;
+    channel(&repo, server.id, "unjoined", false, None).await;
+    let private = channel(&repo, server.id, "private", true, None).await;
+    let elsewhere = channel(&repo, other.id, "elsewhere", false, None).await;
+    for id in [joined_public.id, private.id, elsewhere.id] {
+        member_repo.add_member(id, alice).await.unwrap();
+    }
+    let group = repo
+        .create_conversation_with_members(
+            NewConversation {
+                server_id: server.id,
+                conversation_type: ConversationType::Group,
+                title: None,
+                is_private: false,
+                created_by: Some(alice),
+            },
+            &[alice],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sorted(
+            repo.list_joined_conversation_ids(server.id, alice)
+                .await
+                .unwrap()
+        ),
+        sorted(vec![joined_public.id, private.id, group.id])
+    );
+}

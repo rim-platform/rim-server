@@ -2,6 +2,8 @@
 mod tests {
     use std::sync::Arc;
 
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server::repository::MockServerRepository;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
@@ -57,6 +59,8 @@ mod tests {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
             user_repo: Arc::new(user_repo),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         });
 
         let err = svc
@@ -107,6 +111,8 @@ mod tests {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
             user_repo: Arc::new(user_repo),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         });
 
         let err = svc
@@ -150,6 +156,8 @@ mod tests {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
             user_repo: Arc::new(user_repo),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         });
 
         let err = svc
@@ -183,6 +191,8 @@ mod tests {
             server_repo: Arc::new(server_repo),
             server_member_repo: Arc::new(server_member_repo),
             user_repo: Arc::new(user_repo),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         });
 
         let err = svc

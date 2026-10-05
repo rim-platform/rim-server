@@ -10,7 +10,9 @@ use rim_services::server_member::service::ServerMemberService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerMemberRepos;
-use crate::util::{ensure_server_exists, ensure_server_member, ensure_server_owner};
+use crate::util::{
+    add_workspace_member, ensure_server_exists, ensure_server_member, ensure_server_owner,
+};
 
 #[derive(Clone)]
 pub struct DefaultServerMemberService {
@@ -69,11 +71,15 @@ impl ServerMemberService for DefaultServerMemberService {
             ));
         }
 
-        let member = self
-            .repos
-            .server_member_repo
-            .add_member(cmd.server_id, cmd.user_id, ServerMemberRole::Guest)
-            .await?;
+        let member = add_workspace_member(
+            self.repos.server_member_repo.as_ref(),
+            self.repos.conversation_repo.as_ref(),
+            self.repos.conversation_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.user_id,
+            ServerMemberRole::Guest,
+        )
+        .await?;
 
         let user = self.resolve_user(member.user_id).await?;
 

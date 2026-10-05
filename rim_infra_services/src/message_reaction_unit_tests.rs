@@ -113,6 +113,12 @@ mod tests {
                 server_id: ServerId,
                 user_id: UserId,
             ) -> RepoResult<Vec<ConversationId>>;
+            async fn list_public_channel_ids(&self, server_id: ServerId) -> RepoResult<Vec<ConversationId>>;
+            async fn list_joined_conversation_ids(
+                &self,
+                server_id: ServerId,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
             async fn touch_last_activity_at(
                 &self,
                 conversation_id: ConversationId,

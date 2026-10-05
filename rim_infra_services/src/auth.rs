@@ -35,7 +35,7 @@ use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
-use crate::util::ensure_server_owner;
+use crate::util::{add_workspace_member, ensure_server_owner};
 
 /// Fixed "IP" slot for the per-account login limiter, whose buckets are keyed by username alone.
 const LOGIN_ACCOUNT_SCOPE: &str = "account";
@@ -613,10 +613,15 @@ impl AuthService for DefaultAuthService {
             })?;
 
         info!(username = %username, "add member");
-        let _member = repos
-            .server_member_repo
-            .add_member(server.id, user.id, ServerMemberRole::Owner)
-            .await?;
+        let _member = add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            server.id,
+            user.id,
+            ServerMemberRole::Owner,
+        )
+        .await?;
 
         // Create default #general and #random channels.
         for channel_name in &["general", "random"] {
@@ -918,10 +923,15 @@ impl AuthService for DefaultAuthService {
                 e
             })?;
 
-        let _member = repos
-            .server_member_repo
-            .add_member(inv.server_id, user.id, ServerMemberRole::Guest)
-            .await?;
+        let _member = add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            inv.server_id,
+            user.id,
+            ServerMemberRole::Guest,
+        )
+        .await?;
 
         let consumed = repos.invite_repo.try_consume(inv.id).await?;
         if !consumed {
@@ -1034,10 +1044,15 @@ impl AuthService for DefaultAuthService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        let _member = repos
-            .server_member_repo
-            .add_member(inv.server_id, actor.user_id, ServerMemberRole::Guest)
-            .await?;
+        let _member = add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            inv.server_id,
+            actor.user_id,
+            ServerMemberRole::Guest,
+        )
+        .await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;

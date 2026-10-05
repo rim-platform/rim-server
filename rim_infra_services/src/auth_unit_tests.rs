@@ -13,6 +13,7 @@ mod tests {
     };
     use rim_core::conversation::model::{Conversation, ConversationId};
     use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server::repository::MockServerRepository;
@@ -78,6 +79,7 @@ mod tests {
             bootstrap_token_repo: Arc::new(MockBootstrapTokenRepository::new()),
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         }
     }
 
@@ -102,6 +104,7 @@ mod tests {
             bootstrap_token_repo: Arc::new(bootstrap_token_repo),
             instance_invite_repo: Arc::new(instance_invite_repo),
             conversation_repo: Arc::new(conversation_repo),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
         }
     }
 
@@ -172,6 +175,9 @@ mod tests {
 
     fn mock_conversation_repo() -> MockConversationRepository {
         let mut repo = MockConversationRepository::new();
+        // New workspace members auto-join public channels; none exist in these fixtures.
+        repo.expect_list_public_channel_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
         repo.expect_create_conversation_with_members()
             .returning(|conv, _member_ids| {
                 Box::pin(async move {

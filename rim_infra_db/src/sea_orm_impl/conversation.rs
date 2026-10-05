@@ -440,6 +440,46 @@ impl ConversationRepository for SeaOrmConversationRepository {
         Ok(models.into_iter().map(|m| m.id.into()).collect())
     }
 
+    async fn list_public_channel_ids(
+        &self,
+        server_id: ServerId,
+    ) -> RepoResult<Vec<ConversationId>> {
+        let ids: Vec<Uuid> = conversation::Entity::find()
+            .select_only()
+            .column(conversation::Column::Id)
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(
+                conversation::Column::ConversationType
+                    .eq(entity::sea_orm_active_enums::ConversationType::Channel),
+            )
+            .filter(conversation::Column::IsPrivate.eq(false))
+            .filter(conversation::Column::ArchivedAt.is_null())
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(ids.into_iter().map(Into::into).collect())
+    }
+
+    async fn list_joined_conversation_ids(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Vec<ConversationId>> {
+        let ids: Vec<Uuid> = conversation::Entity::find()
+            .select_only()
+            .column(conversation::Column::Id)
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(conversation::Column::Id.in_subquery(Self::member_conversation_ids(user_id)))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(ids.into_iter().map(Into::into).collect())
+    }
+
     async fn touch_last_activity_at(
         &self,
         conversation_id: ConversationId,

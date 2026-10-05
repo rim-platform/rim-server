@@ -128,6 +128,20 @@ const MARK_AS_READ: &str = r#"
 mutation MarkRead($input: MarkAsReadInput!) { markAsRead(input: $input) }
 "#;
 
+const UNREAD_COUNTS: &str = r#"
+query Unread($workspaceId: ID!) { unreadCounts(workspaceId: $workspaceId) { conversationId count } }
+"#;
+
+const CREATE_INVITE: &str = r#"
+mutation CreateInvite($input: CreateInviteInput!) { invite: createInvite(input: $input) { inviteToken } }
+"#;
+
+const JOIN_BY_INVITE: &str = r#"
+mutation JoinByInvite($input: JoinServerByInviteInput!) {
+  joinServerByInvite(input: $input) { serverId }
+}
+"#;
+
 const UPDATE_TOPIC: &str = r#"
 mutation Topic($input: UpdateConversationTopicInput!) {
   conversation: updateConversationTopic(input: $input) { id }
@@ -180,6 +194,21 @@ fn q(query: &str) -> String {
 }
 
 impl Fixture {
+    /// Conversation ids with an unread-count row for `who`.
+    async fn unread_ids(&self, who: &Caller) -> Vec<String> {
+        let data = exec_ok(
+            &self.schema,
+            who.request(UNREAD_COUNTS, json!({ "workspaceId": self.server_id })),
+        )
+        .await;
+        data["unreadCounts"]
+            .as_array()
+            .expect("unread counts")
+            .iter()
+            .map(|c| c["conversationId"].as_str().expect("id").to_string())
+            .collect()
+    }
+
     /// Users with a stored mention row for `message_id`.
     async fn mentioned_user_ids(&self, message_id: &str) -> Vec<String> {
         let rows = self
@@ -480,6 +509,11 @@ async fn public_channel_join_and_leave() {
     )
     .await;
 
+    // Unread counts only cover conversations carol is a member of: an unjoined public channel
+    // with new messages carries no badge.
+    f.send(&f.alice, &public_id, "launch day").await;
+    assert!(!f.unread_ids(&f.carol).await.contains(&public_id));
+
     // Join (idempotent).
     for _ in 0..2 {
         let joined = exec_ok(
@@ -496,6 +530,13 @@ async fn public_channel_join_and_leave() {
         .expect("joined channel listed");
     assert_eq!(launch["isMember"], true);
     assert_eq!(launch["memberCount"], 2);
+    // Unread counts start at the join: the earlier message does not count, a new one does.
+    assert!(!f.unread_ids(&f.carol).await.contains(&public_id));
+    f.send(&f.alice, &public_id, "launch is live").await;
+    assert!(
+        f.unread_ids(&f.carol).await.contains(&public_id),
+        "a joined channel counts unread messages"
+    );
 
     // A guest may not remove someone else; they may remove themselves.
     assert_eq!(
@@ -684,4 +725,65 @@ async fn owner_archives_private_channel_they_are_not_in() {
         f.send_err(&f.bob, &id, "hello?").await,
         "CONVERSATION_ARCHIVED"
     );
+}
+
+/// A user who joins the workspace after the channel back-fill is auto-joined to every public,
+/// unarchived channel, and to nothing private or archived.
+#[tokio::test]
+async fn new_workspace_member_auto_joins_public_channels() {
+    let f = setup().await;
+    let public_id = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let private_id = id_of(&f.create_channel(&f.alice, "board", true).await);
+    let archived_id = id_of(&f.create_channel(&f.alice, "old-news", false).await);
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            &q(SET_ARCHIVED),
+            json!({ "serverId": f.server_id, "conversationId": archived_id, "archived": true }),
+        ),
+    )
+    .await;
+
+    let invite = exec_ok(
+        &f.schema,
+        f.alice.request(
+            CREATE_INVITE,
+            json!({ "input": { "serverId": f.server_id } }),
+        ),
+    )
+    .await;
+    let token = invite["invite"]["inviteToken"]
+        .as_str()
+        .expect("invite token");
+
+    let dave_user = f.ctx.create_user("pc-dave").await;
+    let dave = caller(&f.ctx, &dave_user).await;
+    exec_ok(
+        &f.schema,
+        dave.request(JOIN_BY_INVITE, json!({ "input": { "inviteToken": token } })),
+    )
+    .await;
+
+    let joined = f
+        .channels(
+            &dave,
+            json!({ "joinedOnly": true, "includeArchived": true }),
+        )
+        .await;
+    let lobby = joined
+        .iter()
+        .find(|c| c["id"] == public_id.as_str())
+        .expect("public channel joined automatically");
+    assert_eq!(lobby["isMember"], true);
+    assert!(
+        joined.iter().all(|c| c["id"] != archived_id.as_str()),
+        "archived channels are not auto-joined"
+    );
+
+    let browse = f.channels(&dave, json!({ "includeArchived": true })).await;
+    assert!(
+        browse.iter().all(|c| c["id"] != private_id.as_str()),
+        "the private channel stays invisible"
+    );
+    assert_eq!(f.conversation_err(&dave, &private_id).await, "NOT_FOUND");
 }

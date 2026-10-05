@@ -56,7 +56,8 @@ use crate::oncall::{OnCallRepos, resolve_on_call_now_for_schedule};
 use crate::repos::AppRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
-    ensure_conversation_writable, ensure_feature_enabled, ensure_server_member,
+    ensure_conversation_writable, ensure_feature_enabled, ensure_not_archived,
+    ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -1090,6 +1091,9 @@ impl IncidentService for DefaultIncidentService {
             cmd.server_id,
         )
         .await?;
+        // An archived channel is read-only: alerts are refused (409 on the webhook) rather than
+        // opening or updating incidents and posting into it.
+        ensure_not_archived(&conversation)?;
 
         let (repos, scope) = self.begin_write().await?;
 
