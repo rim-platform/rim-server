@@ -1,7 +1,10 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
-use rim_services::conversation::command::{CreateConversationCmd, UpdateConversationTopicCmd};
+use rim_services::conversation::command::{
+    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, JoinChannelCmd,
+    LeaveConversationCmd, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+};
 use rim_services::conversation::service::ConversationService;
 
 use crate::auth_context::require_actor;
@@ -45,6 +48,7 @@ impl ConversationMutations {
                 server_id,
                 participants,
                 title: input.title,
+                is_private: input.is_private,
             })
             .await
             .map_err(map_service_error)?;
@@ -70,6 +74,141 @@ impl ConversationMutations {
                 server_id,
                 conversation_id,
                 topic: input.topic,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(conv.into())
+    }
+
+    /// Join a public, unarchived channel. Idempotent.
+    async fn join_channel(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<Conversation> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        let conv = svc
+            .join_channel(JoinChannelCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(conv.into())
+    }
+
+    /// Leave a channel or group (not a DM).
+    async fn leave_conversation(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        svc.leave_conversation(LeaveConversationCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Add (invite) workspace members to a channel or group the caller belongs to.
+    async fn add_conversation_members(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        user_ids: Vec<ID>,
+    ) -> Result<Conversation> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+        let mut ids = Vec::with_capacity(user_ids.len());
+        for id in &user_ids {
+            ids.push(parse_uuid_id::<rim_core::user::model::UserId>(id)?);
+        }
+
+        let conv = svc
+            .add_conversation_members(AddConversationMembersCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                user_ids: ids,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(conv.into())
+    }
+
+    /// Remove a member from a channel or group: Owner/Moderator may remove anyone, others only
+    /// themselves.
+    async fn remove_conversation_member(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        user_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+        let user_id = parse_uuid_id::<rim_core::user::model::UserId>(&user_id)?;
+
+        svc.remove_conversation_member(RemoveConversationMemberCmd {
+            actor: Actor::new(actor),
+            server_id,
+            conversation_id,
+            user_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
+    /// Archive or unarchive a channel (Owner/Moderator). Archived channels are read-only.
+    async fn set_conversation_archived(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        archived: bool,
+    ) -> Result<Conversation> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        let conv = svc
+            .set_conversation_archived(ArchiveConversationCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                archived,
             })
             .await
             .map_err(map_service_error)?;
@@ -193,6 +332,10 @@ pub struct CreateConversationInput {
     pub is_channel: Option<bool>,
 
     pub title: Option<String>,
+
+    /// Channels only: visible to invited members alone. Cannot be changed later.
+    #[graphql(default)]
+    pub is_private: bool,
 }
 
 #[derive(InputObject)]
