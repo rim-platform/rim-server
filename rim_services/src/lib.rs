@@ -21,6 +21,7 @@ pub mod message;
 pub mod message_attachment;
 pub mod message_reaction;
 pub mod message_thread;
+pub mod moderation;
 pub mod notification_preference;
 pub mod oncall;
 pub mod password_reset;
@@ -139,6 +140,15 @@ pub enum ServiceError {
     /// incidents). Surfaced as the `CONVERSATION_ARCHIVED` GraphQL error code.
     #[error("conversation is archived")]
     ConversationArchived,
+
+    /// The actor is timed out in this workspace until `until` (Track 1.2): writes (messages,
+    /// reactions, pins, topic, attachments, joins, invites, conversation creation and Mutating
+    /// commands) are refused while reads continue. Surfaced as the `TIMED_OUT` GraphQL error
+    /// code with an `until` extension.
+    #[error("timed out until {until}")]
+    TimedOut {
+        until: chrono::DateTime<chrono::Utc>,
+    },
 
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),

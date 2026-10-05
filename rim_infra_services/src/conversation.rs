@@ -26,9 +26,10 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::ConversationRepos;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_access, ensure_conversation_in_server,
-    ensure_conversation_member_access, ensure_conversation_writable, ensure_not_archived,
-    ensure_server_member, ensure_server_owner_or_moderator,
+    ConversationAccessRepos, ensure_conversation_access, ensure_conversation_access_as,
+    ensure_conversation_in_server, ensure_conversation_member_access, ensure_conversation_writable,
+    ensure_not_archived, ensure_not_timed_out, ensure_server_member,
+    ensure_server_owner_or_moderator, ensure_workspace_writable, member_standing,
 };
 
 #[derive(Clone)]
@@ -67,7 +68,38 @@ impl DefaultConversationService {
             is_private: conversation.is_private,
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
+            slow_mode_seconds: conversation.slow_mode_seconds,
         }
+    }
+
+    /// Gate for joining and inviting (Track 1.2): role first, so a guest learns nothing about
+    /// which conversation ids exist; then the timeout; then the usual read gate.
+    async fn ensure_may_add_members(
+        &self,
+        actor: UserId,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> ServiceResult<Conversation> {
+        let standing =
+            member_standing(self.repos.server_member_repo.as_ref(), server_id, actor).await?;
+        if standing.role.is_guest() {
+            return Err(ServiceError::PermissionDenied);
+        }
+        ensure_not_timed_out(&standing)?;
+        let conversation = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            conversation_id,
+            server_id,
+        )
+        .await?;
+        ensure_conversation_access_as(
+            self.repos.conversation_member_repo.as_ref(),
+            &conversation,
+            actor,
+            standing.role,
+        )
+        .await?;
+        Ok(conversation)
     }
 
     fn access_repos(&self) -> ConversationAccessRepos<'_> {
@@ -201,12 +233,21 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        ensure_server_member(
+        // Member, not timed out; guests may only open DMs (Track 1.2).
+        let standing = ensure_workspace_writable(
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
             cmd.actor.user_id,
         )
         .await?;
+        if standing.role.is_guest()
+            && !matches!(
+                cmd.participants,
+                ConversationParticipants::DirectMessage { .. }
+            )
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
 
         let (conv_type, member_ids): (CoreConversationType, Vec<UserId>) = match cmd.participants {
             ConversationParticipants::DirectMessage { other_user_id } => {
@@ -426,12 +467,17 @@ impl ConversationService for DefaultConversationService {
         &self,
         query: ListChannelsQuery,
     ) -> ServiceResult<Page<ConversationDto, ChannelPageCursor>> {
-        ensure_server_member(
+        let standing = member_standing(
             self.repos.server_member_repo.as_ref(),
             query.server_id,
             query.actor.user_id,
         )
         .await?;
+        // Guests cannot browse: they only ever list the channels they were added to.
+        let mut filter = query.filter;
+        if standing.role.is_guest() {
+            filter.joined_only = true;
+        }
 
         let page = self
             .repos
@@ -439,7 +485,7 @@ impl ConversationService for DefaultConversationService {
             .list_channels_for_user(
                 query.actor.user_id,
                 query.server_id,
-                query.filter,
+                filter,
                 query.limit,
                 query.dir,
                 query.cursor.map(Into::into),
@@ -484,15 +530,12 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        // Private channels and groups: the gate already requires membership (NotFound /
+        // Guests cannot invite and timed-out members cannot write (Track 1.2). Private
+        // channels and groups: the gate already requires membership (NotFound /
         // PermissionDenied otherwise).
-        let conversation = ensure_conversation_member_access(
-            self.access_repos(),
-            cmd.actor.user_id,
-            cmd.server_id,
-            cmd.conversation_id,
-        )
-        .await?;
+        let conversation = self
+            .ensure_may_add_members(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
+            .await?;
 
         if conversation.conversation_type == CoreConversationType::Direct {
             return Err(ServiceError::Validation(
@@ -620,14 +663,11 @@ impl ConversationService for DefaultConversationService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
     )]
     async fn join_channel(&self, cmd: JoinChannelCmd) -> ServiceResult<ConversationDto> {
-        // A private channel the actor is not in is NotFound here, so it cannot be joined.
-        let conversation = ensure_conversation_member_access(
-            self.access_repos(),
-            cmd.actor.user_id,
-            cmd.server_id,
-            cmd.conversation_id,
-        )
-        .await?;
+        // Guests cannot join (Track 1.2); a timed-out member cannot either. A private channel
+        // the actor is not in is NotFound here, so it cannot be joined.
+        let conversation = self
+            .ensure_may_add_members(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
+            .await?;
 
         if conversation.conversation_type != CoreConversationType::Channel {
             return Err(ServiceError::Validation(

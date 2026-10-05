@@ -3,9 +3,10 @@ use std::sync::Arc;
 use rim_core::conversation::model::{Conversation, ConversationId};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::moderation::repository::ModerationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
-use rim_core::server_member::model::{ServerMember, ServerMemberRole};
+use rim_core::server_member::model::{MemberStanding, ServerMember, ServerMemberRole};
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_core::workspace_feature::model::WorkspaceFeature;
@@ -37,9 +38,9 @@ impl<'a> ConversationAccessRepos<'a> {
 /// Enforces the full three-step access gate in security-correct order:
 /// 1. Server membership (PermissionDenied on failure)
 /// 2. Conversation exists in that server (NotFound on failure)
-/// 3. Conversation-level access (see [`ensure_conversation_access`]: public channels pass with
-///    server membership alone; private channels need membership and fail with NotFound;
-///    DM/group need membership and fail with PermissionDenied)
+/// 3. Conversation-level access (see [`ensure_conversation_access_as`]: public channels pass
+///    with server membership alone, except for guests; private channels need membership and
+///    fail with NotFound; DM/group need membership and fail with PermissionDenied)
 ///
 /// Returns the loaded `Conversation` so callers avoid a second DB round-trip
 /// for `conversation_type` lookups.
@@ -52,25 +53,109 @@ pub async fn ensure_conversation_member_access(
     server_id: ServerId,
     conversation_id: ConversationId,
 ) -> ServiceResult<Conversation> {
-    ensure_server_member(repos.server_member_repo, server_id, actor).await?;
-    let conv =
-        ensure_conversation_in_server(repos.conversation_repo, conversation_id, server_id).await?;
-    ensure_conversation_access(repos.conversation_member_repo, &conv, actor).await?;
-    Ok(conv)
+    Ok(
+        ensure_conversation_readable_with_standing(repos, actor, server_id, conversation_id)
+            .await?
+            .0,
+    )
 }
 
-/// [`ensure_conversation_member_access`] plus [`ensure_not_archived`]: the gate for every write
-/// into a conversation (messages, reactions, pins, topic, attachments, typing, incidents).
-/// Archived conversations stay readable through [`ensure_conversation_member_access`].
+/// [`ensure_conversation_member_access`], also returning the actor's [`MemberStanding`] (role
+/// and active timeout) for callers that need it (slow mode, moderator deletes).
+pub async fn ensure_conversation_readable_with_standing(
+    repos: ConversationAccessRepos<'_>,
+    actor: UserId,
+    server_id: ServerId,
+    conversation_id: ConversationId,
+) -> ServiceResult<(Conversation, MemberStanding)> {
+    let standing = member_standing(repos.server_member_repo, server_id, actor).await?;
+    let conv =
+        ensure_conversation_in_server(repos.conversation_repo, conversation_id, server_id).await?;
+    ensure_conversation_access_as(repos.conversation_member_repo, &conv, actor, standing.role)
+        .await?;
+    Ok((conv, standing))
+}
+
+/// [`ensure_conversation_member_access`] plus [`ensure_not_archived`] and
+/// [`ensure_not_timed_out`]: the gate for every write into a conversation (messages, reactions,
+/// pins, topic, attachments, typing, incidents). Archived conversations stay readable through
+/// [`ensure_conversation_member_access`]; a timed-out member keeps reading.
 pub async fn ensure_conversation_writable(
     repos: ConversationAccessRepos<'_>,
     actor: UserId,
     server_id: ServerId,
     conversation_id: ConversationId,
 ) -> ServiceResult<Conversation> {
-    let conv = ensure_conversation_member_access(repos, actor, server_id, conversation_id).await?;
+    Ok(
+        ensure_conversation_writable_with_standing(repos, actor, server_id, conversation_id)
+            .await?
+            .0,
+    )
+}
+
+/// [`ensure_conversation_writable`], also returning the actor's [`MemberStanding`].
+pub async fn ensure_conversation_writable_with_standing(
+    repos: ConversationAccessRepos<'_>,
+    actor: UserId,
+    server_id: ServerId,
+    conversation_id: ConversationId,
+) -> ServiceResult<(Conversation, MemberStanding)> {
+    let (conv, standing) =
+        ensure_conversation_readable_with_standing(repos, actor, server_id, conversation_id)
+            .await?;
     ensure_not_archived(&conv)?;
-    Ok(conv)
+    ensure_not_timed_out(&standing)?;
+    Ok((conv, standing))
+}
+
+/// The actor's role and active timeout in `server_id`; `PermissionDenied` for a non-member.
+pub async fn member_standing(
+    server_member_repo: &dyn ServerMemberRepository,
+    server_id: ServerId,
+    user_id: UserId,
+) -> ServiceResult<MemberStanding> {
+    server_member_repo
+        .get_member_standing(server_id, user_id)
+        .await?
+        .ok_or(ServiceError::PermissionDenied)
+}
+
+/// `Err(TimedOut { until })` while the member's timeout is in force (Track 1.2).
+pub fn ensure_not_timed_out(standing: &MemberStanding) -> ServiceResult<()> {
+    match standing.timed_out_until {
+        Some(until) if until > chrono::Utc::now() => Err(ServiceError::TimedOut { until }),
+        _ => Ok(()),
+    }
+}
+
+/// Workspace-level write gate for actions not tied to an existing conversation (creating a
+/// conversation): the actor must be a member and not timed out. Returns the standing so the
+/// caller can apply role rules (guests cannot create channels or groups).
+pub async fn ensure_workspace_writable(
+    server_member_repo: &dyn ServerMemberRepository,
+    server_id: ServerId,
+    user_id: UserId,
+) -> ServiceResult<MemberStanding> {
+    let standing = member_standing(server_member_repo, server_id, user_id).await?;
+    ensure_not_timed_out(&standing)?;
+    Ok(standing)
+}
+
+/// `Err(PermissionDenied)` while `user_id` has an active ban in `server_id` (Track 1.2). Called
+/// by every workspace join path except bootstrap and workspace creation, where no ban can exist.
+pub async fn ensure_not_banned(
+    moderation_repo: &dyn ModerationRepository,
+    server_id: ServerId,
+    user_id: UserId,
+) -> ServiceResult<()> {
+    if moderation_repo
+        .get_active_ban(server_id, user_id, chrono::Utc::now())
+        .await?
+        .is_some()
+    {
+        return Err(ServiceError::PermissionDenied);
+    }
+    Ok(())
 }
 
 /// `Err(ConversationArchived)` when `conversation` is archived (read-only).
@@ -98,7 +183,10 @@ pub async fn ensure_server_member(
 /// The one way a user becomes a workspace member: inserts the `server_member` row, then joins
 /// the user to every public, unarchived channel of the workspace (Track 1.1), skipping channels
 /// they are already in, so a member who arrives after the channel back-fill does not start with
-/// an empty joined-channel list. Private channels still need an invitation.
+/// an empty joined-channel list. Private channels still need an invitation. A `Guest` joins no
+/// channel: guests only see conversations they are explicitly added to (Track 1.2).
+///
+/// Ban checks ([`ensure_not_banned`]) are the caller's job, before calling this.
 ///
 /// Every server-membership write (bootstrap, server creation, invite acceptance, join by invite,
 /// owner adding a member) goes through here, with the caller's repos — so inside the caller's
@@ -116,6 +204,9 @@ pub async fn add_workspace_member(
     let member = server_member_repo
         .add_member(server_id, user_id, role)
         .await?;
+    if role.is_guest() {
+        return Ok(member);
+    }
 
     // Checked one by one rather than tolerating a unique-index conflict: inside a Postgres
     // transaction a failed insert would abort the whole transaction.
@@ -203,17 +294,35 @@ pub async fn ensure_conversation_in_server(
     Ok(conv)
 }
 
-/// Check that the user can read the conversation (archived or not).
-/// - Public channels: server membership is sufficient — no conversation_member check needed.
-/// - Private channels: the user must be a conversation member; a non-member gets `NotFound`, so
-///   the response does not reveal that the channel exists.
-/// - DMs and groups: the user must be a conversation member (`PermissionDenied` otherwise).
+/// [`ensure_conversation_access_as`] for a non-guest member.
 pub async fn ensure_conversation_access(
     conversation_member_repo: &dyn ConversationMemberRepository,
     conversation: &rim_core::conversation::model::Conversation,
     user_id: rim_core::user::model::UserId,
 ) -> ServiceResult<()> {
-    if conversation.is_public_channel() {
+    ensure_conversation_access_as(
+        conversation_member_repo,
+        conversation,
+        user_id,
+        ServerMemberRole::Member,
+    )
+    .await
+}
+
+/// Check that a workspace member with `role` can read the conversation (archived or not).
+/// - Public channels: server membership is sufficient — no conversation_member check needed —
+///   except for a `Guest`, who must be a conversation member like in a private channel
+///   (`NotFound` otherwise, Track 1.2).
+/// - Private channels: the user must be a conversation member; a non-member gets `NotFound`, so
+///   the response does not reveal that the channel exists.
+/// - DMs and groups: the user must be a conversation member (`PermissionDenied` otherwise).
+pub async fn ensure_conversation_access_as(
+    conversation_member_repo: &dyn ConversationMemberRepository,
+    conversation: &rim_core::conversation::model::Conversation,
+    user_id: rim_core::user::model::UserId,
+    role: ServerMemberRole,
+) -> ServiceResult<()> {
+    if conversation.is_public_channel() && !role.is_guest() {
         return Ok(());
     }
     let is_member = conversation_member_repo
@@ -279,7 +388,7 @@ mod tests {
         assert!(matches!(
             ServiceError::from(
                 member_repo
-                    .add_member(server_id, user_id, ServerMemberRole::Guest)
+                    .add_member(server_id, user_id, ServerMemberRole::Member)
                     .await
                     .unwrap_err()
             ),
@@ -288,7 +397,7 @@ mod tests {
         assert!(matches!(
             ServiceError::from(
                 member_repo
-                    .change_member_role(server_id, user_id, ServerMemberRole::Guest)
+                    .change_member_role(server_id, user_id, ServerMemberRole::Member)
                     .await
                     .unwrap_err()
             ),
@@ -378,6 +487,20 @@ mod tests {
 
         async fn is_member(&self, _server_id: ServerId, _user_id: UserId) -> RepoResult<bool> {
             Ok(self.is_member)
+        }
+
+        async fn get_member_standing(
+            &self,
+            _server_id: ServerId,
+            _user_id: UserId,
+        ) -> RepoResult<Option<MemberStanding>> {
+            Ok(self.is_member.then(|| MemberStanding {
+                role: self
+                    .member
+                    .as_ref()
+                    .map_or(ServerMemberRole::Member, |m| m.member_role),
+                timed_out_until: None,
+            }))
         }
     }
 
@@ -533,6 +656,14 @@ mod tests {
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
+
+        async fn set_slow_mode(
+            &self,
+            _conversation_id: rim_core::conversation::model::ConversationId,
+            _seconds: i32,
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
     }
 
     #[tokio::test]
@@ -571,7 +702,7 @@ mod tests {
                 id: ServerMemberId::new(),
                 server_id,
                 user_id,
-                member_role: ServerMemberRole::Guest,
+                member_role: ServerMemberRole::Member,
                 joined_at: chrono::Utc::now(),
             }),
         };
@@ -612,7 +743,7 @@ mod tests {
                 id: ServerMemberId::new(),
                 server_id,
                 user_id,
-                member_role: ServerMemberRole::Guest,
+                member_role: ServerMemberRole::Member,
                 joined_at: chrono::Utc::now(),
             }),
         };
@@ -657,6 +788,7 @@ mod tests {
                 is_private: false,
                 archived_at: None,
                 created_by: None,
+                slow_mode_seconds: 0,
             }),
         };
 
@@ -839,6 +971,7 @@ mod tests {
             is_private,
             archived_at: archived.then(chrono::Utc::now),
             created_by: None,
+            slow_mode_seconds: 0,
         };
         let server_member_repo = FakeServerMemberRepo {
             is_member: true,
@@ -905,6 +1038,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         };
         assert!(ensure_not_archived(&conversation).is_ok());
         conversation.archived_at = Some(chrono::Utc::now());
@@ -912,6 +1046,194 @@ mod tests {
             ensure_not_archived(&conversation),
             Err(ServiceError::ConversationArchived)
         ));
+    }
+
+    // ── Track 1.2: guest and timeout gates ──
+
+    fn guest_repo() -> FakeServerMemberRepo {
+        FakeServerMemberRepo {
+            is_member: true,
+            member: Some(ServerMember {
+                id: ServerMemberId::new(),
+                server_id: ServerId::new(),
+                user_id: UserId::new(),
+                member_role: ServerMemberRole::Guest,
+                joined_at: chrono::Utc::now(),
+            }),
+        }
+    }
+
+    /// A guest reads a public channel only as a conversation member, and a non-member guest
+    /// gets `NotFound` (like a private channel), so the response does not confirm the id.
+    #[tokio::test]
+    async fn guest_needs_membership_for_public_channels() {
+        let server_id = ServerId::new();
+        let conversation = Conversation {
+            id: ConversationId::new(),
+            conversation_type: ConversationType::Channel,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            server_id,
+            is_private: false,
+            archived_at: None,
+            created_by: None,
+            slow_mode_seconds: 0,
+        };
+        let server_member_repo = guest_repo();
+        let conversation_repo = FakeConversationRepo {
+            conv: Some(conversation.clone()),
+        };
+        for (is_member, expected) in [(false, Outcome::NotFound), (true, Outcome::Ok)] {
+            let conversation_member_repo = FakeConversationMemberRepo { is_member };
+            let repos = ConversationAccessRepos {
+                server_member_repo: &server_member_repo,
+                conversation_repo: &conversation_repo,
+                conversation_member_repo: &conversation_member_repo,
+            };
+            let got = outcome(
+                ensure_conversation_member_access(repos, UserId::new(), server_id, conversation.id)
+                    .await,
+            );
+            assert_eq!(got, expected, "guest, conversation member = {is_member}");
+        }
+    }
+
+    #[test]
+    fn ensure_not_timed_out_only_refuses_future_timeouts() {
+        let mut standing = MemberStanding::new(ServerMemberRole::Member);
+        assert!(ensure_not_timed_out(&standing).is_ok());
+        standing.timed_out_until = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+        assert!(ensure_not_timed_out(&standing).is_ok(), "expired timeout");
+        let until = chrono::Utc::now() + chrono::Duration::minutes(5);
+        standing.timed_out_until = Some(until);
+        assert!(matches!(
+            ensure_not_timed_out(&standing),
+            Err(ServiceError::TimedOut { until: u }) if u == until
+        ));
+    }
+
+    /// A timed-out member keeps reading a conversation but cannot write to it.
+    #[tokio::test]
+    async fn timed_out_member_reads_but_cannot_write() {
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        let server_id = ServerId::new();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, _| {
+                Ok(Some(MemberStanding {
+                    role: ServerMemberRole::Member,
+                    timed_out_until: Some(until),
+                }))
+            });
+        let conversation = Conversation {
+            id: ConversationId::new(),
+            conversation_type: ConversationType::Channel,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            server_id,
+            is_private: false,
+            archived_at: None,
+            created_by: None,
+            slow_mode_seconds: 0,
+        };
+        let conversation_repo = FakeConversationRepo {
+            conv: Some(conversation.clone()),
+        };
+        let conversation_member_repo = FakeConversationMemberRepo { is_member: true };
+        let repos = || ConversationAccessRepos {
+            server_member_repo: &server_member_repo,
+            conversation_repo: &conversation_repo,
+            conversation_member_repo: &conversation_member_repo,
+        };
+        let actor = UserId::new();
+        assert!(
+            ensure_conversation_member_access(repos(), actor, server_id, conversation.id)
+                .await
+                .is_ok()
+        );
+        assert!(matches!(
+            ensure_conversation_writable(repos(), actor, server_id, conversation.id).await,
+            Err(ServiceError::TimedOut { .. })
+        ));
+        assert!(matches!(
+            ensure_workspace_writable(&server_member_repo, server_id, actor).await,
+            Err(ServiceError::TimedOut { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn ensure_not_banned_refuses_an_active_ban() {
+        use rim_core::moderation::model::ServerBan;
+        use rim_core::moderation::repository::MockModerationRepository;
+
+        let banned = UserId::new();
+        let mut repo = MockModerationRepository::new();
+        repo.expect_get_active_ban().returning(move |sid, uid, _| {
+            Box::pin(async move {
+                Ok((uid == banned).then(|| ServerBan {
+                    server_id: sid,
+                    user_id: uid,
+                    reason: None,
+                    banned_by: None,
+                    created_at: chrono::Utc::now(),
+                    expires_at: None,
+                }))
+            })
+        });
+        let server_id = ServerId::new();
+        assert!(matches!(
+            ensure_not_banned(&repo, server_id, banned).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        assert!(
+            ensure_not_banned(&repo, server_id, UserId::new())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// A guest joins no channel on arrival (Track 1.2).
+    #[tokio::test]
+    async fn add_workspace_member_skips_auto_join_for_guests() {
+        use rim_core::conversation::repository::MockConversationRepository;
+        use rim_core::conversation_member::repository::MockConversationMemberRepository;
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_add_member()
+            .times(1)
+            .returning(|sid, uid, role| {
+                Ok(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id: sid,
+                    user_id: uid,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                })
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_list_public_channel_ids().never();
+        let conversation_member_repo = MockConversationMemberRepository::new();
+
+        let member = add_workspace_member(
+            &server_member_repo,
+            &conversation_repo,
+            &conversation_member_repo,
+            ServerId::new(),
+            UserId::new(),
+            ServerMemberRole::Guest,
+        )
+        .await
+        .expect("add guest");
+        assert_eq!(member.member_role, ServerMemberRole::Guest);
     }
 
     // ── add_workspace_member: Track 1.1 auto-join ──
@@ -932,7 +1254,7 @@ mod tests {
         server_member_repo
             .expect_add_member()
             .withf(move |sid, uid, role| {
-                *sid == server_id && *uid == user_id && *role == ServerMemberRole::Guest
+                *sid == server_id && *uid == user_id && *role == ServerMemberRole::Member
             })
             .times(1)
             .returning(|sid, uid, role| {
@@ -974,7 +1296,7 @@ mod tests {
             &conversation_member_repo,
             server_id,
             user_id,
-            ServerMemberRole::Guest,
+            ServerMemberRole::Member,
         )
         .await
         .expect("add workspace member");
@@ -1001,7 +1323,7 @@ mod tests {
             &conversation_member_repo,
             ServerId::new(),
             UserId::new(),
-            ServerMemberRole::Guest,
+            ServerMemberRole::Member,
         )
         .await
         .unwrap_err();

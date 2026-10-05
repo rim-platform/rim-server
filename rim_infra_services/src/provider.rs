@@ -26,6 +26,7 @@ use rim_services::message::service::MessageService;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::service::ThreadService;
+use rim_services::moderation::service::ModerationService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::oncall::service::OnCallService;
 use rim_services::password_reset::service::PasswordResetService;
@@ -67,6 +68,7 @@ pub struct DefaultAppServiceProvider {
     message_service: Arc<dyn MessageService>,
     message_attachment_service: Arc<dyn MessageAttachmentService>,
     message_reaction_service: Arc<dyn MessageReactionService>,
+    moderation_service: Arc<dyn ModerationService>,
     notification_preference_service: Arc<dyn NotificationPreferenceService>,
     oncall_service: Arc<dyn OnCallService>,
     password_reset_service: Arc<dyn PasswordResetService>,
@@ -121,6 +123,16 @@ impl DefaultAppServiceProvider {
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
         );
+        let audit_log_repo: Arc<dyn rim_core::audit::repository::AuditLogRepository> = Arc::new(
+            rim_infra_db::sea_orm_impl::audit::SeaOrmAuditLogRepository::new(
+                rim_infra_db::DbHandle::from(db.clone()),
+            ),
+        );
+        let audit_log_service: Arc<dyn rim_services::audit::service::AuditLogService> =
+            Arc::new(crate::audit::DefaultAuditLogService::new(
+                Arc::clone(&audit_log_repo),
+                Arc::clone(&capability_service),
+            ));
         let conversation_service: Arc<dyn ConversationService> =
             Arc::new(crate::conversation::DefaultConversationService::new(
                 repos.for_conversation(),
@@ -129,12 +141,21 @@ impl DefaultAppServiceProvider {
         let event_service: Arc<dyn EventService> = Arc::new(crate::event::DefaultEventService);
         let integration_service: Arc<dyn IntegrationService> =
             Arc::new(crate::integration::DefaultIntegrationService);
-        let message_service: Arc<dyn MessageService> =
-            Arc::new(crate::message::DefaultMessageService::new(
+        let message_service: Arc<dyn MessageService> = Arc::new(
+            crate::message::DefaultMessageService::new(
                 repos.for_message(),
                 Some(db.clone()),
                 observers.clone(),
-            ));
+            )
+            .with_audit_log_service(Arc::clone(&audit_log_service)),
+        );
+        let moderation_service: Arc<dyn ModerationService> = Arc::new(
+            crate::moderation::DefaultModerationService::new(
+                repos.for_moderation(),
+                observers.clone(),
+            )
+            .with_audit_log_service(Arc::clone(&audit_log_service)),
+        );
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(
                 repos.for_attachment(),
@@ -202,16 +223,6 @@ impl DefaultAppServiceProvider {
                 repos.for_workspace_state(),
                 ws_state_broadcaster,
             ));
-        let audit_log_repo: Arc<dyn rim_core::audit::repository::AuditLogRepository> = Arc::new(
-            rim_infra_db::sea_orm_impl::audit::SeaOrmAuditLogRepository::new(
-                rim_infra_db::DbHandle::from(db.clone()),
-            ),
-        );
-        let audit_log_service: Arc<dyn rim_services::audit::service::AuditLogService> =
-            Arc::new(crate::audit::DefaultAuditLogService::new(
-                Arc::clone(&audit_log_repo),
-                Arc::clone(&capability_service),
-            ));
         let workspace_feature_service: Arc<dyn WorkspaceFeatureService> = Arc::new(
             crate::workspace_feature::DefaultWorkspaceFeatureService::new(
                 repos.for_workspace_feature(),
@@ -263,6 +274,7 @@ impl DefaultAppServiceProvider {
             incident_service: Arc::clone(&incident_service),
             oncall_service: Arc::clone(&oncall_service),
             workspace_feature_service: Arc::clone(&workspace_feature_service),
+            moderation_service: Arc::clone(&moderation_service),
         };
         let command_service_concrete = Arc::new(
             crate::command::DefaultCommandService::with_confirmation_store(
@@ -351,6 +363,7 @@ impl DefaultAppServiceProvider {
             message_service,
             message_attachment_service,
             message_reaction_service,
+            moderation_service,
             notification_preference_service,
             oncall_service,
             password_reset_service,
@@ -470,6 +483,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService> {
         Arc::clone(&self.workspace_feature_service)
+    }
+    fn moderation_service(&self) -> Arc<dyn ModerationService> {
+        Arc::clone(&self.moderation_service)
     }
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService> {
         Arc::clone(&self.workspace_state_service)

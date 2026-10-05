@@ -30,6 +30,7 @@ pub(crate) mod mention;
 pub(crate) mod message;
 pub(crate) mod message_attachment;
 pub(crate) mod message_reaction;
+pub(crate) mod moderation;
 pub(crate) mod notification_preference;
 // pub(crate) promoted to pub: DefaultOnCallService is constructed directly by the
 // who_is_on_call_matches_pure_resolver integration test (rim_infra_services/tests/oncall_db_test.rs)
@@ -75,6 +76,9 @@ mod conversation_unit_tests;
 
 #[cfg(test)]
 mod message_unit_tests;
+
+#[cfg(test)]
+mod moderation_unit_tests;
 
 #[cfg(test)]
 mod server_unit_tests;
