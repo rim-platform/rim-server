@@ -91,6 +91,33 @@ This is a **minimal** notification, not a full escalation policy:
   swallowed — it must never fail incident creation.
 - No-op-but-harmless when email is unconfigured: `LogEmailSender` "sends" to the log sink.
 
+### Notification digest (Track 1.3)
+
+A user can ask for unread notifications by email: `digest` in their workspace notification
+settings is `OFF` (default), `HOURLY` or `DAILY` (`docs/messaging.md`, Notification rules). A
+periodic job (`rim_infra_services::notification::DefaultNotificationJobs`, driven from
+`rim_server/src/app.rs` next to the escalation timer, every `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS`
+seconds, default 900, minimum 60) sends one email per user per workspace when all of these hold:
+
+- the oldest unread, un-emailed notification is at least one interval old (hourly: 60 minutes,
+  daily: 24 hours);
+- the previous digest in that workspace (the newest `emailed_at`), if any, is at least one
+  interval old;
+- the user has had no presence heartbeat (or disconnect) in the workspace for 15 minutes.
+
+The email (template `notification_digest`) lists the count and the notifications grouped by
+conversation, oldest first, at most 50 per email (the rest go out with the next digest): each
+item is the first 80 characters of the message text, whitespace flattened, HTML-escaped in the
+HTML part, linked to the message permalink
+(`{RIM_PUBLIC_BASE_URL}/workspaces/{server}/conversations/{conversation}/messages/{message}`, with
+`/threads/{thread}` for a reply; no links when the base URL is unset). The subject is only
+"`N unread notification(s) in <workspace>`", so `LogEmailSender`, which logs recipient and subject,
+never logs message text. After a successful send the listed notifications get `emailed_at`; a
+failed send leaves them pending for the next run. Deleted messages are skipped. The job assumes it
+runs on one node, like the escalation timer.
+
+Notifications older than 90 days are deleted by an hourly retention task in the same loop.
+
 ## Retry policy
 
 `SmtpEmailSender` retries **transient** failures internally — the caller only ever sees a final
@@ -113,8 +140,7 @@ Dual MIT/Apache-2.0 licensed, actively maintained (`lettre v0.11.22` as of this 
 ## Future work
 
 Explicitly out of scope for Track B3 (tracked here so they aren't silently dropped):
-- **Notification digest engine** (batching, schedules) — mentioned on the roadmap, not built
-  here; every email sent today is a single transactional message, not a digest.
+- ~~**Notification digest engine**~~ — shipped in Track 1.3 (see "Notification digest" above).
 - **Full incident escalation policies** (on-call chains, paging, push notifications) — Track C.
 - **Per-user incident-email notification preferences** — today, every owner gets every
   incident-declared email unconditionally; no opt-out exists yet.
