@@ -30,6 +30,7 @@ async fn create_get_by_id_and_token_hash_and_revoke() {
             token_hash: "ith".to_string(),
             expires_at: None,
             max_uses: 2,
+            role: ServerMemberRole::Member,
         })
         .await
         .unwrap();
@@ -59,10 +60,42 @@ async fn try_consume_respects_max_uses() {
             token_hash: "ith".to_string(),
             expires_at: None,
             max_uses: 1,
+            role: ServerMemberRole::Member,
         })
         .await
         .unwrap();
 
     assert!(repo.try_consume(inv.id).await.unwrap());
     assert!(!repo.try_consume(inv.id).await.unwrap());
+}
+
+/// Track 1.2: an invite stores the role it grants.
+#[tokio::test]
+async fn invite_role_round_trips() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmInviteRepository::new(ctx.db.clone());
+    let user = ctx.create_user("u").await;
+    let server = ctx.create_server("s").await;
+
+    for (hash, role) in [
+        ("member-link", ServerMemberRole::Member),
+        ("guest-link", ServerMemberRole::Guest),
+    ] {
+        let inv = repo
+            .create_invite(NewInvite {
+                server_id: server.id,
+                created_by_user_id: user.id,
+                token_hash: hash.to_string(),
+                expires_at: None,
+                max_uses: 1,
+                role,
+            })
+            .await
+            .unwrap();
+        assert_eq!(inv.role, role);
+        assert_eq!(
+            repo.get_by_token_hash(hash).await.unwrap().unwrap().role,
+            role
+        );
+    }
 }

@@ -533,4 +533,21 @@ impl ConversationRepository for SeaOrmConversationRepository {
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(updated.into())
     }
+
+    async fn set_slow_mode(
+        &self,
+        conversation_id: ConversationId,
+        seconds: i32,
+    ) -> RepoResult<Conversation> {
+        let model = conversation::Entity::find_by_id(conversation_id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: conversation::ActiveModel = model.into();
+        active.slow_mode_seconds = Set(seconds);
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
 }

@@ -7,10 +7,19 @@ use std::str::FromStr;
 
 model_id!(ServerMemberId);
 
+/// The four-role ladder (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`):
+///
+/// - `Owner`: everything.
+/// - `Moderator`: moderation and channel management; may change roles only between `Member`
+///   and `Guest`.
+/// - `Member`: the default; reads and writes wherever they are a member, creates channels.
+/// - `Guest`: restricted; reads and writes only in conversations they were explicitly added to,
+///   cannot create, browse or join channels, invite, or see the full member directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ServerMemberRole {
     Owner,
     Moderator,
+    Member,
     Guest,
 }
 
@@ -19,8 +28,19 @@ impl ServerMemberRole {
         match self {
             ServerMemberRole::Owner => "owner",
             ServerMemberRole::Moderator => "moderator",
+            ServerMemberRole::Member => "member",
             ServerMemberRole::Guest => "guest",
         }
+    }
+
+    /// `Owner` or `Moderator`: may moderate (kick, ban, timeout, delete others' messages, slow
+    /// mode, reports) and is exempt from slow mode.
+    pub fn is_moderator(&self) -> bool {
+        matches!(self, ServerMemberRole::Owner | ServerMemberRole::Moderator)
+    }
+
+    pub fn is_guest(&self) -> bool {
+        matches!(self, ServerMemberRole::Guest)
     }
 }
 
@@ -37,6 +57,7 @@ impl FromStr for ServerMemberRole {
         match s {
             "owner" => Ok(ServerMemberRole::Owner),
             "moderator" => Ok(ServerMemberRole::Moderator),
+            "member" => Ok(ServerMemberRole::Member),
             "guest" => Ok(ServerMemberRole::Guest),
             other => Err(ParseServerMemberRoleError::new(other)),
         }
@@ -71,4 +92,25 @@ pub struct ServerMember {
     pub user_id: UserId,
     pub member_role: ServerMemberRole,
     pub joined_at: DateTime<Utc>,
+}
+
+/// What the access gates need to know about a workspace member in one lookup: their role and,
+/// while a timeout is in force, when it ends. Returned by
+/// [`crate::server_member::repository::ServerMemberRepository::get_member_standing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberStanding {
+    pub role: ServerMemberRole,
+    /// `Some(until)` only while the member is timed out (`until` is in the future); expired
+    /// timeouts read as `None`.
+    pub timed_out_until: Option<DateTime<Utc>>,
+}
+
+impl MemberStanding {
+    /// A standing with no active timeout.
+    pub fn new(role: ServerMemberRole) -> Self {
+        Self {
+            role,
+            timed_out_until: None,
+        }
+    }
 }

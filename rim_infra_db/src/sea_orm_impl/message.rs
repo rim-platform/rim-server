@@ -403,4 +403,22 @@ impl MessageRepository for SeaOrmMessageRepository {
 
         Ok(())
     }
+
+    async fn last_sent_at_by_author(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        author: rim_core::user::model::UserId,
+    ) -> RepoResult<Option<chrono::DateTime<chrono::Utc>>> {
+        let latest: Option<DateTimeWithTimeZone> = message::Entity::find()
+            .select_only()
+            .column(message::Column::SentAt)
+            .filter(message::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(message::Column::SentBy.eq::<Uuid>(author.into()))
+            .order_by_desc(message::Column::SentAt)
+            .into_tuple()
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(latest.map(Into::into))
+    }
 }

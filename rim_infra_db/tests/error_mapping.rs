@@ -32,6 +32,7 @@ async fn map_db_err_unique_violation_is_conflict_with_message() {
             token_hash: "dup".to_string(),
             expires_at: None,
             max_uses: 1,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await
         .unwrap();
@@ -43,6 +44,7 @@ async fn map_db_err_unique_violation_is_conflict_with_message() {
             token_hash: "dup".to_string(),
             expires_at: None,
             max_uses: 1,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await
         .unwrap_err();

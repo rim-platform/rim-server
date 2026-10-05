@@ -89,6 +89,7 @@ impl InviteRepository for SeaOrmInviteRepository {
             token_hash: Set(inv.token_hash),
             expires_at: Set(inv.expires_at.map(Into::into)),
             max_uses: Set(inv.max_uses),
+            role: Set(inv.role.into()),
             ..Default::default()
         };
 
