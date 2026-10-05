@@ -342,6 +342,9 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     title: Some("migration-2026".to_string()),
                     topic: None,
                     member_ids: vec![],
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
                 })
             })
         });
@@ -361,6 +364,9 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     title: Some("migration-2026".to_string()),
                     topic: Some("Phase-4 reframe migration coordination".to_string()),
                     member_ids: vec![],
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
                 })
             })
         });
@@ -448,6 +454,9 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
                     title: Some("plain-channel".to_string()),
                     topic: None,
                     member_ids: vec![],
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
                 })
             })
         });
@@ -530,6 +539,9 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
                     title: Some("blank-desc".to_string()),
                     topic: None,
                     member_ids: vec![],
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
                 })
             })
         });

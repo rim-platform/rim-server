@@ -78,6 +78,8 @@ async fn boot_recovery_arms_active_run_with_past_deadline_and_ignores_cancelled_
             server_id: server.id,
             conversation_type: ConversationType::Channel,
             title: Some("active".to_string()),
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();
@@ -86,6 +88,8 @@ async fn boot_recovery_arms_active_run_with_past_deadline_and_ignores_cancelled_
             server_id: server.id,
             conversation_type: ConversationType::Channel,
             title: Some("cancelled".to_string()),
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();

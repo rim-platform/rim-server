@@ -80,9 +80,9 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
         let user_uuid: Uuid = user_id.into();
         let conv_uuids: Vec<Uuid> = conversation_ids.iter().copied().map(Into::into).collect();
 
-        // For channels (no conversation_member row) we use the conversation.created_at as the
-        // baseline. For DMs/Groups we use conversation_member.joined_at.
-        // We LEFT JOIN both and use COALESCE to pick the right baseline.
+        // Baseline: the last read, else when the user joined (conversation_member.joined_at),
+        // else conversation.created_at for a conversation without a member row (callers pass
+        // joined conversations only since Track 1.1, so that fallback is defensive).
         let rows = self
             .db
             .query_all_raw(Statement::from_sql_and_values(

@@ -513,7 +513,9 @@ mod tests {
     // `oncall.take_shift`, all with `required_capabilities: []` (§2) — so they
     // surface here unconditionally regardless of the mocked capability grants.
     // Renamed 12→16 to match the sibling inventory gate in `registry/mod.rs`.
-    async fn list_commands_ai_surface_c2_returns_sixteen_commands_with_caps() {
+    // Track 1.1 adds five agent-callable membership/archive builtins (`chat.write`, granted by
+    // the mock): 16→21.
+    async fn list_commands_ai_surface_returns_twenty_one_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -567,8 +569,12 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "chat.archive_channel",
                 "chat.create_channel",
                 "chat.get_recent_messages",
+                "chat.invite_to_conversation",
+                "chat.join_channel",
+                "chat.leave_conversation",
                 "chat.list_channels",
                 "chat.list_members",
                 "chat.open_thread",
@@ -576,6 +582,7 @@ mod tests {
                 "chat.post_message",
                 "chat.search_messages",
                 "chat.toggle_reaction",
+                "chat.unarchive_channel",
                 "incident.ack",
                 "incident.escalate",
                 "oncall.take_shift",

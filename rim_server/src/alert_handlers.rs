@@ -642,6 +642,30 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn archived_conversation_from_ingest_maps_to_409() {
+        let mut tokens = MockIngestTokenService::new();
+        tokens
+            .expect_authenticate_token()
+            .returning(|_| Box::pin(async { Ok(dummy_token_dto()) }));
+        let mut incidents = MockIncidentService::new();
+        incidents
+            .expect_ingest_alert()
+            .returning(|_| Box::pin(async { Err(ServiceError::ConversationArchived) }));
+
+        let app = test_app!(tokens, incidents, AlertRateLimiter::new(60, 120), 262_144);
+
+        let req = actix_test::TestRequest::post()
+            .uri("/api/hooks/alerts/generic")
+            .insert_header(("Authorization", "Bearer rim_ingest_ok"))
+            .set_json(serde_json::json!({"title": "disk full"}))
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 409);
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert_eq!(body["error"], "conversation is archived");
+    }
+
+    #[actix_web::test]
     async fn rate_limit_applies_before_feature_gate() {
         let mut tokens = MockIngestTokenService::new();
         tokens

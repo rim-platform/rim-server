@@ -47,7 +47,9 @@ pub use command_result::{
     CommandResult, CommandResultStatus, ConfirmationChallenge, ConfirmationProofInput,
     InBandTokenInput, OutOfBandProofInput, PipeStageResult,
 };
-pub use conversation::{Conversation, ConversationTypeEnum, MutedConversation, UnreadCount};
+pub use conversation::{
+    ChannelListFilterInput, Conversation, ConversationTypeEnum, MutedConversation, UnreadCount,
+};
 pub use custom_emoji::CustomEmoji;
 pub use escalation::{
     EscalationActionKindGql, EscalationPolicyGql, EscalationRunStatusGql, EscalationStepGql,

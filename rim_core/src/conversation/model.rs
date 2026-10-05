@@ -1,5 +1,6 @@
 use crate::model_id;
 use crate::server::model::ServerId;
+use crate::user::model::UserId;
 use chrono::{DateTime, Utc};
 use std::fmt;
 use std::str::FromStr;
@@ -72,6 +73,25 @@ pub struct Conversation {
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
     pub server_id: ServerId,
+    /// Only meaningful for channels: a private channel is visible to its members only. Always
+    /// `false` for DMs and groups (they are member-only by construction). Fixed at creation.
+    pub is_private: bool,
+    /// Set while the conversation is archived (read-only, hidden from default channel lists).
+    pub archived_at: Option<DateTime<Utc>>,
+    /// Who created the conversation. `None` for rows that predate the column or whose creator
+    /// was deleted.
+    pub created_by: Option<UserId>,
+}
+
+impl Conversation {
+    /// A channel every workspace member can read without being a conversation member.
+    pub fn is_public_channel(&self) -> bool {
+        self.conversation_type == ConversationType::Channel && !self.is_private
+    }
+
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,4 +99,6 @@ pub struct NewConversation {
     pub server_id: ServerId,
     pub conversation_type: ConversationType,
     pub title: Option<String>,
+    pub is_private: bool,
+    pub created_by: Option<UserId>,
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
@@ -16,7 +16,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
 use crate::repos::AppRepos;
-use crate::util::{ensure_server_exists, ensure_server_member};
+use crate::util::{add_workspace_member, ensure_server_exists, ensure_server_member};
 
 #[derive(Clone)]
 pub struct DefaultServerService {
@@ -56,9 +56,13 @@ async fn create_default_channels(
     for channel_name in &["general", "random"] {
         match conversation_repo
             .create_conversation_with_members(
-                ConversationType::Channel,
-                server_id,
-                Some(channel_name.to_string()),
+                NewConversation {
+                    server_id,
+                    conversation_type: ConversationType::Channel,
+                    title: Some(channel_name.to_string()),
+                    is_private: false,
+                    created_by: Some(creator_id),
+                },
                 &[creator_id],
             )
             .await
@@ -76,6 +80,7 @@ async fn create_default_channels(
                     title: conv.title.clone(),
                     conversation_type: conv.conversation_type.as_str().to_string(),
                     member_user_ids: vec![creator_id],
+                    is_private: conv.is_private,
                 });
             }
             Err(err) => {
@@ -124,10 +129,15 @@ impl ServerService for DefaultServerService {
         let server = repos.server_repo.create_server(name).await?;
 
         // Creator becomes owner.
-        let _ = repos
-            .server_member_repo
-            .add_member(server.id, cmd.actor.user_id, ServerMemberRole::Owner)
-            .await?;
+        let _ = add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            server.id,
+            cmd.actor.user_id,
+            ServerMemberRole::Owner,
+        )
+        .await?;
 
         // Create default channels inside the transaction (if available).
         create_default_channels(

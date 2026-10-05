@@ -31,7 +31,8 @@ use crate::MessageRepos;
 use crate::mention::parse_mention_ids;
 use crate::repos::AppRepos;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+    ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -74,14 +75,13 @@ impl DefaultMessageService {
         Ok(())
     }
 
-    /// Parse mentions from message text, validate them against workspace members,
-    /// store in DB, and emit UserMentioned event.
+    /// Parse mentions from message text, validate them against the users who can read the
+    /// conversation, store in DB, and emit UserMentioned event.
     async fn process_mentions(
         &self,
         text: Option<&str>,
         message_id: rim_core::message::model::MessageId,
-        server_id: rim_core::server::model::ServerId,
-        conversation_id: rim_core::conversation::model::ConversationId,
+        conversation: &rim_core::conversation::model::Conversation,
         author_id: rim_core::user::model::UserId,
     ) {
         let Some(text) = text else { return };
@@ -89,18 +89,34 @@ impl DefaultMessageService {
         if mention_ids.is_empty() {
             return;
         }
+        let server_id = conversation.server_id;
+        let conversation_id = conversation.id;
 
-        // Validate: each mentioned user must be a workspace member.
+        // Validate: each mentioned user must be a workspace member who can read the
+        // conversation — anyone for a public channel, otherwise a conversation member. A
+        // mention of anyone else would tell them (via `UserMentioned`) that a private
+        // conversation exists.
         let mut valid_ids = Vec::new();
         for uid in &mention_ids {
             if *uid == author_id {
                 continue; // Don't mention yourself
             }
-            if let Ok(true) = self
+            let Ok(true) = self
                 .repos
                 .server_member_repo
                 .is_member(server_id, *uid)
                 .await
+            else {
+                continue;
+            };
+            if conversation.is_public_channel()
+                || matches!(
+                    self.repos
+                        .conversation_member_repo
+                        .is_member(conversation_id, *uid)
+                        .await,
+                    Ok(true)
+                )
             {
                 valid_ids.push(*uid);
             }
@@ -355,7 +371,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
-        let conv = ensure_conversation_member_access(
+        let conv = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -441,18 +457,13 @@ impl MessageService for DefaultMessageService {
             workspace_id: cmd.server_id,
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
             member_user_ids,
             message: MessageEventData::from(&dto),
         });
 
-        self.process_mentions(
-            dto.text.as_deref(),
-            dto.id,
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.actor.user_id,
-        )
-        .await;
+        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
+            .await;
 
         Ok(dto)
     }
@@ -471,7 +482,7 @@ impl MessageService for DefaultMessageService {
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
         // 1. Validate access
-        let conv = ensure_conversation_member_access(
+        let conv = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -626,6 +637,7 @@ impl MessageService for DefaultMessageService {
                 thread_id: thread.id,
                 root_message_id: cmd.root_message_id,
                 conversation_type: conv.conversation_type.as_str().to_string(),
+                is_private: conv.is_private,
                 member_user_ids: member_user_ids.clone(),
             });
         }
@@ -634,18 +646,13 @@ impl MessageService for DefaultMessageService {
             workspace_id: cmd.server_id,
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
             member_user_ids,
             message: MessageEventData::from(&dto),
         });
 
-        self.process_mentions(
-            dto.text.as_deref(),
-            dto.id,
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.actor.user_id,
-        )
-        .await;
+        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
+            .await;
 
         Ok(dto)
     }
@@ -947,7 +954,7 @@ impl MessageService for DefaultMessageService {
     }
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto> {
-        let conv = ensure_conversation_member_access(
+        let conv = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -1011,6 +1018,7 @@ impl MessageService for DefaultMessageService {
             workspace_id: cmd.server_id,
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
             member_user_ids,
             message: MessageEventData::from(&dto),
         });
@@ -1021,14 +1029,8 @@ impl MessageService for DefaultMessageService {
             .message_mention_repo
             .delete_mentions_for_message(cmd.message_id)
             .await;
-        self.process_mentions(
-            dto.text.as_deref(),
-            dto.id,
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.actor.user_id,
-        )
-        .await;
+        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
+            .await;
 
         Ok(dto)
     }
@@ -1061,7 +1063,7 @@ impl MessageService for DefaultMessageService {
             cmd.source_conversation_id,
         )
         .await?;
-        let target_conv = ensure_conversation_member_access(
+        let target_conv = ensure_conversation_writable(
             access_repos,
             cmd.actor.user_id,
             cmd.server_id,
@@ -1125,6 +1127,7 @@ impl MessageService for DefaultMessageService {
             workspace_id: cmd.server_id,
             conversation_id: dto.conversation_id,
             conversation_type: target_conv.conversation_type.as_str().to_string(),
+            is_private: target_conv.is_private,
             member_user_ids,
             message: MessageEventData::from(&dto),
         });
@@ -1133,7 +1136,7 @@ impl MessageService for DefaultMessageService {
     }
 
     async fn delete_message(&self, cmd: DeleteMessageCmd) -> ServiceResult<()> {
-        let conv = ensure_conversation_member_access(
+        let conv = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -1180,6 +1183,7 @@ impl MessageService for DefaultMessageService {
             workspace_id: cmd.server_id,
             conversation_id: cmd.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
             member_user_ids,
             message_id: cmd.message_id,
             thread_id,

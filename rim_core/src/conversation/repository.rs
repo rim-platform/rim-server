@@ -1,4 +1,4 @@
-use crate::conversation::model::{Conversation, ConversationId, ConversationType, NewConversation};
+use crate::conversation::model::{Conversation, ConversationId, NewConversation};
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
 use crate::server::model::ServerId;
@@ -20,6 +20,16 @@ pub struct ConversationCreatedCursor {
     pub conversation_id: ConversationId,
 }
 
+/// Which channels [`ConversationRepository::list_channels_for_user`] returns. The default lists
+/// every channel the user can see (public ones plus private ones they belong to), unarchived.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChannelListFilter {
+    /// Only channels the user is a conversation member of.
+    pub joined_only: bool,
+    /// Include archived channels.
+    pub include_archived: bool,
+}
+
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationRepository: Send + Sync {
@@ -31,9 +41,7 @@ pub trait ConversationRepository: Send + Sync {
 
     async fn create_conversation_with_members(
         &self,
-        conversation_type: ConversationType,
-        server_id: ServerId,
-        title: Option<String>,
+        conv: NewConversation,
         member_ids: &[UserId],
     ) -> RepoResult<Conversation>;
 
@@ -56,13 +64,16 @@ pub trait ConversationRepository: Send + Sync {
         cursor: Option<ConversationActivityCursor>,
     ) -> RepoResult<Page<Conversation, ConversationActivityCursor>>;
 
-    /// List channel conversations for a user in a stable order.
+    /// List the channels a user can see, in a stable order: public channels plus private channels
+    /// the user is a conversation member of, narrowed by `filter` (archived channels are excluded
+    /// unless `filter.include_archived`).
     ///
     /// v0 ordering: `created_at ASC, id ASC`.
     async fn list_channels_for_user(
         &self,
         user_id: UserId,
         server_id: ServerId,
+        filter: ChannelListFilter,
         limit: u32,
         dir: PageDir,
         cursor: Option<ConversationCreatedCursor>,
@@ -83,8 +94,23 @@ pub trait ConversationRepository: Send + Sync {
     ) -> RepoResult<Option<Conversation>>;
 
     /// List all conversation IDs that the user can access in a server.
-    /// Includes: all channels (server membership is sufficient) + DM/group where user is member.
+    /// Includes: public channels, archived or not (server membership is sufficient) + private
+    /// channels, DMs and groups where the user is a conversation member.
     async fn list_accessible_conversation_ids(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Vec<ConversationId>>;
+
+    /// Public, unarchived channels of a server — the channels a new workspace member joins
+    /// automatically (see `add_workspace_member` in `rim_infra_services`).
+    async fn list_public_channel_ids(&self, server_id: ServerId)
+    -> RepoResult<Vec<ConversationId>>;
+
+    /// Conversations in a server the user is a `conversation_member` of: joined public channels,
+    /// private channels, DMs and groups (not public channels they merely can read). Scopes the
+    /// unread counts.
+    async fn list_joined_conversation_ids(
         &self,
         server_id: ServerId,
         user_id: UserId,
@@ -103,5 +129,12 @@ pub trait ConversationRepository: Send + Sync {
         &self,
         conversation_id: ConversationId,
         topic: Option<String>,
+    ) -> RepoResult<Conversation>;
+
+    /// Archive (`Some(at)`) or unarchive (`None`) a conversation.
+    async fn set_archived(
+        &self,
+        conversation_id: ConversationId,
+        archived_at: Option<DateTime<Utc>>,
     ) -> RepoResult<Conversation>;
 }

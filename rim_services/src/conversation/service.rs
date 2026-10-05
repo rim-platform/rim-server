@@ -4,8 +4,9 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::conversation::command::{
-    AddConversationMemberCmd, CreateConversationCmd, GetConversationQuery, ListChannelsQuery,
-    ListInboxConversationsQuery, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, GetConversationQuery,
+    JoinChannelCmd, LeaveConversationCmd, ListChannelsQuery, ListInboxConversationsQuery,
+    RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
 use crate::conversation::dto::{ChannelPageCursor, ConversationDto, InboxPageCursor};
 use rim_core::conversation::model::ConversationId;
@@ -37,11 +38,30 @@ pub trait ConversationService: Send + Sync {
         query: ListChannelsQuery,
     ) -> ServiceResult<Page<ConversationDto, ChannelPageCursor>>;
 
-    async fn add_member(&self, cmd: AddConversationMemberCmd) -> ServiceResult<ConversationDto>;
+    /// Add workspace members to a channel or group the actor belongs to. Already-member targets
+    /// are skipped. Emits `MemberAddedToConversation` per added user.
+    async fn add_conversation_members(
+        &self,
+        cmd: AddConversationMembersCmd,
+    ) -> ServiceResult<ConversationDto>;
 
-    async fn remove_member(
+    /// Owner/Moderator remove anyone; others only themselves. Emits
+    /// `MemberRemovedFromConversation`.
+    async fn remove_conversation_member(
         &self,
         cmd: RemoveConversationMemberCmd,
+    ) -> ServiceResult<()>;
+
+    /// Join a public, unarchived channel. Idempotent.
+    async fn join_channel(&self, cmd: JoinChannelCmd) -> ServiceResult<ConversationDto>;
+
+    /// Leave a channel or group (not a DM).
+    async fn leave_conversation(&self, cmd: LeaveConversationCmd) -> ServiceResult<()>;
+
+    /// Archive or unarchive a channel (Owner/Moderator). Emits `ConversationUpdated`.
+    async fn set_conversation_archived(
+        &self,
+        cmd: ArchiveConversationCmd,
     ) -> ServiceResult<ConversationDto>;
 
     async fn update_topic(&self, cmd: UpdateConversationTopicCmd)

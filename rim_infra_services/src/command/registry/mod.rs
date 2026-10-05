@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_ai_callable_inventory_matches_reviewed_set_c2_sixteen_commands() {
+    fn collect_ai_callable_inventory_matches_reviewed_set() {
         // P3 + P4-A4 yielded 7 ai_callable builtins. P4-A5 adds 5 brand-new
         // commands (`chat.list_members`, `chat.search_messages`,
         // `chat.get_recent_messages`, `chat.pin_message`,
@@ -165,10 +165,16 @@ mod tests {
         // (`docs/specs/track-c2-agent-operator.md` §1, Jakub-ratified) flips
         // 4 more C1 lifecycle commands to `ai_callable: true` — `incident.ack`,
         // `incident.escalate`, `oncall.who`, `oncall.take_shift` — for a new
-        // total of 16.
+        // total of 16. Track 1.1 (`docs/specs/track-1-1-private-channels.md`, Commands) adds
+        // five chat membership/archive builtins — `chat.join_channel`,
+        // `chat.leave_conversation`, `chat.invite_to_conversation`, `chat.archive_channel`,
+        // `chat.unarchive_channel` — for 21. `chat.remove_conversation_member` is deliberately
+        // NOT AI-callable (dangerous, confirmation-gated). Every one of them is authorized by
+        // `ConversationService` (membership, private-channel visibility, Owner/Moderator for
+        // archive), so the agent gains no access the user does not already have.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 16 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // 21 IDs are AI-callable. Adding a new ai_callable builtin without a
         // Hawkeye + Widow security review (and updating this set) must fail
         // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
@@ -194,6 +200,11 @@ mod tests {
             "incident.escalate",
             "oncall.who",
             "oncall.take_shift",
+            "chat.join_channel",
+            "chat.leave_conversation",
+            "chat.invite_to_conversation",
+            "chat.archive_channel",
+            "chat.unarchive_channel",
         ];
         expected.sort();
 

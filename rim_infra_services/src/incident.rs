@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
 
-use rim_core::conversation::model::{Conversation, ConversationType};
+use rim_core::conversation::model::Conversation;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::escalation::model::{
@@ -54,7 +54,11 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::oncall::{OnCallRepos, resolve_on_call_now_for_schedule};
 use crate::repos::AppRepos;
-use crate::util::{ensure_conversation_in_server, ensure_feature_enabled, ensure_server_member};
+use crate::util::{
+    ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
+    ensure_conversation_writable, ensure_feature_enabled, ensure_not_archived,
+    ensure_server_member,
+};
 
 #[derive(Clone)]
 pub struct IncidentRepos {
@@ -476,15 +480,15 @@ impl DefaultIncidentService {
         }
     }
 
-    /// Channels have no `conversation_member` rows (server membership alone grants access), so
-    /// the subscription-visibility list is only meaningful for DM/Group conversations. The
-    /// `WorkspaceEvent::Incident*` variants carry `conversation_type` precisely so the
-    /// subscriber-side filter doesn't need this list to be populated for channels.
+    /// Public channels are readable by every server member, so the subscription-visibility list
+    /// is only meaningful for private channels and DM/Group conversations. The
+    /// `WorkspaceEvent::Incident*` variants carry `conversation_type`/`is_private` precisely so
+    /// the subscriber-side filter doesn't need this list to be populated for public channels.
     async fn member_user_ids_for_conversation(
         repos: &IncidentRepos,
         conversation: &Conversation,
     ) -> ServiceResult<Vec<UserId>> {
-        if conversation.conversation_type == ConversationType::Channel {
+        if conversation.is_public_channel() {
             Ok(vec![])
         } else {
             Ok(repos
@@ -514,6 +518,7 @@ impl DefaultIncidentService {
             workspace_id: incident.server_id,
             conversation_id: incident.conversation_id,
             conversation_type: conversation.conversation_type.as_str().to_string(),
+            is_private: conversation.is_private,
             incident_id: incident.id,
             severity: incident.severity.map(|s| s.as_str().to_string()),
             title: incident.title.clone(),
@@ -542,6 +547,7 @@ impl DefaultIncidentService {
             workspace_id: incident.server_id,
             conversation_id: incident.conversation_id,
             conversation_type: conversation.conversation_type.as_str().to_string(),
+            is_private: conversation.is_private,
             incident_id: incident.id,
             status: incident.status.as_str().to_string(),
             member_user_ids,
@@ -561,11 +567,17 @@ impl IncidentService for DefaultIncidentService {
         .await?;
         self.ensure_incidents_enabled(cmd.server_id).await?;
 
-        // Validate conversation belongs to this server
-        ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            cmd.conversation_id,
+        // The actor must be able to write to the conversation: it exists in this server, is
+        // readable by them (private channels/DMs/groups need membership) and is not archived.
+        ensure_conversation_writable(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            cmd.actor.user_id,
             cmd.server_id,
+            cmd.conversation_id,
         )
         .await?;
 
@@ -955,11 +967,17 @@ impl IncidentService for DefaultIncidentService {
         )
         .await?;
 
-        // Validate conversation belongs to this server
-        ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
+        // The conversation must exist in this server and be readable by the actor (a private
+        // channel the actor is not in is NotFound).
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            query.actor.user_id,
             query.server_id,
+            query.conversation_id,
         )
         .await?;
 
@@ -1073,6 +1091,9 @@ impl IncidentService for DefaultIncidentService {
             cmd.server_id,
         )
         .await?;
+        // An archived channel is read-only: alerts are refused (409 on the webhook) rather than
+        // opening or updating incidents and posting into it.
+        ensure_not_archived(&conversation)?;
 
         let (repos, scope) = self.begin_write().await?;
 
@@ -1343,6 +1364,7 @@ impl IncidentService for DefaultIncidentService {
                 workspace_id: updated.server_id,
                 conversation_id: updated.conversation_id,
                 conversation_type: conversation.conversation_type.as_str().to_string(),
+                is_private: conversation.is_private,
                 incident_id: updated.id,
                 acknowledged_by: cmd.actor.user_id,
                 member_user_ids,
@@ -1534,7 +1556,7 @@ impl IncidentService for DefaultIncidentService {
             .conversation_repo
             .get_by_id(incident.conversation_id)
             .await?;
-        let (conversation_type, member_user_ids) = match &conversation {
+        let (conversation_type, is_private, member_user_ids) = match &conversation {
             Some(c) => {
                 let member_ids = Self::member_user_ids_for_conversation(&self.repos, c)
                     .await
@@ -1542,15 +1564,20 @@ impl IncidentService for DefaultIncidentService {
                         tracing::warn!(error = %e, incident_id = %incident.id, "failed to resolve incident conversation members for EscalationStepFired broadcast");
                         vec![]
                     });
-                (c.conversation_type.as_str().to_string(), member_ids)
+                (
+                    c.conversation_type.as_str().to_string(),
+                    c.is_private,
+                    member_ids,
+                )
             }
-            None => ("Channel".to_string(), vec![]),
+            None => ("Channel".to_string(), false, vec![]),
         };
 
         self.observers.emit(WorkspaceEvent::EscalationStepFired {
             workspace_id: incident.server_id,
             conversation_id: incident.conversation_id,
             conversation_type,
+            is_private,
             incident_id: incident.id,
             escalation_policy_id: run.policy_id,
             step_index: step.position,

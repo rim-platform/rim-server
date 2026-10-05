@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Enum, SimpleObject};
+use async_graphql::{ComplexObject, Enum, InputObject, SimpleObject};
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ConversationTypeEnum {
@@ -27,6 +27,12 @@ pub struct Conversation {
     pub title: Option<String>,
     pub topic: Option<String>,
     pub member_ids: Vec<async_graphql::ID>,
+    /// Channels only: visible to its members alone. Fixed at creation.
+    pub is_private: bool,
+    pub is_archived: bool,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub member_count: i32,
+    pub created_by: Option<async_graphql::ID>,
 }
 
 #[ComplexObject]
@@ -48,10 +54,19 @@ impl Conversation {
         .await
         .map_err(crate::errors::map_service_error)
     }
+
+    /// Whether the viewer is a member (for channels: has joined it).
+    async fn is_member(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<bool> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let actor = async_graphql::ID(actor.to_string());
+        Ok(self.member_ids.contains(&actor))
+    }
 }
 
 impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
     fn from(value: rim_services::conversation::dto::ConversationDto) -> Self {
+        let is_archived = value.is_archived();
+        let member_count = i32::try_from(value.member_count()).unwrap_or(i32::MAX);
         Self {
             id: async_graphql::ID(value.id.to_string()),
             server_id: async_graphql::ID(value.server_id.to_string()),
@@ -63,6 +78,33 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
                 .into_iter()
                 .map(|id| async_graphql::ID(id.to_string()))
                 .collect(),
+            is_private: value.is_private,
+            is_archived,
+            archived_at: value.archived_at,
+            member_count,
+            created_by: value.created_by.map(|id| async_graphql::ID(id.to_string())),
+        }
+    }
+}
+
+/// Narrows the `channels` query. By default it lists every channel the viewer can see (public
+/// channels plus private channels they belong to) that is not archived.
+#[derive(InputObject, Clone, Copy, Debug, Default)]
+#[graphql(name = "ChannelListFilter")]
+pub struct ChannelListFilterInput {
+    /// Only channels the viewer has joined (the sidebar list).
+    #[graphql(default)]
+    pub joined_only: bool,
+    /// Include archived channels.
+    #[graphql(default)]
+    pub include_archived: bool,
+}
+
+impl From<ChannelListFilterInput> for rim_core::conversation::repository::ChannelListFilter {
+    fn from(value: ChannelListFilterInput) -> Self {
+        Self {
+            joined_only: value.joined_only,
+            include_archived: value.include_archived,
         }
     }
 }

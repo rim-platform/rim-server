@@ -16,6 +16,24 @@ pub struct ConversationDto {
     pub topic: Option<String>,
 
     pub member_ids: Vec<UserId>,
+
+    pub is_private: bool,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: Option<UserId>,
+}
+
+impl ConversationDto {
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+
+    pub fn is_member(&self, user_id: UserId) -> bool {
+        self.member_ids.contains(&user_id)
+    }
+
+    pub fn member_count(&self) -> usize {
+        self.member_ids.len()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

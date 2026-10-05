@@ -127,6 +127,7 @@ pub struct ServerRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
 }
 
 #[derive(Clone)]
@@ -134,6 +135,9 @@ pub struct ServerMemberRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub user_repo: Arc<dyn UserRepository>,
+    /// A new member auto-joins the public channels (`util::add_workspace_member`).
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
 }
 
 #[derive(Clone)]
@@ -151,6 +155,7 @@ pub struct AuthRepos {
     pub bootstrap_token_repo: Arc<dyn BootstrapTokenRepository>,
     pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
 }
 
 #[derive(Clone)]
@@ -211,6 +216,7 @@ impl AppRepos {
         crate::channel_lens::ChannelLensRepos {
             channel_lens_repo: Arc::clone(&self.channel_lens_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             message_repo: Arc::clone(&self.message_repo),
             message_pin_repo: Arc::clone(&self.message_pin_repo),
@@ -267,6 +273,7 @@ impl AppRepos {
             server_repo: Arc::clone(&self.server_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 
@@ -275,6 +282,8 @@ impl AppRepos {
             server_repo: Arc::clone(&self.server_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             user_repo: Arc::clone(&self.user_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 
@@ -294,6 +303,7 @@ impl AppRepos {
             bootstrap_token_repo: Arc::clone(&self.bootstrap_token_repo),
             instance_invite_repo: Arc::clone(&self.instance_invite_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 

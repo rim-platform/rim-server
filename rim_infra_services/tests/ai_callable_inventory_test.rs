@@ -88,9 +88,9 @@ fn emit_ai_callable_inventory_audit_writes_structured_event() {
         output.contains("count="),
         "expected `count=` field in captured log output; got:\n{output}"
     );
-    // The live registry has 12 ai_callable builtins (Phase 1 §3.4 / P4-A5).
+    // The live registry has 21 ai_callable builtins (P4-A5, C2, Track 1.1).
     // Assert `count=0` is NOT present — exact-count is pinned in the unit
-    // test `collect_ai_callable_inventory_phase4_a5_yields_twelve_commands`.
+    // test `collect_ai_callable_inventory_matches_reviewed_set`.
     assert!(
         !output.contains("count=0"),
         "ai_callable_inventory count must be non-zero; got:\n{output}"

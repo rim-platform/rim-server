@@ -12,7 +12,9 @@ use rim_services::pin::service::PinService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::PinRepos;
-use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
+use crate::util::{
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+};
 
 const MAX_PINS_PER_CONVERSATION: u64 = 50;
 
@@ -45,7 +47,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn pin_message(&self, cmd: PinMessageCmd) -> ServiceResult<()> {
-        let conversation = ensure_conversation_member_access(
+        let conversation = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -119,6 +121,7 @@ impl PinService for DefaultPinService {
             message_id: cmd.message_id,
             pinned_by: cmd.actor.user_id,
             conversation_type: conversation.conversation_type.as_str().to_string(),
+            is_private: conversation.is_private,
             member_user_ids: member_ids,
         });
 
@@ -131,7 +134,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn unpin_message(&self, cmd: UnpinMessageCmd) -> ServiceResult<()> {
-        let conversation = ensure_conversation_member_access(
+        let conversation = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -162,6 +165,7 @@ impl PinService for DefaultPinService {
             conversation_id: cmd.conversation_id,
             message_id: cmd.message_id,
             conversation_type: conversation.conversation_type.as_str().to_string(),
+            is_private: conversation.is_private,
             member_user_ids: member_ids,
         });
 
