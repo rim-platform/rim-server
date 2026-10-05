@@ -21,6 +21,7 @@ impl From<conversation::Model> for Conversation {
             is_private: m.is_private,
             archived_at: m.archived_at.map(Into::into),
             created_by: m.created_by.map(Into::into),
+            slow_mode_seconds: m.slow_mode_seconds,
         }
     }
 }

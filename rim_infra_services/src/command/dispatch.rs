@@ -437,6 +437,9 @@ impl DefaultCommandService {
             // builtins here without passing the top-level gate in `execute_command_inner`.
             self.ensure_command_feature_enabled(&definition, ctx.context.as_ref())
                 .await?;
+            // Timeout gate for nested dispatch, for the same reason.
+            self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
+                .await?;
             if definition.requires_confirmation_for_initiator(ctx.initiator)
                 && !ctx.confirmed_dangerous
             {
@@ -537,6 +540,14 @@ impl DefaultCommandService {
         };
         if let Some(def) = &top_level_def {
             self.ensure_command_feature_enabled(def, cmd.context.as_ref())
+                .await?;
+        }
+
+        // ── T1: timeout gate (Track 1.2) ────────────────────────────────
+        // A timed-out member cannot run Mutating commands in that workspace; reads still work.
+        // Also before the rate limiter, so a refused command consumes no slot.
+        if let Some(def) = &top_level_def {
+            self.ensure_command_not_timed_out(def, &cmd.actor, cmd.context.as_ref())
                 .await?;
         }
 

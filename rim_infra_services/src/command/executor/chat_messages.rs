@@ -251,6 +251,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         }
     }
 

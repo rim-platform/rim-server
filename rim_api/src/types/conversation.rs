@@ -33,6 +33,9 @@ pub struct Conversation {
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
     pub member_count: i32,
     pub created_by: Option<async_graphql::ID>,
+    /// Slow mode (Track 1.2): minimum seconds between two messages of the same non-moderator
+    /// member; `0` when off.
+    pub slow_mode_seconds: i32,
 }
 
 #[ComplexObject]
@@ -83,6 +86,7 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
             archived_at: value.archived_at,
             member_count,
             created_by: value.created_by.map(|id| async_graphql::ID(id.to_string())),
+            slow_mode_seconds: value.slow_mode_seconds,
         }
     }
 }

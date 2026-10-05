@@ -36,7 +36,7 @@ pub(super) async fn list_members(
         .map(|m| {
             serde_json::json!({
                 "username": m.username,
-                "role": m.member_role,
+                "role": m.member_role.as_str(),
                 "joined": m.joined_at.to_rfc3339(),
             })
         })
@@ -115,6 +115,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         }
     }
 
@@ -127,8 +130,9 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            member_role: "member".to_string(),
+            member_role: rim_core::server_member::model::ServerMemberRole::Member,
             joined_at: chrono::Utc::now(),
+            timeout_until: None,
         }
     }
 

@@ -38,6 +38,7 @@ mod tests {
                         is_private: conv.is_private,
                         archived_at: None,
                         created_by: conv.created_by,
+                        slow_mode_seconds: 0,
                     })
                 })
             });

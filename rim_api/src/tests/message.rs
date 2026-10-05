@@ -183,6 +183,7 @@ async fn search_messages_query_returns_matches() {
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 }])
             })
         });

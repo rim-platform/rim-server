@@ -271,9 +271,9 @@ async fn setup() -> Fixture {
     let carol_user = ctx.create_user("carol").await;
     let outsider_user = ctx.create_user("outsider").await;
     ctx.add_owner(&server, &alice_user).await;
-    ctx.add_member(&server, &bob_user, ServerMemberRole::Guest)
+    ctx.add_member(&server, &bob_user, ServerMemberRole::Member)
         .await;
-    ctx.add_member(&server, &carol_user, ServerMemberRole::Guest)
+    ctx.add_member(&server, &carol_user, ServerMemberRole::Member)
         .await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
@@ -828,12 +828,17 @@ async fn edit_and_delete_are_reflected_in_the_timeline() {
         "conversationId": f.channel_id,
         "messageId": deleted.id,
     } });
+    // Carol is an ordinary member: only the author or an Owner/Moderator may delete
+    // (moderator deletes are covered in `moderation_e2e.rs`).
     let code = exec_err_code(
         &f.schema,
-        f.alice.request(DELETE_MUTATION, delete_vars.clone()),
+        f.carol.request(DELETE_MUTATION, delete_vars.clone()),
     )
     .await;
-    assert_eq!(code, "FORBIDDEN", "only the author may delete");
+    assert_eq!(
+        code, "FORBIDDEN",
+        "a plain member may not delete others' messages"
+    );
     let data = exec_ok(&f.schema, f.bob.request(DELETE_MUTATION, delete_vars)).await;
     assert_eq!(data["deleteMessage"], json!(true));
 

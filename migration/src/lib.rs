@@ -3,6 +3,9 @@ pub use sea_orm_migration::prelude::*;
 /// Track 1.1 channel-membership back-fill, exposed for the `rim_infra_db` db-tests.
 pub use m20261005_005743_add_channel_privacy_and_archive::CHANNEL_MEMBERSHIP_BACKFILL_SQL;
 
+/// Track 1.2 role data step (`guest` -> `member`), exposed for the `rim_infra_db` db-tests.
+pub use m20261005_024730_add_member_role::GUEST_TO_MEMBER_SQL;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -68,6 +71,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_111818_add_incident_escalation_and_ack_fields::Migration),
             Box::new(m20261004_220805_add_workspace_feature::Migration),
             Box::new(m20261005_005743_add_channel_privacy_and_archive::Migration),
+            Box::new(m20261005_024730_add_member_role::Migration),
+            Box::new(m20261005_024731_add_moderation::Migration),
         ]
     }
 }
@@ -130,3 +135,5 @@ mod m20260710_111818_add_incident_escalation_and_ack_fields;
 mod m20260710_111818_create_escalation_run;
 mod m20261004_220805_add_workspace_feature;
 mod m20261005_005743_add_channel_privacy_and_archive;
+mod m20261005_024730_add_member_role;
+mod m20261005_024731_add_moderation;

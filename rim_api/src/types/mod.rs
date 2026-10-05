@@ -19,6 +19,7 @@ pub(crate) mod invite;
 pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
+pub(crate) mod moderation;
 pub(crate) mod oncall;
 pub(crate) mod pagination;
 pub(crate) mod pipeline;
@@ -72,6 +73,10 @@ pub use keybind::{
 pub use macro_def::{MacroDef, MacroStep};
 pub use message::{
     LinkPreview, Message, MessageReference, ReactionGroup, SearchMessagesInput, SearchResultMessage,
+};
+pub use moderation::{
+    MemberTimeout, MessageReport, MessageReportCursorInput, MessageReportCursorOutput,
+    MessageReportPage, MessageReportStatus, ReportOutcome, ServerBan,
 };
 pub use oncall::{
     OnCallNowGql, OnCallOverrideGql, OnCallScheduleGql, OnCallShiftGql, RotationKindGql,

@@ -12,7 +12,7 @@ use rim_services::message::service::MessageService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::MentionRepos;
-use crate::util::ensure_server_member;
+use crate::util::member_standing;
 
 /// Regex-free mention parser: extracts user IDs from `<@uuid>` tokens.
 pub fn parse_mention_ids(text: &str) -> Vec<UserId> {
@@ -63,18 +63,25 @@ impl DefaultMentionService {
 #[async_trait]
 impl MentionService for DefaultMentionService {
     async fn get_my_mentions(&self, query: MyMentionsQuery) -> ServiceResult<Vec<MessageDto>> {
-        ensure_server_member(
+        let standing = member_standing(
             self.repos.server_member_repo.as_ref(),
             query.server_id,
             query.actor.user_id,
         )
         .await?;
 
-        let conversation_ids = self
-            .repos
-            .conversation_repo
-            .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
-            .await?;
+        // A guest reads only conversations they are a member of (Track 1.2).
+        let conversation_ids = if standing.role.is_guest() {
+            self.repos
+                .conversation_repo
+                .list_joined_conversation_ids(query.server_id, query.actor.user_id)
+                .await?
+        } else {
+            self.repos
+                .conversation_repo
+                .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
+                .await?
+        };
 
         let message_ids = self
             .repos

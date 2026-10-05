@@ -97,6 +97,9 @@ fn build_service(
             incident_service: Arc::new(MockIncidentService::new()),
             oncall_service: Arc::new(MockOnCallService::new()),
             workspace_feature_service: Arc::new(features),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
     )
 }

@@ -21,6 +21,7 @@ pub struct InviteDto {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<DateTime<Utc>>,
+    pub role: rim_core::server_member::model::ServerMemberRole,
 }
 
 #[derive(Debug, Clone)]

@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use entity::server_member;
+use entity::{server_member, server_member_timeout};
 use rim_core::repository::error::RepoResult;
 use rim_core::server::model::ServerId;
-use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+use rim_core::server_member::model::{
+    MemberStanding, ServerMember, ServerMemberId, ServerMemberRole,
+};
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
@@ -116,5 +118,27 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool> {
         Ok(self.get_member(server_id, user_id).await?.is_some())
+    }
+
+    async fn get_member_standing(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Option<MemberStanding>> {
+        let Some(member) = self.get_member(server_id, user_id).await? else {
+            return Ok(None);
+        };
+        let now: sea_orm::prelude::DateTimeWithTimeZone = chrono::Utc::now().into();
+        let timeout = server_member_timeout::Entity::find()
+            .filter(server_member_timeout::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(server_member_timeout::Column::UserId.eq::<Uuid>(user_id.into()))
+            .filter(server_member_timeout::Column::Until.gt(now))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(Some(MemberStanding {
+            role: member.member_role,
+            timed_out_until: timeout.map(|t| t.until.into()),
+        }))
     }
 }

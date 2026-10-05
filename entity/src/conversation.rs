@@ -17,6 +17,7 @@ pub struct Model {
     pub is_private: bool,
     pub archived_at: Option<DateTimeWithTimeZone>,
     pub created_by: Option<Uuid>,
+    pub slow_mode_seconds: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
