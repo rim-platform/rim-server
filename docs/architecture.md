@@ -191,9 +191,15 @@ Today:
 
 A conversation lives inside a server/workspace and represents one of:
 
-- channel
+- channel (public, readable by every workspace member, or private, readable by its members only)
 - DM
 - group chat
+
+Access rules (Track 1.1, `rim_infra_services/src/util.rs`): `ensure_conversation_member_access`
+lets any workspace member read a public channel; private channels, DMs and groups need a
+`conversation_member` row (a private-channel non-member gets `NotFound`, a DM/group non-member
+`PermissionDenied`). `ensure_conversation_writable` adds the archive check
+(`ConversationArchived`) for every write path. See `docs/messaging.md`.
 
 ### Message
 

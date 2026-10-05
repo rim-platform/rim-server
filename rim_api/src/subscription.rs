@@ -36,101 +36,126 @@ impl<S> Drop for DisconnectGuardStream<S> {
     }
 }
 
+/// Whether `user_id` may see an event scoped to one conversation: public channels are visible to
+/// every workspace member, private channels, DMs and groups only to their members.
+fn conversation_event_visible(
+    conversation_type: &str,
+    is_private: bool,
+    member_user_ids: &[UserId],
+    user_id: &str,
+) -> bool {
+    (conversation_type == "Channel" && !is_private)
+        || member_user_ids.iter().any(|id| id.to_string() == user_id)
+}
+
 /// Check whether a subscriber should see a given workspace event.
 ///
-/// - Channel events are visible to all workspace members.
-/// - DM/Group events are only visible to conversation members.
-/// - Workspace-level events (MemberJoined, MemberAddedToConversation,
-///   MemberRemovedFromConversation) are visible to all workspace members.
+/// - Public channel events are visible to all workspace members.
+/// - Private channel, DM and group events are only visible to conversation members.
+/// - Conversation membership events (MemberAddedToConversation,
+///   MemberRemovedFromConversation) are visible to the conversation's members (plus the removed
+///   user); MemberJoined and PresenceChanged to all workspace members.
 fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
     match event {
-        // Message events — filter by conversation type
+        // Conversation-scoped events — public channel, else membership.
         WorkspaceEvent::NewMessage {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
         }
         | WorkspaceEvent::MessageUpdated {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
         }
         | WorkspaceEvent::MessageDeleted {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
         }
         | WorkspaceEvent::ReactionsUpdated {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
-        } => {
-            if conversation_type == "Channel" {
-                true
-            } else {
-                member_user_ids.iter().any(|id| id.to_string() == user_id)
-            }
         }
-
-        // Conversation created — channels are public, DMs/Groups only for members
-        WorkspaceEvent::ConversationCreated {
+        | WorkspaceEvent::ConversationCreated {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
         }
         | WorkspaceEvent::ThreadCreated {
             conversation_type,
+            is_private,
             member_user_ids,
             ..
-        } => {
-            if conversation_type == "Channel" {
-                true
-            } else {
-                member_user_ids.iter().any(|id| id.to_string() == user_id)
-            }
         }
+        | WorkspaceEvent::ConversationUpdated {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::TypingStarted {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        // Pin events: a public channel's member list only covers those who joined it, so the
+        // channel bypass is what makes channel pins reach every workspace member.
+        | WorkspaceEvent::MessagePinned {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::MessageUnpinned {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::LinkPreviewReady {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::IncidentDeclared {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::IncidentUpdated {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::EscalationStepFired {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
+        | WorkspaceEvent::IncidentAcknowledged {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        } => conversation_event_visible(conversation_type, *is_private, member_user_ids, user_id),
 
         // ReadStateUpdated — only visible to the owning user
         WorkspaceEvent::ReadStateUpdated {
             user_id: event_user_id,
             ..
         } => event_user_id.to_string() == user_id,
-
-        // ConversationUpdated is visible to all workspace members
-        WorkspaceEvent::ConversationUpdated { .. } => true,
-
-        // TypingStarted — filter by conversation type like messages
-        WorkspaceEvent::TypingStarted {
-            conversation_type,
-            member_user_ids,
-            ..
-        } => {
-            if conversation_type == "Channel" {
-                true
-            } else {
-                member_user_ids.iter().any(|id| id.to_string() == user_id)
-            }
-        }
-
-        // Pin events — filter by conversation type like messages: channels are visible to all
-        // workspace members (channels have no conversation_member rows, so member_user_ids
-        // would be empty there), DM/Group pins only to conversation members.
-        WorkspaceEvent::MessagePinned {
-            conversation_type,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::MessageUnpinned {
-            conversation_type,
-            member_user_ids,
-            ..
-        } => {
-            if conversation_type == "Channel" {
-                true
-            } else {
-                member_user_ids.iter().any(|id| id.to_string() == user_id)
-            }
-        }
 
         // Workspace-level events: visible to all workspace members
         WorkspaceEvent::MemberJoined { .. } | WorkspaceEvent::PresenceChanged { .. } => true,
@@ -149,9 +174,6 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
         } => mentioned_user_ids
             .iter()
             .any(|id| id.to_string() == user_id),
-
-        // LinkPreviewReady is visible to all workspace members
-        WorkspaceEvent::LinkPreviewReady { .. } => true,
 
         // WorkspaceStateChanged: server-scope visible to all, user-scope only to owning user
         WorkspaceEvent::WorkspaceStateChanged {
@@ -179,36 +201,6 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 
         // Pipeline events are visible to all workspace members.
         WorkspaceEvent::PipelineFired { .. } | WorkspaceEvent::PipelineSuspended { .. } => true,
-
-        // Incident events — filter by conversation type like messages: channels are visible to
-        // all workspace members (channels have no conversation_member rows, so member_user_ids
-        // would be empty there), DM/Group-scoped incidents only to conversation members.
-        WorkspaceEvent::IncidentDeclared {
-            conversation_type,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::IncidentUpdated {
-            conversation_type,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::EscalationStepFired {
-            conversation_type,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::IncidentAcknowledged {
-            conversation_type,
-            member_user_ids,
-            ..
-        } => {
-            if conversation_type == "Channel" {
-                true
-            } else {
-                member_user_ids.iter().any(|id| id.to_string() == user_id)
-            }
-        }
     }
 }
 
@@ -281,8 +273,12 @@ impl Subscription {
 mod tests {
     use super::*;
     use rim_core::conversation::model::ConversationId;
+    use rim_core::escalation::model::EscalationPolicyId;
+    use rim_core::incident::model::IncidentId;
     use rim_core::message::model::MessageId;
+    use rim_core::message_thread::model::MessageThreadId;
     use rim_core::server::model::ServerId;
+    use rim_services::events::MessageEventData;
 
     /// Regression guard for the channel-pin visibility bug
     /// (`docs/specs/fix-channel-pin-event-visibility.md`): a channel-scoped pin has no
@@ -299,6 +295,7 @@ mod tests {
             pinned_by: UserId::new(),
             conversation_type: "Channel".to_string(),
             member_user_ids: vec![],
+            is_private: false,
         };
 
         assert!(user_can_see_event(&event, &UserId::new().to_string()));
@@ -312,6 +309,7 @@ mod tests {
             message_id: MessageId::new(),
             conversation_type: "Channel".to_string(),
             member_user_ids: vec![],
+            is_private: false,
         };
 
         assert!(user_can_see_event(&event, &UserId::new().to_string()));
@@ -331,9 +329,261 @@ mod tests {
             pinned_by: member_id,
             conversation_type: "Group".to_string(),
             member_user_ids: vec![member_id],
+            is_private: false,
         };
 
         assert!(user_can_see_event(&event, &member_id.to_string()));
         assert!(!user_can_see_event(&event, &non_member_id.to_string()));
+    }
+
+    // ── Track 1.1 visibility matrix ──
+    //
+    // Every variant that carries `conversation_type`: a public channel's event reaches every
+    // workspace member; a private channel's only its members; DM/Group events only members.
+
+    /// One instance of every conversation-scoped variant, all for the same conversation.
+    fn conversation_scoped_events(
+        conversation_type: &str,
+        is_private: bool,
+        member_user_ids: Vec<UserId>,
+    ) -> Vec<WorkspaceEvent> {
+        let workspace_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let conversation_type = conversation_type.to_string();
+        let message = MessageEventData {
+            id: MessageId::new(),
+            server_id: workspace_id,
+            conversation_id,
+            thread_id: None,
+            root_thread_id: None,
+            author_id: UserId::new(),
+            text: Some("hi".to_string()),
+            has_attachments: false,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            is_deleted: false,
+            sent_at: chrono::Utc::now(),
+            reactions: vec![],
+        };
+        let m = member_user_ids;
+        let t = conversation_type;
+        vec![
+            WorkspaceEvent::NewMessage {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+                message: message.clone(),
+            },
+            WorkspaceEvent::MessageUpdated {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+                message,
+            },
+            WorkspaceEvent::MessageDeleted {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+                message_id: MessageId::new(),
+                thread_id: None,
+            },
+            WorkspaceEvent::ReactionsUpdated {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+                message_id: MessageId::new(),
+                reactions: vec![],
+            },
+            WorkspaceEvent::ConversationCreated {
+                workspace_id,
+                conversation_id,
+                title: None,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::ThreadCreated {
+                workspace_id,
+                conversation_id,
+                thread_id: MessageThreadId::new(),
+                root_message_id: MessageId::new(),
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::ConversationUpdated {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                is_private,
+                member_user_ids: m.clone(),
+            },
+            WorkspaceEvent::MessagePinned {
+                workspace_id,
+                conversation_id,
+                message_id: MessageId::new(),
+                pinned_by: UserId::new(),
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::MessageUnpinned {
+                workspace_id,
+                conversation_id,
+                message_id: MessageId::new(),
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::TypingStarted {
+                workspace_id,
+                conversation_id,
+                user_id: UserId::new(),
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::LinkPreviewReady {
+                workspace_id,
+                conversation_id,
+                message_id: MessageId::new(),
+                conversation_type: t.clone(),
+                is_private,
+                member_user_ids: m.clone(),
+            },
+            WorkspaceEvent::IncidentDeclared {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                incident_id: IncidentId::new(),
+                severity: None,
+                title: "outage".to_string(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::IncidentUpdated {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                incident_id: IncidentId::new(),
+                status: "resolved".to_string(),
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::EscalationStepFired {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                incident_id: IncidentId::new(),
+                escalation_policy_id: EscalationPolicyId::new(),
+                step_index: 0,
+                target_user_ids: vec![],
+                member_user_ids: m.clone(),
+                is_private,
+            },
+            WorkspaceEvent::IncidentAcknowledged {
+                workspace_id,
+                conversation_id,
+                conversation_type: t,
+                incident_id: IncidentId::new(),
+                acknowledged_by: UserId::new(),
+                member_user_ids: m,
+                is_private,
+            },
+        ]
+    }
+
+    /// Spec case: alice posts in a private channel with bob; carol (a workspace member, subscribed
+    /// to the same workspace) must not receive the `NewMessage`.
+    #[test]
+    fn private_channel_new_message_not_delivered_to_non_member() {
+        let alice = UserId::new();
+        let bob = UserId::new();
+        let carol = UserId::new();
+        let new_message = conversation_scoped_events("Channel", true, vec![alice, bob])
+            .into_iter()
+            .find(|e| matches!(e, WorkspaceEvent::NewMessage { .. }))
+            .expect("NewMessage");
+        assert!(user_can_see_event(&new_message, &alice.to_string()));
+        assert!(user_can_see_event(&new_message, &bob.to_string()));
+        assert!(!user_can_see_event(&new_message, &carol.to_string()));
+    }
+
+    /// The fixture must cover every conversation-scoped variant; a new one has to be added here.
+    #[test]
+    fn visibility_fixture_covers_every_conversation_scoped_variant() {
+        assert_eq!(
+            conversation_scoped_events("Channel", false, vec![]).len(),
+            15
+        );
+    }
+
+    #[test]
+    fn public_channel_events_visible_to_non_member_workspace_members() {
+        let member = UserId::new();
+        let non_member = UserId::new();
+        for event in conversation_scoped_events("Channel", false, vec![member]) {
+            assert!(user_can_see_event(&event, &member.to_string()), "{event:?}");
+            assert!(
+                user_can_see_event(&event, &non_member.to_string()),
+                "public channel event hidden from a non-member: {event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_channel_events_visible_to_members_only() {
+        let member = UserId::new();
+        let non_member = UserId::new();
+        for event in conversation_scoped_events("Channel", true, vec![member]) {
+            assert!(user_can_see_event(&event, &member.to_string()), "{event:?}");
+            assert!(
+                !user_can_see_event(&event, &non_member.to_string()),
+                "private channel event leaked to a non-member: {event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_and_group_events_visible_to_members_only() {
+        let member = UserId::new();
+        let non_member = UserId::new();
+        for kind in ["Direct", "Group"] {
+            for event in conversation_scoped_events(kind, false, vec![member]) {
+                assert!(user_can_see_event(&event, &member.to_string()), "{event:?}");
+                assert!(
+                    !user_can_see_event(&event, &non_member.to_string()),
+                    "{kind} event leaked to a non-member: {event:?}"
+                );
+            }
+        }
+    }
+
+    /// The `is_private` flag (like `member_user_ids`) never reaches the wire: the event JSON is a
+    /// frozen cross-repo contract.
+    #[test]
+    fn visibility_fields_are_not_serialized() {
+        for event in conversation_scoped_events("Channel", true, vec![UserId::new()]) {
+            let json = serde_json::to_value(&event).expect("serialize");
+            let obj = json.as_object().expect("object");
+            assert!(!obj.contains_key("is_private"), "{json}");
+            assert!(!obj.contains_key("member_user_ids"), "{json}");
+        }
+        let updated = conversation_scoped_events("Channel", true, vec![UserId::new()])
+            .into_iter()
+            .find(|e| matches!(e, WorkspaceEvent::ConversationUpdated { .. }))
+            .expect("ConversationUpdated");
+        let json = serde_json::to_value(&updated).expect("serialize");
+        let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["conversation_id", "type", "workspace_id"]);
     }
 }

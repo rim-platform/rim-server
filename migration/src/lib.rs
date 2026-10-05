@@ -1,5 +1,8 @@
 pub use sea_orm_migration::prelude::*;
 
+/// Track 1.1 channel-membership back-fill, exposed for the `rim_infra_db` db-tests.
+pub use m20261005_005743_add_channel_privacy_and_archive::CHANNEL_MEMBERSHIP_BACKFILL_SQL;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -64,6 +67,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_111818_create_escalation_run::Migration),
             Box::new(m20260710_111818_add_incident_escalation_and_ack_fields::Migration),
             Box::new(m20261004_220805_add_workspace_feature::Migration),
+            Box::new(m20261005_005743_add_channel_privacy_and_archive::Migration),
         ]
     }
 }
@@ -125,3 +129,4 @@ mod m20260710_111731_create_escalation_policies;
 mod m20260710_111818_add_incident_escalation_and_ack_fields;
 mod m20260710_111818_create_escalation_run;
 mod m20261004_220805_add_workspace_feature;
+mod m20261005_005743_add_channel_privacy_and_archive;

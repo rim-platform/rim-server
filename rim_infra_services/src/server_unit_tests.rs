@@ -4,6 +4,7 @@ mod tests {
 
     use rim_core::conversation::model::{Conversation, ConversationId};
     use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::server::model::{Server, ServerId};
     use rim_core::server::repository::MockServerRepository;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
@@ -19,22 +20,27 @@ mod tests {
 
     fn mock_conversation_repo() -> MockConversationRepository {
         let mut repo = MockConversationRepository::new();
-        repo.expect_create_conversation_with_members().returning(
-            |conv_type, server_id, title, _member_ids| {
+        // New workspace members auto-join public channels; none exist in these fixtures.
+        repo.expect_list_public_channel_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        repo.expect_create_conversation_with_members()
+            .returning(|conv, _member_ids| {
                 Box::pin(async move {
                     let now = chrono::Utc::now();
                     Ok(Conversation {
                         id: ConversationId::new(),
-                        conversation_type: conv_type,
-                        title,
+                        conversation_type: conv.conversation_type,
+                        title: conv.title,
                         topic: None,
                         created_at: now,
                         last_activity_at: now,
-                        server_id,
+                        server_id: conv.server_id,
+                        is_private: conv.is_private,
+                        archived_at: None,
+                        created_by: conv.created_by,
                     })
                 })
-            },
-        );
+            });
         repo
     }
 
@@ -55,6 +61,7 @@ mod tests {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             },
             None,
             noop_observers(),
@@ -107,6 +114,7 @@ mod tests {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             },
             None,
             noop_observers(),
@@ -140,6 +148,7 @@ mod tests {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             },
             None,
             noop_observers(),
@@ -184,6 +193,7 @@ mod tests {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             },
             None,
             noop_observers(),

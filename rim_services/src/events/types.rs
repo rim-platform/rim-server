@@ -23,6 +23,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
         message: MessageEventData,
     },
     MessageUpdated {
@@ -31,6 +35,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
         message: MessageEventData,
     },
     MessageDeleted {
@@ -39,6 +47,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
         message_id: MessageId,
         thread_id: Option<MessageThreadId>,
     },
@@ -48,6 +60,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
         message_id: MessageId,
         reactions: Vec<ReactionGroupData>,
     },
@@ -58,6 +74,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     MemberJoined {
         workspace_id: ServerId,
@@ -72,6 +92,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     MemberAddedToConversation {
         workspace_id: ServerId,
@@ -87,14 +111,23 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
+    /// Topic or archive state changed. The visibility fields are server-side only (never
+    /// serialized, so the wire shape is unchanged): public-channel updates reach every workspace
+    /// member, everything else only the conversation's members.
     ConversationUpdated {
         workspace_id: ServerId,
         conversation_id: ConversationId,
+        #[serde(skip_serializing)]
+        conversation_type: String,
+        #[serde(skip_serializing, default)]
+        is_private: bool,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
     },
     /// Carries `conversation_type` (like `TypingStarted`) so the subscription filter can treat
-    /// channels as visible to all workspace members without relying on `member_user_ids` —
-    /// channels have no `conversation_member` rows, so that list is always empty for a
-    /// channel-scoped pin. `skip_serializing` keeps the client wire shape unchanged: this field
+    /// public channels as visible to all workspace members without relying on
+    /// `member_user_ids` — a public channel's member list only covers those who joined it.
+    /// `skip_serializing` keeps the client wire shape unchanged: this field
     /// is server-side-only, and the frontend pin handlers already shipped without it.
     MessagePinned {
         workspace_id: ServerId,
@@ -105,6 +138,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     /// See [`Self::MessagePinned`] for why `conversation_type` is carried (`skip_serializing`,
     /// server-side-only).
@@ -116,6 +153,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     TypingStarted {
         workspace_id: ServerId,
@@ -125,6 +166,10 @@ pub enum WorkspaceEvent {
         conversation_type: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     ReadStateUpdated {
         workspace_id: ServerId,
@@ -145,10 +190,17 @@ pub enum WorkspaceEvent {
         mentioned_user_ids: Vec<UserId>,
         author_id: UserId,
     },
+    /// See [`Self::ConversationUpdated`] for the server-side-only visibility fields.
     LinkPreviewReady {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         message_id: MessageId,
+        #[serde(skip_serializing)]
+        conversation_type: String,
+        #[serde(skip_serializing, default)]
+        is_private: bool,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
     },
     WorkspaceStateChanged {
         workspace_id: ServerId,
@@ -182,10 +234,10 @@ pub enum WorkspaceEvent {
     ///
     /// Carries `conversation_type` (like `NewMessage`/`ConversationCreated`) rather than
     /// relying on `member_user_ids` alone: incidents aren't restricted to channels the way
-    /// alert-ingest tokens are (`start_incident` accepts any conversation type), and channel
-    /// conversations have no `conversation_member` rows, so `member_user_ids` would be empty
-    /// for a channel-scoped incident. The subscription filter treats `Channel` as visible to
-    /// all workspace members and falls back to `member_user_ids` otherwise.
+    /// alert-ingest tokens are (`start_incident` accepts any conversation type), and
+    /// `member_user_ids` is left empty for a public-channel incident. The subscription filter
+    /// treats a public `Channel` (`!is_private`) as visible to all workspace members and falls
+    /// back to `member_user_ids` otherwise.
     IncidentDeclared {
         workspace_id: ServerId,
         conversation_id: ConversationId,
@@ -195,6 +247,10 @@ pub enum WorkspaceEvent {
         title: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     /// An incident's status changed (mitigated/resolved/reopened, or updated in place by a
     /// repeat alert with the same fingerprint). See [`Self::IncidentDeclared`] for why
@@ -207,6 +263,10 @@ pub enum WorkspaceEvent {
         status: String,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     /// An escalation step fired (mention + email best-effort actions performed) — see
     /// `IncidentService::fire_escalation_step` (C1b, §5/§9). Carries `conversation_type` for the
@@ -222,6 +282,10 @@ pub enum WorkspaceEvent {
         target_user_ids: Vec<UserId>,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
     /// An incident was acknowledged — see `IncidentService::acknowledge_incident` (C1b, §4/§9).
     IncidentAcknowledged {
@@ -232,6 +296,10 @@ pub enum WorkspaceEvent {
         acknowledged_by: UserId,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
     },
 }
 
@@ -351,8 +419,9 @@ impl WorkspaceEvent {
                 member_user_ids, ..
             } => Some(member_user_ids),
             Self::MemberJoined { .. } => None,
-            // ConversationUpdated is visible to all workspace members.
-            Self::ConversationUpdated { .. } => None,
+            Self::ConversationUpdated {
+                member_user_ids, ..
+            } => Some(member_user_ids),
             Self::TypingStarted {
                 member_user_ids, ..
             } => Some(member_user_ids),
@@ -370,8 +439,9 @@ impl WorkspaceEvent {
             Self::UserMentioned {
                 mentioned_user_ids, ..
             } => Some(mentioned_user_ids),
-            // LinkPreviewReady is visible to all workspace members.
-            Self::LinkPreviewReady { .. } => None,
+            Self::LinkPreviewReady {
+                member_user_ids, ..
+            } => Some(member_user_ids),
             // WorkspaceState events: server-scope visible to all, user-scope only to owning user.
             Self::WorkspaceStateChanged { scope, user_id, .. }
             | Self::WorkspaceStateDeleted { scope, user_id, .. } => match scope {

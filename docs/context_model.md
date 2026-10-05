@@ -92,6 +92,12 @@ This avoids uncontrolled namespace pollution and unclear coupling between unrela
 - selected thread
 - selected channel/conversation
 
+A conversation in context is only ever one the actor can see: public channels for any workspace
+member, private channels, DMs and groups for their members (Track 1.1). Commands that take a
+`conversation_id` fall back to `context.conversation_id`, and the service re-checks access, so a
+stale or forged context id for a private channel resolves to `NOT_FOUND`, exactly like an
+unknown id.
+
 ## Phase 0 Decisions
 
 - selected text should be first-class context from the beginning

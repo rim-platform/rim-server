@@ -18,7 +18,8 @@
 //!   3. **execute_command, end-to-end** — `initiator = Agent`, args carry a
 //!      real `server_id`, and `MockConversationService::list_channels`
 //!      returns two synthetic channels. Asserts the executor projects them
-//!      to the agreed wire shape `{ "channels": [{id,title,conversation_type}] }`
+//!      to the agreed wire shape
+//!      `{ "channels": [{id,title,conversation_type,is_private,is_archived,is_member}] }`
 //!      and **does NOT leak `member_ids`** (Widow no-go per executor
 //!      comment at executor/chat.rs::list_channels). This is the contract Phase 4
 //!      frontend tools depend on.
@@ -230,6 +231,9 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
     let channel_a_id = ConversationId::new();
     let channel_b_id = ConversationId::new();
     let secret_member = UserId::new();
+    // The caller is a member of `general` only; `random` is a private, archived channel
+    // (Track 1.1 flags) the mock returns regardless of the default filter.
+    let caller = actor();
 
     let mut conv = MockConversationService::new();
     conv.expect_list_channels()
@@ -244,7 +248,10 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             conversation_type: ConversationType::Channel,
                             title: Some("general".to_string()),
                             topic: None,
-                            member_ids: vec![secret_member],
+                            member_ids: vec![secret_member, caller.user_id],
+                            is_private: false,
+                            archived_at: None,
+                            created_by: None,
                         },
                         ConversationDto {
                             id: channel_b_id,
@@ -253,6 +260,9 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             title: Some("random".to_string()),
                             topic: None,
                             member_ids: vec![secret_member],
+                            is_private: true,
+                            archived_at: Some(chrono::Utc::now()),
+                            created_by: None,
                         },
                     ],
                     None,
@@ -265,7 +275,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
 
     let result = svc
         .execute_command(ExecuteCommandCmd {
-            actor: actor(),
+            actor: caller,
             command_id: "chat.list_channels".to_string(),
             args: Some(serde_json::json!({
                 "server_id": workspace.to_string(),
@@ -298,11 +308,33 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
     assert_eq!(channels.len(), 2);
 
     // Wire-shape assertion: each channel projects to {id, title,
-    // conversation_type} only — member_ids NOT present.
-    for (channel, expected_id, expected_title) in [
-        (&channels[0], channel_a_id, "general"),
-        (&channels[1], channel_b_id, "random"),
+    // conversation_type, is_private, is_archived, is_member} only — member_ids
+    // NOT present (the caller's membership is derived server-side).
+    for (channel, expected_id, expected_title, private, archived, member) in [
+        (&channels[0], channel_a_id, "general", false, false, true),
+        (&channels[1], channel_b_id, "random", true, true, false),
     ] {
+        let mut keys: Vec<&str> = channel
+            .as_object()
+            .expect("channel object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "conversation_type",
+                "id",
+                "is_archived",
+                "is_member",
+                "is_private",
+                "title"
+            ]
+        );
+        assert_eq!(channel["is_private"], private);
+        assert_eq!(channel["is_archived"], archived);
+        assert_eq!(channel["is_member"], member);
         assert_eq!(
             channel.get("id").and_then(|v| v.as_str()),
             Some(expected_id.to_string().as_str()),

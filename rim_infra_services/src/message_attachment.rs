@@ -14,7 +14,8 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::AttachmentRepos;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+    ensure_server_member,
 };
 
 #[derive(Clone)]
@@ -125,12 +126,14 @@ impl DefaultMessageAttachmentService {
 
     /// Verifies the actor is a member of the conversation (via the full 3-step
     /// gate: server membership → conversation in server → conversation access),
-    /// then returns the loaded message.
+    /// then returns the loaded message. With `write`, an archived conversation is
+    /// rejected with `ConversationArchived` as well.
     async fn ensure_actor_can_access_message(
         &self,
         server_id: rim_core::server::model::ServerId,
         actor_id: rim_core::user::model::UserId,
         message_id: rim_core::message::model::MessageId,
+        write: bool,
     ) -> ServiceResult<rim_core::message::model::Message> {
         let message = self
             .repos
@@ -139,13 +142,23 @@ impl DefaultMessageAttachmentService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        ensure_conversation_member_access(
-            self.access_repos(),
-            actor_id,
-            server_id,
-            message.conversation_id,
-        )
-        .await?;
+        if write {
+            ensure_conversation_writable(
+                self.access_repos(),
+                actor_id,
+                server_id,
+                message.conversation_id,
+            )
+            .await?;
+        } else {
+            ensure_conversation_member_access(
+                self.access_repos(),
+                actor_id,
+                server_id,
+                message.conversation_id,
+            )
+            .await?;
+        }
 
         Ok(message)
     }
@@ -167,7 +180,7 @@ impl DefaultMessageAttachmentService {
             .ok_or(ServiceError::NotFound)?;
 
         let message = self
-            .ensure_actor_can_access_message(server_id, actor_id, att.message_id)
+            .ensure_actor_can_access_message(server_id, actor_id, att.message_id, true)
             .await?;
 
         if message.sent_by != actor_id {
@@ -188,7 +201,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         };
 
         let message = self
-            .ensure_actor_can_access_message(cmd.server_id, cmd.actor.user_id, message_id)
+            .ensure_actor_can_access_message(cmd.server_id, cmd.actor.user_id, message_id, true)
             .await?;
 
         if message.conversation_id != cmd.conversation_id {
@@ -316,7 +329,12 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .ok_or(ServiceError::NotFound)?;
 
         let _message = self
-            .ensure_actor_can_access_message(query.server_id, query.actor.user_id, att.message_id)
+            .ensure_actor_can_access_message(
+                query.server_id,
+                query.actor.user_id,
+                att.message_id,
+                false,
+            )
             .await?;
 
         Ok(Self::attachment_dto(att))
@@ -410,7 +428,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        ensure_conversation_member_access(
+        ensure_conversation_writable(
             self.access_repos(),
             cmd.actor_user_id,
             conversation.server_id,

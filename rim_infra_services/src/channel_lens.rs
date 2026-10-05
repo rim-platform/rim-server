@@ -7,6 +7,7 @@ use rim_core::channel_lens::model::{
 };
 use rim_core::channel_lens::repository::ChannelLensRepository;
 use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::model::Message;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_pin::repository::MessagePinRepository;
@@ -19,7 +20,9 @@ use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::message::dto::MessageDto;
 use rim_services::{ServiceError, ServiceResult};
 
-use crate::util::{ensure_conversation_in_server, ensure_server_member};
+use crate::util::{
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
+};
 
 /// Maximum number of lenses a user may own per conversation.
 const MAX_LENSES_PER_USER_PER_CONVERSATION: u64 = 10;
@@ -34,6 +37,7 @@ const DEFAULT_APPLY_LIMIT: u32 = 50;
 pub struct ChannelLensRepos {
     pub channel_lens_repo: Arc<dyn ChannelLensRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
     pub message_pin_repo: Arc<dyn MessagePinRepository>,
@@ -46,6 +50,28 @@ pub struct DefaultChannelLensService {
 impl DefaultChannelLensService {
     pub fn new(repos: ChannelLensRepos) -> Self {
         Self { repos }
+    }
+
+    /// Lenses read a conversation's messages, so they need the same read gate as the messages
+    /// themselves (a private channel the actor is not in is NotFound).
+    async fn ensure_can_read_conversation(
+        &self,
+        actor: rim_core::user::model::UserId,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> ServiceResult<()> {
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            actor,
+            server_id,
+            conversation_id,
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -147,19 +173,8 @@ fn matches_filter(
 #[async_trait]
 impl ChannelLensService for DefaultChannelLensService {
     async fn create_lens(&self, cmd: CreateLensCmd) -> ServiceResult<ChannelLensDto> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
-        ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            cmd.conversation_id,
-            cmd.server_id,
-        )
-        .await?;
+        self.ensure_can_read_conversation(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
+            .await?;
 
         validate_name(&cmd.name)?;
 
@@ -274,17 +289,10 @@ impl ChannelLensService for DefaultChannelLensService {
     }
 
     async fn list_lenses(&self, query: ListLensesQuery) -> ServiceResult<Vec<ChannelLensDto>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
+        self.ensure_can_read_conversation(
             query.actor.user_id,
-        )
-        .await?;
-
-        ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
             query.server_id,
+            query.conversation_id,
         )
         .await?;
 
@@ -320,10 +328,10 @@ impl ChannelLensService for DefaultChannelLensService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        ensure_conversation_in_server(
-            self.repos.conversation_repo.as_ref(),
-            query.conversation_id,
+        self.ensure_can_read_conversation(
+            query.actor.user_id,
             query.server_id,
+            query.conversation_id,
         )
         .await?;
 

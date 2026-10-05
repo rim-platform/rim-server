@@ -18,6 +18,9 @@ impl From<conversation::Model> for Conversation {
             last_activity_at: m.last_activity_at.into(),
             conversation_type,
             server_id: m.server_id.into(),
+            is_private: m.is_private,
+            archived_at: m.archived_at.map(Into::into),
+            created_by: m.created_by.map(Into::into),
         }
     }
 }

@@ -14,6 +14,9 @@ pub struct Model {
     pub last_activity_at: DateTimeWithTimeZone,
     pub server_id: Uuid,
     pub topic: Option<String>,
+    pub is_private: bool,
+    pub archived_at: Option<DateTimeWithTimeZone>,
+    pub created_by: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -32,6 +35,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Server,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::CreatedBy",
+        to = "super::user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    User,
 }
 
 impl Related<super::conversation_member::Entity> for Entity {
@@ -55,6 +66,12 @@ impl Related<super::message::Entity> for Entity {
 impl Related<super::server::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Server.def()
+    }
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
     }
 }
 

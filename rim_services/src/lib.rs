@@ -134,6 +134,12 @@ pub enum ServiceError {
     #[error("workspace feature `{feature}` is disabled")]
     FeatureDisabled { feature: String },
 
+    /// The conversation is archived and therefore read-only (Track 1.1). Returned by every
+    /// write path into a conversation (messages, reactions, pins, topic, attachments, typing,
+    /// incidents). Surfaced as the `CONVERSATION_ARCHIVED` GraphQL error code.
+    #[error("conversation is archived")]
+    ConversationArchived,
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }
