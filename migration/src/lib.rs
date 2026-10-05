@@ -6,6 +6,10 @@ pub use m20261005_005743_add_channel_privacy_and_archive::CHANNEL_MEMBERSHIP_BAC
 /// Track 1.2 role data step (`guest` -> `member`), exposed for the `rim_infra_db` db-tests.
 pub use m20261005_024730_add_member_role::GUEST_TO_MEMBER_SQL;
 
+/// Track 1.3 notification data step (permanent mute -> `none` level), exposed for the
+/// `rim_infra_db` db-tests.
+pub use m20261005_045140_add_notification_rules::PERMANENT_MUTE_TO_NONE_SQL;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -73,6 +77,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261005_005743_add_channel_privacy_and_archive::Migration),
             Box::new(m20261005_024730_add_member_role::Migration),
             Box::new(m20261005_024731_add_moderation::Migration),
+            Box::new(m20261005_045140_add_notification_rules::Migration),
         ]
     }
 }
@@ -137,3 +142,4 @@ mod m20261004_220805_add_workspace_feature;
 mod m20261005_005743_add_channel_privacy_and_archive;
 mod m20261005_024730_add_member_role;
 mod m20261005_024731_add_moderation;
+mod m20261005_045140_add_notification_rules;

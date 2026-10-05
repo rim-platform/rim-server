@@ -11,8 +11,8 @@ use sea_orm::QuerySelect;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, Set, Statement, Value,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, Set, Statement, Value,
 };
 use std::collections::HashMap;
 
@@ -420,5 +420,31 @@ impl MessageRepository for SeaOrmMessageRepository {
             .await
             .map_err(map_db_err)?;
         Ok(latest.map(Into::into))
+    }
+
+    async fn list_thread_participant_ids(
+        &self,
+        thread_id: rim_core::message_thread::model::MessageThreadId,
+    ) -> RepoResult<Vec<rim_core::user::model::UserId>> {
+        let thread_uuid: Uuid = thread_id.into();
+        let rows = self
+            .db
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"SELECT DISTINCT m.sent_by AS user_id
+                   FROM message m
+                   WHERE (m.thread_id = $1 AND m.is_deleted = false)
+                      OR m.id = (SELECT t.first_message_id FROM message_thread t WHERE t.id = $1)"#,
+                [thread_uuid.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<Uuid>("", "user_id")
+                    .map(Into::into)
+                    .map_err(map_db_err)
+            })
+            .collect()
     }
 }

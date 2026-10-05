@@ -13,6 +13,16 @@ pub enum ConversationType {
     Channel,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "digest_frequency")]
+pub enum DigestFrequency {
+    #[sea_orm(string_value = "off")]
+    Off,
+    #[sea_orm(string_value = "hourly")]
+    Hourly,
+    #[sea_orm(string_value = "daily")]
+    Daily,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",
@@ -25,6 +35,34 @@ pub enum MessageReportStatus {
     Resolved,
     #[sea_orm(string_value = "dismissed")]
     Dismissed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "notification_level")]
+pub enum NotificationLevel {
+    #[sea_orm(string_value = "all")]
+    All,
+    #[sea_orm(string_value = "mentions")]
+    Mentions,
+    #[sea_orm(string_value = "none")]
+    None,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "notification_reason"
+)]
+pub enum NotificationReason {
+    #[sea_orm(string_value = "direct")]
+    Direct,
+    #[sea_orm(string_value = "mention")]
+    Mention,
+    #[sea_orm(string_value = "keyword")]
+    Keyword,
+    #[sea_orm(string_value = "all")]
+    All,
+    #[sea_orm(string_value = "thread_reply")]
+    ThreadReply,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "server_member_role")]

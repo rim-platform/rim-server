@@ -1,5 +1,6 @@
 //! `SeaORM` Entity for notification_preference table
 
+use super::sea_orm_active_enums::NotificationLevel;
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
@@ -10,6 +11,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub conversation_id: Uuid,
     pub muted_until: Option<DateTimeWithTimeZone>,
+    pub level: Option<NotificationLevel>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
