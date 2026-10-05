@@ -652,7 +652,7 @@ async fn migration_backfill_makes_workspace_members_channel_members() {
         .await
         .unwrap();
     server_member_repo
-        .add_member(server.id, bob, ServerMemberRole::Guest)
+        .add_member(server.id, bob, ServerMemberRole::Member)
         .await
         .unwrap();
     server_member_repo

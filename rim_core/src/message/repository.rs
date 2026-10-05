@@ -112,4 +112,13 @@ pub trait MessageRepository: Send + Sync {
     ) -> RepoResult<Message>;
 
     async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+
+    /// `sent_at` of the newest message `author` sent in the conversation (timeline or thread,
+    /// deleted or not), or `None`. The slow-mode check (Track 1.2) reads it instead of keeping
+    /// in-memory state.
+    async fn last_sent_at_by_author(
+        &self,
+        conversation_id: ConversationId,
+        author: UserId,
+    ) -> RepoResult<Option<DateTime<Utc>>>;
 }

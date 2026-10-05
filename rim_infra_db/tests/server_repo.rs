@@ -46,7 +46,7 @@ async fn get_servers_for_user_returns_joined_servers() {
     );
 
     let _ = member_repo
-        .add_member(s1.id, user.id, ServerMemberRole::Guest)
+        .add_member(s1.id, user.id, ServerMemberRole::Member)
         .await
         .unwrap();
     let _ = member_repo

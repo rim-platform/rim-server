@@ -2,6 +2,7 @@ use crate::model_id;
 use chrono::{DateTime, Utc};
 
 use crate::server::model::ServerId;
+use crate::server_member::model::ServerMemberRole;
 use crate::user::model::UserId;
 
 model_id!(SessionId);
@@ -42,6 +43,8 @@ pub struct Invite {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// The role a user joining through this invite gets: `Member` (default) or `Guest`.
+    pub role: ServerMemberRole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +54,7 @@ pub struct NewInvite {
     pub token_hash: String,
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: i32,
+    pub role: ServerMemberRole,
 }
 
 /// A one-time bootstrap token issued by the CLI.

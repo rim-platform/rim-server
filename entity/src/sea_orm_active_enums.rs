@@ -13,12 +13,28 @@ pub enum ConversationType {
     Channel,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "message_report_status"
+)]
+pub enum MessageReportStatus {
+    #[sea_orm(string_value = "open")]
+    Open,
+    #[sea_orm(string_value = "resolved")]
+    Resolved,
+    #[sea_orm(string_value = "dismissed")]
+    Dismissed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "server_member_role")]
 pub enum ServerMemberRole {
     #[sea_orm(string_value = "owner")]
     Owner,
     #[sea_orm(string_value = "moderator")]
     Moderator,
+    #[sea_orm(string_value = "member")]
+    Member,
     #[sea_orm(string_value = "guest")]
     Guest,
 }
