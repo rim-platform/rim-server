@@ -66,6 +66,10 @@ pub struct CommandServices {
     /// Track 0.4: hides feature-gated builtins from `list_commands` and rejects their
     /// execution with `FeatureDisabled` when the workspace has the feature off.
     pub workspace_feature_service: std::sync::Arc<dyn WorkspaceFeatureService>,
+    /// Track 1.2: moderation builtins (`admin.kick`, `chat.set_slow_mode`, ...) dispatch to it,
+    /// and the timeout gate asks it whether the actor is timed out before any Mutating command.
+    pub moderation_service:
+        std::sync::Arc<dyn rim_services::moderation::service::ModerationService>,
     /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target="audit")`

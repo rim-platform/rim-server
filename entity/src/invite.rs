@@ -1,5 +1,6 @@
 //! `SeaORM` Entity, manually maintained.
 
+use super::sea_orm_active_enums::ServerMemberRole;
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
@@ -15,6 +16,7 @@ pub struct Model {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<DateTimeWithTimeZone>,
+    pub role: ServerMemberRole,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

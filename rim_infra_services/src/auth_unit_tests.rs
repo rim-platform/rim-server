@@ -80,6 +80,9 @@ mod tests {
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            moderation_repo: std::sync::Arc::new(
+                rim_core::moderation::repository::MockModerationRepository::permissive(),
+            ),
         }
     }
 
@@ -105,6 +108,9 @@ mod tests {
             instance_invite_repo: Arc::new(instance_invite_repo),
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            moderation_repo: std::sync::Arc::new(
+                rim_core::moderation::repository::MockModerationRepository::permissive(),
+            ),
         }
     }
 
@@ -193,6 +199,7 @@ mod tests {
                         is_private: conv.is_private,
                         archived_at: None,
                         created_by: conv.created_by,
+                        slow_mode_seconds: 0,
                     })
                 })
             });
@@ -375,10 +382,57 @@ mod tests {
                 expires_at: None,
                 max_uses: 0,
                 recipient_email: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    /// Track 1.2: an invite grants `Member` or `Guest`, never a moderating role.
+    #[tokio::test]
+    async fn create_invite_rejects_roles_above_member() {
+        for role in [
+            rim_core::server_member::model::ServerMemberRole::Owner,
+            rim_core::server_member::model::ServerMemberRole::Moderator,
+        ] {
+            let (
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ) = repos();
+            let svc = DefaultAuthService::new(
+                make_auth_repos(
+                    user_repo,
+                    server_repo,
+                    server_member_repo,
+                    session_repo,
+                    invite_repo,
+                    conversation_repo,
+                ),
+                None,
+                Some("secret".to_string()),
+                Duration::hours(1),
+                noop_observers(),
+                Arc::new(crate::email::LogEmailSender),
+                None,
+            );
+            let err = svc
+                .create_invite(CreateInviteCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    expires_at: None,
+                    max_uses: 1,
+                    recipient_email: None,
+                    role,
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{role:?}");
+        }
     }
 
     fn make_owner_member(server_id: ServerId, user_id: UserId) -> ServerMember {
@@ -418,6 +472,7 @@ mod tests {
                 max_uses: new.max_uses,
                 use_count: 0,
                 revoked_at: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
         });
 
@@ -452,6 +507,7 @@ mod tests {
                 expires_at: None,
                 max_uses: 1,
                 recipient_email: Some("invitee@example.com".to_string()),
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
             .await
             .unwrap();
@@ -485,6 +541,7 @@ mod tests {
                 max_uses: new.max_uses,
                 use_count: 0,
                 revoked_at: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
         });
 
@@ -515,6 +572,7 @@ mod tests {
                 expires_at: None,
                 max_uses: 1,
                 recipient_email: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
             .await
             .unwrap();
@@ -559,6 +617,7 @@ mod tests {
                 expires_at: None,
                 max_uses: 1,
                 recipient_email: Some("not-an-email".to_string()),
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
             .await
             .unwrap_err();
@@ -594,6 +653,7 @@ mod tests {
                 max_uses: new.max_uses,
                 use_count: 0,
                 revoked_at: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
         });
 
@@ -626,6 +686,7 @@ mod tests {
                 expires_at: None,
                 max_uses: 1,
                 recipient_email: Some("invitee@example.com".to_string()),
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             })
             .await
             .unwrap();
@@ -679,6 +740,7 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
                 revoked_at: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             }))
         });
         invite_repo.expect_try_consume().never();
@@ -1893,6 +1955,7 @@ mod tests {
             max_uses: 5,
             use_count: 0,
             revoked_at: None,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         };
 
         let mut bootstrap_repo = MockBootstrapTokenRepository::new();

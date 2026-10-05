@@ -24,7 +24,7 @@ async fn add_get_is_member_get_by_id_and_list_members() {
         .await
         .unwrap();
     let _m2 = repo
-        .add_member(server.id, u2, ServerMemberRole::Guest)
+        .add_member(server.id, u2, ServerMemberRole::Member)
         .await
         .unwrap();
 
@@ -59,7 +59,7 @@ async fn change_member_role_and_remove_member_errors() {
     assert!(matches!(err.kind(), RepoErrorKind::NotFound));
 
     let _ = repo
-        .add_member(server.id, u, ServerMemberRole::Guest)
+        .add_member(server.id, u, ServerMemberRole::Member)
         .await
         .unwrap();
 
@@ -83,12 +83,12 @@ async fn add_member_conflicts_on_duplicate_server_membership() {
     let server = ctx.create_server("s").await;
     let user_id = ctx.create_user("dup-server-member").await.id;
 
-    repo.add_member(server.id, user_id, ServerMemberRole::Guest)
+    repo.add_member(server.id, user_id, ServerMemberRole::Member)
         .await
         .unwrap();
 
     let err = repo
-        .add_member(server.id, user_id, ServerMemberRole::Guest)
+        .add_member(server.id, user_id, ServerMemberRole::Member)
         .await
         .unwrap_err();
     assert!(matches!(err.kind(), RepoErrorKind::Conflict));

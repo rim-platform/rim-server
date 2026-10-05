@@ -27,6 +27,7 @@ use rim_core::message_mention::repository::MessageMentionRepository;
 use rim_core::message_pin::repository::MessagePinRepository;
 use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
+use rim_core::moderation::repository::ModerationRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
 use rim_core::oncall::repository::{
     OnCallOverrideRepository, OnCallScheduleRepository, RotationLayerRepository,
@@ -85,6 +86,7 @@ pub struct AppRepos {
     pub conversation_escalation_policy_repo: Arc<dyn ConversationEscalationPolicyRepository>,
     pub escalation_run_repo: Arc<dyn EscalationRunRepository>,
     pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
+    pub moderation_repo: Arc<dyn ModerationRepository>,
 }
 
 #[derive(Clone)]
@@ -138,6 +140,8 @@ pub struct ServerMemberRepos {
     /// A new member auto-joins the public channels (`util::add_workspace_member`).
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    /// Bans (owner-added members) and active timeouts (`ServerMember.timeoutUntil`).
+    pub moderation_repo: Arc<dyn ModerationRepository>,
 }
 
 #[derive(Clone)]
@@ -156,6 +160,8 @@ pub struct AuthRepos {
     pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    /// Ban checks on the workspace join paths (Track 1.2).
+    pub moderation_repo: Arc<dyn ModerationRepository>,
 }
 
 #[derive(Clone)]
@@ -284,6 +290,18 @@ impl AppRepos {
             user_repo: Arc::clone(&self.user_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
+        }
+    }
+
+    pub fn for_moderation(&self) -> crate::moderation::ModerationRepos {
+        crate::moderation::ModerationRepos {
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            user_repo: Arc::clone(&self.user_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
         }
     }
 
@@ -304,6 +322,7 @@ impl AppRepos {
             instance_invite_repo: Arc::clone(&self.instance_invite_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
         }
     }
 
@@ -640,6 +659,9 @@ impl AppRepos {
                     handle.clone(),
                 ),
             ),
+            moderation_repo: Arc::new(sea_orm_impl::moderation::SeaOrmModerationRepository::new(
+                handle.clone(),
+            )),
         }
     }
 }

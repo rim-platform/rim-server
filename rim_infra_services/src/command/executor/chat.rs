@@ -421,6 +421,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         }
     }
 
@@ -454,6 +457,7 @@ mod tests {
                 is_private: false,
                 archived_at: None,
                 created_by: None,
+                slow_mode_seconds: 0,
             }],
             None,
             None,
@@ -593,6 +597,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         }
     }
 
@@ -670,6 +675,7 @@ mod tests {
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     })
                 })
             });
@@ -710,6 +716,7 @@ mod tests {
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     })
                 })
             });
@@ -749,6 +756,7 @@ mod tests {
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     })
                 })
             });
@@ -829,6 +837,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         };
 
         let mut args = serde_json::Map::new();
@@ -882,6 +893,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         };
 
         let mut args = serde_json::Map::new();
@@ -932,6 +946,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         };
 
@@ -1006,6 +1023,9 @@ mod tests {
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         };
 
         let mut args = serde_json::Map::new();
@@ -1052,6 +1072,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         };
 
@@ -1102,6 +1125,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         };
 
@@ -1163,6 +1189,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         }
     }
@@ -1318,6 +1347,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         }
     }

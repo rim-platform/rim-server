@@ -137,4 +137,12 @@ pub trait ConversationRepository: Send + Sync {
         conversation_id: ConversationId,
         archived_at: Option<DateTime<Utc>>,
     ) -> RepoResult<Conversation>;
+
+    /// Set the slow-mode interval (`0` turns it off). Range checks happen in the service layer
+    /// (and a database CHECK constraint).
+    async fn set_slow_mode(
+        &self,
+        conversation_id: ConversationId,
+        seconds: i32,
+    ) -> RepoResult<Conversation>;
 }

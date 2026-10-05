@@ -44,7 +44,7 @@ mod tests {
             id: ServerMemberId::new(),
             server_id,
             user_id,
-            member_role: ServerMemberRole::Guest,
+            member_role: ServerMemberRole::Member,
             joined_at: Utc::now(),
         }
     }

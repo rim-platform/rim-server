@@ -105,6 +105,7 @@ pub async fn seed_workspace_invite(
             token_hash: hash_token(raw_token),
             expires_at: None,
             max_uses: 1,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await
         .expect("seed_workspace_invite: insert failed");

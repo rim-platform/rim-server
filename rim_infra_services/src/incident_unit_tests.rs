@@ -135,6 +135,9 @@ mod tests {
             .expect_is_member()
             .with(eq(server_id), eq(actor_id))
             .returning(|_, _| Ok(false));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
 
         let mut incident_repo = MockIncidentRepository::new();
         incident_repo.expect_list_incidents().never();
@@ -171,6 +174,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut incident_repo = MockIncidentRepository::new();
         incident_repo
@@ -224,6 +234,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut incident_repo = MockIncidentRepository::new();
         let cursor_for_check = cursor;
@@ -325,6 +342,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         }
     }
 
@@ -380,6 +398,9 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(false));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
 
         let svc = build_ingest_service(
             MockIncidentRepository::new(),
@@ -408,6 +429,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
             let mut channel = make_channel(server_id, conversation_id);
@@ -443,6 +471,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -530,6 +565,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -594,6 +636,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
         server_member_repo
             .expect_get_members_for_server()
             .returning(move |_| {
@@ -735,6 +784,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -802,6 +858,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -857,6 +920,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -953,6 +1023,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
@@ -1197,6 +1274,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let svc = build_escalation_service(
             incident_repo,
@@ -1340,6 +1424,9 @@ mod tests {
             .expect_is_member()
             .withf(move |sid, uid| *sid == server_id && *uid == departed_user)
             .returning(|_, _| Ok(false));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
 
         let svc = build_escalation_service(
             incident_repo,
@@ -1563,6 +1650,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -1643,6 +1737,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         // No expectations on escalation_run_repo — cancellation must not be attempted again.
         let svc = build_escalation_service(
@@ -1705,6 +1806,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -1819,6 +1927,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -1888,6 +2003,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -1945,6 +2067,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         // No expectations on escalation_run_repo or incident_phase_repo — neither cancellation
         // nor a transcript note may be attempted for an already-acked incident.
@@ -2005,6 +2134,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -2132,6 +2268,15 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(move |_, user_id| Ok(user_id == actor_id));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, user_id| {
+                Ok((user_id == actor_id).then(|| {
+                    rim_core::server_member::model::MemberStanding::new(
+                        rim_core::server_member::model::ServerMemberRole::Member,
+                    )
+                }))
+            });
 
         let notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let notes_for_mock = Arc::clone(&notes);
@@ -2218,6 +2363,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -2321,6 +2473,15 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(move |_, user_id| Ok(user_id == actor_id));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, user_id| {
+                Ok((user_id == actor_id).then(|| {
+                    rim_core::server_member::model::MemberStanding::new(
+                        rim_core::server_member::model::ServerMemberRole::Member,
+                    )
+                }))
+            });
 
         let notes: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let notes_for_mock = Arc::clone(&notes);
@@ -2418,6 +2579,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut escalation_run_repo = MockEscalationRunRepository::new();
         escalation_run_repo
@@ -2560,6 +2728,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
         let mut incident_repo = MockIncidentRepository::new();
         incident_repo.expect_create().never();
 
@@ -2593,6 +2768,9 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(false));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
         // No expectation on the feature repo: a non-member must not learn the flag's value.
         let svc = build_service_with(
             MockIncidentRepository::new(),
@@ -2624,6 +2802,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_| {
             Box::pin(async move {
@@ -2638,6 +2823,7 @@ mod tests {
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 }))
             })
         });

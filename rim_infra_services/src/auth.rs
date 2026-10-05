@@ -35,7 +35,7 @@ use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
-use crate::util::{add_workspace_member, ensure_server_owner};
+use crate::util::{add_workspace_member, ensure_not_banned, ensure_server_owner};
 
 /// Fixed "IP" slot for the per-account login limiter, whose buckets are keyed by username alone.
 const LOGIN_ACCOUNT_SCOPE: &str = "account";
@@ -309,6 +309,7 @@ impl DefaultAuthService {
             max_uses: inv.max_uses,
             use_count: inv.use_count,
             revoked_at: inv.revoked_at,
+            role: inv.role,
         }
     }
 
@@ -796,9 +797,16 @@ impl AuthService for DefaultAuthService {
             expires_at,
             max_uses,
             recipient_email,
+            role,
         } = cmd;
         if max_uses <= 0 {
             return Err(ServiceError::Validation("max_uses must be > 0".to_string()));
+        }
+        // An invite grants `Member` or the restricted `Guest`, never a moderating role.
+        if !matches!(role, ServerMemberRole::Member | ServerMemberRole::Guest) {
+            return Err(ServiceError::Validation(
+                "an invite can grant only the member or guest role".to_string(),
+            ));
         }
 
         // Validate before persisting, per docs/email.md — a malformed address should surface
@@ -831,6 +839,7 @@ impl AuthService for DefaultAuthService {
                 token_hash,
                 expires_at,
                 max_uses,
+                role,
             })
             .await?;
 
@@ -923,13 +932,16 @@ impl AuthService for DefaultAuthService {
                 e
             })?;
 
+        // A brand-new account cannot carry a ban yet; checked anyway so every join path
+        // refuses banned users the same way (Track 1.2).
+        ensure_not_banned(repos.moderation_repo.as_ref(), inv.server_id, user.id).await?;
         let _member = add_workspace_member(
             repos.server_member_repo.as_ref(),
             repos.conversation_repo.as_ref(),
             repos.conversation_member_repo.as_ref(),
             inv.server_id,
             user.id,
-            ServerMemberRole::Guest,
+            inv.role,
         )
         .await?;
 
@@ -1023,6 +1035,13 @@ impl AuthService for DefaultAuthService {
                 "already a member of this server".to_string(),
             ));
         }
+        // Banned users cannot re-join (Track 1.2). Checked before the invite is consumed.
+        ensure_not_banned(
+            self.repos.moderation_repo.as_ref(),
+            inv.server_id,
+            actor.user_id,
+        )
+        .await?;
 
         // Run all writes inside a single transaction when DB is available.
         let scope = if let Some(db) = &self.db {
@@ -1050,7 +1069,7 @@ impl AuthService for DefaultAuthService {
             repos.conversation_member_repo.as_ref(),
             inv.server_id,
             actor.user_id,
-            ServerMemberRole::Guest,
+            inv.role,
         )
         .await?;
 

@@ -1,0 +1,866 @@
+//! Through-the-stack e2e tests for Track 1.2: roles and moderation
+//! (`docs/specs/track-1-2-roles-and-moderation.md`).
+//!
+//! Every assertion goes through GraphQL: resolver → `ModerationService` / `MessageService` /
+//! `ConversationService` / `AuthService` / `CommandService` → SeaORM repositories → Postgres.
+//!
+//! Run with:
+//! ```sh
+//! cargo test -p rim_api --features e2e-tests -- --test-threads=1
+//! ```
+#![cfg(feature = "e2e-tests")]
+
+mod support;
+
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use serde_json::{Value, json};
+
+use rim_api::AppSchema;
+use rim_core::server_member::model::ServerMemberRole;
+use rim_core::user::model::User;
+use rim_services::auth::dto::RegistrationMode;
+
+use support::TestCtx;
+use support::graphql::{Caller, exec_err_code, exec_ok};
+
+const CREATE_CHANNEL: &str = r#"
+mutation Create($input: CreateConversationInput!) {
+  conversation: createConversation(input: $input) { id slowModeSeconds }
+}
+"#;
+
+const ADD_MEMBERS: &str = r#"
+mutation Add($serverId: ID!, $conversationId: ID!, $userIds: [ID!]!) {
+  conversation: addConversationMembers(serverId: $serverId, conversationId: $conversationId,
+                                       userIds: $userIds) { id }
+}
+"#;
+
+const JOIN_CHANNEL: &str = r#"
+mutation Join($serverId: ID!, $conversationId: ID!) {
+  conversation: joinChannel(serverId: $serverId, conversationId: $conversationId) { id }
+}
+"#;
+
+const CONVERSATION_QUERY: &str = r#"
+query Conversation($serverId: ID!, $conversationId: ID!) {
+  conversation(serverId: $serverId, conversationId: $conversationId) { id slowModeSeconds }
+}
+"#;
+
+const CHANNELS_QUERY: &str = r#"
+query Channels($serverId: ID!) {
+  channels(serverId: $serverId, dir: AFTER, limit: 50, filter: { joinedOnly: false }) {
+    items { id }
+  }
+}
+"#;
+
+const SEND_MESSAGE: &str = r#"
+mutation Send($input: SendMessageInput!) { msg: sendMessage(input: $input) { id } }
+"#;
+
+const DELETE_MESSAGE: &str = r#"
+mutation Delete($input: DeleteMessageInput!) { deleteMessage(input: $input) }
+"#;
+
+const MESSAGES_QUERY: &str = r#"
+query Messages($serverId: ID!, $conversationId: ID!) {
+  page: messages(serverId: $serverId, conversationId: $conversationId, dir: AFTER, limit: 50,
+                 includeDeleted: false) { items { id } }
+}
+"#;
+
+const SERVER_MEMBERS: &str = r#"
+query Members($serverId: ID!) {
+  serverMembers(serverId: $serverId) { userId memberRole timeoutUntil }
+}
+"#;
+
+const CREATE_INVITE: &str = r#"
+mutation CreateInvite($input: CreateInviteInput!) {
+  invite: createInvite(input: $input) { inviteToken }
+}
+"#;
+
+const JOIN_BY_INVITE: &str = r#"
+mutation JoinByInvite($input: JoinServerByInviteInput!) {
+  joinServerByInvite(input: $input) { serverId }
+}
+"#;
+
+const SET_MEMBER_ROLE: &str = r#"
+mutation SetRole($serverId: ID!, $userId: ID!, $role: ServerMemberRoleGql!) {
+  member: setMemberRole(serverId: $serverId, userId: $userId, role: $role) { userId memberRole }
+}
+"#;
+
+const KICK: &str = r#"
+mutation Kick($serverId: ID!, $userId: ID!) {
+  kickMember(serverId: $serverId, userId: $userId, reason: "be nice")
+}
+"#;
+
+const BAN: &str = r#"
+mutation Ban($serverId: ID!, $userId: ID!) {
+  ban: banMember(serverId: $serverId, userId: $userId, reason: "spam") {
+    userId reason expiresAt user { id }
+  }
+}
+"#;
+
+const UNBAN: &str = r#"
+mutation Unban($serverId: ID!, $userId: ID!) { unbanMember(serverId: $serverId, userId: $userId) }
+"#;
+
+const BANS: &str = r#"
+query Bans($serverId: ID!) { serverBans(serverId: $serverId) { userId reason } }
+"#;
+
+const TIMEOUT: &str = r#"
+mutation Timeout($serverId: ID!, $userId: ID!, $until: DateTime!) {
+  timeout: timeoutMember(serverId: $serverId, userId: $userId, until: $until) { userId until }
+}
+"#;
+
+const CLEAR_TIMEOUT: &str = r#"
+mutation Clear($serverId: ID!, $userId: ID!) { clearTimeout(serverId: $serverId, userId: $userId) }
+"#;
+
+const SET_SLOW_MODE: &str = r#"
+mutation Slow($serverId: ID!, $conversationId: ID!, $seconds: Int!) {
+  conversation: setSlowMode(serverId: $serverId, conversationId: $conversationId,
+                            seconds: $seconds) { id slowModeSeconds }
+}
+"#;
+
+const REPORT: &str = r#"
+mutation Report($serverId: ID!, $conversationId: ID!, $messageId: ID!, $reason: String!) {
+  report: reportMessage(serverId: $serverId, conversationId: $conversationId,
+                        messageId: $messageId, reason: $reason) { id status reason }
+}
+"#;
+
+const REPORTS: &str = r#"
+query Reports($serverId: ID!, $status: MessageReportStatus) {
+  page: messageReports(serverId: $serverId, status: $status, dir: AFTER, limit: 20) {
+    items { id messageId reporterUserId reason status messageReadable messageText messageAuthorId }
+    pageInfo { hasNext hasPrev }
+  }
+}
+"#;
+
+const RESOLVE: &str = r#"
+mutation Resolve($serverId: ID!, $reportId: ID!, $outcome: ReportOutcome!) {
+  report: resolveReport(serverId: $serverId, reportId: $reportId, outcome: $outcome) {
+    id status resolvedBy
+  }
+}
+"#;
+
+const EXECUTE_POST: &str = r#"
+mutation Exec($serverId: ID!, $args: JSON!) {
+  executeCommand(input: {
+    commandId: "chat.post_message"
+    args: $args
+    commandContext: { workspaceId: $serverId }
+  }) { status message }
+}
+"#;
+
+struct Fixture {
+    ctx: TestCtx,
+    schema: AppSchema,
+    server: rim_core::server::model::Server,
+    server_id: String,
+    /// Owner; created the public channel.
+    alice: Caller,
+    mona: Caller,
+    bob: Caller,
+    carol: Caller,
+    gina: Caller,
+    channel_id: String,
+}
+
+async fn caller(ctx: &TestCtx, user: &User) -> Caller {
+    Caller {
+        user_id: user.id,
+        session_id: ctx.create_session(user).await,
+    }
+}
+
+/// alice (Owner), mona (Moderator), bob and carol (Member), gina (Guest) and a public channel
+/// alice created.
+async fn setup() -> Fixture {
+    let ctx = TestCtx::new().await;
+    let server = ctx.create_server("moderation-e2e").await;
+    let alice_user = ctx.create_user("mod-alice").await;
+    let mona_user = ctx.create_user("mod-mona").await;
+    let bob_user = ctx.create_user("mod-bob").await;
+    let carol_user = ctx.create_user("mod-carol").await;
+    let gina_user = ctx.create_user("mod-gina").await;
+    ctx.add_owner(&server, &alice_user).await;
+    ctx.add_member(&server, &mona_user, ServerMemberRole::Moderator)
+        .await;
+    ctx.add_member(&server, &bob_user, ServerMemberRole::Member)
+        .await;
+    ctx.add_member(&server, &carol_user, ServerMemberRole::Member)
+        .await;
+    ctx.add_member(&server, &gina_user, ServerMemberRole::Guest)
+        .await;
+
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let alice = caller(&ctx, &alice_user).await;
+    let server_id = server.id.to_string();
+    let created = exec_ok(
+        &schema,
+        alice.request(
+            CREATE_CHANNEL,
+            json!({ "input": { "serverId": server_id, "isChannel": true, "title": "general" } }),
+        ),
+    )
+    .await;
+    let channel_id = created["conversation"]["id"]
+        .as_str()
+        .expect("channel id")
+        .to_string();
+
+    Fixture {
+        mona: caller(&ctx, &mona_user).await,
+        bob: caller(&ctx, &bob_user).await,
+        carol: caller(&ctx, &carol_user).await,
+        gina: caller(&ctx, &gina_user).await,
+        alice,
+        server,
+        server_id,
+        channel_id,
+        schema,
+        ctx,
+    }
+}
+
+impl Fixture {
+    async fn send(&self, who: &Caller, conversation_id: &str, text: &str) -> String {
+        let data = exec_ok(
+            &self.schema,
+            who.request(
+                SEND_MESSAGE,
+                json!({ "input": {
+                    "serverId": self.server_id,
+                    "conversationId": conversation_id,
+                    "text": text,
+                } }),
+            ),
+        )
+        .await;
+        data["msg"]["id"].as_str().expect("message id").to_string()
+    }
+
+    fn send_request(&self, who: &Caller, text: &str) -> async_graphql::Request {
+        who.request(
+            SEND_MESSAGE,
+            json!({ "input": {
+                "serverId": self.server_id,
+                "conversationId": self.channel_id,
+                "text": text,
+            } }),
+        )
+    }
+
+    fn member_vars(&self, user: &Caller) -> Value {
+        json!({ "serverId": self.server_id, "userId": user.user_id.to_string() })
+    }
+
+    async fn invite_token(&self) -> String {
+        let data = exec_ok(
+            &self.schema,
+            self.alice.request(
+                CREATE_INVITE,
+                json!({ "input": { "serverId": self.server_id, "maxUses": 1 } }),
+            ),
+        )
+        .await;
+        data["invite"]["inviteToken"]
+            .as_str()
+            .expect("token")
+            .to_string()
+    }
+
+    async fn member_ids(&self, who: &Caller) -> Vec<String> {
+        let data = exec_ok(
+            &self.schema,
+            who.request(SERVER_MEMBERS, json!({ "serverId": self.server_id })),
+        )
+        .await;
+        let mut ids: Vec<String> = data["serverMembers"]
+            .as_array()
+            .expect("members")
+            .iter()
+            .map(|m| m["userId"].as_str().expect("id").to_string())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    async fn audit_rows(&self, command_id: &str) -> Vec<entity::command_audit_log::Model> {
+        let server_uuid: uuid::Uuid = self.server.id.into();
+        entity::command_audit_log::Entity::find()
+            .filter(entity::command_audit_log::Column::ServerId.eq(server_uuid))
+            .filter(entity::command_audit_log::Column::CommandId.eq(command_id))
+            .all(&self.ctx.conn)
+            .await
+            .expect("audit query")
+    }
+}
+
+/// Seed the builtin capabilities into the registry, as `rim_server` does at boot, so
+/// `executeCommand` passes the capability gate (C1) and reaches the timeout gate.
+async fn seed_capabilities(ctx: &TestCtx) {
+    use rim_core::capability::repository::CapabilityRegistryRepository;
+    let repo =
+        rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(
+            ctx.db.clone(),
+        );
+    for spec in rim_infra_services::capability::builtin_capabilities() {
+        repo.upsert_if_missing(
+            spec.id,
+            rim_core::capability::model::CapabilitySourceKind::Builtin,
+            None,
+            spec.is_self_scoped,
+        )
+        .await
+        .expect("seed capability");
+    }
+}
+
+fn error_extension(res: &async_graphql::Response, key: &str) -> Option<async_graphql::Value> {
+    res.errors
+        .first()
+        .and_then(|e| e.extensions.as_ref())
+        .and_then(|ext| ext.get(key).cloned())
+}
+
+#[tokio::test]
+async fn kicked_member_may_rejoin_but_banned_member_may_not() {
+    let f = setup().await;
+
+    // Nobody kicks the owner; a moderator cannot kick a moderator either.
+    let code = exec_err_code(&f.schema, f.mona.request(KICK, f.member_vars(&f.alice))).await;
+    assert_eq!(code, "FORBIDDEN");
+    let code = exec_err_code(&f.schema, f.bob.request(KICK, f.member_vars(&f.carol))).await;
+    assert_eq!(code, "FORBIDDEN", "members cannot kick");
+
+    let data = exec_ok(&f.schema, f.mona.request(KICK, f.member_vars(&f.bob))).await;
+    assert_eq!(data["kickMember"], json!(true));
+    assert!(
+        !f.member_ids(&f.alice)
+            .await
+            .contains(&f.bob.user_id.to_string())
+    );
+    // The kicked user lost access to the workspace.
+    let code = exec_err_code(&f.schema, f.send_request(&f.bob, "still here?")).await;
+    assert_eq!(code, "FORBIDDEN");
+
+    // A kick does not block re-joining.
+    let token = f.invite_token().await;
+    exec_ok(
+        &f.schema,
+        f.bob
+            .request(JOIN_BY_INVITE, json!({ "input": { "inviteToken": token } })),
+    )
+    .await;
+    assert!(
+        f.member_ids(&f.alice)
+            .await
+            .contains(&f.bob.user_id.to_string())
+    );
+
+    // A ban removes and blocks.
+    let data = exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
+    assert_eq!(data["ban"]["reason"], json!("spam"));
+    assert_eq!(data["ban"]["expiresAt"], Value::Null);
+    assert_eq!(data["ban"]["user"]["id"], json!(f.bob.user_id.to_string()));
+    let bans = exec_ok(
+        &f.schema,
+        f.mona.request(BANS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    assert_eq!(
+        bans["serverBans"],
+        json!([{ "userId": f.bob.user_id.to_string(), "reason": "spam" }])
+    );
+    let code = exec_err_code(
+        &f.schema,
+        f.carol.request(BANS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "only moderators list bans");
+
+    let token = f.invite_token().await;
+    let code = exec_err_code(
+        &f.schema,
+        f.bob.request(
+            JOIN_BY_INVITE,
+            json!({ "input": { "inviteToken": token.clone() } }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        code, "FORBIDDEN",
+        "a banned user cannot accept a new invite"
+    );
+
+    let data = exec_ok(&f.schema, f.mona.request(UNBAN, f.member_vars(&f.bob))).await;
+    assert_eq!(data["unbanMember"], json!(true));
+    exec_ok(
+        &f.schema,
+        f.bob
+            .request(JOIN_BY_INVITE, json!({ "input": { "inviteToken": token } })),
+    )
+    .await;
+
+    assert_eq!(f.audit_rows("admin.kick").await.len(), 1);
+    assert_eq!(f.audit_rows("admin.ban").await.len(), 1);
+    assert_eq!(f.audit_rows("admin.unban").await.len(), 1);
+    let ban_row = &f.audit_rows("admin.ban").await[0];
+    assert_eq!(ban_row.actor_user_id, uuid::Uuid::from(f.mona.user_id));
+    assert_eq!(ban_row.initiator, "moderation");
+}
+
+#[tokio::test]
+async fn timed_out_member_cannot_send_or_run_mutating_commands() {
+    let f = setup().await;
+    seed_capabilities(&f.ctx).await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let vars = json!({
+        "serverId": f.server_id,
+        "userId": f.carol.user_id.to_string(),
+        "until": until.to_rfc3339(),
+    });
+    let code = exec_err_code(&f.schema, f.bob.request(TIMEOUT, vars.clone())).await;
+    assert_eq!(code, "FORBIDDEN", "members cannot time people out");
+    exec_ok(&f.schema, f.mona.request(TIMEOUT, vars)).await;
+
+    let res = f.schema.execute(f.send_request(&f.carol, "hi")).await;
+    assert_eq!(
+        error_extension(&res, "code"),
+        Some(async_graphql::Value::from("TIMED_OUT"))
+    );
+    assert!(error_extension(&res, "until").is_some());
+
+    let exec_vars = json!({
+        "serverId": f.server_id,
+        "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": "via palette" },
+    });
+    let code = exec_err_code(&f.schema, f.carol.request(EXECUTE_POST, exec_vars.clone())).await;
+    assert_eq!(code, "TIMED_OUT");
+
+    // Reads continue, and the directory shows the timeout.
+    exec_ok(
+        &f.schema,
+        f.carol.request(
+            MESSAGES_QUERY,
+            json!({ "serverId": f.server_id, "conversationId": f.channel_id }),
+        ),
+    )
+    .await;
+    let members = exec_ok(
+        &f.schema,
+        f.alice
+            .request(SERVER_MEMBERS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    let carol = members["serverMembers"]
+        .as_array()
+        .expect("members")
+        .iter()
+        .find(|m| m["userId"] == json!(f.carol.user_id.to_string()))
+        .expect("carol")
+        .clone();
+    assert!(carol["timeoutUntil"].is_string());
+    assert_eq!(carol["memberRole"], json!("MEMBER"));
+
+    let data = exec_ok(
+        &f.schema,
+        f.mona.request(CLEAR_TIMEOUT, f.member_vars(&f.carol)),
+    )
+    .await;
+    assert_eq!(data["clearTimeout"], json!(true));
+    f.send(&f.carol, &f.channel_id, "back").await;
+    let ok = exec_ok(&f.schema, f.carol.request(EXECUTE_POST, exec_vars)).await;
+    assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+    assert_eq!(f.audit_rows("admin.timeout").await.len(), 1);
+    assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
+}
+
+#[tokio::test]
+async fn slow_mode_rate_limits_members_but_not_moderators() {
+    let f = setup().await;
+    let vars = |seconds: i64| json!({ "serverId": f.server_id, "conversationId": f.channel_id, "seconds": seconds });
+    let code = exec_err_code(&f.schema, f.bob.request(SET_SLOW_MODE, vars(60))).await;
+    assert_eq!(code, "FORBIDDEN");
+    let code = exec_err_code(&f.schema, f.mona.request(SET_SLOW_MODE, vars(21_601))).await;
+    assert_eq!(code, "VALIDATION");
+    let data = exec_ok(&f.schema, f.mona.request(SET_SLOW_MODE, vars(60))).await;
+    assert_eq!(data["conversation"]["slowModeSeconds"], json!(60));
+    let read = exec_ok(
+        &f.schema,
+        f.bob.request(
+            CONVERSATION_QUERY,
+            json!({ "serverId": f.server_id, "conversationId": f.channel_id }),
+        ),
+    )
+    .await;
+    assert_eq!(read["conversation"]["slowModeSeconds"], json!(60));
+
+    f.send(&f.bob, &f.channel_id, "first").await;
+    let res = f.schema.execute(f.send_request(&f.bob, "second")).await;
+    assert_eq!(
+        error_extension(&res, "code"),
+        Some(async_graphql::Value::from("RATE_LIMITED"))
+    );
+    match error_extension(&res, "retryAfterSeconds") {
+        Some(async_graphql::Value::Number(n)) => {
+            let secs = n.as_i64().expect("integer");
+            assert!((1..=60).contains(&secs), "{secs}");
+        }
+        other => panic!("missing retryAfterSeconds: {other:?}"),
+    }
+
+    // Moderators and the owner are exempt.
+    f.send(&f.mona, &f.channel_id, "mod one").await;
+    f.send(&f.mona, &f.channel_id, "mod two").await;
+    f.send(&f.alice, &f.channel_id, "owner one").await;
+    f.send(&f.alice, &f.channel_id, "owner two").await;
+
+    // Turning it off lets bob post again.
+    exec_ok(&f.schema, f.mona.request(SET_SLOW_MODE, vars(0))).await;
+    f.send(&f.bob, &f.channel_id, "second, finally").await;
+    assert_eq!(f.audit_rows("chat.set_slow_mode").await.len(), 2);
+}
+
+#[tokio::test]
+async fn guest_cannot_create_join_invite_or_browse() {
+    let f = setup().await;
+
+    let code = exec_err_code(
+        &f.schema,
+        f.gina.request(
+            CREATE_CHANNEL,
+            json!({ "input": { "serverId": f.server_id, "isChannel": true, "title": "guestroom" } }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "guests cannot create channels");
+    let code = exec_err_code(
+        &f.schema,
+        f.gina.request(
+            JOIN_CHANNEL,
+            json!({ "serverId": f.server_id, "conversationId": f.channel_id }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "guests cannot join channels");
+    let code = exec_err_code(
+        &f.schema,
+        f.gina.request(
+            CREATE_INVITE,
+            json!({ "input": { "serverId": f.server_id, "maxUses": 1 } }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "guests cannot invite");
+    let code = exec_err_code(
+        &f.schema,
+        f.gina.request(
+            CONVERSATION_QUERY,
+            json!({ "serverId": f.server_id, "conversationId": f.channel_id }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "NOT_FOUND", "an unjoined public channel stays hidden");
+    let channels = exec_ok(
+        &f.schema,
+        f.gina
+            .request(CHANNELS_QUERY, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    assert_eq!(channels["channels"]["items"], json!([]), "no browsing");
+    assert_eq!(
+        f.member_ids(&f.gina).await,
+        vec![f.gina.user_id.to_string()],
+        "a guest sharing no conversation sees only themselves"
+    );
+
+    // Added by a member, the guest reads and writes there like anyone, sees the people in it,
+    // and still cannot invite.
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            ADD_MEMBERS,
+            json!({
+                "serverId": f.server_id,
+                "conversationId": f.channel_id,
+                "userIds": [f.gina.user_id.to_string()],
+            }),
+        ),
+    )
+    .await;
+    f.send(&f.gina, &f.channel_id, "hello from a guest").await;
+    let channels = exec_ok(
+        &f.schema,
+        f.gina
+            .request(CHANNELS_QUERY, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    assert_eq!(
+        channels["channels"]["items"],
+        json!([{ "id": f.channel_id }])
+    );
+    let mut expected = vec![f.alice.user_id.to_string(), f.gina.user_id.to_string()];
+    expected.sort();
+    assert_eq!(f.member_ids(&f.gina).await, expected);
+    let code = exec_err_code(
+        &f.schema,
+        f.gina.request(
+            ADD_MEMBERS,
+            json!({
+                "serverId": f.server_id,
+                "conversationId": f.channel_id,
+                "userIds": [f.bob.user_id.to_string()],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN");
+}
+
+#[tokio::test]
+async fn moderator_deletes_others_messages_with_an_audit_row() {
+    let f = setup().await;
+    let message_id = f.send(&f.bob, &f.channel_id, "rude words").await;
+    let delete_vars = json!({ "input": {
+        "serverId": f.server_id,
+        "conversationId": f.channel_id,
+        "messageId": message_id,
+    } });
+
+    let code = exec_err_code(
+        &f.schema,
+        f.carol.request(DELETE_MESSAGE, delete_vars.clone()),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "members delete only their own messages");
+    let data = exec_ok(&f.schema, f.mona.request(DELETE_MESSAGE, delete_vars)).await;
+    assert_eq!(data["deleteMessage"], json!(true));
+
+    let rows = f.audit_rows("admin.delete_message").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor_user_id, uuid::Uuid::from(f.mona.user_id));
+    assert_eq!(
+        rows[0].args_redacted["author_id"],
+        json!(f.bob.user_id.to_string())
+    );
+    assert_eq!(rows[0].args_redacted["message_id"], json!(message_id));
+    assert!(
+        !rows[0].args_redacted.to_string().contains("rude"),
+        "message text is redacted"
+    );
+}
+
+#[tokio::test]
+async fn report_list_and_resolve() {
+    let f = setup().await;
+    let message_id = f.send(&f.bob, &f.channel_id, "buy cheap watches").await;
+    let report_vars = |reason: &str| {
+        json!({
+            "serverId": f.server_id,
+            "conversationId": f.channel_id,
+            "messageId": message_id,
+            "reason": reason,
+        })
+    };
+
+    let data = exec_ok(&f.schema, f.carol.request(REPORT, report_vars("spam"))).await;
+    assert_eq!(data["report"]["status"], json!("OPEN"));
+    let report_id = data["report"]["id"].as_str().expect("id").to_string();
+    let code = exec_err_code(&f.schema, f.carol.request(REPORT, report_vars("spam!"))).await;
+    assert_eq!(code, "CONFLICT", "one report per message and reporter");
+
+    // A private channel the moderator is not in: listed, but without the message body.
+    let private = exec_ok(
+        &f.schema,
+        f.bob.request(
+            CREATE_CHANNEL,
+            json!({ "input": { "serverId": f.server_id, "isChannel": true, "title": "secret",
+                               "isPrivate": true } }),
+        ),
+    )
+    .await;
+    let private_id = private["conversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    exec_ok(
+        &f.schema,
+        f.bob.request(
+            ADD_MEMBERS,
+            json!({ "serverId": f.server_id, "conversationId": private_id,
+                    "userIds": [f.carol.user_id.to_string()] }),
+        ),
+    )
+    .await;
+    let secret_id = f.send(&f.bob, &private_id, "private insult").await;
+    exec_ok(
+        &f.schema,
+        f.carol.request(
+            REPORT,
+            json!({ "serverId": f.server_id, "conversationId": private_id,
+                    "messageId": secret_id, "reason": "harassment" }),
+        ),
+    )
+    .await;
+
+    let code = exec_err_code(
+        &f.schema,
+        f.bob.request(
+            REPORTS,
+            json!({ "serverId": f.server_id, "status": "OPEN" }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "only moderators list reports");
+
+    let listed = exec_ok(
+        &f.schema,
+        f.mona.request(
+            REPORTS,
+            json!({ "serverId": f.server_id, "status": "OPEN" }),
+        ),
+    )
+    .await;
+    let items = listed["page"]["items"].as_array().expect("items").clone();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["messageId"], json!(message_id));
+    assert_eq!(items[0]["messageReadable"], json!(true));
+    assert_eq!(items[0]["messageText"], json!("buy cheap watches"));
+    assert_eq!(
+        items[0]["messageAuthorId"],
+        json!(f.bob.user_id.to_string())
+    );
+    assert_eq!(
+        items[0]["reporterUserId"],
+        json!(f.carol.user_id.to_string())
+    );
+    assert_eq!(items[1]["messageId"], json!(secret_id));
+    assert_eq!(items[1]["messageReadable"], json!(false));
+    assert_eq!(items[1]["messageText"], Value::Null);
+    assert_eq!(items[1]["messageAuthorId"], Value::Null);
+    assert_eq!(items[1]["reason"], json!("harassment"));
+
+    let resolve_vars =
+        json!({ "serverId": f.server_id, "reportId": report_id, "outcome": "DISMISSED" });
+    let resolved = exec_ok(&f.schema, f.mona.request(RESOLVE, resolve_vars.clone())).await;
+    assert_eq!(resolved["report"]["status"], json!("DISMISSED"));
+    assert_eq!(
+        resolved["report"]["resolvedBy"],
+        json!(f.mona.user_id.to_string())
+    );
+    let code = exec_err_code(&f.schema, f.mona.request(RESOLVE, resolve_vars)).await;
+    assert_eq!(code, "CONFLICT", "a closed report cannot be resolved again");
+
+    let open = exec_ok(
+        &f.schema,
+        f.mona.request(
+            REPORTS,
+            json!({ "serverId": f.server_id, "status": "OPEN" }),
+        ),
+    )
+    .await;
+    assert_eq!(open["page"]["items"].as_array().expect("items").len(), 1);
+    assert_eq!(f.audit_rows("chat.report_message").await.len(), 2);
+    assert_eq!(f.audit_rows("admin.resolve_report").await.len(), 1);
+}
+
+#[tokio::test]
+async fn set_member_role_matrix() {
+    let f = setup().await;
+    let set = |who: &Caller, target: &Caller, role: &str| {
+        who.request(
+            SET_MEMBER_ROLE,
+            json!({ "serverId": f.server_id, "userId": target.user_id.to_string(), "role": role }),
+        )
+    };
+
+    let data = exec_ok(&f.schema, set(&f.alice, &f.bob, "MODERATOR")).await;
+    assert_eq!(data["member"]["memberRole"], json!("MODERATOR"));
+    let data = exec_ok(&f.schema, set(&f.mona, &f.carol, "GUEST")).await;
+    assert_eq!(data["member"]["memberRole"], json!("GUEST"));
+    let data = exec_ok(&f.schema, set(&f.mona, &f.gina, "MEMBER")).await;
+    assert_eq!(data["member"]["memberRole"], json!("MEMBER"));
+
+    for (who, target, role, expected) in [
+        (&f.mona, &f.gina, "MODERATOR", "FORBIDDEN"),
+        (&f.mona, &f.bob, "MEMBER", "FORBIDDEN"),
+        (&f.mona, &f.alice, "MEMBER", "FORBIDDEN"),
+        (&f.carol, &f.gina, "GUEST", "FORBIDDEN"),
+        (&f.alice, &f.alice, "MEMBER", "VALIDATION"),
+        (&f.alice, &f.bob, "OWNER", "VALIDATION"),
+    ] {
+        let code = exec_err_code(&f.schema, set(who, target, role)).await;
+        assert_eq!(
+            code, expected,
+            "{:?} -> {:?} {role}",
+            who.user_id, target.user_id
+        );
+    }
+
+    let members = exec_ok(
+        &f.schema,
+        f.alice
+            .request(SERVER_MEMBERS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    let role_of = |c: &Caller| {
+        members["serverMembers"]
+            .as_array()
+            .expect("members")
+            .iter()
+            .find(|m| m["userId"] == json!(c.user_id.to_string()))
+            .map(|m| m["memberRole"].clone())
+    };
+    assert_eq!(role_of(&f.alice), Some(json!("OWNER")));
+    assert_eq!(role_of(&f.bob), Some(json!("MODERATOR")));
+    assert_eq!(role_of(&f.carol), Some(json!("GUEST")));
+    assert_eq!(role_of(&f.gina), Some(json!("MEMBER")));
+    assert_eq!(f.audit_rows("admin.set_member_role").await.len(), 3);
+}
+
+#[tokio::test]
+async fn sdl_exposes_the_role_enum_and_moderation_surface() {
+    let f = setup().await;
+    let sdl = f.schema.sdl();
+    for needle in [
+        "enum ServerMemberRoleGql",
+        "MEMBER",
+        "memberRole: ServerMemberRoleGql!",
+        "timeoutUntil: DateTime",
+        "slowModeSeconds: Int!",
+        "role: ServerMemberRoleGql",
+        "enum MessageReportStatus",
+        "enum ReportOutcome",
+        "setMemberRole(",
+        "kickMember(",
+        "banMember(",
+        "unbanMember(",
+        "timeoutMember(",
+        "clearTimeout(",
+        "setSlowMode(",
+        "reportMessage(",
+        "resolveReport(",
+        "serverBans(",
+        "messageReports(",
+    ] {
+        assert!(sdl.contains(needle), "SDL is missing `{needle}`");
+    }
+}

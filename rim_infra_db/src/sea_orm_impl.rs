@@ -25,6 +25,7 @@ pub mod message_mention;
 pub mod message_pin;
 pub mod message_reaction;
 pub mod message_thread;
+pub mod moderation;
 pub mod notification_preference;
 pub mod on_call_override;
 pub mod on_call_rotation_layer;

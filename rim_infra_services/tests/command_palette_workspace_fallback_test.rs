@@ -98,6 +98,9 @@ fn build_service(
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
     )
 }
@@ -159,6 +162,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     }],
                     None,
                     None,
@@ -245,8 +249,9 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
                     avatar_url: None,
                     status_text: None,
                     bio: None,
-                    member_role: "member".to_string(),
+                    member_role: rim_core::server_member::model::ServerMemberRole::Member,
                     joined_at: chrono::Utc::now(),
+                    timeout_until: None,
                 }])
             })
         });

@@ -27,6 +27,7 @@ pub(super) async fn invite_member(
             expires_at: None,
             max_uses: 1,
             recipient_email: None,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await?;
 
@@ -91,6 +92,7 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
                 revoked_at: None,
+                role: rim_core::server_member::model::ServerMemberRole::Member,
             },
             invite_token: "test-token".to_string(),
         }
@@ -119,6 +121,9 @@ mod tests {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         }
     }

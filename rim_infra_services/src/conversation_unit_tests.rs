@@ -12,13 +12,15 @@ mod tests {
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{
+        MemberStanding, ServerMember, ServerMemberId, ServerMemberRole,
+    };
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::conversation::command::{
         AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd,
-        GetConversationQuery, JoinChannelCmd, LeaveConversationCmd, RemoveConversationMemberCmd,
-        UpdateConversationTopicCmd,
+        GetConversationQuery, JoinChannelCmd, LeaveConversationCmd, ListChannelsQuery,
+        RemoveConversationMemberCmd, UpdateConversationTopicCmd,
     };
     use rim_services::conversation::service::ConversationService;
     use rim_services::conversation::types::ConversationParticipants;
@@ -57,6 +59,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         }
     }
 
@@ -69,6 +72,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let svc = DefaultConversationService::new(
             ConversationRepos {
@@ -103,6 +113,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let svc = DefaultConversationService::new(
             ConversationRepos {
@@ -141,6 +158,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         conversation_repo
             .expect_exists_channel_by_title()
@@ -198,6 +222,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         conversation_repo
             .expect_find_direct_between_users()
@@ -249,6 +280,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let c_for_repo = c.clone();
         conversation_repo.expect_get_by_id().returning(move |_id| {
@@ -292,6 +330,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let c1_inbox = c1.clone();
         let c2_inbox = c2.clone();
@@ -376,6 +421,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         // Actor is a member of the Direct conversation — test verifies type check fires anyway.
         conversation_member_repo
@@ -421,6 +473,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         conversation_repo
             .expect_list_inbox_conversations_for_user()
@@ -502,6 +561,8 @@ mod tests {
         members: Arc<Mutex<Vec<UserId>>>,
         /// Workspace members and their roles; anyone else is not in the workspace.
         roles: Vec<(UserId, ServerMemberRole)>,
+        /// Workspace members whose timeout is in force (Track 1.2).
+        timed_out: Vec<UserId>,
         events: Arc<RecordingBroadcaster>,
     }
 
@@ -516,12 +577,18 @@ mod tests {
                 conversation,
                 members: Arc::new(Mutex::new(members.to_vec())),
                 roles: vec![],
+                timed_out: vec![],
                 events: Arc::new(RecordingBroadcaster::default()),
             }
         }
 
         fn with_workspace_member(mut self, user: UserId, role: ServerMemberRole) -> Self {
             self.roles.push((user, role));
+            self
+        }
+
+        fn timed_out(mut self, user: UserId) -> Self {
+            self.timed_out.push(user);
             self
         }
 
@@ -548,6 +615,21 @@ mod tests {
                 .expect_is_member()
                 .returning(move |sid, uid| {
                     Ok(sid == server_id && roles.iter().any(|(u, _)| *u == uid))
+                });
+            let roles = self.roles.clone();
+            let timed_out = self.timed_out.clone();
+            server_member_repo
+                .expect_get_member_standing()
+                .returning(move |sid, uid| {
+                    Ok(roles
+                        .iter()
+                        .find(|(u, _)| sid == server_id && *u == uid)
+                        .map(|(_, role)| MemberStanding {
+                            role: *role,
+                            timed_out_until: timed_out
+                                .contains(&uid)
+                                .then(|| chrono::Utc::now() + chrono::Duration::minutes(5)),
+                        }))
                 });
             let roles = self.roles.clone();
             server_member_repo
@@ -721,8 +803,8 @@ mod tests {
     async fn private_channel_is_not_found_for_non_member_and_readable_for_member() {
         let [alice, carol] = users();
         let fx = Fx::new(ConversationType::Channel, true, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
 
         fx.get(alice)
             .await
@@ -738,8 +820,8 @@ mod tests {
     async fn create_rejects_private_direct_and_group() {
         let [alice, bob] = users();
         let fx = Fx::new(ConversationType::Channel, false, &[])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(bob, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member);
         for participants in [
             ConversationParticipants::DirectMessage { other_user_id: bob },
             ConversationParticipants::Group {
@@ -765,8 +847,8 @@ mod tests {
     async fn join_public_channel_is_idempotent_and_emits_once() {
         let [alice, carol] = users();
         let fx = Fx::new(ConversationType::Channel, false, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
 
         fx.join(carol).await.expect("join");
         fx.join(carol).await.expect("join again");
@@ -783,7 +865,7 @@ mod tests {
     async fn join_rejects_private_archived_and_non_channels() {
         let [alice, carol] = users();
         let private = Fx::new(ConversationType::Channel, true, &[alice])
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(carol, ServerMemberRole::Member);
         assert!(matches!(
             private.join(carol).await,
             Err(ServiceError::NotFound)
@@ -791,7 +873,7 @@ mod tests {
         assert_eq!(private.members(), vec![alice]);
 
         let archived = Fx::new(ConversationType::Channel, false, &[alice])
-            .with_workspace_member(carol, ServerMemberRole::Guest)
+            .with_workspace_member(carol, ServerMemberRole::Member)
             .archived();
         assert!(matches!(
             archived.join(carol).await,
@@ -799,7 +881,7 @@ mod tests {
         ));
 
         let group = Fx::new(ConversationType::Group, false, &[alice, carol])
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(carol, ServerMemberRole::Member);
         assert!(matches!(
             group.join(carol).await,
             Err(ServiceError::Validation(_))
@@ -817,8 +899,8 @@ mod tests {
     async fn leave_removes_member_and_notifies_the_leaver() {
         let [alice, bob] = users();
         let fx = Fx::new(ConversationType::Channel, true, &[alice, bob])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(bob, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member);
 
         fx.leave(bob).await.expect("leave");
         assert_eq!(fx.members(), vec![alice]);
@@ -836,14 +918,14 @@ mod tests {
     async fn leave_rejects_direct_and_is_a_no_op_for_unjoined_public_channel() {
         let [alice, bob, carol] = users();
         let dm = Fx::new(ConversationType::Direct, false, &[alice, bob])
-            .with_workspace_member(alice, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member);
         assert!(matches!(
             dm.leave(alice).await,
             Err(ServiceError::Validation(_))
         ));
 
         let public = Fx::new(ConversationType::Channel, false, &[alice])
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(carol, ServerMemberRole::Member);
         public.leave(carol).await.expect("no-op leave");
         assert_eq!(public.members(), vec![alice]);
         assert!(public.events().is_empty());
@@ -863,9 +945,9 @@ mod tests {
         let [alice, bob, carol] = users();
         let outsider = UserId::new();
         let fx = Fx::new(ConversationType::Channel, true, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(bob, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
 
         // A non-member cannot tell the private channel exists, let alone invite into it.
         assert!(matches!(
@@ -899,9 +981,9 @@ mod tests {
     async fn invite_into_public_channel_requires_joining_first() {
         let [alice, bob, carol] = users();
         let fx = Fx::new(ConversationType::Channel, false, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(bob, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
         assert!(matches!(
             fx.invite(carol, &[bob]).await,
             Err(ServiceError::PermissionDenied)
@@ -914,16 +996,16 @@ mod tests {
     async fn invite_rejects_direct_and_archived() {
         let [alice, bob, carol] = users();
         let dm = Fx::new(ConversationType::Direct, false, &[alice, bob])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
         assert!(matches!(
             dm.invite(alice, &[carol]).await,
             Err(ServiceError::Validation(_))
         ));
 
         let archived = Fx::new(ConversationType::Group, false, &[alice, bob])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest)
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
             .archived();
         assert!(matches!(
             archived.invite(alice, &[carol]).await,
@@ -936,8 +1018,8 @@ mod tests {
         let [alice, bob, moderator] = users();
         let fresh = || {
             Fx::new(ConversationType::Channel, true, &[alice, bob])
-                .with_workspace_member(alice, ServerMemberRole::Guest)
-                .with_workspace_member(bob, ServerMemberRole::Guest)
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
                 .with_workspace_member(moderator, ServerMemberRole::Moderator)
         };
 
@@ -975,8 +1057,8 @@ mod tests {
     async fn remove_member_hides_private_channel_from_non_member_guest() {
         let [alice, carol] = users();
         let fx = Fx::new(ConversationType::Channel, true, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
-            .with_workspace_member(carol, ServerMemberRole::Guest);
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
         assert!(matches!(
             fx.remove(carol, alice).await,
             Err(ServiceError::NotFound)
@@ -998,7 +1080,7 @@ mod tests {
     async fn archive_requires_owner_or_moderator_and_a_channel() {
         let [alice, owner, moderator] = users();
         let fx = Fx::new(ConversationType::Channel, true, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
+            .with_workspace_member(alice, ServerMemberRole::Member)
             .with_workspace_member(owner, ServerMemberRole::Owner)
             .with_workspace_member(moderator, ServerMemberRole::Moderator);
 
@@ -1042,7 +1124,7 @@ mod tests {
     async fn topic_update_on_archived_channel_is_rejected() {
         let [alice] = users();
         let fx = Fx::new(ConversationType::Channel, false, &[alice])
-            .with_workspace_member(alice, ServerMemberRole::Guest)
+            .with_workspace_member(alice, ServerMemberRole::Member)
             .archived();
         let err = fx
             .service()
@@ -1068,6 +1150,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
         let want = ChannelListFilter {
             joined_only: true,
             include_archived: true,
@@ -1099,5 +1188,145 @@ mod tests {
         })
         .await
         .expect("list");
+    }
+
+    // ── Track 1.2: guest restrictions and timeouts ──
+
+    #[tokio::test]
+    async fn guest_cannot_create_channels_or_groups() {
+        let [guest, member] = users();
+        let fx = Fx::new(ConversationType::Channel, false, &[])
+            .with_workspace_member(guest, ServerMemberRole::Guest)
+            .with_workspace_member(member, ServerMemberRole::Member);
+        for participants in [
+            ConversationParticipants::Channel,
+            ConversationParticipants::Group {
+                member_ids: vec![member],
+            },
+        ] {
+            let err = fx
+                .service()
+                .create_conversation(CreateConversationCmd {
+                    actor: Actor::new(guest),
+                    server_id: fx.server_id,
+                    participants,
+                    title: Some("guest-room".to_string()),
+                    is_private: false,
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_cannot_join_invite_or_read_unjoined_public_channels() {
+        let [alice, guest, carol] = users();
+        let fx = Fx::new(ConversationType::Channel, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(guest, ServerMemberRole::Guest)
+            .with_workspace_member(carol, ServerMemberRole::Member);
+
+        assert!(matches!(
+            fx.join(guest).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        assert!(matches!(
+            fx.invite(guest, &[carol]).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        assert!(
+            matches!(fx.get(guest).await, Err(ServiceError::NotFound)),
+            "a public channel the guest was not added to stays hidden"
+        );
+
+        // Once a member adds the guest, the guest reads it like any member, but still cannot
+        // invite others.
+        fx.invite(alice, &[guest]).await.expect("member adds guest");
+        fx.get(guest).await.expect("guest reads the channel");
+        assert!(matches!(
+            fx.invite(guest, &[carol]).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn timed_out_member_cannot_join_invite_or_create() {
+        let [alice, carol] = users();
+        let fx = Fx::new(ConversationType::Channel, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .timed_out(carol)
+            .timed_out(alice);
+
+        assert!(matches!(
+            fx.join(carol).await,
+            Err(ServiceError::TimedOut { .. })
+        ));
+        assert!(matches!(
+            fx.invite(alice, &[carol]).await,
+            Err(ServiceError::TimedOut { .. })
+        ));
+        let err = fx
+            .service()
+            .create_conversation(CreateConversationCmd {
+                actor: Actor::new(carol),
+                server_id: fx.server_id,
+                participants: ConversationParticipants::Channel,
+                title: Some("muted".to_string()),
+                is_private: false,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::TimedOut { .. }), "{err:?}");
+        // Reads continue.
+        fx.get(carol).await.expect("timed-out member still reads");
+    }
+
+    #[tokio::test]
+    async fn guest_channel_list_is_always_joined_only() {
+        use rim_core::repository::pagination::{Page, PageDir};
+
+        for (role, browse_allowed) in [
+            (ServerMemberRole::Guest, false),
+            (ServerMemberRole::Member, true),
+        ] {
+            let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
+                base_repos();
+            server_member_repo
+                .expect_get_member_standing()
+                .returning(move |_, _| Ok(Some(MemberStanding::new(role))));
+            conversation_repo
+                .expect_list_channels_for_user()
+                .withf(move |_, _, filter, _, _, _| filter.joined_only != browse_allowed)
+                .times(1)
+                .returning(|_, _, _, _, _, _| {
+                    Box::pin(async { Ok(Page::new(vec![], None, None)) })
+                });
+            conversation_member_repo
+                .expect_list_member_ids_for_conversations()
+                .returning(|_| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+            let svc = DefaultConversationService::new(
+                ConversationRepos {
+                    conversation_repo: Arc::new(conversation_repo),
+                    conversation_member_repo: Arc::new(conversation_member_repo),
+                    server_member_repo: Arc::new(server_member_repo),
+                },
+                test_observers(),
+            );
+            svc.list_channels(ListChannelsQuery {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+                filter: rim_core::conversation::repository::ChannelListFilter {
+                    joined_only: false,
+                    include_archived: false,
+                },
+                limit: 50,
+                dir: PageDir::After,
+                cursor: None,
+            })
+            .await
+            .expect("list channels");
+        }
     }
 }

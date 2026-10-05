@@ -38,6 +38,9 @@ pub struct CreateInviteCmd {
     /// [`crate::ServiceError::Validation`]. Send failure is best-effort — the invite is still
     /// created and its raw token still returned even if the email doesn't go out.
     pub recipient_email: Option<String>,
+    /// Role granted on join (Track 1.2): `Member` or `Guest`. Anything else is a
+    /// [`crate::ServiceError::Validation`] error.
+    pub role: rim_core::server_member::model::ServerMemberRole,
 }
 
 #[derive(Debug, Clone)]

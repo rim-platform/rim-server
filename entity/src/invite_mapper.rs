@@ -13,6 +13,7 @@ impl From<invite::Model> for Invite {
             max_uses: m.max_uses,
             use_count: m.use_count,
             revoked_at: m.revoked_at.map(Into::into),
+            role: m.role.into(),
         }
     }
 }

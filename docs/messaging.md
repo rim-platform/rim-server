@@ -18,7 +18,8 @@ This document describes the current v0 backend contract for conversations, messa
 
 Spec: `docs/specs/track-1-1-private-channels.md`.
 
-- **Public channels** (`isPrivate = false`) are readable by every workspace member, joined or not.
+- **Public channels** (`isPrivate = false`) are readable by every workspace member, joined or not
+  (except guests, see Roles And Moderation below).
   Joining (`joinChannel`) adds a `conversation_member` row; joined channels are what the sidebar
   lists (`channels(filter: { joinedOnly: true })`), all public channels appear in browse
   (`channels` with the default filter). Posting does not require joining.
@@ -66,6 +67,118 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   (409 `{"error": "conversation is archived"}` on the webhook). Leaving and removing members still work.
 - Archived channels are hidden from `channels` unless `includeArchived: true`, and stay readable
   and searchable by whoever could read them before.
+
+## Roles And Moderation (Track 1.2)
+
+Spec: `docs/specs/track-1-2-roles-and-moderation.md`.
+
+### Roles
+
+| Role | Meaning |
+|---|---|
+| `OWNER` | Everything. One per workspace; the role cannot be granted (`setMemberRole` with `OWNER` is `VALIDATION`). |
+| `MODERATOR` | Moderation (kick, ban, timeout, delete any message, slow mode, reports) and channel management (archive, remove members). Changes roles only between `MEMBER` and `GUEST`. |
+| `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. |
+| `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
+
+- **Migration:** until Track 1.2 every new member was created as `guest`, so "guest" meant an
+  ordinary member. The `m20261005_024730_add_member_role` migration adds `member` to the
+  `server_member_role` enum and turns **every existing `guest` into `member`**; the column
+  default is now `member`.
+- New members get `MEMBER` on every join path (invite acceptance, join by invite, owner-added).
+  Invites carry a role (`CreateInviteInput.role`, `MEMBER` by default, `GUEST` for a guest link;
+  any other value is `VALIDATION`). Workspace invites (`createInvite`) stay owner-only.
+- `ServerMember.memberRole` is the enum `ServerMemberRoleGql` (it was a string); the field name is
+  unchanged. `ServerMember.timeoutUntil` is set while the member is timed out.
+- `setMemberRole(serverId, userId, role)`: the Owner may set `MODERATOR`, `MEMBER` or `GUEST` on
+  anyone but themselves; a Moderator may move a `MEMBER` to `GUEST` and back; everyone else gets
+  `FORBIDDEN`. Changing your own role is `VALIDATION`. Emits `MemberRoleChanged`.
+
+### Guest restrictions (enforced in the services)
+
+- Creating a channel or a group, joining a channel, inviting into a conversation
+  (`addConversationMembers`) and creating workspace invites: `FORBIDDEN`. Guests may open DMs.
+- A public channel the guest has not been added to behaves like a private channel: `NOT_FOUND`
+  on every read and write, absent from `channels` (a guest's channel list is always the joined
+  list, whatever `joinedOnly` says), from `searchMessages` and from `myMentions`, and its realtime
+  events do not reach the guest.
+- `serverMembers` for a guest lists only themselves and the members of conversations they share;
+  `ServerMember` lookups of anyone else are `NOT_FOUND`. The directory events `MemberJoined`,
+  `MemberLeft` and `MemberRoleChanged` reach a guest only when they are about the guest.
+- Guests are not auto-joined to public channels when they join the workspace.
+- Inside a conversation they belong to, a guest can do everything a member can.
+
+### Kick, ban, timeout
+
+Who may target whom (kick, ban, timeout, clear timeout): the actor must be Owner or Moderator;
+nobody can target the Owner; a Moderator cannot target another Moderator; nobody targets
+themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
+
+- `kickMember`: removes the member from the workspace and from every conversation of it, emits
+  `MemberLeft`. They can re-join with a new invite.
+- `banMember(reason, expiresAt)`: records a ban (`server_ban`), then removes the member like a
+  kick. A user who is not a member can be banned pre-emptively. While a ban is active (no
+  `expiresAt`, or `expiresAt` in the future) accepting an invite, joining by invite and being
+  added by the owner fail with `FORBIDDEN`; the refused join consumes no invite use.
+  `unbanMember` deletes the ban; `serverBans` lists active bans (Owner/Moderator).
+- `timeoutMember(until, reason)`: `until` must be in the future and at most 30 days ahead. While
+  it lasts, every write fails with `TIMED_OUT` (extension `until`, RFC 3339): sending, replying,
+  editing, forwarding, reactions, pins, topic, attachments (REST upload: 403 with `until`),
+  starting an incident, joining, inviting, creating conversations, and `executeCommand` of
+  any `Mutating` (or stricter) command in that workspace. Reads continue, and a timed-out author
+  may still delete their own messages over GraphQL. Expired timeouts are ignored;
+  `clearTimeout` ends one early.
+
+### Slow mode
+
+- `setSlowMode(serverId, conversationId, seconds)`: Owner/Moderator, channels only, `0..=21600`
+  (`0` turns it off), not on archived channels. Shown as `Conversation.slowModeSeconds`; changes
+  emit `ConversationUpdated`.
+- While it is on, a member's `sendMessage`, `replyToMessage` or forward into the channel fails
+  with `RATE_LIMITED` (extension `retryAfterSeconds`, rounded up) if their previous message there
+  is younger than the interval. Owner and Moderators are exempt. The check reads the author's
+  last `sent_at` in the conversation; no in-memory state.
+
+### Deleting messages
+
+`deleteMessage`: the author, or an Owner/Moderator of the workspace who can read the
+conversation (a moderator outside a private channel gets `NOT_FOUND`, like any read). A
+moderator delete writes an `admin.delete_message` audit row with the message id and author (no
+text). `MessageDeleted` is unchanged.
+
+### Reports
+
+- `reportMessage(serverId, conversationId, messageId, reason)`: any member who can read the
+  message, once per message (`CONFLICT` on a second report); deleted messages cannot be
+  reported. Allowed while timed out.
+- `messageReports(serverId, status, dir, cursor, limit)`: Owner/Moderator, ordered
+  `(createdAt, id)` ascending with the standard cursor contract (`docs/pagination.md`). Moderators
+  see every report of the workspace, but the reported message's current text and author
+  (`messageText`, `messageAuthorId`) are included only when the moderator can read the
+  conversation (`messageReadable`); for a private channel they are not in, only the ids and the
+  reporter's reason are shown.
+- `resolveReport(serverId, reportId, outcome: RESOLVED | DISMISSED)`: Owner/Moderator; a report
+  that is no longer open is `CONFLICT`.
+
+### Audit
+
+Every moderation action writes one `command_audit_log` row (initiator `moderation`) through one
+shared helper, whether it came from GraphQL or a command: `admin.set_member_role`, `admin.kick`,
+`admin.ban`, `admin.unban`, `admin.timeout`, `admin.clear_timeout`, `chat.set_slow_mode`,
+`chat.report_message`, `admin.resolve_report`, `admin.delete_message`. Arguments hold ids and
+flags only, never reasons or message text. An action run as a command also gets the generic
+command-execution row. Refused actions are not audited by the helper.
+
+### Realtime events
+
+Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
+
+- `{"type": "MemberLeft", "workspace_id": "…", "user_id": "…"}` — a member was kicked or banned.
+  Delivered to the workspace (guests: only about themselves), including the removed user, whose
+  subscription then ends.
+- `{"type": "MemberRoleChanged", "workspace_id": "…", "user_id": "…", "role": "member"}` — `role`
+  is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
+  own role changes to or from `guest` gets the matching visibility from the next event on.
 
 ## Titles
 

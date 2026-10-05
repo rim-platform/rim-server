@@ -35,6 +35,10 @@ impl InviteMutations {
                 expires_at: input.expires_at,
                 max_uses: input.max_uses.unwrap_or(1),
                 recipient_email: input.recipient_email,
+                role: input.role.map_or(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                    Into::into,
+                ),
             })
             .await
             .map_err(map_service_error)?;
@@ -299,6 +303,9 @@ pub struct CreateInviteInput {
     /// Optional recipient to email the invite link to (Track B3). Validated server-side;
     /// malformed addresses return a validation error.
     pub recipient_email: Option<String>,
+    /// Role granted on join (Track 1.2): `MEMBER` (default) or `GUEST`. Any other value is a
+    /// `VALIDATION` error.
+    pub role: Option<crate::types::ServerMemberRoleGql>,
 }
 
 #[derive(SimpleObject)]

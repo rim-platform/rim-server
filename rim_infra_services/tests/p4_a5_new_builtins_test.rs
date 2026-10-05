@@ -128,6 +128,9 @@ fn build_service_with_store(mocks: Mocks) -> (DefaultCommandService, Arc<dyn Con
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
         Arc::clone(&store),
     );
@@ -303,8 +306,9 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         avatar_url: Some("https://example/alice.png".to_string()),
                         status_text: Some("away".to_string()),
                         bio: Some("secret bio".to_string()),
-                        member_role: "admin".to_string(),
+                        member_role: rim_core::server_member::model::ServerMemberRole::Moderator,
                         joined_at: chrono::Utc::now(),
+                        timeout_until: None,
                     },
                     ServerMemberDto {
                         server_id: ws,
@@ -314,8 +318,9 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         avatar_url: None,
                         status_text: None,
                         bio: None,
-                        member_role: "member".to_string(),
+                        member_role: rim_core::server_member::model::ServerMemberRole::Member,
                         joined_at: chrono::Utc::now(),
+                        timeout_until: None,
                     },
                 ])
             })
@@ -455,6 +460,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     },
                     ConversationDto {
                         id: conv_b,
@@ -466,6 +472,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         is_private: false,
                         archived_at: None,
                         created_by: None,
+                        slow_mode_seconds: 0,
                     },
                 ])
             })

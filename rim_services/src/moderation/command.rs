@@ -1,0 +1,128 @@
+use chrono::{DateTime, Utc};
+
+use rim_core::conversation::model::ConversationId;
+use rim_core::message::model::MessageId;
+use rim_core::moderation::model::{MessageReportId, MessageReportStatus};
+use rim_core::repository::pagination::PageDir;
+use rim_core::server::model::ServerId;
+use rim_core::server_member::model::ServerMemberRole;
+use rim_core::user::model::UserId;
+
+use crate::Actor;
+use crate::moderation::dto::ReportPageCursor;
+
+/// Owner: any role except `Owner`, never on themselves. Moderator: `Member` <-> `Guest` only.
+#[derive(Debug, Clone)]
+pub struct SetMemberRoleCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub role: ServerMemberRole,
+}
+
+/// Owner/Moderator. Cannot target an Owner; a Moderator cannot target a Moderator.
+#[derive(Debug, Clone)]
+pub struct KickMemberCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub reason: Option<String>,
+}
+
+/// Same targeting rules as [`KickMemberCmd`]. Removes the member (if present) and records the
+/// ban; `expires_at = None` bans until unbanned.
+#[derive(Debug, Clone)]
+pub struct BanMemberCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub reason: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnbanMemberCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListBansQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+}
+
+/// Same targeting rules as [`KickMemberCmd`]; `until` must be in the future and at most
+/// [`crate::moderation::MAX_TIMEOUT_DAYS`] days ahead.
+#[derive(Debug, Clone)]
+pub struct TimeoutMemberCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub until: DateTime<Utc>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClearTimeoutCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+}
+
+/// Owner/Moderator; channels only; `seconds` in `0..=MAX_SLOW_MODE_SECONDS` (`0` turns it off).
+#[derive(Debug, Clone)]
+pub struct SetSlowModeCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub seconds: i32,
+}
+
+/// Any member who can read the message, once per message.
+#[derive(Debug, Clone)]
+pub struct ReportMessageCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    pub reason: String,
+}
+
+/// Owner/Moderator.
+#[derive(Debug, Clone)]
+pub struct ListReportsQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    /// `None` lists every status.
+    pub status: Option<MessageReportStatus>,
+    pub limit: u32,
+    pub dir: PageDir,
+    pub cursor: Option<ReportPageCursor>,
+}
+
+/// How a moderator closes a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportOutcome {
+    Resolved,
+    Dismissed,
+}
+
+impl From<ReportOutcome> for MessageReportStatus {
+    fn from(value: ReportOutcome) -> Self {
+        match value {
+            ReportOutcome::Resolved => MessageReportStatus::Resolved,
+            ReportOutcome::Dismissed => MessageReportStatus::Dismissed,
+        }
+    }
+}
+
+/// Owner/Moderator; the report must belong to `server_id` and still be open.
+#[derive(Debug, Clone)]
+pub struct ResolveReportCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub report_id: MessageReportId,
+    pub outcome: ReportOutcome,
+}

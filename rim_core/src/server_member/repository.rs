@@ -1,6 +1,6 @@
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
-use crate::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+use crate::server_member::model::{MemberStanding, ServerMember, ServerMemberId, ServerMemberRole};
 use crate::user::model::UserId;
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
@@ -36,4 +36,12 @@ pub trait ServerMemberRepository: Send + Sync {
     async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+
+    /// The member's role plus any timeout still in force (`until > now()`), in one call.
+    /// `None` when the user is not a member. Used by the conversation access gates (Track 1.2).
+    async fn get_member_standing(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> RepoResult<Option<MemberStanding>>;
 }

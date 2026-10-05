@@ -134,6 +134,7 @@ mod tests {
                 conversation_id: ConversationId,
                 archived_at: Option<chrono::DateTime<chrono::Utc>>,
             ) -> RepoResult<Conversation>;
+            async fn set_slow_mode(&self, conversation_id: ConversationId, seconds: i32) -> RepoResult<Conversation>;
         }
     }
 
@@ -198,6 +199,7 @@ mod tests {
                 has_attachments: bool,
             ) -> RepoResult<Message>;
             async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+            async fn last_sent_at_by_author(&self, conversation_id: ConversationId, author: UserId) -> RepoResult<Option<chrono::DateTime<chrono::Utc>>>;
         }
     }
 
@@ -226,6 +228,7 @@ mod tests {
             async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
             async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
             async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+            async fn get_member_standing(&self, server_id: rim_core::server::model::ServerId, user_id: rim_core::user::model::UserId) -> RepoResult<Option<rim_core::server_member::model::MemberStanding>>;
         }
     }
 
@@ -247,6 +250,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         }
     }
 
@@ -306,6 +310,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo
@@ -432,6 +443,9 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
 
         let svc = DefaultMessageReactionService::new(
             make_repos(
@@ -469,6 +483,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo
@@ -516,6 +537,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo

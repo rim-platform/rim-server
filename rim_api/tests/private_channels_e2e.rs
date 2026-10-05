@@ -173,9 +173,9 @@ async fn setup() -> Fixture {
     let bob_user = ctx.create_user("pc-bob").await;
     let carol_user = ctx.create_user("pc-carol").await;
     ctx.add_owner(&server, &alice_user).await;
-    ctx.add_member(&server, &bob_user, ServerMemberRole::Guest)
+    ctx.add_member(&server, &bob_user, ServerMemberRole::Member)
         .await;
-    ctx.add_member(&server, &carol_user, ServerMemberRole::Guest)
+    ctx.add_member(&server, &carol_user, ServerMemberRole::Member)
         .await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
