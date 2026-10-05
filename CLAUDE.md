@@ -138,6 +138,14 @@ The frontend uses this to generate TypeScript types via `@graphql-codegen`.
   (e.g., Rust `Sev2` → GraphQL `SEV_2`, Rust `ActionItem` → GraphQL `ACTION_ITEM`)
 - `#[derive(SimpleObject)]` converts Rust `snake_case` fields to GraphQL `camelCase`
 - The `export_sdl()` function in `rim_api/src/lib.rs` builds the full schema for SDL export
+- GraphQL types live in `rim_api/src/types/<domain>.rs` (all re-exported from `rim_api/src/types/mod.rs`,
+  so `crate::types::X` works everywhere) — check there for field names. Resolvers live in
+  `rim_api/src/query/<domain>.rs` and `rim_api/src/mutation/<domain>.rs`, one `#[Object]` per domain,
+  merged into `Query`/`Mutation` with `#[derive(MergedObject)]` in each `mod.rs`
+- **The member order of `Query`/`Mutation` is the field order in the SDL.** Append a new domain object to
+  the last `QueryGroupN`/`MutationGroupN` (or add resolvers to an existing object); never reorder members, or
+  the frontend codegen diff churns. Groups hold at most five objects: a flat `MergedObject` of ~30 members
+  overflows rustc's default recursion limit (see the module docs in `query/mod.rs`)
 - The SDL endpoint in `rim_server/src/server.rs` serves it at `/api/sdl`
 - **Always verify enum value names** in the SDL match what the frontend expects
 
