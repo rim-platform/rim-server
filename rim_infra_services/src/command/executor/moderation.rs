@@ -312,6 +312,9 @@ mod tests {
             oncall_service: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             workspace_feature_service: Arc::new(MockWorkspaceFeatureService::all_enabled()),
             moderation_service: Arc::new(moderation),
+            notification_service: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
         }
     }
 

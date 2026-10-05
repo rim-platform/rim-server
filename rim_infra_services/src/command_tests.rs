@@ -125,6 +125,9 @@ mod tests {
                     MockWorkspaceFeatureService::all_enabled(),
                 ),
                 moderation_service: Arc::new(moderation_service),
+                notification_service: Arc::new(
+                    rim_services::notification::service::MockNotificationService::new(),
+                ),
             },
         )
     }
@@ -533,8 +536,10 @@ mod tests {
     // Track 1.1 adds five agent-callable membership/archive builtins (`chat.write`, granted by
     // the mock): 16→21. Track 1.2 adds three moderation builtins — `chat.set_slow_mode`,
     // `chat.report_message` (`chat.write`) and `admin.timeout` (`admin.manage_members`, now also
-    // granted by the mock): 21→24.
-    async fn list_commands_ai_surface_returns_twenty_four_commands_with_caps() {
+    // granted by the mock): 21→24. Track 1.3 adds three notification builtins with no
+    // capability (`notifications.set_level`, `notifications.dnd`, `notifications.mark_all_read`):
+    // 24→27.
+    async fn list_commands_ai_surface_returns_twenty_seven_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -608,6 +613,9 @@ mod tests {
                 "chat.unarchive_channel",
                 "incident.ack",
                 "incident.escalate",
+                "notifications.dnd",
+                "notifications.mark_all_read",
+                "notifications.set_level",
                 "oncall.take_shift",
                 "oncall.who",
                 "workspace.navigate_to_channel",
@@ -1075,6 +1083,9 @@ mod tests {
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
+                notification_service: std::sync::Arc::new(
+                    rim_services::notification::service::MockNotificationService::new(),
+                ),
             },
             vec![cmd_def],
         )
@@ -1225,6 +1236,9 @@ mod tests {
                 ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
+                ),
+                notification_service: std::sync::Arc::new(
+                    rim_services::notification::service::MockNotificationService::new(),
                 ),
             },
         );
@@ -1604,6 +1618,9 @@ mod tests {
                 ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
+                ),
+                notification_service: std::sync::Arc::new(
+                    rim_services::notification::service::MockNotificationService::new(),
                 ),
             },
             vec![mutating_cmd],

@@ -125,10 +125,25 @@ which now lets an Owner/Moderator delete other people's messages.
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
 
-AI-callable builtins: 24 (the 21 of Track 1.1 plus `admin.timeout`, `chat.set_slow_mode` and
-`chat.report_message`), pinned by `collect_ai_callable_inventory_matches_reviewed_set`
-(`registry/mod.rs`) and `list_commands_ai_surface_returns_twenty_four_commands_with_caps`
-(`command_tests.rs`).
+Notification builtins (Track 1.3, `docs/specs/track-1-3-notification-rules.md`). All are
+`Backend`, `Mutating`, palette- and keybind-visible, AI-callable, in category `Notifications`,
+and need **no capability**: like `chat.mark_as_read` they change only the caller's own state.
+They call `NotificationService`, which requires workspace membership (and, for the level, read
+access to the conversation). Being `Mutating`, they are refused while the caller is timed out
+(T1); the GraphQL mutations are not.
+
+| Id | Args | AI-callable | Dangerous | Notes |
+|---|---|---|---|---|
+| `notifications.set_level` | `server_id`, `conversation_id`, `level` (`all`/`mentions`/`none`/`default`) | yes | no | `default` clears the override; `conversation_id` falls back to the focused conversation. Payload `{conversation_id, level, effective_level}` |
+| `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
+| `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
+
+AI-callable builtins: 27 (the 21 of Track 1.1, plus `admin.timeout`, `chat.set_slow_mode` and
+`chat.report_message` from Track 1.2, plus the three `notifications.*` builtins of Track 1.3),
+pinned by `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
+`list_commands_ai_surface_returns_twenty_seven_commands_with_caps` (`command_tests.rs`). The
+capability union the AI surface checks is unchanged (`admin.manage_members`, `chat.read`,
+`chat.write`), since the notification builtins declare none.
 
 ### Plugin-Provided Commands
 

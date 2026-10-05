@@ -131,6 +131,9 @@ fn build_service_with_store(mocks: Mocks) -> (DefaultCommandService, Arc<dyn Con
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
         },
         Arc::clone(&store),
     );

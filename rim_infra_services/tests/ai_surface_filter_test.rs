@@ -156,6 +156,9 @@ fn build_service(
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
         },
     )
 }
@@ -326,6 +329,9 @@ async fn list_commands_palette_does_not_consult_capability_service() {
             ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
             ),
         },
     );
