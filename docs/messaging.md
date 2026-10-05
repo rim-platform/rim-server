@@ -151,8 +151,9 @@ text). `MessageDeleted` is unchanged.
 - `reportMessage(serverId, conversationId, messageId, reason)`: any member who can read the
   message, once per message (`CONFLICT` on a second report); deleted messages cannot be
   reported. Allowed while timed out.
-- `messageReports(serverId, status, dir, cursor, limit)`: Owner/Moderator, ordered
-  `(createdAt, id)` ascending with the standard cursor contract (`docs/pagination.md`). Moderators
+- `messageReports(serverId, status, dir, cursor, limit)`: Owner/Moderator, ordered newest first
+  (`(createdAt, id)` descending; `AFTER` walks toward older reports) with the standard cursor
+  contract (`docs/pagination.md`). Moderators
   see every report of the workspace, but the reported message's current text and author
   (`messageText`, `messageAuthorId`) are included only when the moderator can read the
   conversation (`messageReadable`); for a private channel they are not in, only the ids and the

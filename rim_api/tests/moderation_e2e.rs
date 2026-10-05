@@ -741,22 +741,18 @@ async fn report_list_and_resolve() {
     .await;
     let items = listed["page"]["items"].as_array().expect("items").clone();
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["messageId"], json!(message_id));
-    assert_eq!(items[0]["messageReadable"], json!(true));
-    assert_eq!(items[0]["messageText"], json!("buy cheap watches"));
-    assert_eq!(
-        items[0]["messageAuthorId"],
-        json!(f.bob.user_id.to_string())
-    );
-    assert_eq!(
-        items[0]["reporterUserId"],
-        json!(f.carol.user_id.to_string())
-    );
-    assert_eq!(items[1]["messageId"], json!(secret_id));
-    assert_eq!(items[1]["messageReadable"], json!(false));
-    assert_eq!(items[1]["messageText"], Value::Null);
-    assert_eq!(items[1]["messageAuthorId"], Value::Null);
-    assert_eq!(items[1]["reason"], json!("harassment"));
+    // Newest first: the second report (on the private channel's message) comes first.
+    let (newest, older) = (&items[0], &items[1]);
+    assert_eq!(newest["messageId"], json!(secret_id));
+    assert_eq!(newest["messageReadable"], json!(false));
+    assert_eq!(newest["messageText"], Value::Null);
+    assert_eq!(newest["messageAuthorId"], Value::Null);
+    assert_eq!(newest["reason"], json!("harassment"));
+    assert_eq!(older["messageId"], json!(message_id));
+    assert_eq!(older["messageReadable"], json!(true));
+    assert_eq!(older["messageText"], json!("buy cheap watches"));
+    assert_eq!(older["messageAuthorId"], json!(f.bob.user_id.to_string()));
+    assert_eq!(older["reporterUserId"], json!(f.carol.user_id.to_string()));
 
     let resolve_vars =
         json!({ "serverId": f.server_id, "reportId": report_id, "outcome": "DISMISSED" });
