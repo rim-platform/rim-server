@@ -37,8 +37,9 @@ impl<'a> ConversationAccessRepos<'a> {
 /// Enforces the full three-step access gate in security-correct order:
 /// 1. Server membership (PermissionDenied on failure)
 /// 2. Conversation exists in that server (NotFound on failure)
-/// 3. Conversation-level access (PermissionDenied on failure for DM/group;
-///    channels pass with server membership alone)
+/// 3. Conversation-level access (see [`ensure_conversation_access`]: public channels pass with
+///    server membership alone; private channels need membership and fail with NotFound;
+///    DM/group need membership and fail with PermissionDenied)
 ///
 /// Returns the loaded `Conversation` so callers avoid a second DB round-trip
 /// for `conversation_type` lookups.
@@ -56,6 +57,28 @@ pub async fn ensure_conversation_member_access(
         ensure_conversation_in_server(repos.conversation_repo, conversation_id, server_id).await?;
     ensure_conversation_access(repos.conversation_member_repo, &conv, actor).await?;
     Ok(conv)
+}
+
+/// [`ensure_conversation_member_access`] plus [`ensure_not_archived`]: the gate for every write
+/// into a conversation (messages, reactions, pins, topic, attachments, typing, incidents).
+/// Archived conversations stay readable through [`ensure_conversation_member_access`].
+pub async fn ensure_conversation_writable(
+    repos: ConversationAccessRepos<'_>,
+    actor: UserId,
+    server_id: ServerId,
+    conversation_id: ConversationId,
+) -> ServiceResult<Conversation> {
+    let conv = ensure_conversation_member_access(repos, actor, server_id, conversation_id).await?;
+    ensure_not_archived(&conv)?;
+    Ok(conv)
+}
+
+/// `Err(ConversationArchived)` when `conversation` is archived (read-only).
+pub fn ensure_not_archived(conversation: &Conversation) -> ServiceResult<()> {
+    if conversation.is_archived() {
+        return Err(ServiceError::ConversationArchived);
+    }
+    Ok(())
 }
 
 pub async fn ensure_server_member(
@@ -142,22 +165,32 @@ pub async fn ensure_conversation_in_server(
     Ok(conv)
 }
 
-/// Check that the user can access the conversation.
-/// For channels (public), server membership is sufficient — no conversation_member check needed.
-/// For DMs and groups, the user must be an explicit conversation member.
+/// Check that the user can read the conversation (archived or not).
+/// - Public channels: server membership is sufficient — no conversation_member check needed.
+/// - Private channels: the user must be a conversation member; a non-member gets `NotFound`, so
+///   the response does not reveal that the channel exists.
+/// - DMs and groups: the user must be a conversation member (`PermissionDenied` otherwise).
 pub async fn ensure_conversation_access(
     conversation_member_repo: &dyn ConversationMemberRepository,
     conversation: &rim_core::conversation::model::Conversation,
     user_id: rim_core::user::model::UserId,
 ) -> ServiceResult<()> {
-    if conversation.conversation_type == rim_core::conversation::model::ConversationType::Channel {
+    if conversation.is_public_channel() {
         return Ok(());
     }
     let is_member = conversation_member_repo
         .is_member(conversation.id, user_id)
         .await?;
     if !is_member {
-        return Err(ServiceError::PermissionDenied);
+        return Err(
+            if conversation.conversation_type
+                == rim_core::conversation::model::ConversationType::Channel
+            {
+                ServiceError::NotFound
+            } else {
+                ServiceError::PermissionDenied
+            },
+        );
     }
     Ok(())
 }
@@ -247,6 +280,8 @@ mod tests {
                         server_id,
                         conversation_type: ConversationType::Channel,
                         title: None,
+                        is_private: false,
+                        created_by: None,
                     })
                     .await
                     .unwrap_err()
@@ -360,9 +395,7 @@ mod tests {
 
         async fn create_conversation_with_members(
             &self,
-            _conversation_type: ConversationType,
-            _server_id: ServerId,
-            _title: Option<String>,
+            _conv: rim_core::conversation::model::NewConversation,
             _member_ids: &[UserId],
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
@@ -392,6 +425,7 @@ mod tests {
             &self,
             _user_id: UserId,
             _server_id: ServerId,
+            _filter: rim_core::conversation::repository::ChannelListFilter,
             _limit: u32,
             _dir: PageDir,
             _cursor: Option<ConversationCreatedCursor>,
@@ -435,6 +469,14 @@ mod tests {
             &self,
             _conversation_id: rim_core::conversation::model::ConversationId,
             _topic: Option<String>,
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn set_archived(
+            &self,
+            _conversation_id: rim_core::conversation::model::ConversationId,
+            _archived_at: Option<chrono::DateTime<chrono::Utc>>,
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
@@ -559,6 +601,9 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 last_activity_at: chrono::Utc::now(),
                 server_id: other_server,
+                is_private: false,
+                archived_at: None,
+                created_by: None,
             }),
         };
 
@@ -696,5 +741,123 @@ mod tests {
             "missing conversation must yield NotFound (step 2) for a server-member, not {:?}",
             err
         );
+    }
+
+    // ── Track 1.1 access-gate matrix ──
+    //
+    // (public channel | private channel | group | DM) × (member | non-member) × archived, for
+    // the read gate (`ensure_conversation_member_access`) and the write gate
+    // (`ensure_conversation_writable`). The private-channel non-member must get `NotFound`, never
+    // `PermissionDenied`, so the response does not reveal that the channel exists.
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Outcome {
+        Ok,
+        NotFound,
+        Forbidden,
+        Archived,
+    }
+
+    fn outcome<T>(res: ServiceResult<T>) -> Outcome {
+        match res {
+            Ok(_) => Outcome::Ok,
+            Err(ServiceError::NotFound) => Outcome::NotFound,
+            Err(ServiceError::PermissionDenied) => Outcome::Forbidden,
+            Err(ServiceError::ConversationArchived) => Outcome::Archived,
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    async fn gate_outcomes(
+        conversation_type: ConversationType,
+        is_private: bool,
+        is_member: bool,
+        archived: bool,
+    ) -> (Outcome, Outcome) {
+        let server_id = ServerId::new();
+        let conversation = Conversation {
+            id: ConversationId::new(),
+            conversation_type,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            server_id,
+            is_private,
+            archived_at: archived.then(chrono::Utc::now),
+            created_by: None,
+        };
+        let server_member_repo = FakeServerMemberRepo {
+            is_member: true,
+            member: None,
+        };
+        let conversation_repo = FakeConversationRepo {
+            conv: Some(conversation.clone()),
+        };
+        let conversation_member_repo = FakeConversationMemberRepo { is_member };
+        let repos = || ConversationAccessRepos {
+            server_member_repo: &server_member_repo,
+            conversation_repo: &conversation_repo,
+            conversation_member_repo: &conversation_member_repo,
+        };
+        let actor = UserId::new();
+        let read = outcome(
+            ensure_conversation_member_access(repos(), actor, server_id, conversation.id).await,
+        );
+        let write =
+            outcome(ensure_conversation_writable(repos(), actor, server_id, conversation.id).await);
+        (read, write)
+    }
+
+    #[tokio::test]
+    async fn access_gate_matrix() {
+        use ConversationType::{Channel, Direct, Group};
+        use Outcome::{Archived, Forbidden, NotFound, Ok};
+
+        // (type, private, member, archived) => (read, write)
+        let cases = [
+            ((Channel, false, true, false), (Ok, Ok)),
+            ((Channel, false, false, false), (Ok, Ok)),
+            ((Channel, false, true, true), (Ok, Archived)),
+            ((Channel, false, false, true), (Ok, Archived)),
+            ((Channel, true, true, false), (Ok, Ok)),
+            ((Channel, true, false, false), (NotFound, NotFound)),
+            ((Channel, true, true, true), (Ok, Archived)),
+            ((Channel, true, false, true), (NotFound, NotFound)),
+            ((Group, false, true, false), (Ok, Ok)),
+            ((Group, false, false, false), (Forbidden, Forbidden)),
+            ((Group, false, true, true), (Ok, Archived)),
+            ((Direct, false, true, false), (Ok, Ok)),
+            ((Direct, false, false, false), (Forbidden, Forbidden)),
+        ];
+        for ((kind, private, member, archived), expected) in cases {
+            let got = gate_outcomes(kind, private, member, archived).await;
+            assert_eq!(
+                got, expected,
+                "type={kind:?} private={private} member={member} archived={archived}"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_not_archived_rejects_archived_only() {
+        let mut conversation = Conversation {
+            id: ConversationId::new(),
+            conversation_type: ConversationType::Channel,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            server_id: ServerId::new(),
+            is_private: false,
+            archived_at: None,
+            created_by: None,
+        };
+        assert!(ensure_not_archived(&conversation).is_ok());
+        conversation.archived_at = Some(chrono::Utc::now());
+        assert!(matches!(
+            ensure_not_archived(&conversation),
+            Err(ServiceError::ConversationArchived)
+        ));
     }
 }

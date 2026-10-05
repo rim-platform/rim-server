@@ -19,22 +19,24 @@ mod tests {
 
     fn mock_conversation_repo() -> MockConversationRepository {
         let mut repo = MockConversationRepository::new();
-        repo.expect_create_conversation_with_members().returning(
-            |conv_type, server_id, title, _member_ids| {
+        repo.expect_create_conversation_with_members()
+            .returning(|conv, _member_ids| {
                 Box::pin(async move {
                     let now = chrono::Utc::now();
                     Ok(Conversation {
                         id: ConversationId::new(),
-                        conversation_type: conv_type,
-                        title,
+                        conversation_type: conv.conversation_type,
+                        title: conv.title,
                         topic: None,
                         created_at: now,
                         last_activity_at: now,
-                        server_id,
+                        server_id: conv.server_id,
+                        is_private: conv.is_private,
+                        archived_at: None,
+                        created_by: conv.created_by,
                     })
                 })
-            },
-        );
+            });
         repo
     }
 

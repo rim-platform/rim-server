@@ -746,6 +746,7 @@ mod tests {
             conversation_id: conv_id,
             conversation_type: "Channel".to_string(),
             member_user_ids: vec![],
+            is_private: false,
             message: MessageEventData {
                 id: rim_core::message::model::MessageId::new(),
                 server_id,

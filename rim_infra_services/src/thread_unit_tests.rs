@@ -43,9 +43,7 @@ mod tests {
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
             async fn create_conversation_with_members(
                 &self,
-                conversation_type: ConversationType,
-                server_id: ServerId,
-                title: Option<String>,
+                conv: NewConversation,
                 member_ids: &[UserId],
             ) -> RepoResult<Conversation>;
             async fn find_direct_between_users(
@@ -66,6 +64,7 @@ mod tests {
                 &self,
                 user_id: UserId,
                 server_id: ServerId,
+                filter: rim_core::conversation::repository::ChannelListFilter,
                 limit: u32,
                 dir: PageDir,
                 cursor: Option<ConversationCreatedCursor>,
@@ -94,6 +93,11 @@ mod tests {
                 &self,
                 conversation_id: ConversationId,
                 topic: Option<String>,
+            ) -> RepoResult<Conversation>;
+            async fn set_archived(
+                &self,
+                conversation_id: ConversationId,
+                archived_at: Option<chrono::DateTime<chrono::Utc>>,
             ) -> RepoResult<Conversation>;
         }
     }
@@ -238,6 +242,9 @@ mod tests {
             topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
+            is_private: false,
+            archived_at: None,
+            created_by: None,
         }
     }
 

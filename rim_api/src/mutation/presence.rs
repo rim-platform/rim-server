@@ -39,7 +39,13 @@ impl PresenceMutations {
                 })
                 .await
                 .map_err(map_service_error)?;
+            if conversation.is_archived() {
+                return Err(map_service_error(
+                    rim_services::ServiceError::ConversationArchived,
+                ));
+            }
             let conversation_type = conversation.conversation_type.as_str().to_owned();
+            let is_private = conversation.is_private;
             let member_user_ids = conversation.member_ids;
 
             let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
@@ -50,6 +56,7 @@ impl PresenceMutations {
                 user_id: actor,
                 conversation_type,
                 member_user_ids,
+                is_private,
             });
         }
 

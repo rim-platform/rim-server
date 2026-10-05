@@ -329,6 +329,9 @@ fn spawn_link_preview_fetch(
     let link_svc = ctx
         .data::<std::sync::Arc<dyn rim_services::link_preview::LinkPreviewService>>()?
         .clone();
+    let conv_svc = ctx
+        .data::<std::sync::Arc<dyn rim_services::conversation::service::ConversationService>>()?
+        .clone();
     let observers = ctx
         .data::<std::sync::Arc<rim_services::events::Observers>>()?
         .clone();
@@ -336,11 +339,27 @@ fn spawn_link_preview_fetch(
     tokio::spawn(async move {
         match link_svc.fetch_and_store(message_id, urls).await {
             Ok(previews) if !previews.is_empty() => {
+                // The event carries the conversation's visibility so a private channel's
+                // previews reach its members only; without it, emit nothing (fail closed).
+                let conversation = match conv_svc.get_conversations_by_ids(&[conversation_id]).await
+                {
+                    Ok(mut found) => found.pop(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "link preview: conversation lookup failed");
+                        None
+                    }
+                };
+                let Some(conversation) = conversation else {
+                    return;
+                };
                 use rim_services::events::EventObserver;
                 observers.emit(rim_services::events::WorkspaceEvent::LinkPreviewReady {
                     workspace_id,
                     conversation_id,
                     message_id,
+                    conversation_type: conversation.conversation_type.as_str().to_owned(),
+                    is_private: conversation.is_private,
+                    member_user_ids: conversation.member_ids,
                 });
             }
             Ok(_) => {}

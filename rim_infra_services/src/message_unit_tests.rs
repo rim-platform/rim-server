@@ -42,6 +42,9 @@ mod tests {
             topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
+            is_private: false,
+            archived_at: None,
+            created_by: None,
         }
     }
 

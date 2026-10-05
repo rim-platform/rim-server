@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
@@ -56,9 +56,13 @@ async fn create_default_channels(
     for channel_name in &["general", "random"] {
         match conversation_repo
             .create_conversation_with_members(
-                ConversationType::Channel,
-                server_id,
-                Some(channel_name.to_string()),
+                NewConversation {
+                    server_id,
+                    conversation_type: ConversationType::Channel,
+                    title: Some(channel_name.to_string()),
+                    is_private: false,
+                    created_by: Some(creator_id),
+                },
                 &[creator_id],
             )
             .await
@@ -76,6 +80,7 @@ async fn create_default_channels(
                     title: conv.title.clone(),
                     conversation_type: conv.conversation_type.as_str().to_string(),
                     member_user_ids: vec![creator_id],
+                    is_private: conv.is_private,
                 });
             }
             Err(err) => {

@@ -60,6 +60,12 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("feature", Value::from(feature.as_str()));
             })
         }
+        // Track 1.1: writes into an archived (read-only) conversation.
+        ServiceError::ConversationArchived => {
+            Error::new("conversation is archived").extend_with(|_, e| {
+                e.set("code", Value::from("CONVERSATION_ARCHIVED"));
+            })
+        }
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
@@ -79,5 +85,12 @@ mod tests {
         assert_eq!(ext.get("code"), Some(&Value::from("FEATURE_DISABLED")));
         assert_eq!(ext.get("feature"), Some(&Value::from("incidents")));
         assert_eq!(err.message, "workspace feature `incidents` is disabled");
+    }
+
+    #[test]
+    fn conversation_archived_maps_to_conversation_archived_code() {
+        let err = map_service_error(ServiceError::ConversationArchived);
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("CONVERSATION_ARCHIVED")));
     }
 }

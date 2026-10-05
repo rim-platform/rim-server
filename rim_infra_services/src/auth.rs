@@ -10,7 +10,7 @@ use rim_auth::csrf::generate_csrf_token;
 use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInstanceInvite, NewInvite, NewSession};
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
@@ -623,9 +623,13 @@ impl AuthService for DefaultAuthService {
             match repos
                 .conversation_repo
                 .create_conversation_with_members(
-                    ConversationType::Channel,
-                    server.id,
-                    Some(channel_name.to_string()),
+                    NewConversation {
+                        server_id: server.id,
+                        conversation_type: ConversationType::Channel,
+                        title: Some(channel_name.to_string()),
+                        is_private: false,
+                        created_by: Some(user.id),
+                    },
                     &[user.id],
                 )
                 .await

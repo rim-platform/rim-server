@@ -19,6 +19,7 @@ use crate::ReactionRepos;
 use crate::repos::AppRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
+    ensure_conversation_writable,
 };
 
 #[derive(Clone)]
@@ -99,7 +100,7 @@ impl DefaultMessageReactionService {
         message_id: rim_core::message::model::MessageId,
         actor_user_id: rim_core::user::model::UserId,
     ) -> ServiceResult<()> {
-        ensure_conversation_member_access(
+        ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -206,6 +207,7 @@ impl MessageReactionService for DefaultMessageReactionService {
             workspace_id: cmd.server_id,
             conversation_id: cmd.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
             member_user_ids,
             message_id: cmd.message_id,
             reactions: groups
