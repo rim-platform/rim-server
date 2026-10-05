@@ -140,7 +140,7 @@ pub fn build_schema(
     registration: RegistrationContext,
 ) -> AppSchema {
     wire_common_schema_data(
-        Schema::build(Query, Mutation, Subscription),
+        Schema::build(Query::default(), Mutation::default(), Subscription),
         service_provider,
         broadcaster,
         presence_manager,
@@ -168,7 +168,7 @@ pub fn export_sdl(
     observers: Arc<rim_services::events::Observers>,
 ) -> String {
     let schema = wire_common_schema_data(
-        Schema::build(Query, Mutation, Subscription),
+        Schema::build(Query::default(), Mutation::default(), Subscription),
         service_provider,
         broadcaster,
         presence_manager,

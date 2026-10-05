@@ -141,6 +141,18 @@ Owns:
 
 It should remain an adapter over service traits, not a business-logic owner.
 
+Layout: resolvers are split per domain under `rim_api/src/query/` and
+`rim_api/src/mutation/` (one `#[Object]` per domain, merged into `Query` and
+`Mutation` with `#[derive(MergedObject)]` in each `mod.rs`, in groups of at
+most five to stay under rustc's recursion limit; member order is the SDL field
+order, so new objects are appended). GraphQL types mirror that split
+under `rim_api/src/types/` and are all re-exported from `types/mod.rs`.
+Resolver unit tests live in `rim_api/src/tests/` (shared mock fixtures in
+`mod.rs`, one submodule per domain). Shared resolver helpers stay in their own
+modules: `auth_context` (`require_actor`, `require_session_id`,
+`require_server_member`), `auth_intent`, `errors` (`map_service_error`), `ids`
+(`parse_uuid_id`) and `resolve` (DataLoader accessors).
+
 ### `rim_server`
 
 Owns:
