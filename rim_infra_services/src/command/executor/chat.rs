@@ -55,9 +55,12 @@ pub(super) async fn list_channels(
         .await?;
 
     // Project to a stable wire shape for the AI tool consumer:
-    // {id, title, conversation_type}. The frontend agent renders
-    // this directly; do NOT leak member_ids (PII surface widening
-    // for a "list" tool is a Widow no-go).
+    // {id, title, conversation_type, is_private, is_archived, is_member}.
+    // The frontend agent renders this directly; do NOT leak member_ids
+    // (PII surface widening for a "list" tool is a Widow no-go) — the
+    // caller's own membership is derived from them here instead.
+    // Track 1.1: the flags let the agent and macros decide whether to
+    // join (public, not a member) or invite, and skip archived channels.
     let channels: Vec<serde_json::Value> = page
         .items
         .iter()
@@ -66,6 +69,9 @@ pub(super) async fn list_channels(
                 "id": c.id.to_string(),
                 "title": c.title,
                 "conversation_type": c.conversation_type.as_str(),
+                "is_private": c.is_private,
+                "is_archived": c.is_archived(),
+                "is_member": c.is_member(actor.user_id),
             })
         })
         .collect();
@@ -455,6 +461,36 @@ mod tests {
     }
 
     // ── list_channels ────────────────────────────────────────────────────────
+
+    /// Track 1.1: each channel carries `is_private`, `is_archived` and the caller's
+    /// `is_member` (derived from member ids, which themselves never reach the payload).
+    #[tokio::test]
+    async fn list_channels_projects_privacy_archive_and_membership_flags() {
+        let ws = ServerId::new();
+        let caller = actor();
+        let mut joined = one_channel_page(ws).items.remove(0);
+        joined.member_ids = vec![caller.user_id];
+        let mut private_archived = one_channel_page(ws).items.remove(0);
+        private_archived.is_private = true;
+        private_archived.archived_at = Some(chrono::Utc::now());
+        let mut conv = MockConversationService::new();
+        conv.expect_list_channels().return_once(move |_| {
+            Box::pin(async move { Ok(Page::new(vec![joined, private_archived], None, None)) })
+        });
+        let svc = make_services(conv, MockMessageService::new());
+        let result = super::list_channels(&svc, caller, serde_json::Map::new(), Some(ctx_with(ws)))
+            .await
+            .expect("list channels");
+        let payload = result.payload.expect("payload");
+        let channels = payload["channels"].as_array().expect("channels");
+        assert_eq!(channels[0]["is_member"], true);
+        assert_eq!(channels[0]["is_private"], false);
+        assert_eq!(channels[0]["is_archived"], false);
+        assert_eq!(channels[1]["is_member"], false);
+        assert_eq!(channels[1]["is_private"], true);
+        assert_eq!(channels[1]["is_archived"], true);
+        assert!(channels[0].get("member_ids").is_none());
+    }
 
     /// 1. AI path: args carry server_id, context is None — downstream sees arg UUID.
     #[tokio::test]

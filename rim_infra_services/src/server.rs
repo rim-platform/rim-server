@@ -16,7 +16,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
 use crate::repos::AppRepos;
-use crate::util::{ensure_server_exists, ensure_server_member};
+use crate::util::{add_workspace_member, ensure_server_exists, ensure_server_member};
 
 #[derive(Clone)]
 pub struct DefaultServerService {
@@ -129,10 +129,15 @@ impl ServerService for DefaultServerService {
         let server = repos.server_repo.create_server(name).await?;
 
         // Creator becomes owner.
-        let _ = repos
-            .server_member_repo
-            .add_member(server.id, cmd.actor.user_id, ServerMemberRole::Owner)
-            .await?;
+        let _ = add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            server.id,
+            cmd.actor.user_id,
+            ServerMemberRole::Owner,
+        )
+        .await?;
 
         // Create default channels inside the transaction (if available).
         create_default_channels(

@@ -71,11 +71,12 @@ impl ReadStateService for DefaultReadStateService {
         )
         .await?;
 
-        // Get all accessible conversations for the user in this workspace.
+        // Conversations the user is a member of — the same set the unread counts cover. Public
+        // channels they can read but never joined have no unread state to clear.
         let conversation_ids = self
             .repos
             .conversation_repo
-            .list_accessible_conversation_ids(cmd.workspace_id, cmd.actor.user_id)
+            .list_joined_conversation_ids(cmd.workspace_id, cmd.actor.user_id)
             .await?;
 
         if conversation_ids.is_empty() {
@@ -112,11 +113,13 @@ impl ReadStateService for DefaultReadStateService {
         )
         .await?;
 
-        // Get all accessible conversations.
+        // Only conversations the user is a member of (joined public channels, private
+        // channels, DMs, groups): unjoined public channels are readable but not followed, so
+        // they carry no unread badge (Track 1.1).
         let conversation_ids = self
             .repos
             .conversation_repo
-            .list_accessible_conversation_ids(query.workspace_id, query.actor.user_id)
+            .list_joined_conversation_ids(query.workspace_id, query.actor.user_id)
             .await?;
 
         if conversation_ids.is_empty() {
@@ -137,5 +140,112 @@ impl ReadStateService for DefaultReadStateService {
                 count,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rim_core::conversation::model::ConversationId;
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
+    use rim_core::conversation_read_state::repository::MockConversationReadStateRepository;
+    use rim_core::server::model::ServerId;
+    use rim_core::server_member::repository::MockServerMemberRepository;
+    use rim_core::user::model::UserId;
+    use rim_services::Actor;
+    use rim_services::events::NoopBroadcaster;
+    use rim_services::read_state::dto::{MarkAllAsReadCmd, UnreadCountsQuery};
+    use rim_services::read_state::service::ReadStateService;
+
+    use super::DefaultReadStateService;
+    use crate::ReadStateRepos;
+
+    /// Track 1.1: unread counts and mark-all-read cover only the conversations the user is a
+    /// member of — never every public channel they could read.
+    fn service(
+        joined: Vec<ConversationId>,
+        read_state_repo: MockConversationReadStateRepository,
+    ) -> DefaultReadStateService {
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_list_joined_conversation_ids()
+            .returning(move |_, _| {
+                let joined = joined.clone();
+                Box::pin(async move { Ok(joined) })
+            });
+        conversation_repo
+            .expect_list_accessible_conversation_ids()
+            .never();
+        DefaultReadStateService::new(
+            ReadStateRepos {
+                read_state_repo: Arc::new(read_state_repo),
+                conversation_repo: Arc::new(conversation_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            },
+            rim_services::events::Observers::new(Arc::new(NoopBroadcaster)),
+        )
+    }
+
+    #[tokio::test]
+    async fn unread_counts_cover_joined_conversations_only() {
+        let joined = vec![ConversationId::new(), ConversationId::new()];
+        let expected = joined.clone();
+        let mut read_state_repo = MockConversationReadStateRepository::new();
+        read_state_repo
+            .expect_get_unread_counts()
+            .withf(move |_, ids| ids == expected.as_slice())
+            .returning(|_, ids| {
+                let counts = ids.iter().map(|id| (*id, 1)).collect();
+                Box::pin(async move { Ok(counts) })
+            });
+
+        let counts = service(joined.clone(), read_state_repo)
+            .get_unread_counts(UnreadCountsQuery {
+                actor: Actor::new(UserId::new()),
+                workspace_id: ServerId::new(),
+            })
+            .await
+            .expect("unread counts");
+        let ids: Vec<_> = counts.iter().map(|c| c.conversation_id).collect();
+        assert_eq!(ids, joined);
+    }
+
+    #[tokio::test]
+    async fn unread_counts_empty_without_memberships() {
+        let mut read_state_repo = MockConversationReadStateRepository::new();
+        read_state_repo.expect_get_unread_counts().never();
+        let counts = service(vec![], read_state_repo)
+            .get_unread_counts(UnreadCountsQuery {
+                actor: Actor::new(UserId::new()),
+                workspace_id: ServerId::new(),
+            })
+            .await
+            .expect("unread counts");
+        assert!(counts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mark_all_as_read_covers_joined_conversations_only() {
+        let joined = vec![ConversationId::new()];
+        let expected = joined.clone();
+        let mut read_state_repo = MockConversationReadStateRepository::new();
+        read_state_repo
+            .expect_mark_all_read()
+            .withf(move |_, ids, _| ids == expected.as_slice())
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        service(joined, read_state_repo)
+            .mark_all_as_read(MarkAllAsReadCmd {
+                actor: Actor::new(UserId::new()),
+                workspace_id: ServerId::new(),
+            })
+            .await
+            .expect("mark all as read");
     }
 }

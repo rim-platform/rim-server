@@ -47,8 +47,14 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   `member_user_ids`, and `conversation_type` where it was not already serialized) are
   server-side only and never serialized, so the WebSocket JSON is unchanged.
 - Existing workspace members became members of every existing channel when the Track 1.1
-  migration ran, so the joined list did not start empty. Users who join the workspace later start
-  with no joined channels.
+  migration ran, so the joined list did not start empty. A user who joins the workspace later
+  (invite acceptance, join by invite, owner adding them, bootstrap, server creation — all through
+  `util::add_workspace_member`) is joined to every public, unarchived channel at that moment;
+  private and archived channels are not joined.
+- Unread counts (`unreadCounts`) and `markAllAsRead` cover only conversations the user is a
+  member of: joined public channels, private channels, DMs and groups. A public channel the user
+  can read but has not joined carries no unread badge; after joining, messages count from the
+  join time.
 
 ## Archived Channels
 
@@ -56,7 +62,8 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   `FORBIDDEN`. Only channels can be archived (`VALIDATION` otherwise).
 - An archived conversation is read-only: sending, replying, editing, deleting and forwarding into
   it, reactions, pins, topic edits, threads, attachments, typing, joining, inviting and starting an
-  incident fail with `CONVERSATION_ARCHIVED`. Leaving and removing members still work.
+  incident fail with `CONVERSATION_ARCHIVED`; alert ingestion into an archived channel is refused
+  (409 `{"error": "conversation is archived"}` on the webhook). Leaving and removing members still work.
 - Archived channels are hidden from `channels` unless `includeArchived: true`, and stay readable
   and searchable by whoever could read them before.
 

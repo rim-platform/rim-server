@@ -16,7 +16,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         CommandDefinitionDto {
             id: "chat.list_channels".to_string(),
             title: "List Channels".to_string(),
-            description: "List all channels in the current workspace.".to_string(),
+            description: "List the channels you can see in the current workspace.".to_string(),
             category: "Chat".to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
@@ -37,9 +37,11 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             dangerous: false,
             user_command_id: None,
             nl_description: Some(
-                "Lists every channel in the current workspace, returning name, ID, and \
-                 conversation type. Use this when the user asks 'what channels are here?' \
-                 or wants to navigate to a channel by name."
+                "Lists the channels in the current workspace the user can see (public ones \
+                 and private ones they belong to, archived excluded), returning name, ID, \
+                 conversation type, and whether each is private, archived, and joined by the \
+                 user. Use this when the user asks 'what channels are here?', wants to \
+                 navigate to a channel by name, or before joining or inviting to one."
                     .to_string(),
             ),
             intent_samples: vec![

@@ -89,14 +89,16 @@ RIM should support the following command sources.
 - Stable and documented.
 - Usually available in the command palette.
 
-Channel membership and archive builtins (Track 1.1, `docs/specs/track-1-1-private-channels.md`).
-All are `Backend`, `Mutating`, `chat.write`, palette- and keybind-visible. `conversation_id`
+Channel builtins (Track 1.1, `docs/specs/track-1-1-private-channels.md`). Apart from the read-only
+`chat.list_channels` (`Safe`, `chat.read`), all are `Backend`, `Mutating`, `chat.write`, palette-
+and keybind-visible. `conversation_id`
 falls back to the focused conversation (`context.conversation_id`). Authorization (membership,
 private-channel visibility, Owner/Moderator) lives in `ConversationService`, so the agent can
 never do more than the user it acts for.
 
 | Id | Args | AI-callable | Dangerous | Notes |
 |---|---|---|---|---|
+| `chat.list_channels` | `server_id` | yes | no | Read; each channel is `{id, title, conversation_type, is_private, is_archived, is_member}` (`is_member` is the caller's; member ids are never returned). Default filter: every visible, unarchived channel |
 | `chat.create_channel` | `server_id`, `name`, `description?`, `is_private?` (default false), `member_ids?` | yes | no | Members are added right after creation; privacy cannot change later |
 | `chat.join_channel` | `server_id`, `conversation_id` | yes | no | Public, unarchived channels only; idempotent |
 | `chat.leave_conversation` | `server_id`, `conversation_id` | yes | no | Channels and groups, not DMs |
