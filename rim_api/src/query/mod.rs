@@ -34,6 +34,7 @@ pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
+pub(crate) mod notification;
 pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod platform;
@@ -53,6 +54,7 @@ pub struct Query(
     QueryGroup4,
     QueryGroup5,
     QueryGroup6,
+    QueryGroup7,
 );
 
 #[derive(MergedObject, Default)]
@@ -108,3 +110,6 @@ pub(crate) struct QueryGroup6(
     escalation::EscalationQueries,
     moderation::ModerationQueries,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct QueryGroup7(notification::NotificationQueries);
