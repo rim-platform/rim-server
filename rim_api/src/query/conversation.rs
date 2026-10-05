@@ -9,8 +9,8 @@ use crate::auth_context::require_actor;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
 use crate::types::{
-    ChannelCursorInput, ChannelPage, Conversation, ConversationPage, InboxCursorInput,
-    MutedConversation, UnreadCount,
+    ChannelCursorInput, ChannelListFilterInput, ChannelPage, Conversation, ConversationPage,
+    InboxCursorInput, MutedConversation, UnreadCount,
 };
 
 #[derive(Default)]
@@ -76,6 +76,7 @@ impl ConversationQueries {
         dir: PageDir,
         cursor: Option<ChannelCursorInput>,
         limit: i32,
+        filter: Option<ChannelListFilterInput>,
     ) -> Result<ChannelPage> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
@@ -85,6 +86,7 @@ impl ConversationQueries {
             .list_channels(ListChannelsQuery {
                 actor: Actor::new(actor),
                 server_id,
+                filter: filter.unwrap_or_default().into(),
                 dir: dir.into(),
                 cursor: cursor.map(TryFrom::try_from).transpose()?,
                 limit: (limit.max(1) as u32).min(100),
