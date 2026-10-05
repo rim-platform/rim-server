@@ -452,6 +452,9 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         title: Some("general".to_string()),
                         topic: None,
                         member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
                     },
                     ConversationDto {
                         id: conv_b,
@@ -460,6 +463,9 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         title: Some("engineering".to_string()),
                         topic: None,
                         member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
                     },
                 ])
             })

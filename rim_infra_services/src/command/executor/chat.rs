@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use rim_services::conversation::command::{
-    CreateConversationCmd, ListChannelsQuery, UpdateConversationTopicCmd,
+    AddConversationMembersCmd, CreateConversationCmd, ListChannelsQuery, UpdateConversationTopicCmd,
 };
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::message::command::{ListMessagesQuery, SearchMessagesQuery};
@@ -11,8 +11,9 @@ use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 
 use super::{
-    clamp_limit, optional_integer_arg, optional_string_arg, parse_uuid_arg, require_string_arg,
-    resolve_author_usernames, resolve_channel_titles, resolve_workspace_id,
+    clamp_limit, optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
+    parse_uuid_array_arg, require_string_arg, resolve_author_usernames, resolve_channel_titles,
+    resolve_workspace_id,
 };
 
 /// Hard cap on the single-page result for `chat.list_channels`. Conservative
@@ -46,6 +47,7 @@ pub(super) async fn list_channels(
         .list_channels(ListChannelsQuery {
             actor,
             server_id,
+            filter: Default::default(),
             dir: rim_core::repository::pagination::PageDir::After,
             cursor: None,
             limit: CHAT_LIST_CHANNELS_LIMIT,
@@ -98,6 +100,14 @@ pub(super) async fn create_channel(
     // topic missing) which matches what they'd see in the UI if
     // they did this manually.
     let description = optional_string_arg(&args, "description");
+    let is_private = optional_bool_arg(&args, "is_private").unwrap_or(false);
+    // Track 1.1: optional initial members, added right after creation (the same two-step flow
+    // the client uses for a private channel's first members).
+    let member_ids = if args.contains_key("member_ids") {
+        parse_uuid_array_arg::<rim_core::user::model::UserId>(&args, "member_ids")?
+    } else {
+        vec![]
+    };
 
     let conversation = services
         .conversation_service
@@ -106,8 +116,21 @@ pub(super) async fn create_channel(
             server_id,
             participants: ConversationParticipants::Channel,
             title: Some(name),
+            is_private,
         })
         .await?;
+
+    if !member_ids.is_empty() {
+        services
+            .conversation_service
+            .add_conversation_members(AddConversationMembersCmd {
+                actor,
+                server_id,
+                conversation_id: conversation.id,
+                user_ids: member_ids,
+            })
+            .await?;
+    }
 
     if let Some(desc) = description.filter(|s| !s.is_empty()) {
         services
@@ -422,6 +445,9 @@ mod tests {
                 title: Some("test-channel".to_string()),
                 topic: None,
                 member_ids: vec![],
+                is_private: false,
+                archived_at: None,
+                created_by: None,
             }],
             None,
             None,
@@ -518,6 +544,74 @@ mod tests {
         }
     }
 
+    // ── create_channel: Track 1.1 private + initial members ─────────────────
+
+    fn fake_channel(ws: ServerId) -> ConversationDto {
+        ConversationDto {
+            id: ConversationId::new(),
+            server_id: ws,
+            conversation_type: ConversationType::Channel,
+            title: Some("new-ch".to_string()),
+            topic: None,
+            member_ids: vec![],
+            is_private: false,
+            archived_at: None,
+            created_by: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_channel_private_with_members_adds_them_after_creation() {
+        let ws = ServerId::new();
+        let members = vec![UserId::new(), UserId::new()];
+        let expected = members.clone();
+        let mut conv = MockConversationService::new();
+        let created = ConversationDto {
+            is_private: true,
+            ..fake_channel(ws)
+        };
+        let created_id = created.id;
+        conv.expect_create_conversation()
+            .withf(|cmd| cmd.is_private)
+            .return_once(move |_| Box::pin(async move { Ok(created) }));
+        conv.expect_add_conversation_members()
+            .withf(move |cmd| cmd.conversation_id == created_id && cmd.user_ids == expected)
+            .return_once(move |_| Box::pin(async move { Ok(fake_channel(ws)) }));
+
+        let svc = make_services(conv, MockMessageService::new());
+        let mut args = serde_json::Map::new();
+        args.insert("name".to_string(), serde_json::json!("hiring"));
+        args.insert("is_private".to_string(), serde_json::json!("true"));
+        args.insert(
+            "member_ids".to_string(),
+            serde_json::Value::Array(
+                members
+                    .iter()
+                    .map(|id| serde_json::Value::String(id.to_string()))
+                    .collect(),
+            ),
+        );
+        super::create_channel(&svc, actor(), args, Some(ctx_with(ws)))
+            .await
+            .expect("private channel with members");
+    }
+
+    #[tokio::test]
+    async fn create_channel_defaults_to_public_without_members() {
+        let ws = ServerId::new();
+        let mut conv = MockConversationService::new();
+        conv.expect_create_conversation()
+            .withf(|cmd| !cmd.is_private)
+            .return_once(move |_| Box::pin(async move { Ok(fake_channel(ws)) }));
+        conv.expect_add_conversation_members().never();
+        let svc = make_services(conv, MockMessageService::new());
+        let mut args = serde_json::Map::new();
+        args.insert("name".to_string(), serde_json::json!("general-2"));
+        super::create_channel(&svc, actor(), args, Some(ctx_with(ws)))
+            .await
+            .expect("public channel");
+    }
+
     // ── create_channel ───────────────────────────────────────────────────────
 
     /// 1. AI path: args carry server_id — downstream sees arg UUID.
@@ -537,6 +631,9 @@ mod tests {
                         title: Some("new-ch".to_string()),
                         topic: None,
                         member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
                     })
                 })
             });
@@ -574,6 +671,9 @@ mod tests {
                         title: Some("new-ch".to_string()),
                         topic: None,
                         member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
                     })
                 })
             });
@@ -610,6 +710,9 @@ mod tests {
                         title: None,
                         topic: None,
                         member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
                     })
                 })
             });
