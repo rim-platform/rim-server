@@ -104,6 +104,9 @@ fn build_service_with_store(
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
         Arc::clone(&store),
     );
@@ -345,6 +348,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 })
             })
         });
@@ -367,6 +371,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 })
             })
         });
@@ -457,6 +462,7 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 })
             })
         });
@@ -542,6 +548,7 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
                     is_private: false,
                     archived_at: None,
                     created_by: None,
+                    slow_mode_seconds: 0,
                 })
             })
         });

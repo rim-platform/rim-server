@@ -5,6 +5,7 @@ mod conversation;
 mod desktop_local;
 mod incident;
 mod member;
+mod moderation;
 mod oncall;
 mod pin;
 mod reaction;
@@ -78,6 +79,13 @@ pub(super) async fn execute_builtin_command(
         "chat.pin_message" => pin::pin_message(services, actor, args, context).await,
         "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args, context).await,
         "admin.invite_member" => admin::invite_member(services, actor, args, context).await,
+        "admin.kick" => moderation::kick(services, actor, args, context).await,
+        "admin.ban" => moderation::ban(services, actor, args, context).await,
+        "admin.unban" => moderation::unban(services, actor, args, context).await,
+        "admin.timeout" => moderation::timeout(services, actor, args, context).await,
+        "admin.set_role" => moderation::set_role(services, actor, args, context).await,
+        "chat.set_slow_mode" => moderation::set_slow_mode(services, actor, args, context).await,
+        "chat.report_message" => moderation::report_message(services, actor, args, context).await,
         "incident.ack" => incident::ack(services, actor, args, context, initiator).await,
         "incident.escalate" => incident::escalate(services, actor, args, context, initiator).await,
         "oncall.who" => oncall::who(services, actor, args, context).await,
