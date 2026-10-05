@@ -780,6 +780,7 @@ mod tests {
                 server_id: rim_core::server::model::ServerId,
                 user_id: rim_core::user::model::UserId,
             ) -> RepoResult<bool>;
+            async fn get_member_standing(&self, server_id: rim_core::server::model::ServerId, user_id: rim_core::user::model::UserId) -> RepoResult<Option<rim_core::server_member::model::MemberStanding>>;
         }
     }
 

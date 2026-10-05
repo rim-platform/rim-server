@@ -505,6 +505,7 @@ async fn concurrent_invite_revoke_exactly_one_wins() {
             token_hash: hash_token("rim_inv_race_token"),
             expires_at: Some(Utc::now() + Duration::hours(1)),
             max_uses: 5,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await
         .expect("create invite failed");
@@ -591,6 +592,7 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
             token_hash,
             expires_at: None,
             max_uses: 5,
+            role: rim_core::server_member::model::ServerMemberRole::Member,
         })
         .await
         .expect("create invite failed");

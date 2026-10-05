@@ -84,6 +84,21 @@ pub enum WorkspaceEvent {
         user_id: UserId,
         username: String,
     },
+    /// A member left the workspace because a moderator kicked or banned them (Track 1.2).
+    /// Wire shape: `{"type":"MemberLeft","workspace_id","user_id"}`. Delivered to every
+    /// subscriber of the workspace, including the removed user, whose subscription then ends.
+    MemberLeft {
+        workspace_id: ServerId,
+        user_id: UserId,
+    },
+    /// A member's role changed (Track 1.2). `role` is the snake_case role name (`owner`,
+    /// `moderator`, `member`, `guest`). Wire shape:
+    /// `{"type":"MemberRoleChanged","workspace_id","user_id","role"}`.
+    MemberRoleChanged {
+        workspace_id: ServerId,
+        user_id: UserId,
+        role: String,
+    },
     ThreadCreated {
         workspace_id: ServerId,
         conversation_id: ConversationId,
@@ -374,6 +389,8 @@ impl WorkspaceEvent {
             | Self::MessageUnpinned { workspace_id, .. }
             | Self::ThreadCreated { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
+            | Self::MemberLeft { workspace_id, .. }
+            | Self::MemberRoleChanged { workspace_id, .. }
             | Self::MemberAddedToConversation { workspace_id, .. }
             | Self::MemberRemovedFromConversation { workspace_id, .. }
             | Self::ReadStateUpdated { workspace_id, .. }
@@ -418,7 +435,9 @@ impl WorkspaceEvent {
             | Self::MemberRemovedFromConversation {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            Self::MemberJoined { .. } => None,
+            Self::MemberJoined { .. }
+            | Self::MemberLeft { .. }
+            | Self::MemberRoleChanged { .. } => None,
             Self::ConversationUpdated {
                 member_user_ids, ..
             } => Some(member_user_ids),
