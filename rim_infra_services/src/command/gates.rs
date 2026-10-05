@@ -1,6 +1,7 @@
 use rim_services::command::dto::{CommandContextDto, CommandDefinitionDto};
 use rim_services::command::request::ExecuteCommandCmd;
-use rim_services::{ServiceError, ServiceResult};
+use rim_services::command::sensitivity::CommandSensitivityDto;
+use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
 use super::pipe_parser;
@@ -120,6 +121,33 @@ impl DefaultCommandService {
             Ok(())
         } else {
             Err(ServiceError::feature_disabled(feature))
+        }
+    }
+
+    /// Track 1.2 timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
+    /// stricter) and the actor is timed out in the context's workspace. Without a workspace
+    /// context there is nothing to check here; the services behind the command still apply
+    /// their own write gates.
+    pub(super) async fn ensure_command_not_timed_out(
+        &self,
+        definition: &CommandDefinitionDto,
+        actor: &Actor,
+        context: Option<&CommandContextDto>,
+    ) -> ServiceResult<()> {
+        if definition.sensitivity < CommandSensitivityDto::Mutating {
+            return Ok(());
+        }
+        let Some(server_id) = context.and_then(|c| c.workspace_id) else {
+            return Ok(());
+        };
+        match self
+            .services
+            .moderation_service
+            .active_timeout(server_id, actor.user_id)
+            .await?
+        {
+            Some(until) => Err(ServiceError::TimedOut { until }),
+            None => Ok(()),
         }
     }
 }

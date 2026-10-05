@@ -45,6 +45,7 @@ mod tests {
             is_private: false,
             archived_at: None,
             created_by: None,
+            slow_mode_seconds: 0,
         }
     }
 
@@ -74,6 +75,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -169,6 +177,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -249,6 +264,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -309,6 +331,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo.expect_get_by_id().returning(move |_id| {
@@ -360,6 +389,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -442,6 +478,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -544,6 +587,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -623,6 +673,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -751,6 +808,13 @@ mod tests {
             server_member_repo
                 .expect_is_member()
                 .returning(|_sid, _uid| Ok(true));
+            server_member_repo
+                .expect_get_member_standing()
+                .returning(|_, _| {
+                    Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                        rim_core::server_member::model::ServerMemberRole::Member,
+                    )))
+                });
             let mut conversation_repo = MockConversationRepository::new();
             conversation_repo
                 .expect_list_accessible_conversation_ids()
@@ -832,6 +896,13 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
 
         let mut conversation_repo = MockConversationRepository::new();
         let conv_for_repo = conv.clone();
@@ -877,5 +948,335 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    // ── Track 1.2: slow mode and moderator deletes ──
+
+    #[test]
+    fn slow_mode_retry_after_rounds_up_and_expires() {
+        use crate::message::slow_mode_retry_after;
+        let now = chrono::Utc::now();
+        assert_eq!(slow_mode_retry_after(0, now, now), None, "off");
+        assert_eq!(slow_mode_retry_after(30, now, now), Some(30));
+        assert_eq!(
+            slow_mode_retry_after(30, now - chrono::Duration::milliseconds(10_500), now),
+            Some(20),
+            "19.5 s left rounds up to 20"
+        );
+        assert_eq!(
+            slow_mode_retry_after(30, now - chrono::Duration::milliseconds(29_999), now),
+            Some(1)
+        );
+        assert_eq!(
+            slow_mode_retry_after(30, now - chrono::Duration::seconds(30), now),
+            None
+        );
+        assert_eq!(
+            slow_mode_retry_after(30, now + chrono::Duration::seconds(5), now),
+            Some(30),
+            "a clock skewed into the future never shortens the wait below the interval"
+        );
+    }
+
+    /// A message service for slow-mode tests: one public channel with `slow_mode_seconds`, the
+    /// actor's last message there `last_sent_ago` ago, and the actor holding `role`.
+    fn slow_mode_service(
+        role: rim_core::server_member::model::ServerMemberRole,
+        slow_mode_seconds: i32,
+        last_sent_ago: chrono::Duration,
+    ) -> (DefaultMessageService, ServerId, ConversationId) {
+        let server_id = ServerId::new();
+        let mut conv = conversation(server_id);
+        conv.slow_mode_seconds = slow_mode_seconds;
+        let conv_id = conv.id;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    role,
+                )))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        conversation_repo
+            .expect_touch_last_activity_at()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_last_sent_at_by_author()
+            .returning(move |_, _| {
+                Box::pin(async move { Ok(Some(chrono::Utc::now() - last_sent_ago)) })
+            });
+        message_repo.expect_create_message().returning(|msg| {
+            let msg = msg.clone();
+            Box::pin(async move {
+                Ok(Message {
+                    id: MessageId::new(),
+                    conversation_id: msg.conversation_id,
+                    thread_id: None,
+                    sent_by: msg.sent_by,
+                    text: msg.text,
+                    has_attachments: false,
+                    parent_message_id: None,
+                    forwarded_from_message_id: None,
+                    is_deleted: false,
+                    sent_at: chrono::Utc::now(),
+                })
+            })
+        });
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        let mut thread_repo = MockMessageThreadRepository::new();
+        thread_repo
+            .expect_get_by_root_message()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        );
+        (svc, server_id, conv_id)
+    }
+
+    fn send(server_id: ServerId, conversation_id: ConversationId) -> SendMessageCmd {
+        SendMessageCmd {
+            actor: Actor::new(UserId::new()),
+            server_id,
+            conversation_id,
+            text: Some("hello".to_string()),
+            parent_message_id: None,
+            attachments: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_mode_refuses_a_member_with_retry_after() {
+        use rim_core::server_member::model::ServerMemberRole;
+        let (svc, server_id, conv_id) =
+            slow_mode_service(ServerMemberRole::Member, 60, chrono::Duration::seconds(15));
+        let err = svc
+            .send_message(send(server_id, conv_id))
+            .await
+            .unwrap_err();
+        match err {
+            ServiceError::RateLimited {
+                retry_after_seconds,
+            } => assert!(
+                (44..=45).contains(&retry_after_seconds),
+                "{retry_after_seconds}"
+            ),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_mode_allows_after_the_interval_and_exempts_moderators() {
+        use rim_core::server_member::model::ServerMemberRole;
+        let (svc, server_id, conv_id) =
+            slow_mode_service(ServerMemberRole::Member, 60, chrono::Duration::seconds(61));
+        svc.send_message(send(server_id, conv_id))
+            .await
+            .expect("interval elapsed");
+        for role in [ServerMemberRole::Owner, ServerMemberRole::Moderator] {
+            let (svc, server_id, conv_id) =
+                slow_mode_service(role, 60, chrono::Duration::seconds(1));
+            svc.send_message(send(server_id, conv_id))
+                .await
+                .unwrap_or_else(|e| panic!("{role:?} must be exempt: {e:?}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn timed_out_member_cannot_send() {
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding {
+                    role: rim_core::server_member::model::ServerMemberRole::Member,
+                    timed_out_until: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+                }))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        );
+        let err = svc
+            .send_message(send(server_id, conv_id))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::TimedOut { .. }), "{err:?}");
+    }
+
+    #[derive(Default)]
+    struct RecordingAudit(std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>);
+
+    #[async_trait::async_trait]
+    impl rim_services::audit::service::AuditLogService for RecordingAudit {
+        async fn write_entry(
+            &self,
+            entry: rim_services::audit::dto::AuditLogEntryDto,
+        ) -> rim_services::ServiceResult<()> {
+            self.0.lock().expect("lock").push(entry);
+            Ok(())
+        }
+
+        async fn list_entries(
+            &self,
+            _caller: Actor,
+            _query: rim_services::audit::dto::ListAuditLogQuery,
+        ) -> rim_services::ServiceResult<rim_services::audit::dto::AuditLogPage> {
+            Err(ServiceError::NotFound)
+        }
+    }
+
+    /// The author's message, deleted by `actor` holding `role`; returns the result and the
+    /// audit rows written.
+    async fn delete_as(
+        role: rim_core::server_member::model::ServerMemberRole,
+        actor_is_author: bool,
+    ) -> (
+        Result<(), ServiceError>,
+        Vec<rim_services::audit::dto::AuditLogEntryDto>,
+    ) {
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let author = UserId::new();
+        let actor = if actor_is_author {
+            author
+        } else {
+            UserId::new()
+        };
+        let msg = message(author, conv_id);
+        let msg_id = msg.id;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    role,
+                )))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        // A guest reads a public channel only as a member; make every actor one.
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo.expect_get_by_id().returning(move |_| {
+            let m = msg.clone();
+            Box::pin(async move { Ok(Some(m)) })
+        });
+        message_repo
+            .expect_soft_delete_message()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let audit = Arc::new(RecordingAudit::default());
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        )
+        .with_audit_log_service(
+            Arc::clone(&audit) as Arc<dyn rim_services::audit::service::AuditLogService>
+        );
+        let res = svc
+            .delete_message(DeleteMessageCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id: conv_id,
+                message_id: msg_id,
+                hard: false,
+            })
+            .await;
+        let rows = audit.0.lock().expect("lock").clone();
+        (res, rows)
+    }
+
+    #[tokio::test]
+    async fn moderators_delete_others_messages_with_an_audit_row() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        for role in [ServerMemberRole::Owner, ServerMemberRole::Moderator] {
+            let (res, rows) = delete_as(role, false).await;
+            res.unwrap_or_else(|e| panic!("{role:?} delete: {e:?}"));
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].command_id, "admin.delete_message");
+            assert!(rows[0].args_redacted.get("author_id").is_some());
+            assert!(
+                !rows[0].args_redacted.to_string().contains("\"t\""),
+                "message text is never copied into the audit log"
+            );
+        }
+        for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+            let (res, rows) = delete_as(role, false).await;
+            assert!(
+                matches!(res, Err(ServiceError::PermissionDenied)),
+                "{role:?}"
+            );
+            assert!(rows.is_empty());
+        }
+        // An author deleting their own message is not a moderation action.
+        let (res, rows) = delete_as(ServerMemberRole::Moderator, true).await;
+        res.expect("own delete");
+        assert!(rows.is_empty());
     }
 }
