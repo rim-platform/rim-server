@@ -94,6 +94,11 @@ pub struct RIMConfig {
     /// floor for the "nothing armed" idle case, per §11. Controlled by
     /// `RIM_ESCALATION_TIMER_RESOLUTION_SECS`.
     pub escalation_timer_resolution_secs: Option<u64>,
+
+    /// How often (seconds) the notification digest job looks for due digests (Track 1.3).
+    /// Default: 900 (15 minutes); values below 60 are raised to 60. Controlled by
+    /// `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS`.
+    pub notification_digest_interval_secs: Option<u64>,
 }
 
 /// The registration mode resolved from environment at boot.
@@ -144,6 +149,10 @@ impl fmt::Debug for RIMConfig {
                 "escalation_timer_resolution_secs",
                 &self.escalation_timer_resolution_secs(),
             )
+            .field(
+                "notification_digest_interval_secs",
+                &self.notification_digest_interval_secs(),
+            )
             .finish()
     }
 }
@@ -179,6 +188,7 @@ impl Default for RIMConfig {
             smtp_tls: None,
             public_base_url: None,
             escalation_timer_resolution_secs: None,
+            notification_digest_interval_secs: None,
         }
     }
 }
@@ -336,6 +346,21 @@ impl RIMConfig {
         const DEFAULT: u64 = 5;
         self.escalation_timer_resolution_secs.unwrap_or(DEFAULT)
     }
+
+    /// Interval (seconds) of the notification digest job. Defaults to 900 (15 minutes); never
+    /// less than 60 so a misconfiguration cannot hammer the database.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let every = std::time::Duration::from_secs(config.notification_digest_interval_secs());
+    /// ```
+    pub fn notification_digest_interval_secs(&self) -> u64 {
+        const DEFAULT: u64 = 900;
+        const MIN: u64 = 60;
+        self.notification_digest_interval_secs
+            .unwrap_or(DEFAULT)
+            .max(MIN)
+    }
 }
 
 impl RIMConfig {
@@ -352,6 +377,7 @@ impl RIMConfig {
             .set_default("alert_rate_limit_per_min", 120_i64)?
             .set_default("alert_max_body_bytes", 262_144_i64)?
             .set_default("escalation_timer_resolution_secs", 5_i64)?
+            .set_default("notification_digest_interval_secs", 900_i64)?
             .add_source(Environment::with_prefix("RIM"))
             .add_source(Environment::default());
         c.build()?.try_deserialize()
@@ -472,5 +498,25 @@ mod tests {
             config.public_base_url(),
             Some("https://rim.example.com".to_string())
         );
+    }
+
+    #[test]
+    fn notification_digest_interval_defaults_to_fifteen_minutes() {
+        let config = RIMConfig::default();
+        assert_eq!(config.notification_digest_interval_secs(), 900);
+    }
+
+    #[test]
+    fn notification_digest_interval_is_configurable_with_a_floor() {
+        let config = RIMConfig {
+            notification_digest_interval_secs: Some(300),
+            ..Default::default()
+        };
+        assert_eq!(config.notification_digest_interval_secs(), 300);
+        let config = RIMConfig {
+            notification_digest_interval_secs: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(config.notification_digest_interval_secs(), 60);
     }
 }
