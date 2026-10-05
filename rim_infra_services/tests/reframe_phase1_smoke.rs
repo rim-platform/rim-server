@@ -159,6 +159,9 @@ fn build_service(
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,
     );
@@ -202,6 +205,9 @@ fn build_service_with_audit(
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,

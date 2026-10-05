@@ -72,6 +72,9 @@ mod fixtures {
                 workspace_feature_service: std::sync::Arc::new(
                     MockWorkspaceFeatureService::all_enabled(),
                 ),
+                moderation_service: std::sync::Arc::new(
+                    rim_services::moderation::service::MockModerationService::no_timeouts(),
+                ),
             },
         )
     }
@@ -208,6 +211,9 @@ async fn execute_command_proceeds_when_capability_check_passes() {
             ),
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
+            ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
         },
     );

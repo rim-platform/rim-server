@@ -74,6 +74,22 @@ mod tests {
         message_service: MockMessageService,
         capability_service: rim_services::capability::service::MockCapabilityService,
     ) -> DefaultCommandService {
+        service_with_moderation(
+            repo,
+            conversation_service,
+            message_service,
+            capability_service,
+            rim_services::moderation::service::MockModerationService::no_timeouts(),
+        )
+    }
+
+    fn service_with_moderation(
+        repo: MockUserCommandRepository,
+        conversation_service: MockConversationService,
+        message_service: MockMessageService,
+        capability_service: rim_services::capability::service::MockCapabilityService,
+        moderation_service: rim_services::moderation::service::MockModerationService,
+    ) -> DefaultCommandService {
         DefaultCommandService::new(
             CommandRepos {
                 user_command_repo: Arc::new(repo),
@@ -108,6 +124,7 @@ mod tests {
                 workspace_feature_service: std::sync::Arc::new(
                     MockWorkspaceFeatureService::all_enabled(),
                 ),
+                moderation_service: Arc::new(moderation_service),
             },
         )
     }
@@ -514,8 +531,10 @@ mod tests {
     // surface here unconditionally regardless of the mocked capability grants.
     // Renamed 12→16 to match the sibling inventory gate in `registry/mod.rs`.
     // Track 1.1 adds five agent-callable membership/archive builtins (`chat.write`, granted by
-    // the mock): 16→21.
-    async fn list_commands_ai_surface_returns_twenty_one_commands_with_caps() {
+    // the mock): 16→21. Track 1.2 adds three moderation builtins — `chat.set_slow_mode`,
+    // `chat.report_message` (`chat.write`) and `admin.timeout` (`admin.manage_members`, now also
+    // granted by the mock): 21→24.
+    async fn list_commands_ai_surface_returns_twenty_four_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -526,7 +545,8 @@ mod tests {
             .withf(|_actor, _ws, caps| {
                 let cap_set: std::collections::HashSet<&str> =
                     caps.iter().map(|s| s.as_str()).collect();
-                cap_set.len() == 2
+                cap_set.len() == 3
+                    && cap_set.contains("admin.manage_members")
                     && cap_set.contains("chat.read")
                     && cap_set.contains("chat.write")
             })
@@ -569,6 +589,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "admin.timeout",
                 "chat.archive_channel",
                 "chat.create_channel",
                 "chat.get_recent_messages",
@@ -580,7 +601,9 @@ mod tests {
                 "chat.open_thread",
                 "chat.pin_message",
                 "chat.post_message",
+                "chat.report_message",
                 "chat.search_messages",
+                "chat.set_slow_mode",
                 "chat.toggle_reaction",
                 "chat.unarchive_channel",
                 "incident.ack",
@@ -1049,6 +1072,9 @@ mod tests {
                 workspace_feature_service: std::sync::Arc::new(
                     MockWorkspaceFeatureService::all_enabled(),
                 ),
+                moderation_service: std::sync::Arc::new(
+                    rim_services::moderation::service::MockModerationService::no_timeouts(),
+                ),
             },
             vec![cmd_def],
         )
@@ -1196,6 +1222,9 @@ mod tests {
                 ),
                 workspace_feature_service: std::sync::Arc::new(
                     MockWorkspaceFeatureService::all_enabled(),
+                ),
+                moderation_service: std::sync::Arc::new(
+                    rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
             },
         );
@@ -1573,6 +1602,9 @@ mod tests {
                 workspace_feature_service: std::sync::Arc::new(
                     MockWorkspaceFeatureService::all_enabled(),
                 ),
+                moderation_service: std::sync::Arc::new(
+                    rim_services::moderation::service::MockModerationService::no_timeouts(),
+                ),
             },
             vec![mutating_cmd],
         )
@@ -1901,5 +1933,114 @@ mod tests {
             !commands.iter().any(|c| c.id == second_macro_cmd_id),
             "the second (rejected) macro service must not have taken effect"
         );
+    }
+
+    // ── Track 1.2: timeout gate (T1) ──
+
+    fn workspace_context(workspace: rim_core::server::model::ServerId) -> CommandContextDto {
+        CommandContextDto {
+            workspace_id: Some(workspace),
+            conversation_id: None,
+            thread_id: None,
+            selected_text: None,
+            selected_message_id: None,
+            selected_message_ids: vec![],
+            focused_surface: None,
+            active_panel: None,
+        }
+    }
+
+    fn timed_out_moderation(
+        until: chrono::DateTime<chrono::Utc>,
+    ) -> rim_services::moderation::service::MockModerationService {
+        let mut moderation = rim_services::moderation::service::MockModerationService::new();
+        moderation
+            .expect_active_timeout()
+            .returning(move |_, _| Box::pin(async move { Ok(Some(until)) }));
+        moderation
+    }
+
+    fn allow_all_caps() -> rim_services::capability::service::MockCapabilityService {
+        let mut cap = rim_services::capability::service::MockCapabilityService::new();
+        cap.expect_check().returning(|_, _, _| Ok(()));
+        cap
+    }
+
+    #[tokio::test]
+    async fn timed_out_actor_cannot_run_mutating_commands() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let mut message_service = MockMessageService::new();
+        message_service.expect_send_message().never();
+        let svc = service_with_moderation(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            message_service,
+            allow_all_caps(),
+            timed_out_moderation(until),
+        );
+
+        let err = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(rim_core::user::model::UserId::new()),
+                command_id: "chat.post_message".to_string(),
+                args: Some(serde_json::json!({
+                    "server_id": workspace.to_string(),
+                    "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
+                    "text": "hello"
+                })),
+                context: Some(workspace_context(workspace)),
+                confirmation: None,
+                is_pipe: false,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::TimedOut { until: u } if u == until),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_actor_still_runs_read_only_commands() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let mut message_service = MockMessageService::new();
+        message_service.expect_search_messages().returning(|_| {
+            Box::pin(async {
+                Ok(rim_core::repository::pagination::Page::new(
+                    vec![],
+                    None,
+                    None,
+                ))
+            })
+        });
+        let mut moderation = rim_services::moderation::service::MockModerationService::new();
+        // The gate only consults moderation state for Mutating commands.
+        moderation.expect_active_timeout().never();
+        let svc = service_with_moderation(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            message_service,
+            allow_all_caps(),
+            moderation,
+        );
+
+        let result = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(rim_core::user::model::UserId::new()),
+                command_id: "chat.search_messages".to_string(),
+                args: Some(serde_json::json!({
+                    "server_id": workspace.to_string(),
+                    "query": "launch"
+                })),
+                context: Some(workspace_context(workspace)),
+                confirmation: None,
+                is_pipe: false,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .expect("read-only command runs");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 }

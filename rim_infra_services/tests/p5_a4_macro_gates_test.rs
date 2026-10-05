@@ -96,6 +96,7 @@ mockall::mock! {
         async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
         async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
         async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+        async fn get_member_standing(&self, server_id: rim_core::server::model::ServerId, user_id: rim_core::user::model::UserId) -> RepoResult<Option<rim_core::server_member::model::MemberStanding>>;
     }
 }
 

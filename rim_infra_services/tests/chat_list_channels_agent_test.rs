@@ -96,6 +96,9 @@ fn build_service(
             workspace_feature_service: std::sync::Arc::new(
                 MockWorkspaceFeatureService::all_enabled(),
             ),
+            moderation_service: std::sync::Arc::new(
+                rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
         },
     )
 }
@@ -103,11 +106,15 @@ fn build_service(
 /// Helper — assert the cap union the AI surface bulk-checks. Post-P4-A4
 /// the union grows to {chat.read, chat.write} because the metadata flips
 /// added 2 Mutating commands (`chat.post_message`, `chat.create_channel`).
-/// The 4 DesktopLocal flips contribute no caps. Compared as a set so a
-/// future flip that reorders registration doesn't break the test.
+/// The 4 DesktopLocal flips contribute no caps. Track 1.2 adds `admin.manage_members` (the
+/// agent-callable `admin.timeout`). Compared as a set so a future flip that reorders
+/// registration doesn't break the test.
 fn caps_match_phase4_union(caps: &[String]) -> bool {
     let cap_set: std::collections::HashSet<&str> = caps.iter().map(|s| s.as_str()).collect();
-    cap_set.len() == 2 && cap_set.contains("chat.read") && cap_set.contains("chat.write")
+    cap_set.len() == 3
+        && cap_set.contains("admin.manage_members")
+        && cap_set.contains("chat.read")
+        && cap_set.contains("chat.write")
 }
 
 /// Leg 1 — actor holding `chat.read` (and `chat.write`) sees
@@ -252,6 +259,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             is_private: false,
                             archived_at: None,
                             created_by: None,
+                            slow_mode_seconds: 0,
                         },
                         ConversationDto {
                             id: channel_b_id,
@@ -263,6 +271,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             is_private: true,
                             archived_at: Some(chrono::Utc::now()),
                             created_by: None,
+                            slow_mode_seconds: 0,
                         },
                     ],
                     None,

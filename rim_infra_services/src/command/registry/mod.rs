@@ -4,6 +4,7 @@ mod chat_messages;
 mod conversation;
 mod incident;
 mod member;
+mod moderation;
 mod oncall;
 mod pin;
 mod reaction;
@@ -73,6 +74,7 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
         admin::commands(),
         incident::commands(),
         oncall::commands(),
+        moderation::commands(),
     ]
     .into_iter()
     .flatten()
@@ -171,10 +173,15 @@ mod tests {
         // `chat.unarchive_channel` — for 21. `chat.remove_conversation_member` is deliberately
         // NOT AI-callable (dangerous, confirmation-gated). Every one of them is authorized by
         // `ConversationService` (membership, private-channel visibility, Owner/Moderator for
-        // archive), so the agent gains no access the user does not already have.
+        // archive), so the agent gains no access the user does not already have. Track 1.2
+        // (`docs/specs/track-1-2-roles-and-moderation.md`, Commands) adds three moderation
+        // builtins — `chat.set_slow_mode`, `admin.timeout`, `chat.report_message` — for 24. All
+        // three are authorized by `ModerationService` (Owner/Moderator for slow mode and
+        // timeouts, read access for reports). `admin.kick`, `admin.ban`, `admin.unban` and
+        // `admin.set_role` are deliberately NOT AI-callable.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 21 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // 24 IDs are AI-callable. Adding a new ai_callable builtin without a
         // Hawkeye + Widow security review (and updating this set) must fail
         // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
@@ -205,6 +212,9 @@ mod tests {
             "chat.invite_to_conversation",
             "chat.archive_channel",
             "chat.unarchive_channel",
+            "chat.set_slow_mode",
+            "admin.timeout",
+            "chat.report_message",
         ];
         expected.sort();
 
