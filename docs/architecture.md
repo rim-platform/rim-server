@@ -186,6 +186,12 @@ The persisted/core identifier still uses `ServerId`, but product terminology pre
 Today:
 
 - a server/workspace is the top-level shared container
+- members hold one of four roles (Track 1.2): `Owner`, `Moderator`, `Member` (default), `Guest`
+  (restricted to conversations they were added to). Moderation state — bans, timeouts and
+  message reports — lives in `rim_core::moderation` (`ModerationRepository`) and is managed by
+  `ModerationService` (`rim_infra_services/src/moderation.rs`), which also owns the shared
+  moderation audit writer (`record_moderation_action`). See `docs/messaging.md`, Roles And
+  Moderation.
 
 ### Conversation
 
@@ -200,6 +206,12 @@ lets any workspace member read a public channel; private channels, DMs and group
 `conversation_member` row (a private-channel non-member gets `NotFound`, a DM/group non-member
 `PermissionDenied`). `ensure_conversation_writable` adds the archive check
 (`ConversationArchived`) for every write path. See `docs/messaging.md`.
+
+Track 1.2 makes the gate role-aware: it loads the actor's `MemberStanding` (role plus any active
+timeout, `ServerMemberRepository::get_member_standing`) instead of a bare membership check. A
+`Guest` needs a `conversation_member` row even for a public channel (`NotFound` otherwise), and
+`ensure_conversation_writable` also refuses a timed-out member (`TimedOut`). Slow mode is
+checked in `MessageService` on send/reply/forward.
 
 ### Message
 

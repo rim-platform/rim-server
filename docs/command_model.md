@@ -107,6 +107,29 @@ never do more than the user it acts for.
 | `chat.unarchive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
 | `chat.remove_conversation_member` | `server_id`, `conversation_id`, `user_id` | no | yes | Owner/Moderator, or yourself; confirmation required |
 
+Moderation builtins (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`). All are
+`Backend` and `Mutating`; the `admin.*` ones require `admin.manage_members`, the `chat.*` ones
+`chat.write`. They call `ModerationService`, which enforces the roles (Owner/Moderator, who may
+target whom) and writes the moderation audit row (`docs/messaging.md`, Roles And Moderation), so
+a command execution is audited twice: the generic command row plus the moderation row.
+`chat.delete_message` (context menu, selected message) goes through `MessageService` as before,
+which now lets an Owner/Moderator delete other people's messages.
+
+| Id | Args | AI-callable | Dangerous | Notes |
+|---|---|---|---|---|
+| `admin.kick` | `server_id`, `user_id`, `reason?` | no | yes | Owner/Moderator; confirmation required |
+| `admin.ban` | `server_id`, `user_id`, `reason?`, `expires_at?` (RFC 3339) | no | yes | Owner/Moderator; confirmation required |
+| `admin.unban` | `server_id`, `user_id` | no | no | Owner/Moderator |
+| `admin.timeout` | `server_id`, `user_id`, `minutes` (1..=43200), `reason?` | yes | no | Owner/Moderator |
+| `admin.set_role` | `server_id`, `user_id`, `role` (`moderator`/`member`/`guest`) | no | yes | Owner: any but owner; Moderator: member/guest; confirmation required |
+| `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
+| `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
+
+AI-callable builtins: 24 (the 21 of Track 1.1 plus `admin.timeout`, `chat.set_slow_mode` and
+`chat.report_message`), pinned by `collect_ai_callable_inventory_matches_reviewed_set`
+(`registry/mod.rs`) and `list_commands_ai_surface_returns_twenty_four_commands_with_caps`
+(`command_tests.rs`).
+
 ### Plugin-Provided Commands
 
 - Registered by plugins.
@@ -188,6 +211,16 @@ user-defined command and every macro has `feature = None` and is always availabl
 - Nested dispatch hits the same gate: a user-command step or a pipe stage that reaches a gated
   builtin fails with `FeatureDisabled`; a macro step goes through `execute_command` and fails
   the same way.
+
+### Timeout gate (T1, Track 1.2)
+
+Right after F1, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
+`Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
+when the actor is timed out in the context's workspace (`ModerationService::active_timeout`).
+`Safe` and `Sensitive` commands still run. The gate also runs on nested dispatch (user-command
+steps, pipe stages), before the rate limiter, inside the audit wrapper. Without a workspace
+context it has nothing to check; the services behind the command apply their own write gates
+anyway. Gate order: C1 capability → H1 confirmation → F1 feature → T1 timeout → R1 rate limit.
 
 Feature state is managed per workspace by its Owner (`setWorkspaceFeature`); see
 `docs/specs/track-0-4-optional-incident-module.md`.

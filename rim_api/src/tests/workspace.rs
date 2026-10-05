@@ -87,7 +87,7 @@ async fn viewer_role_resolves_owner() {
         let mut dto = test_server_member_dto();
         dto.server_id = server_id;
         dto.user_id = actor;
-        dto.member_role = "owner".to_string();
+        dto.member_role = rim_core::server_member::model::ServerMemberRole::Owner;
         Ok(dto)
     })
     .await;
@@ -106,7 +106,7 @@ async fn viewer_role_resolves_moderator() {
         let mut dto = test_server_member_dto();
         dto.server_id = server_id;
         dto.user_id = actor;
-        dto.member_role = "moderator".to_string();
+        dto.member_role = rim_core::server_member::model::ServerMemberRole::Moderator;
         Ok(dto)
     })
     .await;
@@ -125,7 +125,7 @@ async fn viewer_role_resolves_guest() {
         let mut dto = test_server_member_dto();
         dto.server_id = server_id;
         dto.user_id = actor;
-        dto.member_role = "guest".to_string();
+        dto.member_role = rim_core::server_member::model::ServerMemberRole::Guest;
         Ok(dto)
     })
     .await;
@@ -169,7 +169,7 @@ async fn server_members_query_returns_members() {
             let mut dto = test_server_member_dto();
             dto.server_id = server_id;
             dto.user_id = member_user_id;
-            dto.member_role = "admin".to_string();
+            dto.member_role = rim_core::server_member::model::ServerMemberRole::Moderator;
             dto.joined_at = joined_at;
             Ok(vec![dto])
         })
@@ -195,7 +195,7 @@ async fn server_members_query_returns_members() {
     );
     assert_eq!(
         json["serverMembers"][0]["memberRole"],
-        serde_json::json!("admin")
+        serde_json::json!("MODERATOR")
     );
     assert!(json["serverMembers"][0]["joinedAt"].is_string());
 }

@@ -1,14 +1,15 @@
-use async_graphql::{ComplexObject, Context, Enum, Error, Result, SimpleObject};
+use async_graphql::{ComplexObject, Context, Enum, Result, SimpleObject};
 
 use super::WorkspaceFeatureState;
 
 /// GraphQL exposure of `rim_core::server_member::model::ServerMemberRole`. Reused (not
-/// duplicated) across every place a member's role needs to cross the wire — currently
-/// `Server.viewerRole`.
+/// duplicated) across every place a member's role needs to cross the wire — `Server.viewerRole`,
+/// `ServerMember.memberRole`, `CreateInviteInput.role`, `setMemberRole`.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ServerMemberRoleGql {
     Owner,
     Moderator,
+    Member,
     Guest,
 }
 
@@ -18,6 +19,7 @@ impl From<rim_core::server_member::model::ServerMemberRole> for ServerMemberRole
         match value {
             D::Owner => Self::Owner,
             D::Moderator => Self::Moderator,
+            D::Member => Self::Member,
             D::Guest => Self::Guest,
         }
     }
@@ -28,6 +30,7 @@ impl From<ServerMemberRoleGql> for rim_core::server_member::model::ServerMemberR
         match value {
             ServerMemberRoleGql::Owner => Self::Owner,
             ServerMemberRoleGql::Moderator => Self::Moderator,
+            ServerMemberRoleGql::Member => Self::Member,
             ServerMemberRoleGql::Guest => Self::Guest,
         }
     }
@@ -64,11 +67,7 @@ impl Server {
             .await
             .map_err(crate::errors::map_service_error)?;
 
-        member
-            .member_role
-            .parse::<rim_core::server_member::model::ServerMemberRole>()
-            .map(Into::into)
-            .map_err(|e| Error::new(format!("failed to parse member role: {e}")))
+        Ok(member.member_role.into())
     }
 
     /// Per-workspace optional modules and whether each is on (Track 0.4). One entry per known
@@ -114,8 +113,10 @@ pub struct ServerMember {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
-    pub member_role: String,
+    pub member_role: ServerMemberRoleGql,
     pub joined_at: chrono::DateTime<chrono::Utc>,
+    /// End of the member's timeout while one is in force (Track 1.2), else null.
+    pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
@@ -128,8 +129,9 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             avatar_url: value.avatar_url,
             status_text: value.status_text,
             bio: value.bio,
-            member_role: value.member_role,
+            member_role: value.member_role.into(),
             joined_at: value.joined_at,
+            timeout_until: value.timeout_until,
         }
     }
 }
