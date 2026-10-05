@@ -5,6 +5,7 @@ mod conversation;
 mod incident;
 mod member;
 mod moderation;
+mod notification;
 mod oncall;
 mod pin;
 mod reaction;
@@ -75,6 +76,7 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
         incident::commands(),
         oncall::commands(),
         moderation::commands(),
+        notification::commands(),
     ]
     .into_iter()
     .flatten()
@@ -178,10 +180,15 @@ mod tests {
         // builtins — `chat.set_slow_mode`, `admin.timeout`, `chat.report_message` — for 24. All
         // three are authorized by `ModerationService` (Owner/Moderator for slow mode and
         // timeouts, read access for reports). `admin.kick`, `admin.ban`, `admin.unban` and
-        // `admin.set_role` are deliberately NOT AI-callable.
+        // `admin.set_role` are deliberately NOT AI-callable. Track 1.3
+        // (`docs/specs/track-1-3-notification-rules.md`, Commands) adds three notification
+        // builtins — `notifications.set_level`, `notifications.dnd`,
+        // `notifications.mark_all_read` — for 27. They change only the actor's own notification
+        // state, gated by `NotificationService` (workspace membership; conversation access for
+        // the level), so they need no capability.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 24 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // 27 IDs are AI-callable. Adding a new ai_callable builtin without a
         // Hawkeye + Widow security review (and updating this set) must fail
         // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
@@ -215,6 +222,9 @@ mod tests {
             "chat.set_slow_mode",
             "admin.timeout",
             "chat.report_message",
+            "notifications.set_level",
+            "notifications.dnd",
+            "notifications.mark_all_read",
         ];
         expected.sort();
 
