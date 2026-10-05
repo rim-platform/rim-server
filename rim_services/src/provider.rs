@@ -71,6 +71,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn user_service(&self) -> Arc<dyn UserService>;
     fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService>;
     fn moderation_service(&self) -> Arc<dyn crate::moderation::service::ModerationService>;
+    fn notification_service(&self) -> Arc<dyn crate::notification::service::NotificationService>;
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService>;
     fn pipeline_service(&self) -> Arc<dyn PipelineService>;
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator>;

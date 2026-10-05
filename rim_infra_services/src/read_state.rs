@@ -1,14 +1,17 @@
 use async_trait::async_trait;
 use chrono::Utc;
+use rim_infra_db::begin_transaction;
+use sea_orm::DatabaseConnection;
 
-use rim_services::ServiceResult;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::read_state::dto::{
     MarkAllAsReadCmd, MarkAsReadCmd, UnreadCountDto, UnreadCountsQuery,
 };
 use rim_services::read_state::service::ReadStateService;
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::ReadStateRepos;
+use crate::repos::AppRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
@@ -17,11 +20,23 @@ use crate::util::{
 pub struct DefaultReadStateService {
     repos: ReadStateRepos,
     observers: Observers,
+    /// When set, `mark_as_read` writes the read state and marks the conversation's
+    /// notifications read in one transaction. `None` in unit tests.
+    db: Option<DatabaseConnection>,
 }
 
 impl DefaultReadStateService {
     pub fn new(repos: ReadStateRepos, observers: Observers) -> Self {
-        Self { repos, observers }
+        Self {
+            repos,
+            observers,
+            db: None,
+        }
+    }
+
+    pub fn with_db(mut self, db: DatabaseConnection) -> Self {
+        self.db = Some(db);
+        self
     }
 }
 
@@ -44,11 +59,32 @@ impl ReadStateService for DefaultReadStateService {
         )
         .await?;
 
-        // Upsert with forward-only guard (handled at DB level).
-        self.repos
+        // Upsert with forward-only guard (handled at DB level), and mark the conversation's
+        // notifications up to `read_at` read (Track 1.3), in one transaction when a database
+        // connection is available.
+        let scope = match &self.db {
+            Some(db) => Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let repos = match &scope {
+            Some(scope) => AppRepos::with_handle(&scope.handle()).for_read_state(),
+            None => self.repos.clone(),
+        };
+        repos
             .read_state_repo
             .upsert(cmd.actor.user_id, cmd.conversation_id, read_at)
             .await?;
+        repos
+            .notification_repo
+            .mark_read_for_conversation(cmd.actor.user_id, cmd.conversation_id, read_at, now)
+            .await?;
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
 
         self.observers.emit(WorkspaceEvent::ReadStateUpdated {
             workspace_id: cmd.workspace_id,
@@ -87,6 +123,11 @@ impl ReadStateService for DefaultReadStateService {
         self.repos
             .read_state_repo
             .mark_all_read(cmd.actor.user_id, &conversation_ids, now)
+            .await?;
+        // Everything is read now, so are the workspace's notifications (Track 1.3).
+        self.repos
+            .notification_repo
+            .mark_read_before(cmd.actor.user_id, cmd.workspace_id, now, now)
             .await?;
 
         for conv_id in &conversation_ids {
@@ -151,6 +192,7 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::conversation_read_state::repository::MockConversationReadStateRepository;
+    use rim_core::notification::repository::MockNotificationRepository;
     use rim_core::server::model::ServerId;
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
@@ -167,6 +209,14 @@ mod tests {
     fn service(
         joined: Vec<ConversationId>,
         read_state_repo: MockConversationReadStateRepository,
+    ) -> DefaultReadStateService {
+        service_with(joined, read_state_repo, MockNotificationRepository::new())
+    }
+
+    fn service_with(
+        joined: Vec<ConversationId>,
+        read_state_repo: MockConversationReadStateRepository,
+        notification_repo: MockNotificationRepository,
     ) -> DefaultReadStateService {
         let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
@@ -188,6 +238,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                notification_repo: Arc::new(notification_repo),
             },
             rim_services::events::Observers::new(Arc::new(NoopBroadcaster)),
         )
@@ -240,10 +291,21 @@ mod tests {
             .expect_mark_all_read()
             .withf(move |_, ids, _| ids == expected.as_slice())
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
-        service(joined, read_state_repo)
+        // Track 1.3: marking everything read also marks the workspace's notifications read.
+        let workspace = ServerId::new();
+        let actor = UserId::new();
+        let mut notification_repo = MockNotificationRepository::new();
+        notification_repo
+            .expect_mark_read_before()
+            .withf(move |user, server, before, read_at| {
+                *user == actor && *server == workspace && before == read_at
+            })
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(3) }));
+        service_with(joined, read_state_repo, notification_repo)
             .mark_all_as_read(MarkAllAsReadCmd {
-                actor: Actor::new(UserId::new()),
-                workspace_id: ServerId::new(),
+                actor: Actor::new(actor),
+                workspace_id: workspace,
             })
             .await
             .expect("mark all as read");
