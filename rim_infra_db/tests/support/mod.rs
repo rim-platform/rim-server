@@ -139,6 +139,8 @@ TRUNCATE TABLE
   server_member_timeout,
   session,
   user_command,
+  user_notification,
+  user_notification_settings,
   user_skill_profile,
   "user",
   workspace_feature,

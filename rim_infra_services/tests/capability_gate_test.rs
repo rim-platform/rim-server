@@ -75,6 +75,9 @@ mod fixtures {
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
+                notification_service: std::sync::Arc::new(
+                    rim_services::notification::service::MockNotificationService::new(),
+                ),
             },
         )
     }
@@ -214,6 +217,9 @@ async fn execute_command_proceeds_when_capability_check_passes() {
             ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
             ),
         },
     );

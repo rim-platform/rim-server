@@ -1,0 +1,11 @@
+//! Server-side notification rules (Track 1.3): the pure decision engine, the
+//! `NotificationService` implementation and the digest/retention jobs.
+
+pub(crate) mod decide;
+// pub: `DefaultNotificationJobs`/`NotificationJobs` are constructed and driven by the
+// composition root (rim_server/src/app.rs), like the escalation driver.
+pub mod digest;
+pub(crate) mod service;
+
+pub use digest::{DefaultNotificationJobs, NotificationJobRepos, NotificationJobs};
+pub use service::{DefaultNotificationService, NotificationRepos};

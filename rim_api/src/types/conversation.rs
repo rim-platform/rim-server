@@ -64,6 +64,54 @@ impl Conversation {
         let actor = async_graphql::ID(actor.to_string());
         Ok(self.member_ids.contains(&actor))
     }
+
+    /// The viewer's own notification level for this conversation (Track 1.3); null inherits
+    /// the workspace default.
+    async fn notification_level(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<super::NotificationLevel>> {
+        Ok(self
+            .viewer_notification_level(ctx)
+            .await?
+            .level
+            .map(Into::into))
+    }
+
+    /// The level that applies to the viewer now: `NONE` while muted, else `notificationLevel`,
+    /// else the workspace default.
+    async fn effective_notification_level(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<super::NotificationLevel> {
+        Ok(self
+            .viewer_notification_level(ctx)
+            .await?
+            .effective_level
+            .into())
+    }
+}
+
+impl Conversation {
+    async fn viewer_notification_level(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<rim_services::notification::dto::ConversationNotificationLevelDto>
+    {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::notification::service::NotificationService>>(
+            )?;
+        svc.get_conversation_level(
+            rim_services::notification::command::GetConversationNotificationLevelQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id: crate::ids::parse_uuid_id(&self.server_id)?,
+                conversation_id: crate::ids::parse_uuid_id(&self.id)?,
+            },
+        )
+        .await
+        .map_err(crate::errors::map_service_error)
+    }
 }
 
 impl From<rim_services::conversation::dto::ConversationDto> for Conversation {

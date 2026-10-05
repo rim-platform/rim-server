@@ -1279,4 +1279,173 @@ mod tests {
         res.expect("own delete");
         assert!(rows.is_empty());
     }
+
+    // ── Track 1.3: notifications after commit, best-effort ──
+
+    /// A failing notification service never fails the send; it is called once, after the
+    /// message is stored, with the conversation's member list.
+    #[tokio::test]
+    async fn send_message_succeeds_when_notifications_fail() {
+        let actor_id = UserId::new();
+        let bob = UserId::new();
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let msg = message(actor_id, conv_id);
+        let msg_id = msg.id;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        let conv_for_repo = conv.clone();
+        conversation_repo.expect_get_by_id().returning(move |_id| {
+            let c = conv_for_repo.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        conversation_repo
+            .expect_touch_last_activity_at()
+            .returning(move |_cid, _at| Box::pin(async { Ok(()) }));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id, bob]) }));
+        let mut message_repo = MockMessageRepository::new();
+        let msg_for_repo = msg.clone();
+        message_repo.expect_create_message().returning(move |_| {
+            let m = msg_for_repo.clone();
+            Box::pin(async move { Ok(m) })
+        });
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_attachments_for_message()
+            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
+        let mut thread_repo = MockMessageThreadRepository::new();
+        thread_repo
+            .expect_get_by_root_message()
+            .return_once(move |_| Box::pin(async { Ok(None) }));
+
+        let mut notifications = rim_services::notification::service::MockNotificationService::new();
+        notifications
+            .expect_notify_for_message()
+            .withf(move |cmd| {
+                cmd.server_id == server_id
+                    && cmd.conversation.id == conv_id
+                    && cmd.message.id == msg_id
+                    && cmd.member_user_ids == vec![actor_id, bob]
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::Unavailable) }));
+
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        )
+        .with_notification_service(Arc::new(notifications));
+
+        let dto = svc
+            .send_message(SendMessageCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id: conv_id,
+                text: Some("hi".to_string()),
+                parent_message_id: None,
+                attachments: vec![],
+            })
+            .await
+            .expect("the send succeeds although notifications failed");
+        assert_eq!(dto.id, msg_id);
+    }
+
+    /// Deleting a message drops its unread notifications (best-effort: a failure is logged).
+    #[tokio::test]
+    async fn delete_message_forgets_unread_notifications() {
+        let server_id = ServerId::new();
+        let conv = conversation(server_id);
+        let conv_id = conv.id;
+        let author = UserId::new();
+        let msg = message(author, conv_id);
+        let msg_id = msg.id;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo.expect_get_by_id().returning(move |_| {
+            let m = msg.clone();
+            Box::pin(async move { Ok(Some(m)) })
+        });
+        message_repo
+            .expect_soft_delete_message()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let mut notifications = rim_services::notification::service::MockNotificationService::new();
+        notifications
+            .expect_forget_message()
+            .withf(move |id| *id == msg_id)
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::Unavailable) }));
+
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        )
+        .with_notification_service(Arc::new(notifications));
+        svc.delete_message(DeleteMessageCmd {
+            actor: Actor::new(author),
+            server_id,
+            conversation_id: conv_id,
+            message_id: msg_id,
+            hard: false,
+        })
+        .await
+        .expect("delete succeeds although forgetting notifications failed");
+    }
 }

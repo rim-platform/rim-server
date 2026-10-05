@@ -162,6 +162,9 @@ fn build_service(
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,
     );
@@ -208,6 +211,9 @@ fn build_service_with_audit(
             ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
+            ),
+            notification_service: std::sync::Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
             ),
         },
         Arc::clone(&store) as Arc<dyn rim_services::command::confirmation::ConfirmationStore>,

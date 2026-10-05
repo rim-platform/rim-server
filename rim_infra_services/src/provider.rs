@@ -27,6 +27,7 @@ use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::message_reaction::service::MessageReactionService;
 use rim_services::message_thread::service::ThreadService;
 use rim_services::moderation::service::ModerationService;
+use rim_services::notification::service::NotificationService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::oncall::service::OnCallService;
 use rim_services::password_reset::service::PasswordResetService;
@@ -69,6 +70,7 @@ pub struct DefaultAppServiceProvider {
     message_attachment_service: Arc<dyn MessageAttachmentService>,
     message_reaction_service: Arc<dyn MessageReactionService>,
     moderation_service: Arc<dyn ModerationService>,
+    notification_service: Arc<dyn NotificationService>,
     notification_preference_service: Arc<dyn NotificationPreferenceService>,
     oncall_service: Arc<dyn OnCallService>,
     password_reset_service: Arc<dyn PasswordResetService>,
@@ -141,13 +143,19 @@ impl DefaultAppServiceProvider {
         let event_service: Arc<dyn EventService> = Arc::new(crate::event::DefaultEventService);
         let integration_service: Arc<dyn IntegrationService> =
             Arc::new(crate::integration::DefaultIntegrationService);
+        let notification_service: Arc<dyn NotificationService> =
+            Arc::new(crate::notification::DefaultNotificationService::new(
+                repos.for_notification(),
+                observers.clone(),
+            ));
         let message_service: Arc<dyn MessageService> = Arc::new(
             crate::message::DefaultMessageService::new(
                 repos.for_message(),
                 Some(db.clone()),
                 observers.clone(),
             )
-            .with_audit_log_service(Arc::clone(&audit_log_service)),
+            .with_audit_log_service(Arc::clone(&audit_log_service))
+            .with_notification_service(Arc::clone(&notification_service)),
         );
         let moderation_service: Arc<dyn ModerationService> = Arc::new(
             crate::moderation::DefaultModerationService::new(
@@ -198,11 +206,13 @@ impl DefaultAppServiceProvider {
             pin_observers,
             Arc::clone(&message_service),
         ));
-        let read_state_service: Arc<dyn ReadStateService> =
-            Arc::new(crate::read_state::DefaultReadStateService::new(
+        let read_state_service: Arc<dyn ReadStateService> = Arc::new(
+            crate::read_state::DefaultReadStateService::new(
                 repos.for_read_state(),
                 read_state_observers,
-            ));
+            )
+            .with_db(db.clone()),
+        );
         let server_service: Arc<dyn ServerService> =
             Arc::new(crate::server::DefaultServerService::new(
                 repos.for_server(),
@@ -275,6 +285,7 @@ impl DefaultAppServiceProvider {
             oncall_service: Arc::clone(&oncall_service),
             workspace_feature_service: Arc::clone(&workspace_feature_service),
             moderation_service: Arc::clone(&moderation_service),
+            notification_service: Arc::clone(&notification_service),
         };
         let command_service_concrete = Arc::new(
             crate::command::DefaultCommandService::with_confirmation_store(
@@ -364,6 +375,7 @@ impl DefaultAppServiceProvider {
             message_attachment_service,
             message_reaction_service,
             moderation_service,
+            notification_service,
             notification_preference_service,
             oncall_service,
             password_reset_service,
@@ -486,6 +498,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn moderation_service(&self) -> Arc<dyn ModerationService> {
         Arc::clone(&self.moderation_service)
+    }
+    fn notification_service(&self) -> Arc<dyn NotificationService> {
+        Arc::clone(&self.notification_service)
     }
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService> {
         Arc::clone(&self.workspace_state_service)

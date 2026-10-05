@@ -28,6 +28,7 @@ use rim_core::message_pin::repository::MessagePinRepository;
 use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::moderation::repository::ModerationRepository;
+use rim_core::notification::repository::NotificationRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
 use rim_core::oncall::repository::{
     OnCallOverrideRepository, OnCallScheduleRepository, RotationLayerRepository,
@@ -87,6 +88,7 @@ pub struct AppRepos {
     pub escalation_run_repo: Arc<dyn EscalationRunRepository>,
     pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
     pub moderation_repo: Arc<dyn ModerationRepository>,
+    pub notification_repo: Arc<dyn NotificationRepository>,
 }
 
 #[derive(Clone)]
@@ -194,6 +196,8 @@ pub struct ReadStateRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    /// Reading a conversation also marks its notifications read (Track 1.3).
+    pub notification_repo: Arc<dyn NotificationRepository>,
 }
 
 #[derive(Clone)]
@@ -374,6 +378,7 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            notification_repo: Arc::clone(&self.notification_repo),
         }
     }
 
@@ -391,6 +396,25 @@ impl AppRepos {
         crate::notification_preference::NotificationPreferenceRepos {
             notification_preference_repo: Arc::clone(&self.notification_preference_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+        }
+    }
+
+    pub fn for_notification(&self) -> crate::notification::NotificationRepos {
+        crate::notification::NotificationRepos {
+            notification_repo: Arc::clone(&self.notification_repo),
+            notification_preference_repo: Arc::clone(&self.notification_preference_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            message_repo: Arc::clone(&self.message_repo),
+        }
+    }
+
+    pub fn for_notification_jobs(&self) -> crate::notification::NotificationJobRepos {
+        crate::notification::NotificationJobRepos {
+            notification_repo: Arc::clone(&self.notification_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
         }
     }
 
@@ -662,6 +686,9 @@ impl AppRepos {
             moderation_repo: Arc::new(sea_orm_impl::moderation::SeaOrmModerationRepository::new(
                 handle.clone(),
             )),
+            notification_repo: Arc::new(
+                sea_orm_impl::notification::SeaOrmNotificationRepository::new(handle.clone()),
+            ),
         }
     }
 }

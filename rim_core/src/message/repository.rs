@@ -121,4 +121,11 @@ pub trait MessageRepository: Send + Sync {
         conversation_id: ConversationId,
         author: UserId,
     ) -> RepoResult<Option<DateTime<Utc>>>;
+
+    /// Distinct authors of a thread: the root message's author plus everyone with a non-deleted
+    /// reply in it. Thread-reply notifications (Track 1.3) go to them.
+    async fn list_thread_participant_ids(
+        &self,
+        thread_id: crate::message_thread::model::MessageThreadId,
+    ) -> RepoResult<Vec<UserId>>;
 }

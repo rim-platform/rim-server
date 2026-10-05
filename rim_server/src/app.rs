@@ -129,7 +129,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         observers,
         Arc::clone(&storage_service),
         config.ingest_token_ttl_seconds(),
-        email_sender,
+        Arc::clone(&email_sender),
         config.public_base_url(),
         Arc::clone(&escalation_scheduler)
             as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
@@ -256,6 +256,59 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
+    // Background tasks: notification digest and retention (Track 1.3), next to the escalation
+    // driver and under the same single-scheduler-node assumption. The jobs live in
+    // `rim_infra_services::notification` behind `NotificationJobs`; this loop only times them.
+    {
+        let jobs: Arc<dyn rim_infra_services::notification::NotificationJobs> = Arc::new(
+            rim_infra_services::notification::DefaultNotificationJobs::new(
+                repos.for_notification_jobs(),
+                Arc::clone(&email_sender),
+                Arc::clone(&presence_manager) as Arc<dyn PresenceService>,
+                config.public_base_url(),
+            ),
+        );
+        let digest_every =
+            std::time::Duration::from_secs(config.notification_digest_interval_secs());
+        let retention_every = std::time::Duration::from_secs(NOTIFICATION_RETENTION_INTERVAL_SECS);
+        let mut shutdown_rx4 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut digest_tick = tokio::time::interval(digest_every);
+            let mut retention_tick = tokio::time::interval(retention_every);
+            // A late tick runs once, not in a burst.
+            digest_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            retention_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = digest_tick.tick() => {
+                        match jobs.run_digest(chrono::Utc::now()).await {
+                            Ok(report) if report.candidates > 0 => tracing::info!(
+                                candidates = report.candidates,
+                                sent = report.sent,
+                                skipped_active = report.skipped_active,
+                                failed = report.failed,
+                                "notification digest run"
+                            ),
+                            Ok(_) => {}
+                            Err(e) => tracing::error!(error = %e, "notification digest run failed"),
+                        }
+                    }
+                    _ = retention_tick.tick() => {
+                        match jobs.purge_expired(chrono::Utc::now()).await {
+                            Ok(deleted) if deleted > 0 => tracing::info!(deleted, "purged expired notifications"),
+                            Ok(_) => {}
+                            Err(e) => tracing::error!(error = %e, "notification retention purge failed"),
+                        }
+                    }
+                    _ = shutdown_rx4.changed() => {
+                        tracing::info!("notification jobs: shutdown signal received");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     let message_attachment_service = service_provider.message_attachment_service();
     let ingest_token_service = service_provider.ingest_token_service();
     let incident_service = service_provider.incident_service();
@@ -324,6 +377,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         shutdown_tx,
     })
 }
+
+/// How often expired notifications (older than 90 days) are purged: hourly.
+const NOTIFICATION_RETENTION_INTERVAL_SECS: u64 = 60 * 60;
 
 /// Computes how long the escalation timer driver should sleep before its
 /// next wakeup.
