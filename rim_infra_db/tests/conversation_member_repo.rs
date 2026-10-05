@@ -23,6 +23,8 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
             server_id: server.id,
             conversation_type: ConversationType::Group,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();
@@ -59,6 +61,8 @@ async fn remove_member_success_and_not_found() {
             server_id: server.id,
             conversation_type: ConversationType::Group,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();
@@ -85,6 +89,8 @@ async fn add_member_conflicts_on_duplicate_conversation_membership() {
             server_id: server.id,
             conversation_type: ConversationType::Group,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();
@@ -110,6 +116,8 @@ async fn list_member_ids_for_conversations_batch() {
             server_id: server.id,
             conversation_type: ConversationType::Group,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();
@@ -119,6 +127,8 @@ async fn list_member_ids_for_conversations_batch() {
             server_id: server.id,
             conversation_type: ConversationType::Group,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap();

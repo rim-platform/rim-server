@@ -1,10 +1,12 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use entity::{conversation, conversation_member};
 use rim_core::conversation::model::{
     Conversation, ConversationId, ConversationType, NewConversation,
 };
 use rim_core::conversation::repository::{
-    ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
+    ChannelListFilter, ConversationActivityCursor, ConversationCreatedCursor,
+    ConversationRepository,
 };
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -29,6 +31,41 @@ pub struct SeaOrmConversationRepository {
 impl SeaOrmConversationRepository {
     pub fn new(db: DbHandle) -> Self {
         Self { db }
+    }
+
+    fn new_active_model(conv: NewConversation) -> conversation::ActiveModel {
+        conversation::ActiveModel {
+            id: Set(ConversationId::new().into()),
+            conversation_type: Set(conv.conversation_type.into()),
+            server_id: Set(conv.server_id.into()),
+            title: Set(conv.title),
+            is_private: Set(conv.is_private),
+            created_by: Set(conv.created_by.map(Into::into)),
+            ..Default::default()
+        }
+    }
+
+    /// `SELECT conversation_id FROM conversation_member WHERE user_id = $user`.
+    fn member_conversation_ids(user_id: UserId) -> sea_orm::sea_query::SelectStatement {
+        conversation_member::Entity::find()
+            .select_only()
+            .column(conversation_member::Column::ConversationId)
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .into_query()
+    }
+
+    /// Rows `user_id` may read: public channels, or any conversation they are a member of.
+    fn visible_to(user_id: UserId) -> Condition {
+        Condition::any()
+            .add(
+                Condition::all()
+                    .add(
+                        conversation::Column::ConversationType
+                            .eq(entity::sea_orm_active_enums::ConversationType::Channel),
+                    )
+                    .add(conversation::Column::IsPrivate.eq(false)),
+            )
+            .add(conversation::Column::Id.in_subquery(Self::member_conversation_ids(user_id)))
     }
 }
 
@@ -58,13 +95,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
     }
 
     async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation> {
-        let active = conversation::ActiveModel {
-            id: Set(ConversationId::new().into()),
-            conversation_type: Set(conv.conversation_type.into()),
-            server_id: Set(conv.server_id.into()),
-            title: Set(conv.title),
-            ..Default::default()
-        };
+        let active = Self::new_active_model(conv);
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
         Ok(inserted.into())
@@ -72,12 +103,9 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
     async fn create_conversation_with_members(
         &self,
-        conversation_type: ConversationType,
-        server_id: ServerId,
-        title: Option<String>,
+        conv: NewConversation,
         member_ids: &[UserId],
     ) -> RepoResult<Conversation> {
-        let server_id_uuid: Uuid = server_id.into();
         let member_ids = member_ids
             .iter()
             .copied()
@@ -88,13 +116,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .db
             .transaction::<_, conversation::Model, RepoError>(|txn| {
                 Box::pin(async move {
-                    let active = conversation::ActiveModel {
-                        id: Set(ConversationId::new().into()),
-                        conversation_type: Set(conversation_type.into()),
-                        server_id: Set(server_id_uuid),
-                        title: Set(title.clone()),
-                        ..Default::default()
-                    };
+                    let active = Self::new_active_model(conv);
 
                     let inserted = active.insert(txn).await.map_err(map_db_err)?;
 
@@ -259,21 +281,31 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
     async fn list_channels_for_user(
         &self,
-        _user_id: UserId,
+        user_id: UserId,
         server_id: ServerId,
+        filter: ChannelListFilter,
         limit: u32,
         dir: PageDir,
         cursor: Option<ConversationCreatedCursor>,
     ) -> RepoResult<Page<Conversation, ConversationCreatedCursor>> {
-        // Channels are public — all server members can see all channels.
-        // Server membership is verified at the service layer.
+        // Public channels are visible to every server member; private channels only to their
+        // members. Server membership is verified at the service layer.
         let mut q = conversation::Entity::find()
             .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
             .filter(
                 conversation::Column::ConversationType
                     .eq(entity::sea_orm_active_enums::ConversationType::Channel)
                     .to_owned(),
+            )
+            .filter(Self::visible_to(user_id));
+        if filter.joined_only {
+            q = q.filter(
+                conversation::Column::Id.in_subquery(Self::member_conversation_ids(user_id)),
             );
+        }
+        if !filter.include_archived {
+            q = q.filter(conversation::Column::ArchivedAt.is_null());
+        }
 
         let has_cursor = cursor.is_some();
         if let Some(cursor) = cursor {
@@ -394,28 +426,13 @@ impl ConversationRepository for SeaOrmConversationRepository {
         server_id: ServerId,
         user_id: UserId,
     ) -> RepoResult<Vec<ConversationId>> {
-        let channel_type: entity::sea_orm_active_enums::ConversationType =
-            ConversationType::Channel.into();
         let server_uuid: Uuid = server_id.into();
-        let user_uuid: Uuid = user_id.into();
 
-        // Channels: all channels in the server (server membership suffices)
-        // DM/Group: only where user is an explicit conversation_member
-        let subquery = sea_orm::QuerySelect::query(
-            &mut conversation_member::Entity::find()
-                .select_only()
-                .column(conversation_member::Column::ConversationId)
-                .filter(conversation_member::Column::UserId.eq(user_uuid)),
-        )
-        .to_owned();
-
+        // Public channels (archived or not): server membership suffices.
+        // Private channels, DMs and groups: only where the user is a conversation_member.
         let models = conversation::Entity::find()
             .filter(conversation::Column::ServerId.eq(server_uuid))
-            .filter(
-                Condition::any()
-                    .add(conversation::Column::ConversationType.eq(channel_type))
-                    .add(conversation::Column::Id.in_subquery(subquery)),
-            )
+            .filter(Self::visible_to(user_id))
             .all(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -456,6 +473,23 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
         let mut active: conversation::ActiveModel = model.into();
         active.topic = Set(topic);
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
+
+    async fn set_archived(
+        &self,
+        conversation_id: ConversationId,
+        archived_at: Option<DateTime<Utc>>,
+    ) -> RepoResult<Conversation> {
+        let model = conversation::Entity::find_by_id(conversation_id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: conversation::ActiveModel = model.into();
+        active.archived_at = Set(archived_at.map(Into::into));
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(updated.into())
     }
