@@ -27,12 +27,32 @@ use rim_services::{ServiceError, ServiceResult};
 /// Maximum allowed length (in characters) for message text.
 const MAX_MESSAGE_TEXT_LENGTH: usize = 10_000;
 
+/// Seconds a member must still wait under slow mode, or `None` when they may send now: the
+/// interval minus the time since `last_sent_at`, rounded up (never less than 1 while waiting).
+pub(crate) fn slow_mode_retry_after(
+    interval_seconds: i32,
+    last_sent_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<u64> {
+    if interval_seconds <= 0 {
+        return None;
+    }
+    let interval_ms = i64::from(interval_seconds) * 1000;
+    let elapsed_ms = (now - last_sent_at).num_milliseconds().max(0);
+    if elapsed_ms >= interval_ms {
+        return None;
+    }
+    let remaining_ms = interval_ms - elapsed_ms;
+    u64::try_from((remaining_ms + 999) / 1000).ok()
+}
+
 use crate::MessageRepos;
 use crate::mention::parse_mention_ids;
+use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_action};
 use crate::repos::AppRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
-    ensure_server_member,
+    ensure_conversation_writable_with_standing, ensure_not_archived,
 };
 
 #[derive(Clone)]
@@ -40,6 +60,9 @@ pub struct DefaultMessageService {
     repos: MessageRepos,
     db: Option<DatabaseConnection>,
     observers: Observers,
+    /// Writes the `admin.delete_message` audit row for moderator deletes. `None` in unit tests;
+    /// the composition root always wires it.
+    audit_log_service: Option<std::sync::Arc<dyn rim_services::audit::service::AuditLogService>>,
 }
 
 impl DefaultMessageService {
@@ -48,6 +71,43 @@ impl DefaultMessageService {
             repos,
             db,
             observers,
+            audit_log_service: None,
+        }
+    }
+
+    pub fn with_audit_log_service(
+        mut self,
+        audit_log_service: std::sync::Arc<dyn rim_services::audit::service::AuditLogService>,
+    ) -> Self {
+        self.audit_log_service = Some(audit_log_service);
+        self
+    }
+
+    /// Slow mode (Track 1.2): a non-moderator whose previous message in the conversation is
+    /// younger than `conversation.slow_mode_seconds` gets `RateLimited` with the seconds left.
+    /// Owner/Moderator are exempt. Reads the author's last `sent_at`; no in-memory state.
+    async fn ensure_slow_mode_allows(
+        &self,
+        conversation: &rim_core::conversation::model::Conversation,
+        standing: &rim_core::server_member::model::MemberStanding,
+        author: rim_core::user::model::UserId,
+    ) -> ServiceResult<()> {
+        if conversation.slow_mode_seconds <= 0 || standing.role.is_moderator() {
+            return Ok(());
+        }
+        let Some(last) = self
+            .repos
+            .message_repo
+            .last_sent_at_by_author(conversation.id, author)
+            .await?
+        else {
+            return Ok(());
+        };
+        match slow_mode_retry_after(conversation.slow_mode_seconds, last, chrono::Utc::now()) {
+            Some(retry_after_seconds) => Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            }),
+            None => Ok(()),
         }
     }
 
@@ -101,15 +161,16 @@ impl DefaultMessageService {
             if *uid == author_id {
                 continue; // Don't mention yourself
             }
-            let Ok(true) = self
+            let Ok(Some(member)) = self
                 .repos
                 .server_member_repo
-                .is_member(server_id, *uid)
+                .get_member(server_id, *uid)
                 .await
             else {
                 continue;
             };
-            if conversation.is_public_channel()
+            // A guest can read a public channel only as a conversation member (Track 1.2).
+            if (conversation.is_public_channel() && !member.member_role.is_guest())
                 || matches!(
                     self.repos
                         .conversation_member_repo
@@ -371,7 +432,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
-        let conv = ensure_conversation_writable(
+        let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -382,6 +443,8 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        self.ensure_slow_mode_allows(&conv, &standing, cmd.actor.user_id)
+            .await?;
 
         if !cmd.attachments.is_empty() {
             return Err(ServiceError::Validation(
@@ -481,8 +544,8 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
-        // 1. Validate access
-        let conv = ensure_conversation_writable(
+        // 1. Validate access (membership, archive, timeout) and slow mode
+        let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -493,6 +556,8 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        self.ensure_slow_mode_allows(&conv, &standing, cmd.actor.user_id)
+            .await?;
 
         // 2. Validate root message exists and belongs to conversation
         let root_message = self
@@ -857,19 +922,27 @@ impl MessageService for DefaultMessageService {
             vec![explicit_conversation_id]
         } else {
             // Workspace-wide search: server membership gates access;
-            // list_accessible_conversation_ids already scopes to joined conversations.
-            ensure_server_member(
+            // list_accessible_conversation_ids already scopes to joined conversations. A guest
+            // reads only conversations they are a member of, so public channels they have not
+            // been added to are excluded (Track 1.2).
+            let standing = crate::util::member_standing(
                 self.repos.server_member_repo.as_ref(),
                 query.server_id,
                 query.actor.user_id,
             )
             .await?;
 
-            let accessible_ids = self
-                .repos
-                .conversation_repo
-                .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
-                .await?;
+            let accessible_ids = if standing.role.is_guest() {
+                self.repos
+                    .conversation_repo
+                    .list_joined_conversation_ids(query.server_id, query.actor.user_id)
+                    .await?
+            } else {
+                self.repos
+                    .conversation_repo
+                    .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
+                    .await?
+            };
 
             match in_channel_id {
                 // `in:` intersects the accessible set. A channel outside it never leaks —
@@ -1063,13 +1136,16 @@ impl MessageService for DefaultMessageService {
             cmd.source_conversation_id,
         )
         .await?;
-        let target_conv = ensure_conversation_writable(
+        let (target_conv, standing) = ensure_conversation_writable_with_standing(
             access_repos,
             cmd.actor.user_id,
             cmd.server_id,
             cmd.target_conversation_id,
         )
         .await?;
+        // A forward is a send into the target: slow mode applies there too.
+        self.ensure_slow_mode_allows(&target_conv, &standing, cmd.actor.user_id)
+            .await?;
 
         // Get the source message
         let source_msg = self
@@ -1136,7 +1212,9 @@ impl MessageService for DefaultMessageService {
     }
 
     async fn delete_message(&self, cmd: DeleteMessageCmd) -> ServiceResult<()> {
-        let conv = ensure_conversation_writable(
+        // Read gate plus archive, but not the timeout: a timed-out author may still delete
+        // their own messages.
+        let (conv, standing) = crate::util::ensure_conversation_readable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -1147,6 +1225,7 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        ensure_not_archived(&conv)?;
 
         if cmd.hard {
             return Err(ServiceError::Validation(
@@ -1154,7 +1233,6 @@ impl MessageService for DefaultMessageService {
             ));
         }
 
-        // v0: only author can delete.
         let msg = self
             .repos
             .message_repo
@@ -1166,7 +1244,9 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::NotFound);
         }
 
-        if msg.sent_by != cmd.actor.user_id {
+        // The author, or an Owner/Moderator of the workspace (Track 1.2).
+        let moderator_delete = msg.sent_by != cmd.actor.user_id;
+        if moderator_delete && !standing.role.is_moderator() {
             return Err(ServiceError::PermissionDenied);
         }
 
@@ -1176,6 +1256,26 @@ impl MessageService for DefaultMessageService {
             .message_repo
             .soft_delete_message(cmd.message_id)
             .await?;
+
+        if moderator_delete {
+            // Ids only: the message text is never copied into the audit log.
+            record_moderation_action(
+                self.audit_log_service.as_ref(),
+                ModerationAuditEntry {
+                    actor: cmd.actor.user_id,
+                    server_id: cmd.server_id,
+                    command_id: audit_ids::DELETE_MESSAGE,
+                    args: serde_json::json!({
+                        "conversation_id": cmd.conversation_id.to_string(),
+                        "message_id": cmd.message_id.to_string(),
+                        "author_id": msg.sent_by.to_string(),
+                    }),
+                    dangerous: true,
+                    typed_verb: rim_services::command::verb::TypedVerb::Delete,
+                },
+            )
+            .await;
+        }
 
         let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
