@@ -6,6 +6,7 @@ mod desktop_local;
 mod incident;
 mod member;
 mod moderation;
+mod notification;
 mod oncall;
 mod pin;
 mod reaction;
@@ -86,6 +87,11 @@ pub(super) async fn execute_builtin_command(
         "admin.set_role" => moderation::set_role(services, actor, args, context).await,
         "chat.set_slow_mode" => moderation::set_slow_mode(services, actor, args, context).await,
         "chat.report_message" => moderation::report_message(services, actor, args, context).await,
+        "notifications.set_level" => notification::set_level(services, actor, args, context).await,
+        "notifications.dnd" => notification::dnd(services, actor, args, context).await,
+        "notifications.mark_all_read" => {
+            notification::mark_all_read(services, actor, args, context).await
+        }
         "incident.ack" => incident::ack(services, actor, args, context, initiator).await,
         "incident.escalate" => incident::escalate(services, actor, args, context, initiator).await,
         "oncall.who" => oncall::who(services, actor, args, context).await,

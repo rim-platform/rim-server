@@ -70,6 +70,10 @@ pub struct CommandServices {
     /// and the timeout gate asks it whether the actor is timed out before any Mutating command.
     pub moderation_service:
         std::sync::Arc<dyn rim_services::moderation::service::ModerationService>,
+    /// Track 1.3: `notifications.set_level`, `notifications.dnd` and
+    /// `notifications.mark_all_read` dispatch to it.
+    pub notification_service:
+        std::sync::Arc<dyn rim_services::notification::service::NotificationService>,
     /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target="audit")`

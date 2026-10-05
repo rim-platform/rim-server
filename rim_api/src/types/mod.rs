@@ -20,6 +20,7 @@ pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
+pub(crate) mod notification;
 pub(crate) mod oncall;
 pub(crate) mod pagination;
 pub(crate) mod pipeline;
@@ -77,6 +78,11 @@ pub use message::{
 pub use moderation::{
     MemberTimeout, MessageReport, MessageReportCursorInput, MessageReportCursorOutput,
     MessageReportPage, MessageReportStatus, ReportOutcome, ServerBan,
+};
+pub use notification::{
+    ConversationNotificationLevel, DigestFrequency, DndWindow, DndWindowInput, Notification,
+    NotificationCursorInput, NotificationCursorOutput, NotificationLevel, NotificationPage,
+    NotificationReason, NotificationSettings, UpdateNotificationSettingsInput,
 };
 pub use oncall::{
     OnCallNowGql, OnCallOverrideGql, OnCallScheduleGql, OnCallShiftGql, RotationKindGql,

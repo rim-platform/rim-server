@@ -150,6 +150,9 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -204,6 +207,9 @@ fn schema_with_server_mocks(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -255,6 +261,9 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -312,6 +321,9 @@ fn schema_with_incident_mocks(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -365,6 +377,9 @@ fn schema_with_oncall_mock(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(oncall),
             escalation_policy: Arc::new(
@@ -418,6 +433,9 @@ fn schema_with_escalation_policy_mock(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(escalation_policy),
@@ -653,6 +671,7 @@ struct TestAppServiceProvider {
     workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
     workspace_feature: Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService>,
     moderation: Arc<dyn rim_services::moderation::service::ModerationService>,
+    notification: Arc<dyn rim_services::notification::service::NotificationService>,
     pipeline: Arc<dyn rim_services::pipeline::service::PipelineService>,
     oncall: Arc<dyn rim_services::oncall::service::OnCallService>,
     escalation_policy: Arc<dyn rim_services::escalation::service::EscalationPolicyService>,
@@ -827,6 +846,12 @@ impl AppServiceProvider for TestAppServiceProvider {
         Arc::clone(&self.moderation)
     }
 
+    fn notification_service(
+        &self,
+    ) -> Arc<dyn rim_services::notification::service::NotificationService> {
+        Arc::clone(&self.notification)
+    }
+
     fn pipeline_service(&self) -> Arc<dyn rim_services::pipeline::service::PipelineService> {
         Arc::clone(&self.pipeline)
     }
@@ -879,6 +904,9 @@ fn schema_with_mocks(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -936,6 +964,9 @@ fn schema_with_platform_mocks(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -987,6 +1018,9 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -1042,6 +1076,9 @@ fn schema_with_audit_mock(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(
@@ -1094,6 +1131,7 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         workspace_state: Arc::new(MockWorkspaceStateService::new()),
         workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
         moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+        notification: Arc::new(rim_services::notification::service::MockNotificationService::new()),
         pipeline: Arc::new(MockPipelineService::new()),
         oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
         escalation_policy: Arc::new(
@@ -1143,6 +1181,9 @@ fn schema_with_ingest_token_mocks(
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
+            notification: Arc::new(
+                rim_services::notification::service::MockNotificationService::new(),
+            ),
             pipeline: Arc::new(MockPipelineService::new()),
             oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
             escalation_policy: Arc::new(

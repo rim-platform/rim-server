@@ -63,6 +63,10 @@ pub struct DefaultMessageService {
     /// Writes the `admin.delete_message` audit row for moderator deletes. `None` in unit tests;
     /// the composition root always wires it.
     audit_log_service: Option<std::sync::Arc<dyn rim_services::audit::service::AuditLogService>>,
+    /// Decides and records notifications after a message commits (Track 1.3), best-effort.
+    /// `None` in unit tests that are not about notifications; the composition root wires it.
+    notification_service:
+        Option<std::sync::Arc<dyn rim_services::notification::service::NotificationService>>,
 }
 
 impl DefaultMessageService {
@@ -72,6 +76,53 @@ impl DefaultMessageService {
             db,
             observers,
             audit_log_service: None,
+            notification_service: None,
+        }
+    }
+
+    pub fn with_notification_service(
+        mut self,
+        notification_service: std::sync::Arc<
+            dyn rim_services::notification::service::NotificationService,
+        >,
+    ) -> Self {
+        self.notification_service = Some(notification_service);
+        self
+    }
+
+    /// Best-effort notifications for a committed message (Track 1.3): a failure is logged and
+    /// never fails the send.
+    async fn notify_recipients(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+        conversation: &rim_core::conversation::model::Conversation,
+        message: Message,
+        member_user_ids: Vec<rim_core::user::model::UserId>,
+    ) {
+        let Some(notification_service) = &self.notification_service else {
+            return;
+        };
+        let message_id = message.id;
+        if let Err(e) = notification_service
+            .notify_for_message(rim_services::notification::command::NotifyForMessageCmd {
+                server_id,
+                conversation: conversation.clone(),
+                message,
+                member_user_ids,
+            })
+            .await
+        {
+            tracing::warn!(error = %e, message_id = %message_id, "failed to create notifications");
+        }
+    }
+
+    /// Best-effort: a deleted message's unread notifications go away (Track 1.3).
+    async fn forget_notifications(&self, message_id: rim_core::message::model::MessageId) {
+        let Some(notification_service) = &self.notification_service else {
+            return;
+        };
+        if let Err(e) = notification_service.forget_message(message_id).await {
+            tracing::warn!(error = %e, message_id = %message_id, "failed to delete notifications of a deleted message");
         }
     }
 
@@ -512,7 +563,7 @@ impl MessageService for DefaultMessageService {
             "updated conversation activity"
         );
 
-        let dto = self.to_dto(message, cmd.server_id).await?;
+        let dto = self.to_dto(message.clone(), cmd.server_id).await?;
 
         let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
@@ -521,11 +572,13 @@ impl MessageService for DefaultMessageService {
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
             is_private: conv.is_private,
-            member_user_ids,
+            member_user_ids: member_user_ids.clone(),
             message: MessageEventData::from(&dto),
         });
 
         self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
+            .await;
+        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids)
             .await;
 
         Ok(dto)
@@ -690,7 +743,7 @@ impl MessageService for DefaultMessageService {
             "created reply message"
         );
 
-        let dto = self.to_dto(message, cmd.server_id).await?;
+        let dto = self.to_dto(message.clone(), cmd.server_id).await?;
 
         let member_user_ids = self.list_member_user_ids(cmd.conversation_id).await?;
 
@@ -712,11 +765,14 @@ impl MessageService for DefaultMessageService {
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
             is_private: conv.is_private,
-            member_user_ids,
+            member_user_ids: member_user_ids.clone(),
             message: MessageEventData::from(&dto),
         });
 
         self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
+            .await;
+        // 11. Notifications (best-effort, after commit)
+        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids)
             .await;
 
         Ok(dto)
@@ -1193,7 +1249,7 @@ impl MessageService for DefaultMessageService {
             "forwarded message"
         );
 
-        let dto = self.to_dto(message, cmd.server_id).await?;
+        let dto = self.to_dto(message.clone(), cmd.server_id).await?;
 
         let member_user_ids = self
             .list_member_user_ids(cmd.target_conversation_id)
@@ -1204,9 +1260,13 @@ impl MessageService for DefaultMessageService {
             conversation_id: dto.conversation_id,
             conversation_type: target_conv.conversation_type.as_str().to_string(),
             is_private: target_conv.is_private,
-            member_user_ids,
+            member_user_ids: member_user_ids.clone(),
             message: MessageEventData::from(&dto),
         });
+
+        // A forward is a send into the target: it notifies like one.
+        self.notify_recipients(cmd.server_id, &target_conv, message, member_user_ids)
+            .await;
 
         Ok(dto)
     }
@@ -1256,6 +1316,7 @@ impl MessageService for DefaultMessageService {
             .message_repo
             .soft_delete_message(cmd.message_id)
             .await?;
+        self.forget_notifications(cmd.message_id).await;
 
         if moderator_delete {
             // Ids only: the message text is never copied into the audit log.

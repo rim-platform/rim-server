@@ -33,6 +33,7 @@ pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
+pub(crate) mod notification;
 pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod presence;
@@ -103,4 +104,5 @@ pub(crate) struct MutationGroup6(
     profile::ProfileMutations,
     oncall::OnCallMutations,
     moderation::ModerationMutations,
+    notification::NotificationMutations,
 );

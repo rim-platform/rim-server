@@ -5,6 +5,7 @@ use rim_core::escalation::model::EscalationPolicyId;
 use rim_core::incident::model::IncidentId;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
+use rim_core::notification::model::UserNotificationId;
 use rim_core::pipeline::model::PipelineId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -316,6 +317,22 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing, default)]
         is_private: bool,
     },
+    /// The server decided to notify `user_id` about a message (Track 1.3): emitted once per
+    /// recipient after the notification row is stored. Delivered to that user only
+    /// (`member_user_ids == [user_id]`). `reason` is the snake_case notification reason
+    /// (`direct`, `mention`, `keyword`, `thread_reply`, `all`); `quiet` is true inside the
+    /// user's do-not-disturb window or pause, so clients record it without a toast or sound.
+    NotificationDue {
+        workspace_id: ServerId,
+        user_id: UserId,
+        notification_id: UserNotificationId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        reason: String,
+        quiet: bool,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
 }
 
 /// Event payload for message-related events.
@@ -404,7 +421,8 @@ impl WorkspaceEvent {
             | Self::IncidentDeclared { workspace_id, .. }
             | Self::IncidentUpdated { workspace_id, .. }
             | Self::EscalationStepFired { workspace_id, .. }
-            | Self::IncidentAcknowledged { workspace_id, .. } => workspace_id.to_string(),
+            | Self::IncidentAcknowledged { workspace_id, .. }
+            | Self::NotificationDue { workspace_id, .. } => workspace_id.to_string(),
         }
     }
 
@@ -479,6 +497,10 @@ impl WorkspaceEvent {
                 member_user_ids, ..
             }
             | Self::IncidentAcknowledged {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            // NotificationDue is scoped to its one recipient.
+            Self::NotificationDue {
                 member_user_ids, ..
             } => Some(member_user_ids),
         }
