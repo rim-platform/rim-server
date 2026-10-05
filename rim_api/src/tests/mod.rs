@@ -434,6 +434,9 @@ fn test_conversation_dto() -> rim_services::conversation::dto::ConversationDto {
         title: None,
         topic: None,
         member_ids: vec![],
+        is_private: false,
+        archived_at: None,
+        created_by: None,
     }
 }
 

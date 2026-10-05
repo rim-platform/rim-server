@@ -11,7 +11,9 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 
 use crate::ThreadRepos;
-use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
+use crate::util::{
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+};
 
 #[derive(Clone)]
 pub struct DefaultThreadService {
@@ -76,7 +78,7 @@ impl DefaultThreadService {
 #[async_trait]
 impl ThreadService for DefaultThreadService {
     async fn create_thread(&self, cmd: CreateThreadCmd) -> ServiceResult<ThreadDto> {
-        ensure_conversation_member_access(
+        ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,

@@ -80,9 +80,8 @@ impl IngestTokenService for DefaultIngestTokenService {
                 "ingest tokens may only target channels".to_string(),
             ));
         }
-        // Channels never require explicit membership (see `ensure_conversation_access`), but
-        // calling it keeps this call site consistent with every other conversation-scoped
-        // write path in case that invariant ever changes.
+        // Public channels need no explicit membership; private channels do, and a non-member
+        // gets `NotFound` here (see `ensure_conversation_access`).
         ensure_conversation_access(
             self.repos.conversation_member_repo.as_ref(),
             &conv,
@@ -229,6 +228,9 @@ mod tests {
             topic: None,
             created_at: chrono::Utc::now(),
             last_activity_at: chrono::Utc::now(),
+            is_private: false,
+            archived_at: None,
+            created_by: None,
         }
     }
 
@@ -302,6 +304,9 @@ mod tests {
                     topic: None,
                     created_at: chrono::Utc::now(),
                     last_activity_at: chrono::Utc::now(),
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
                 }))
             })
         });

@@ -30,6 +30,9 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
         rim_services::ServiceError::Conflict(msg) => {
             HttpResponse::Conflict().json(serde_json::json!({"error": msg}))
         }
+        rim_services::ServiceError::ConversationArchived => {
+            HttpResponse::Conflict().json(serde_json::json!({"error": "conversation is archived"}))
+        }
         rim_services::ServiceError::RateLimited {
             retry_after_seconds,
         } => HttpResponse::TooManyRequests()

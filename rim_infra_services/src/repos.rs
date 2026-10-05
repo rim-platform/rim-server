@@ -211,6 +211,7 @@ impl AppRepos {
         crate::channel_lens::ChannelLensRepos {
             channel_lens_repo: Arc::clone(&self.channel_lens_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             message_repo: Arc::clone(&self.message_repo),
             message_pin_repo: Arc::clone(&self.message_pin_repo),
