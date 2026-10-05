@@ -193,6 +193,8 @@ impl TestCtx {
             server_id,
             conversation_type: conv_type,
             title: None,
+            is_private: false,
+            created_by: None,
         })
         .await
         .unwrap()
