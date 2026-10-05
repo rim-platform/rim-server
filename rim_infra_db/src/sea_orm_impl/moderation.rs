@@ -225,34 +225,36 @@ impl ModerationRepository for SeaOrmModerationRepository {
         if let Some(cursor) = cursor {
             let cursor_id: Uuid = cursor.report_id.into();
             let cursor_ts: DateTimeWithTimeZone = cursor.created_at.into();
+            // DESC endpoint (docs/pagination.md): `Before` is newer than the cursor, `After`
+            // is older.
             let cond = match dir {
                 PageDir::Before => Condition::any()
-                    .add(message_report::Column::CreatedAt.lt(cursor_ts))
-                    .add(
-                        Condition::all()
-                            .add(message_report::Column::CreatedAt.eq(cursor_ts))
-                            .add(message_report::Column::Id.lt(cursor_id)),
-                    ),
-                PageDir::After => Condition::any()
                     .add(message_report::Column::CreatedAt.gt(cursor_ts))
                     .add(
                         Condition::all()
                             .add(message_report::Column::CreatedAt.eq(cursor_ts))
                             .add(message_report::Column::Id.gt(cursor_id)),
                     ),
+                PageDir::After => Condition::any()
+                    .add(message_report::Column::CreatedAt.lt(cursor_ts))
+                    .add(
+                        Condition::all()
+                            .add(message_report::Column::CreatedAt.eq(cursor_ts))
+                            .add(message_report::Column::Id.lt(cursor_id)),
+                    ),
             };
             q = q.filter(cond);
         }
 
-        // Oldest first. `Before` pages are fetched nearest-first and flipped back, as in
-        // `SeaOrmConversationRepository::list_channels_for_user`.
+        // Newest first. `Before` pages are fetched nearest-first (ascending) and flipped
+        // back, as in `SeaOrmMessageRepository::list_messages`.
         let fetch_reversed = has_cursor && dir == PageDir::Before;
         q = if fetch_reversed {
-            q.order_by_desc(message_report::Column::CreatedAt)
-                .order_by_desc(message_report::Column::Id)
-        } else {
             q.order_by_asc(message_report::Column::CreatedAt)
                 .order_by_asc(message_report::Column::Id)
+        } else {
+            q.order_by_desc(message_report::Column::CreatedAt)
+                .order_by_desc(message_report::Column::Id)
         };
 
         let mut items: Vec<MessageReport> = q
@@ -276,17 +278,18 @@ impl ModerationRepository for SeaOrmModerationRepository {
             created_at: r.created_at,
             report_id: r.id,
         };
-        let min = items.first().map(to_cursor);
-        let max = items.last().map(to_cursor);
+        // Items are newest-first, so `first` is the newest row and `last` the oldest.
+        let newest = items.first().map(to_cursor);
+        let oldest = items.last().map(to_cursor);
         let has_opposite = has_cursor && !items.is_empty();
         let (next, prev) = match dir {
             PageDir::After => (
-                has_more_in_dir.then_some(max).flatten(),
-                has_opposite.then_some(min).flatten(),
+                has_more_in_dir.then_some(oldest).flatten(),
+                has_opposite.then_some(newest).flatten(),
             ),
             PageDir::Before => (
-                has_more_in_dir.then_some(min).flatten(),
-                has_opposite.then_some(max).flatten(),
+                has_more_in_dir.then_some(newest).flatten(),
+                has_opposite.then_some(oldest).flatten(),
             ),
         };
 

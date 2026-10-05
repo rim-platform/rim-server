@@ -250,7 +250,8 @@ async fn reports_are_unique_paginated_and_resolved_once() {
         .unwrap_err();
     assert_eq!(duplicate.kind(), RepoErrorKind::Conflict);
 
-    // Pagination visits every report exactly once, oldest first.
+    // Pagination visits every report exactly once, newest first (a DESC endpoint: `After`
+    // walks toward older reports, `Before` toward newer ones).
     let first = repo
         .list_reports(server.id, None, 2, PageDir::After, None)
         .await
@@ -276,7 +277,7 @@ async fn reports_are_unique_paginated_and_resolved_once() {
         .chain(second.items.iter())
         .map(|r| r.id)
         .collect();
-    assert_eq!(ids, reports.iter().map(|r| r.id).collect::<Vec<_>>());
+    assert_eq!(ids, reports.iter().rev().map(|r| r.id).collect::<Vec<_>>());
 
     let resolved = repo
         .resolve_report(
