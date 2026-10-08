@@ -60,6 +60,10 @@ format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`, a
 "simple mode" in `simple_manifest.rs`), not by this protocol; this document only refers to the
 manifest fields the protocol depends on. Section 19 shows a minimal manifest.
 
+A plugin id (`plugin_id` in the manifest) is reverse-domain: at least three dot-separated
+segments of ASCII letters, digits and hyphens, such as `dev.example.hello-world`. Underscores are
+not allowed. Ids starting with `dev.rim.` or `com.rim.` are reserved.
+
 The host starts the plugin like this:
 
 - It executes `<plugin dir>/<entrypoint>` **directly**, with no interpreter, no arguments, the
@@ -490,7 +494,7 @@ The protocol knows two kinds of capability name. Both are valid in `grantedCapab
   `plugin.dev.example.k8stools.restart_pod`. They exist so the user can approve, say, "restart
   pods" separately from "list pods", and so `required_capabilities` on a command can point at
   them. The host guards no method of its own with them; it checks them only on commands.
-- **Built-in names**, which guard host methods:
+- **Built-in names**, which guard things the host does for the plugin:
 
 | Capability | Guards |
 |---|---|
@@ -498,37 +502,42 @@ The protocol knows two kinds of capability name. Both are valid in `grantedCapab
 | `chat.write` | `rim.chat.send_message` (and the unimplemented edit and delete calls) |
 | `events.read` | `rim.events.subscribe` |
 | `ui.panel` | `rim.ui.update_panel` (and the unimplemented `rim.ui.show_panel`) |
-| `ui.notify` | `rim.ui.show_notification` (unimplemented on the process side) |
+| `ui.notify` | Notifications a plugin's panel sends through the panel bridge; `rim.ui.show_notification` is unimplemented on the process side |
 | `local.process` | `rim.process.spawn`, `rim.process.kill` (unimplemented) |
 | `network` | `rim.network.http_request`, `rim.network.websocket_connect` (unimplemented) |
 | `fs.read`, `fs.write` | `rim.fs.read_file`, `rim.fs.list_dir`, `rim.fs.write_file` (unimplemented) |
 
 None of the methods the built-in names guard is part of frozen v1 (section 17).
 
-### What the host enforces today
+### What the host enforces
 
-These are properties of the current rim-ui host, not of the protocol, and a later host may relax
-them without a protocol change. Check the host's install-time validation
-(`rim-ui/src-tauri/src/plugin_host/validation.rs`) for the version you target.
+These are properties of the rim-ui host, not of the protocol, and a host may change them without
+a protocol change. They changed with the TypeScript SDK PR (rim-ui #16), so both are described;
+check `rim-ui/src-tauri/src/plugin_host/validation.rs` in the host version you target.
 
-- **Only plugin-scoped names can be declared.** Install-time validation accepts a manifest
-  capability only if it has the form `plugin.<pluginId>.<verb>`, uses only `[a-z0-9_.]`, is 4 to
-  128 bytes long, and has no segment named `system`, `internal`, `admin` or `audit`. A manifest
-  that declares anything else, a built-in name included, **fails to install**. So no installed
-  plugin can hold a built-in name, and `rim.ui.update_panel` is always answered
-  `CAPABILITY_DENIED`.
-- **Some plugin ids cannot declare any capability.** A plugin id is at least three dot-separated
-  segments of ASCII letters, digits and hyphens (`dev.example.hello-world`). Since capability
-  names allow only lowercase letters, digits, `_` and `.`, a plugin id with an uppercase letter or
-  a hyphen can declare no capability at all. Pick a lowercase id without hyphens
-  (`dev.example.k8stools`) if your plugin needs capabilities.
-- **Revocation reaches a running plugin only partly.** `grantedCapabilities` is the approved list
-  when the connection started, and v1 has no notification for changes to it. When the user
-  approves or revokes a capability while the plugin runs, the command gate applies the change at
-  once, but the plugin's own calls to the host are still checked against the start-time list
-  until the process stops. Revoking also marks the plugin disabled, so it does not start with the
-  app next time, but the running process is not stopped. A plugin that needs a newly approved
-  capability should ask the user to disable and re-enable it.
+- **Which names a manifest may declare.** A manifest that declares any other name fails to
+  install.
+  - From rim-ui #16 onward: the built-in names `chat.read`, `chat.write`, `events.read`,
+    `ui.panel` and `ui.notify`, and the plugin's own keys `plugin.<pluginId>.<verb>`, where the
+    verb uses only `[a-z0-9_.]` and neither starts nor ends with `.` nor contains `..`.
+    `local.process`, `network`, `fs.read` and `fs.write` guard nothing yet and are rejected.
+  - Before rim-ui #16: only `plugin.<pluginId>.<verb>` keys, with the **whole** key in
+    `[a-z0-9_.]`. No plugin could hold a built-in name, so `rim.ui.update_panel` was always
+    answered `CAPABILITY_DENIED`, and a plugin id with an uppercase letter or a hyphen could
+    declare no capability at all.
+  - In both: a key is 4 to 128 bytes long and has no segment named `system`, `internal`,
+    `admin` or `audit`.
+- **Approving while the plugin runs.** `grantedCapabilities` is the approved list when the
+  connection started, and v1 has no notification for changes to it. A capability the user
+  approves while the plugin runs reaches the command gate at once, but the plugin's own calls to
+  the host are checked against the start-time list until the process restarts. A plugin that
+  needs a newly approved capability should ask the user to disable and re-enable it.
+- **Revoking.** Revoking a capability marks the plugin disabled, so it does not start with the
+  app next time.
+  - From rim-ui #16 onward: revoking also stops the running plugin, so a revoked capability is
+    never used again.
+  - Before rim-ui #16: the running process was not stopped, and its own calls kept the
+    start-time list until it stopped.
 
 ### Rules for v1
 
@@ -673,7 +682,7 @@ on them.
 | `rim.chat.search_messages` | plugin → host | `chat.read` | Not wired, as above. |
 | `rim.events.subscribe` | plugin → host | `events.read` | Not wired: answered `INTERNAL_ERROR` ("event forwarder not configured"). |
 | `rim.event.<type>` | host → plugin | `events.read` | Never sent today, since nothing can subscribe. |
-| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store, but today's host cannot grant `ui.panel` (section 12), so it is answered `CAPABILITY_DENIED`. |
+| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store. Hosts before rim-ui #16 cannot grant `ui.panel` (section 12) and answer `CAPABILITY_DENIED`. The panel page does not receive the stored state yet. |
 
 The chat read and send calls are deliberately **not in v1**: they will go through the client's
 single message service, so that a plugin sees exactly what the user sees, before their shapes are

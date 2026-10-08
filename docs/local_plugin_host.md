@@ -80,9 +80,9 @@ a `main.ts`, `main.js` or `main.py` entrypoint ("simple mode", `simple_manifest.
 ```
 
 Install-time validation rejects reserved plugin id prefixes (`dev.rim.`, `com.rim.`), capability
-keys that are not of the form `plugin.<plugin_id>.<verb>`, and `ai_callable` commands whose
-`output_schema` could leak a plugin install id. See the protocol spec, section 12, for what that
-means for capability names today.
+names other than the plugin's own `plugin.<plugin_id>.<verb>` keys and the built-in names the host
+accepts, and `ai_callable` commands whose `output_schema` could leak a plugin install id. The
+protocol spec, section 12, lists which names each host version accepts.
 
 ## Runtime
 
@@ -191,7 +191,7 @@ Panel → host messages, with what each does today:
 | Message | Status |
 |---|---|
 | `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
-| `rim.ui.notification.show` | Gated on `ui.notify`, which cannot be granted yet; only logged. |
+| `rim.ui.notification.show` | Gated on `ui.notify` (grantable from rim-ui #16 onward); only logged. |
 | `rim.ui.dialog.confirm` | Only logged. |
 | `rim.settings.get` / `rim.settings.set` | Only logged. |
 | `rim.plugin.ui_event` | Not wired: the host queues the event but never delivers it to the plugin process. |
