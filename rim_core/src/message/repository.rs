@@ -138,6 +138,11 @@ pub trait MessageRepository: Send + Sync {
         limit: u32,
     ) -> RepoResult<Vec<MessageChange>>;
 
+    /// The newest committed version of a conversation's change sequence, or `0` when it has
+    /// none. Every cursor the feed has handed out is at most this, so a larger cursor means the
+    /// counters were reset (a migration rolled back and re-run, or a restored backup).
+    async fn latest_change_version(&self, conversation_id: ConversationId) -> RepoResult<i64>;
+
     /// `sent_at` of the newest message `author` sent in the conversation (timeline or thread,
     /// deleted or not), or `None`. The slow-mode check (Track 1.2) reads it instead of keeping
     /// in-memory state.

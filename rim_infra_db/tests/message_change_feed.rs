@@ -82,6 +82,11 @@ async fn every_write_bumps_the_conversation_version() {
 
     let all = repo.list_message_changes(conv.id, 0, 10).await.unwrap();
     assert_eq!(versions(&all), vec![4, 5, 6], "one entry per message");
+    assert_eq!(repo.latest_change_version(conv.id).await.unwrap(), 6);
+    let empty = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    assert_eq!(repo.latest_change_version(empty.id).await.unwrap(), 0);
 }
 
 #[tokio::test]

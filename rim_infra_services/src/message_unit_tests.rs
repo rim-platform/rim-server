@@ -1559,6 +1559,9 @@ mod tests {
 
         let mut message_repo = MockMessageRepository::new();
         message_repo
+            .expect_latest_change_version()
+            .returning(|_| Box::pin(async { Ok(12) }));
+        message_repo
             .expect_list_message_changes()
             .withf(move |cid, after, limit| *cid == conv_id && *after == 7 && *limit == 3)
             .return_once(move |_, _, _| Box::pin(async move { Ok(rows) }));
@@ -1601,6 +1604,9 @@ mod tests {
     async fn list_message_changes_echoes_the_cursor_when_nothing_changed() {
         let conv_id = ConversationId::new();
         let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_latest_change_version()
+            .returning(|_| Box::pin(async { Ok(42) }));
         message_repo
             .expect_list_message_changes()
             .return_once(|_, _, _| Box::pin(async { Ok(vec![]) }));
@@ -1662,5 +1668,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_rejects_a_cursor_ahead_of_the_counter() {
+        // The counters were reset (rollback and re-run, or a restored backup): reading on from
+        // the stored cursor would skip changes, so the client must start over.
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_latest_change_version()
+            .returning(|_| Box::pin(async { Ok(5) }));
+        let svc = change_feed_service(message_repo, true);
+
+        let err = svc
+            .list_message_changes(change_feed_query(
+                vec![MessageChangeCursor {
+                    conversation_id: ConversationId::new(),
+                    after_version: 6,
+                }],
+                10,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_shares_a_total_budget_across_conversations() {
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_list_message_changes()
+            .times(50)
+            .withf(|_, _, limit| *limit == 20)
+            .returning(|_, _, _| Box::pin(async { Ok(vec![]) }));
+        let svc = change_feed_service(message_repo, true);
+
+        let conversations = (0..50)
+            .map(|_| MessageChangeCursor {
+                conversation_id: ConversationId::new(),
+                after_version: 0,
+            })
+            .collect();
+        svc.list_message_changes(change_feed_query(conversations, 200))
+            .await
+            .unwrap();
     }
 }

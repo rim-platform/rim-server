@@ -9,6 +9,10 @@ const MAX_PAGE_LIMIT: u32 = 200;
 /// Maximum number of conversations one message change feed request may name.
 const MAX_CHANGE_FEED_CONVERSATIONS: usize = 100;
 
+/// Maximum number of changes one message change feed request returns across all its
+/// conversations: the per-conversation limit is lowered to fit, and `has_more` carries the rest.
+const MAX_CHANGE_FEED_TOTAL: u32 = 1000;
+
 use rim_core::message::model::{Message, NewMessage};
 use rim_core::message::repository::MessageSearchParams;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
@@ -1116,9 +1120,28 @@ impl MessageService for DefaultMessageService {
             .await?;
         }
 
-        let limit = query.limit.clamp(1, MAX_PAGE_LIMIT);
+        let conversation_count = u32::try_from(query.conversations.len()).unwrap_or(u32::MAX);
+        let limit = query
+            .limit
+            .clamp(1, MAX_PAGE_LIMIT)
+            .min((MAX_CHANGE_FEED_TOTAL / conversation_count.max(1)).max(1));
         let mut result = Vec::with_capacity(query.conversations.len());
         for cursor in query.conversations {
+            // A cursor past the newest version means the counters were reset since the client
+            // stored it; reading on would silently skip changes, so make the client start over.
+            if cursor.after_version > 0
+                && cursor.after_version
+                    > self
+                        .repos
+                        .message_repo
+                        .latest_change_version(cursor.conversation_id)
+                        .await?
+            {
+                return Err(ServiceError::Conflict(
+                    "change feed cursor is ahead of this conversation; re-sync from the beginning"
+                        .to_string(),
+                ));
+            }
             let mut rows = self
                 .repos
                 .message_repo

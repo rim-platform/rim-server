@@ -19,12 +19,14 @@ use sea_orm_migration::prelude::*;
 /// and gets the next number only after the first commits (or reuses it after a rollback). A
 /// reader therefore never sees version N+1 while N is still in flight, and a client that stores
 /// "last version seen" never skips a change. A global sequence hands out numbers at insert time,
-/// not commit time, so a later number can become visible first. Sends already lock the
-/// conversation row (`last_activity_at`) for the same span, so the extra lock costs little.
+/// not commit time, so a later number can become visible first. Sends then also lock the
+/// conversation row (`last_activity_at`) until commit, so the extra lock costs little.
 ///
 /// **Data step:** existing messages get versions `1..n` per conversation in `(sent_at, id)`
 /// order, and each conversation's counter starts at its `n`. A client syncing from the
-/// beginning therefore receives the full history. See [`BACKFILL_VERSIONS_SQL`].
+/// beginning therefore receives the full history. See [`BACKFILL_VERSIONS_SQL`]. The back-fill
+/// rewrites every message row (and its `search_tsv`) while the `ALTER TABLE` lock blocks reads
+/// and writes of `message`, so on a large table run it in a maintenance window.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -51,6 +53,10 @@ const UP_SQL: &[&str] = &[
     BACKFILL_VERSIONS_SQL,
     "INSERT INTO message_change_seq (conversation_id, last_version) \
      SELECT conversation_id, max(version) FROM message GROUP BY conversation_id",
+    // Every row has a real version now; without a default, an insert that bypasses the trigger
+    // (`session_replication_role = replica`, a manual repair) fails instead of landing at
+    // version 0, where the feed would never return it.
+    "ALTER TABLE message ALTER COLUMN version DROP DEFAULT",
     "CREATE INDEX idx_message_conversation_version ON message (conversation_id, version)",
     r#"CREATE FUNCTION message_change_feed() RETURNS trigger
     LANGUAGE plpgsql AS $$
