@@ -289,6 +289,9 @@ pub(super) fn resolve_conversation_id(
     })
 }
 
+/// Parses a list of UUIDs from `key`. Accepts a JSON array of strings, or one string of
+/// comma-separated ids: the agent's tool schema types every command argument as a scalar
+/// (Track 4.1), so `"a,b"` is what it sends for a list argument.
 pub(super) fn parse_uuid_array_arg<T>(
     map: &serde_json::Map<String, Value>,
     key: &str,
@@ -296,17 +299,30 @@ pub(super) fn parse_uuid_array_arg<T>(
 where
     T: From<uuid::Uuid>,
 {
-    let values = map
-        .get(key)
-        .and_then(Value::as_array)
-        .ok_or_else(|| ServiceError::Validation(format!("missing array arg `{key}`")))?;
+    let raw_values: Vec<&str> = match map.get(key) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    ServiceError::Validation(format!("invalid array arg `{key}` element"))
+                })
+            })
+            .collect::<ServiceResult<_>>()?,
+        Some(Value::String(joined)) => joined
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => {
+            return Err(ServiceError::Validation(format!(
+                "missing array arg `{key}`"
+            )));
+        }
+    };
 
-    values
-        .iter()
-        .map(|value| {
-            let raw = value.as_str().ok_or_else(|| {
-                ServiceError::Validation(format!("invalid array arg `{key}` element"))
-            })?;
+    raw_values
+        .into_iter()
+        .map(|raw| {
             let uuid = uuid::Uuid::parse_str(raw)
                 .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{key}`")))?;
             Ok(T::from(uuid))
@@ -409,6 +425,36 @@ mod tests {
             focused_surface: None,
             active_panel: None,
         }
+    }
+
+    #[test]
+    fn parse_uuid_array_arg_accepts_json_array_and_comma_separated_string() {
+        let a = uuid::Uuid::now_v7();
+        let b = uuid::Uuid::now_v7();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "ids".into(),
+            serde_json::json!([a.to_string(), b.to_string()]),
+        );
+        assert_eq!(
+            parse_uuid_array_arg::<uuid::Uuid>(&args, "ids").unwrap(),
+            vec![a, b]
+        );
+        args.insert("ids".into(), serde_json::json!(format!("{a}, {b},")));
+        assert_eq!(
+            parse_uuid_array_arg::<uuid::Uuid>(&args, "ids").unwrap(),
+            vec![a, b]
+        );
+    }
+
+    #[test]
+    fn parse_uuid_array_arg_rejects_missing_and_invalid_ids() {
+        let mut args = serde_json::Map::new();
+        assert!(parse_uuid_array_arg::<uuid::Uuid>(&args, "ids").is_err());
+        args.insert("ids".into(), serde_json::json!("not-a-uuid"));
+        assert!(parse_uuid_array_arg::<uuid::Uuid>(&args, "ids").is_err());
+        args.insert("ids".into(), serde_json::json!(7));
+        assert!(parse_uuid_array_arg::<uuid::Uuid>(&args, "ids").is_err());
     }
 
     fn ctx_without_workspace() -> CommandContextDto {

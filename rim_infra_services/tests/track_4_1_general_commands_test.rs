@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rim_core::command::repository::MockUserCommandRepository;
+use rim_core::conversation::model::{ConversationId, ConversationType};
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -31,7 +32,9 @@ use rim_services::command::dto::{
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, ListCommandsQuery};
 use rim_services::command::service::CommandService;
+use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::MockConversationService;
+use rim_services::conversation::types::ConversationParticipants;
 use rim_services::message::service::MockMessageService;
 use rim_services::read_state::service::MockReadStateService;
 use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
@@ -69,6 +72,18 @@ fn build_service(
     capability_service: MockCapabilityService,
     workspace_state_service: MockWorkspaceStateService,
 ) -> (DefaultCommandService, Arc<dyn ConfirmationStore>) {
+    build_service_with_conversations(
+        capability_service,
+        workspace_state_service,
+        MockConversationService::new(),
+    )
+}
+
+fn build_service_with_conversations(
+    capability_service: MockCapabilityService,
+    workspace_state_service: MockWorkspaceStateService,
+    conversation_service: MockConversationService,
+) -> (DefaultCommandService, Arc<dyn ConfirmationStore>) {
     let mut user_repo = MockUserCommandRepository::new();
     user_repo
         .expect_list_for_user()
@@ -83,7 +98,7 @@ fn build_service(
         CommandServices {
             auth_service: Arc::new(MockAuthService::new()),
             capability_service: Arc::new(capability_service),
-            conversation_service: Arc::new(MockConversationService::new()),
+            conversation_service: Arc::new(conversation_service),
             message_service: Arc::new(MockMessageService::new()),
             message_reaction_service: Arc::new(
                 rim_services::message_reaction::service::MockMessageReactionService::new(),
@@ -356,6 +371,72 @@ async fn palette_state_set_still_runs_in_one_step() {
         })
         .await
         .expect("a human state.set needs no confirmation");
+
+    assert_eq!(result.status, CommandResultStatusDto::Success);
+}
+
+/// The agent's tool schema types `member_ids` as a string, so it sends the ids comma-separated;
+/// the executor must accept that once the user approves the confirmation.
+#[tokio::test]
+async fn agent_create_group_with_proof_accepts_comma_separated_member_ids() {
+    let workspace = ServerId::new();
+    let actor = Actor::new(UserId::new());
+    let (anna, petr) = (UserId::new(), UserId::new());
+    let mut conversations = MockConversationService::new();
+    conversations
+        .expect_create_conversation()
+        .withf(move |cmd| {
+            cmd.server_id == workspace
+                && matches!(
+                    &cmd.participants,
+                    ConversationParticipants::Group { member_ids } if *member_ids == vec![anna, petr]
+                )
+        })
+        .times(1)
+        .returning(move |_| {
+            Box::pin(async move {
+                Ok(ConversationDto {
+                    id: ConversationId::new(),
+                    server_id: workspace,
+                    conversation_type: ConversationType::Group,
+                    title: Some("release".to_string()),
+                    topic: None,
+                    member_ids: vec![anna, petr],
+                    is_private: false,
+                    archived_at: None,
+                    created_by: None,
+                    slow_mode_seconds: 0,
+                })
+            })
+        });
+    let (svc, store) = build_service_with_conversations(
+        cap_grant_all(),
+        MockWorkspaceStateService::new(),
+        conversations,
+    );
+
+    let args = Some(serde_json::json!({
+        "member_ids": format!("{anna},{petr}"),
+        "title": "release",
+    }));
+    let ctx = context(workspace);
+    let challenge = issue_in_band(store.as_ref(), &actor, "chat.create_group", &args, &ctx);
+
+    let result = svc
+        .execute_command(ExecuteCommandCmd {
+            actor,
+            command_id: "chat.create_group".to_string(),
+            args,
+            context: ctx,
+            confirmation: Some(ConfirmationProof::InBandToken {
+                token: challenge.token,
+                args_hash: challenge.args_hash,
+            }),
+            is_pipe: false,
+            initiator: CommandInitiator::Agent,
+        })
+        .await
+        .expect("chat.create_group with a valid proof must run for the agent");
 
     assert_eq!(result.status, CommandResultStatusDto::Success);
 }
