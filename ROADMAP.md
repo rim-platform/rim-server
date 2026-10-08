@@ -58,7 +58,8 @@ _Verified against both repositories on 2026-10-08 (rim-server `a668c05`, rim-ui 
 rim-ui `master` carries the code, `cargo audit` blocking, messaging e2e, resolvers split by
 domain, dead `plugin_host` module removed), 0.4 (optional incident module behind a
 workspace feature flag), 1.1 (private channels), 1.2 (roles and moderation) and 1.3
-(notification rules) are merged on both server and UI `master`.
+(notification rules) are merged on both server and UI `master`. Track 4.1 (general commands
+AI-callable) is merged on rim-server (PR #24).
 
 Chat, commands, keybinds, macros and a plugin host all exist, but a plugin command cannot
 run yet and the client keeps no history between launches.
@@ -69,7 +70,7 @@ run yet and the client keeps no history between launches.
 | Programmable runtime | Command registry (~50 builtins, four surfaces, typed args, sensitivity tiers, rate limits), user commands, macros with piping, keybinds with layers, workspace state, pipelines v1, capability registry with default-deny, audit log, confirmation proofs |
 | Plugin host (rim-ui) | Separate-process plugins over stdio, capability broker, panels, git install, trust badges. The UI calls `plugin_execute_command`, which does not exist in `src-tauri/src`; `plugin_run_ai_command` always returns `PluginNotRunning` |
 | Plugin protocol | Docs and code disagree on method names; only `plugins/hello-world` exists; no SDK |
-| Agent | Works (Anthropic and OpenAI, keys in the OS keyring, confirmation modal), but only incident and on-call commands are AI-callable |
+| Agent | Works (Anthropic and OpenAI, keys in the OS keyring, confirmation modal). Incident, on-call, chat, navigation and workspace-state commands are AI-callable (Track 4.1, PR #24); every agent write goes through the confirmation gate |
 | Client history | None kept on disk; TanStack Query memory only |
 | Identity | Username and password per server; `Principal` is an in-memory struct with no table |
 | Message edits | No `updated_at` or version on `message`, so a client cache cannot see edits yet |
@@ -185,7 +186,7 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 
 ### Track 4 — The agent as operator (bet 3, M/L each)
 
-1. **Flip the general commands to AI-callable** (S): chat, navigation, state and member
+1. **Done (PR #24).** **Flip the general commands to AI-callable** (S): chat, navigation, state and member
    commands get `nl_description` and `intent_samples`; the agent stops being incident-only.
 2. **Agent over plugin commands** (M, with Track 2.2): the agent can call plugin commands
    under the same gate; "restart the crashlooping pod" becomes the demo.
@@ -337,7 +338,7 @@ Stage 5 puts the workspace plugin registry on the workspace host, next to roles 
 | 4 | rim-server | `docs/specs/plugin-protocol-v1.md`; `local_plugin_host.md` and `plugin_model.md` rewritten to match the code | 1 | S |
 | 5 | rim-ui | TypeScript SDK in `sdk/`, template plugin, hello-world ported, Python example kept | 1 | S/M |
 | 6 | rim-ui | `plugins/k8s-pods/` panel with `k8s.restart_pod` (Dangerous, AI-callable); plugin commands in the palette and keybind picker | 1 | S/M |
-| 7 | rim-server | Track 4.1: `nl_description` and `intent_samples` on chat, navigation, state and member commands | 1 | S |
+| 7 | rim-server | Track 4.1: `nl_description` and `intent_samples` on chat, navigation and state commands (merged, #24) | 1 | S |
 | 8 | rim-server | Message change feed: `change_seq` bumped on edit, delete, reaction and pin, plus `conversationChanges(since)` | 2 | S |
 | 9 | rim-ui | Encrypted SQLite cache (`rusqlite` with `bundled-sqlcipher`) behind Tauri commands, read-through and reconcile | 2 | M |
 | 10 | rim-ui | FTS5 local search as a second palette source | 2 | S |
@@ -382,7 +383,7 @@ Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in
 | 3.1 to 3.4 Bots, webhooks, pipelines | Unchanged; bots keep host-local credentials | side lane |
 | 3.5 RIM CLI v1 | Unchanged; host-local credentials | side lane |
 | 3.6 MCP bridge | Unchanged | later |
-| 4.1 General commands AI-callable | Pulled into Stage 1 | 1 |
+| 4.1 General commands AI-callable | Done (PR #24) | 1 |
 | 4.2 Agent over plugin commands | Pulled into Stage 1 | 1 |
 | 4.3 to 4.6 | Unchanged | later |
 | 5.x Keyboard polish | Vim profile and navigation as side lane | side lane |

@@ -50,9 +50,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: false,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Read one workspace state entry by key. \
+                 Scope 'server' is shared with the workspace, 'user' is private to the current user."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "what is the value of deploy.lock".to_string(),
+                "read my state key theme".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
@@ -119,10 +126,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: false,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
-            sensitivity: CommandSensitivityDto::Safe,
+            nl_description: Some(
+                "Set a workspace state entry to a value, optionally with a TTL in seconds."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "set deploy.lock to true".to_string(),
+                "store release.version as 1.4".to_string(),
+            ],
+            ai_callable: true,
+            sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
             feature: None,
@@ -170,10 +183,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: false,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
-            sensitivity: CommandSensitivityDto::Safe,
+            nl_description: Some(
+                "Delete a workspace state entry by key."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "delete the deploy.lock key".to_string(),
+                "remove state key release.version".to_string(),
+            ],
+            ai_callable: true,
+            sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Delete,
             rate_limit_per_minute: None,
             feature: None,
@@ -230,9 +249,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: false,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "List workspace state entries, optionally filtered by key prefix."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "list state keys".to_string(),
+                "show state entries starting with deploy.".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
@@ -290,10 +315,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: false,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
-            sensitivity: CommandSensitivityDto::Safe,
+            nl_description: Some(
+                "Increment a numeric workspace state entry by a delta."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "increment the build counter".to_string(),
+                "add 1 to release.count".to_string(),
+            ],
+            ai_callable: true,
+            sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
             feature: None,
