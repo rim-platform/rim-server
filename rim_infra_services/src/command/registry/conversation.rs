@@ -122,10 +122,17 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         keybind_capable: true,
         dangerous: false,
         user_command_id: None,
-        nl_description: None,
-        intent_samples: vec![],
-        ai_callable: false,
-        sensitivity: CommandSensitivityDto::Safe,
+        nl_description: Some(
+            "Create a group conversation with the given members. \
+             Pass member_ids from chat.list_members; an optional title names the group."
+                .to_string(),
+        ),
+        intent_samples: vec![
+            "start a group with Anna and Petr".to_string(),
+            "create a group chat for the release".to_string(),
+        ],
+        ai_callable: true,
+        sensitivity: CommandSensitivityDto::Mutating,
         typed_verb: TypedVerb::Write,
         rate_limit_per_minute: None,
         feature: None,

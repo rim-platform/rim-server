@@ -185,10 +185,18 @@ mod tests {
         // builtins — `notifications.set_level`, `notifications.dnd`,
         // `notifications.mark_all_read` — for 27. They change only the actor's own notification
         // state, gated by `NotificationService` (workspace membership; conversation access for
-        // the level), so they need no capability.
+        // the level), so they need no capability. Track 4.1 (ROADMAP Track 4.1) flips the
+        // general builtins for 45: eleven desktop-local navigation commands the client runs
+        // locally (Safe, no confirmation), `state.get`/`state.list` (Safe reads), and
+        // `chat.mark_as_read`, `chat.create_group`, `state.set`, `state.incr`, `state.delete`,
+        // raised from Safe to Mutating so every agent write is confirmation-gated. Commands that
+        // act on the user's selected message (`chat.edit_message`, `chat.delete_message`,
+        // `chat.reply_to_selected_message`, `chat.copy_message_text`) stay off because the agent
+        // cannot supply a selection, and `admin.invite_member` stays off because its payload is
+        // an invite token that would pass through the model provider.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 27 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // 45 IDs are AI-callable. Adding a new ai_callable builtin without a
         // Hawkeye + Widow security review (and updating this set) must fail
         // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
@@ -225,6 +233,24 @@ mod tests {
             "notifications.set_level",
             "notifications.dnd",
             "notifications.mark_all_read",
+            "workspace.open_search",
+            "workspace.search_in_channel",
+            "workspace.open_marketplace",
+            "workspace.toggle_sidebar",
+            "workspace.previous_channel",
+            "workspace.next_channel",
+            "workspace.next_unread_channel",
+            "workspace.close_panel",
+            "workspace.reopen_last_thread",
+            "chat.scroll_to_bottom",
+            "chat.scroll_to_top",
+            "chat.mark_as_read",
+            "chat.create_group",
+            "state.get",
+            "state.list",
+            "state.set",
+            "state.incr",
+            "state.delete",
         ];
         expected.sort();
 
