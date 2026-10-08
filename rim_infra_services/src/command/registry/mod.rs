@@ -196,7 +196,7 @@ mod tests {
         // an invite token that would pass through the model provider.
         //
         // Set-equality assertion: the security contract is that exactly these
-        // 46 IDs are AI-callable. Adding a new ai_callable builtin without a
+        // 45 IDs are AI-callable. Adding a new ai_callable builtin without a
         // Hawkeye + Widow security review (and updating this set) must fail
         // CI. Order is intentionally NOT asserted — registration order is a
         // domain-file concern, not a security property. Use the audit log
