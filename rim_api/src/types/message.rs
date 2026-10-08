@@ -85,7 +85,12 @@ impl From<rim_services::message::dto::MessageDto> for Message {
             author_id: async_graphql::ID(value.author_id.to_string()),
             text: if value.is_deleted { None } else { value.text },
             has_attachments: value.has_attachments,
-            attachments: value.attachments.into_iter().map(Into::into).collect(),
+            // A deleted message is a tombstone: no text and no attachment names either.
+            attachments: if value.is_deleted {
+                Vec::new()
+            } else {
+                value.attachments.into_iter().map(Into::into).collect()
+            },
             parent_message_id: value
                 .parent_message_id
                 .map(|id| async_graphql::ID(id.to_string())),
@@ -235,7 +240,7 @@ pub struct MessageChangeCursorInput {
 #[derive(InputObject, Clone, Debug)]
 pub struct MessageChangesInput {
     pub server_id: async_graphql::ID,
-    /// At most 100 conversations; each must be readable by the caller or the request fails.
+    /// At most 100 conversations. One the caller cannot read comes back with status `NO_ACCESS`.
     pub conversations: Vec<MessageChangeCursorInput>,
     /// Maximum changes per conversation. Clamped to 1..=200; defaults to 100.
     pub limit: Option<i32>,
@@ -274,10 +279,35 @@ pub struct MessageChange {
     pub message: Message,
 }
 
+/// How one conversation of a `messageChanges` request was answered.
+#[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ConversationChangesStatus {
+    /// The changes after the requested cursor.
+    Ok,
+    /// The caller cannot read this conversation (removed from it, not a member of a private one,
+    /// or it does not exist). No changes; the cursor is echoed. Stop syncing it.
+    NoAccess,
+    /// The stored cursor is ahead of the server (its counters were reset). The changes start
+    /// from the beginning: drop the cached copy of this conversation, then apply them.
+    Reset,
+}
+
+impl From<rim_services::message::dto::ConversationChangesStatus> for ConversationChangesStatus {
+    fn from(value: rim_services::message::dto::ConversationChangesStatus) -> Self {
+        use rim_services::message::dto::ConversationChangesStatus as Status;
+        match value {
+            Status::Ok => Self::Ok,
+            Status::NoAccess => Self::NoAccess,
+            Status::Reset => Self::Reset,
+        }
+    }
+}
+
 /// The changes of one conversation after the requested cursor, oldest first.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ConversationMessageChanges {
     pub conversation_id: async_graphql::ID,
+    pub status: ConversationChangesStatus,
     pub changes: Vec<MessageChange>,
     /// Store this and pass it as `after` next time. Opaque.
     pub cursor: String,
@@ -291,6 +321,7 @@ impl From<rim_services::message::dto::ConversationMessageChangesDto>
     fn from(value: rim_services::message::dto::ConversationMessageChangesDto) -> Self {
         Self {
             conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            status: value.status.into(),
             changes: value
                 .changes
                 .into_iter()

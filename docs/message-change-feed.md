@@ -13,6 +13,7 @@ new field or query next to this one.
 query MessageChanges($input: MessageChangesInput!) {
   messageChanges(input: $input) {
     conversationId
+    status          # OK | NO_ACCESS | RESET
     cursor          # store this; pass it back as `after`
     hasMore         # more changes follow `cursor`; ask again right away
     changes {
@@ -44,24 +45,34 @@ The result has one entry per requested conversation, in request order.
 ## Semantics
 
 - **Scope.** Every message of the conversation: timeline messages and thread replies (a reply
-  carries `threadId`). Each requested conversation must be readable by the caller (same gate as
-  `messages`); if any is not, the whole request fails with that error (`NOT_FOUND` or
-  `FORBIDDEN`). An `after` that is not a cursor this API returned fails with `VALIDATION`.
+  carries `threadId`). An `after` that is not a cursor this API returned fails the request with
+  `VALIDATION`; a caller who is not a member of the workspace gets `FORBIDDEN`.
+- **Status, per conversation.** Each entry says how its conversation was answered, so one
+  conversation never stalls the sync of the others:
+  - `OK`: the changes after `after`.
+  - `NO_ACCESS`: the caller cannot read the conversation (same gate as `messages`: removed from
+    it, not a member of a private one, or it does not exist in the workspace). `changes` is
+    empty, `hasMore` is false and `cursor` echoes `after`. Stop syncing it; whether the cached
+    copy is kept is the client's policy.
+  - `RESET`: the stored cursor is ahead of the conversation, because the server's counters were
+    reset after the client stored it (the migration rolled back and re-run, or a database
+    restored from an older backup). The changes are read from the beginning instead. The client
+    drops its cached copy of the conversation, then applies them and follows `hasMore` as in an
+    initial sync. Without this the feed would silently return nothing until the counter caught
+    up, skipping real changes.
 - **Budget.** One request returns at most 1000 changes in total: with many conversations the
   per-conversation `limit` is lowered to share that budget (never below 1). Follow `hasMore`.
-- **Reset.** If the server's counters were reset after a client stored a cursor (the migration
-  rolled back and re-run, or a database restored from an older backup), the stored cursor is
-  ahead of the conversation and the request fails with `CONFLICT`. The client drops its cached
-  copy of that conversation and syncs again with `after: null`. Without this check the feed
-  would silently return nothing until the counter caught up, skipping real changes.
 - **Order.** Changes come oldest first, ordered by `version`.
 - **One entry per message.** A message appears once, at its newest version, carrying its current
   state. Three edits since the cursor give one `EDITED` entry with the latest text, not three.
 - **Kind.** Judged from the current state: `DELETED` if `message.isDeleted`, else `EDITED` if
   `editedAt` is set, else `CREATED`. A client cache can treat every entry as an upsert keyed by
   `message.id` and keep the copy with the higher `version`.
-- **Deletes are tombstones.** A deleted message comes back with `isDeleted: true` and
-  `text: null` (soft delete; the row stays). Hard delete is not supported.
+- **Deletes are tombstones.** A deleted message comes back with `isDeleted: true`, `text: null`
+  and no `attachments` (soft delete; the row stays). Hard delete is not supported.
+- **Edits made before the feed existed.** Messages edited before migration
+  `m20261008_211159_add_message_change_feed` ran have no `editedAt`, so they come back as
+  `CREATED` until they change again.
 - **Cursor.** Opaque string; today it is the conversation's last returned `version`. When
   nothing changed it echoes the cursor that was sent (`"0"` for a null one). Store it per
   conversation.
@@ -76,6 +87,14 @@ The result has one entry per requested conversation, in request order.
 Only changes to the message row itself bump a version: creation, text edits, soft delete, and
 `hasAttachments`. Reactions, pins, mentions, link previews and a message becoming a thread root
 (`rootThreadId`) do not; those stay on their own queries and real-time events.
+
+## Real-time events
+
+The WebSocket subscription keeps delivering new, edited and deleted messages as before; its
+events carry no `version`. A client cache treats an event as a hint: it may show the message
+right away, and it then calls `messageChanges` with the conversation's stored cursor to record
+the change at its version. A client that reconnects after a gap does the same for every cached
+conversation, so a missed event never leaves the cache behind.
 
 ## How versions are assigned
 

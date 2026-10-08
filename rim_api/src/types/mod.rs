@@ -73,9 +73,9 @@ pub use keybind::{
 };
 pub use macro_def::{MacroDef, MacroStep};
 pub use message::{
-    ConversationMessageChanges, LinkPreview, Message, MessageChange, MessageChangeCursorInput,
-    MessageChangeKind, MessageChangesInput, MessageReference, ReactionGroup, SearchMessagesInput,
-    SearchResultMessage,
+    ConversationChangesStatus, ConversationMessageChanges, LinkPreview, Message, MessageChange,
+    MessageChangeCursorInput, MessageChangeKind, MessageChangesInput, MessageReference,
+    ReactionGroup, SearchMessagesInput, SearchResultMessage,
 };
 pub use moderation::{
     MemberTimeout, MessageReport, MessageReportCursorInput, MessageReportCursorOutput,
