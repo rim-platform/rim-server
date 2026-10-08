@@ -49,7 +49,8 @@ pub trait MessageService: Send + Sync {
 
     /// The message change feed (`docs/message-change-feed.md`): for each requested
     /// conversation, the messages created, edited or deleted after its cursor, in version order.
-    /// Every conversation must be readable by the actor, or the whole request fails.
+    /// A conversation the actor cannot read, or whose cursor is ahead of its counter, is reported
+    /// on its own entry (`ConversationChangesStatus`); only a non-member of the workspace fails.
     async fn list_message_changes(
         &self,
         query: ListMessageChangesQuery,

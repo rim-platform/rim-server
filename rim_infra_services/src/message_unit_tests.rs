@@ -21,7 +21,9 @@ mod tests {
         ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, MessageChangeCursor,
         SearchMessagesQuery, SendMessageCmd,
     };
-    use rim_services::message::dto::{MessageChangeKind, MessageReferenceDto};
+    use rim_services::message::dto::{
+        ConversationChangesStatus, MessageChangeKind, MessageReferenceDto,
+    };
     use rim_services::message::service::MessageService;
     use rim_services::{Actor, ServiceError};
 
@@ -1629,24 +1631,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_message_changes_fails_whole_request_for_an_unreadable_conversation() {
-        // No `list_message_changes` expectation: reading any conversation would panic.
+    async fn list_message_changes_reports_an_unreadable_conversation_on_its_entry() {
+        // No `list_message_changes` expectation: reading the conversation would panic.
         let svc = change_feed_service(MockMessageRepository::new(), false);
+        let conv_id = ConversationId::new();
 
-        let err = svc
+        let feed = svc
             .list_message_changes(change_feed_query(
                 vec![MessageChangeCursor {
-                    conversation_id: ConversationId::new(),
-                    after_version: 0,
+                    conversation_id: conv_id,
+                    after_version: 7,
                 }],
                 10,
             ))
             .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            ServiceError::NotFound | ServiceError::PermissionDenied
-        ));
+            .unwrap();
+        assert_eq!(feed.len(), 1);
+        assert_eq!(feed[0].conversation_id, conv_id);
+        assert_eq!(feed[0].status, ConversationChangesStatus::NoAccess);
+        assert!(feed[0].changes.is_empty());
+        assert_eq!(feed[0].cursor, 7, "the cursor is echoed");
+        assert!(!feed[0].has_more);
     }
 
     #[tokio::test]
@@ -1671,16 +1676,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_message_changes_rejects_a_cursor_ahead_of_the_counter() {
+    async fn list_message_changes_restarts_a_cursor_ahead_of_the_counter() {
         // The counters were reset (rollback and re-run, or a restored backup): reading on from
-        // the stored cursor would skip changes, so the client must start over.
+        // the stored cursor would skip changes, so the conversation starts over from 0.
         let mut message_repo = MockMessageRepository::new();
         message_repo
             .expect_latest_change_version()
             .returning(|_| Box::pin(async { Ok(5) }));
+        message_repo
+            .expect_list_message_changes()
+            .withf(|_, after, _| *after == 0)
+            .returning(|_, _, _| Box::pin(async { Ok(vec![]) }));
         let svc = change_feed_service(message_repo, true);
 
-        let err = svc
+        let feed = svc
             .list_message_changes(change_feed_query(
                 vec![MessageChangeCursor {
                     conversation_id: ConversationId::new(),
@@ -1689,8 +1698,9 @@ mod tests {
                 10,
             ))
             .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)));
+            .unwrap();
+        assert_eq!(feed[0].status, ConversationChangesStatus::Reset);
+        assert_eq!(feed[0].cursor, 0);
     }
 
     #[tokio::test]

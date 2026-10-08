@@ -1001,7 +1001,7 @@ async fn non_members_cannot_page_messages() {
 const CHANGES_QUERY: &str = r#"
 query Changes($input: MessageChangesInput!) {
   feed: messageChanges(input: $input) {
-    conversationId cursor hasMore
+    conversationId status cursor hasMore
     changes { kind version editedAt message { ...MessageFields } }
   }
 }
@@ -1020,6 +1020,7 @@ struct Change {
 #[derive(Debug)]
 struct ConversationChanges {
     conversation_id: String,
+    status: String,
     cursor: String,
     has_more: bool,
     changes: Vec<Change>,
@@ -1029,6 +1030,7 @@ impl ConversationChanges {
     fn from_json(v: &Value) -> Self {
         Self {
             conversation_id: v["conversationId"].as_str().expect("id").to_string(),
+            status: v["status"].as_str().expect("status").to_string(),
             cursor: v["cursor"].as_str().expect("cursor").to_string(),
             has_more: v["hasMore"].as_bool().expect("hasMore"),
             changes: v["changes"]
@@ -1218,8 +1220,7 @@ async fn change_feed_reports_creates_edits_and_deletes_since_the_cursor() {
     assert!(idle[0].changes.is_empty());
 }
 
-/// Several conversations in one request, each with its own cursor; any unreadable one fails
-/// the whole request.
+/// Several conversations in one request, each with its own cursor and its own status.
 #[tokio::test]
 async fn change_feed_reads_several_conversations_and_enforces_access() {
     let f = setup().await;
@@ -1261,14 +1262,42 @@ async fn change_feed_reads_several_conversations_and_enforces_access() {
     );
     assert_ne!(later.id, channel_msg.id);
 
-    // Carol is in the workspace but not in the DM; the outsider is in neither. Naming the DM
-    // fails the whole request, even next to a channel she can read.
-    let req = f.changes_request(&f.carol, &[(&f.channel_id, None), (&dm_id, None)], 10);
-    assert_eq!(exec_err_code(&f.schema, req).await, "FORBIDDEN");
+    assert!(feed.iter().all(|c| c.status == "OK"));
+
+    // Carol is in the workspace but not in the DM: the DM is reported on its own entry and the
+    // channel next to it still syncs. The outsider is not in the workspace at all.
+    let req = f.changes_request(
+        &f.carol,
+        &[(&f.channel_id, None), (&dm_id, Some(&channel_cursor))],
+        10,
+    );
+    let data = exec_ok(&f.schema, req).await;
+    let feed: Vec<_> = data["feed"]
+        .as_array()
+        .expect("feed")
+        .iter()
+        .map(ConversationChanges::from_json)
+        .collect();
+    assert_eq!(feed[0].status, "OK");
+    assert!(
+        !feed[0].changes.is_empty(),
+        "the readable channel still syncs"
+    );
+    assert_eq!(feed[1].conversation_id, dm_id);
+    assert_eq!(feed[1].status, "NO_ACCESS");
+    assert!(feed[1].changes.is_empty(), "nothing from the DM leaks");
+    assert_eq!(feed[1].cursor, channel_cursor, "the cursor is echoed");
+    assert!(!feed[1].has_more);
     let req = f.changes_request(&f.outsider, &[(&f.channel_id, None)], 10);
     assert_eq!(exec_err_code(&f.schema, req).await, "FORBIDDEN");
-    let req = f.changes_request(&f.carol, &[(&f.channel_id, None)], 10);
-    exec_ok(&f.schema, req).await;
+
+    // A stored cursor ahead of the server (its counters were reset) restarts from the beginning.
+    let feed = f.changes(&[(&dm_id, Some("999999"))], 10).await;
+    assert_eq!(feed[0].status, "RESET");
+    assert_eq!(
+        feed[0].summary(),
+        vec![(dm_msg.id.clone(), "CREATED".to_string())]
+    );
 
     // A cursor the API never returned.
     for bad in ["not-a-cursor", "-1"] {
