@@ -6,7 +6,7 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId, NewMessage};
-    use rim_core::message::repository::MockMessageRepository;
+    use rim_core::message::repository::{MessageChange, MockMessageRepository};
     use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
     use rim_core::message_mention::repository::MockMessageMentionRepository;
     use rim_core::message_thread::model::{MessageThread, MessageThreadId};
@@ -18,9 +18,10 @@ mod tests {
     use rim_core::user::repository::MockUserRepository;
     use rim_services::message::command::{
         DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-        ListMessagesQuery, ListThreadMessagesQuery, SearchMessagesQuery, SendMessageCmd,
+        ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, MessageChangeCursor,
+        SearchMessagesQuery, SendMessageCmd,
     };
-    use rim_services::message::dto::MessageReferenceDto;
+    use rim_services::message::dto::{MessageChangeKind, MessageReferenceDto};
     use rim_services::message::service::MessageService;
     use rim_services::{Actor, ServiceError};
 
@@ -1447,5 +1448,219 @@ mod tests {
         })
         .await
         .expect("delete succeeds although forgetting notifications failed");
+    }
+
+    fn change_feed_server() -> ServerId {
+        ServerId::from(uuid::Uuid::from_u128(1))
+    }
+
+    /// A service whose access gate admits the actor to every conversation (or to none, with
+    /// `member = false`), wired to `message_repo`.
+    fn change_feed_service(
+        message_repo: MockMessageRepository,
+        member: bool,
+    ) -> DefaultMessageService {
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
+
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |id| {
+            Box::pin(async move {
+                let mut conv = conversation(change_feed_server());
+                conv.id = id;
+                conv.is_private = true;
+                Ok(Some(conv))
+            })
+        });
+
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(move |_cid, _uid| Box::pin(async move { Ok(member) }));
+
+        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_get_attachments_for_messages()
+            .returning(|_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+        let mut thread_repo = MockMessageThreadRepository::new();
+        thread_repo
+            .expect_get_thread_ids_by_root_messages()
+            .returning(|_ids| Box::pin(async { Ok(std::collections::HashMap::new()) }));
+
+        DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(message_attachment_repo),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(thread_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        )
+    }
+
+    fn change_feed_query(
+        conversations: Vec<MessageChangeCursor>,
+        limit: u32,
+    ) -> ListMessageChangesQuery {
+        ListMessageChangesQuery {
+            actor: Actor::new(UserId::new()),
+            server_id: change_feed_server(),
+            conversations,
+            limit,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_derives_kinds_and_the_next_cursor() {
+        let conv_id = ConversationId::new();
+        let author = UserId::new();
+        let created = message(author, conv_id);
+        let edited = message(author, conv_id);
+        let mut deleted = message(author, conv_id);
+        deleted.is_deleted = true;
+        let beyond_the_page = message(author, conv_id);
+        let rows = vec![
+            MessageChange {
+                message: created.clone(),
+                version: 8,
+                edited_at: None,
+            },
+            MessageChange {
+                message: edited.clone(),
+                version: 9,
+                edited_at: Some(chrono::Utc::now()),
+            },
+            // Deleted wins over edited.
+            MessageChange {
+                message: deleted.clone(),
+                version: 11,
+                edited_at: Some(chrono::Utc::now()),
+            },
+            MessageChange {
+                message: beyond_the_page,
+                version: 12,
+                edited_at: None,
+            },
+        ];
+
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_list_message_changes()
+            .withf(move |cid, after, limit| *cid == conv_id && *after == 7 && *limit == 3)
+            .return_once(move |_, _, _| Box::pin(async move { Ok(rows) }));
+        let svc = change_feed_service(message_repo, true);
+
+        let feed = svc
+            .list_message_changes(change_feed_query(
+                vec![MessageChangeCursor {
+                    conversation_id: conv_id,
+                    after_version: 7,
+                }],
+                3,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(feed.len(), 1);
+        let entry = &feed[0];
+        assert_eq!(entry.conversation_id, conv_id);
+        assert!(entry.has_more, "the repo returned limit + 1 rows");
+        assert_eq!(
+            entry.cursor, 11,
+            "the last returned change, not the extra row"
+        );
+        assert_eq!(
+            entry
+                .changes
+                .iter()
+                .map(|c| (c.message.id, c.version, c.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (created.id, 8, MessageChangeKind::Created),
+                (edited.id, 9, MessageChangeKind::Edited),
+                (deleted.id, 11, MessageChangeKind::Deleted),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_echoes_the_cursor_when_nothing_changed() {
+        let conv_id = ConversationId::new();
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_list_message_changes()
+            .return_once(|_, _, _| Box::pin(async { Ok(vec![]) }));
+        let svc = change_feed_service(message_repo, true);
+
+        let feed = svc
+            .list_message_changes(change_feed_query(
+                vec![MessageChangeCursor {
+                    conversation_id: conv_id,
+                    after_version: 42,
+                }],
+                10,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(feed[0].cursor, 42);
+        assert!(!feed[0].has_more);
+        assert!(feed[0].changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_fails_whole_request_for_an_unreadable_conversation() {
+        // No `list_message_changes` expectation: reading any conversation would panic.
+        let svc = change_feed_service(MockMessageRepository::new(), false);
+
+        let err = svc
+            .list_message_changes(change_feed_query(
+                vec![MessageChangeCursor {
+                    conversation_id: ConversationId::new(),
+                    after_version: 0,
+                }],
+                10,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ServiceError::NotFound | ServiceError::PermissionDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn list_message_changes_rejects_bad_requests_before_reading() {
+        let svc = change_feed_service(MockMessageRepository::new(), true);
+        let cursor = |after_version| MessageChangeCursor {
+            conversation_id: ConversationId::new(),
+            after_version,
+        };
+
+        let err = svc
+            .list_message_changes(change_feed_query(vec![cursor(-1)], 10))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
+
+        let err = svc
+            .list_message_changes(change_feed_query((0..101).map(|_| cursor(0)).collect(), 10))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 }

@@ -72,6 +72,21 @@ pub struct MessageSearchHit {
     pub headline: Option<String>,
 }
 
+/// One entry of a conversation's message change feed: a message's state after its latest change.
+///
+/// `version` is the message's position in the conversation's change sequence. The database
+/// assigns it on every insert and on every change of `text`, `is_deleted` or `has_attachments`
+/// (migration `m20261008_211159_add_message_change_feed`), from a per-conversation counter whose
+/// row lock is held until commit, so versions become visible in increasing order with no gaps
+/// skipped by a reader. A message appears once in the feed, at its newest version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageChange {
+    pub message: Message,
+    pub version: i64,
+    /// Set by the database whenever the message's text changes; `None` for a never-edited message.
+    pub edited_at: Option<DateTime<Utc>>,
+}
+
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageRepository: Send + Sync {
@@ -112,6 +127,16 @@ pub trait MessageRepository: Send + Sync {
     ) -> RepoResult<Message>;
 
     async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+
+    /// Messages of a conversation (timeline and threads, deleted included) whose `version` is
+    /// greater than `after_version`, ordered by `version` ascending. Returns up to `limit + 1`
+    /// rows so the caller can tell whether more remain; it does not truncate.
+    async fn list_message_changes(
+        &self,
+        conversation_id: ConversationId,
+        after_version: i64,
+        limit: u32,
+    ) -> RepoResult<Vec<MessageChange>>;
 
     /// `sent_at` of the newest message `author` sent in the conversation (timeline or thread,
     /// deleted or not), or `None`. The slow-mode check (Track 1.2) reads it instead of keeping
