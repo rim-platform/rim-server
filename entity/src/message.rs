@@ -16,6 +16,8 @@ pub struct Model {
     pub text: Option<String>,
     pub is_deleted: bool,
     pub has_attachments: bool,
+    pub version: i64,
+    pub edited_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Context, InputObject, Object, Result, SimpleObject};
+use async_graphql::{ComplexObject, Context, Enum, InputObject, Object, Result, SimpleObject};
 
 use super::{Attachment, ConversationTypeEnum, MessageCursorInput, User};
 use crate::resolve::ResolveExt;
@@ -215,6 +215,96 @@ pub struct SearchMessagesInput {
     pub cursor: Option<MessageCursorInput>,
     /// Defaults to `AFTER` (most-recent-first) if omitted.
     pub dir: Option<crate::pagination::PageDir>,
+}
+
+// ── Message change feed ───────────────────────────────────────────────────
+//
+// Frozen contract for the client cache: see `docs/message-change-feed.md` before changing any
+// of these types.
+
+/// One conversation to read in `messageChanges`, with the cursor the client stored for it.
+#[derive(InputObject, Clone, Debug)]
+pub struct MessageChangeCursorInput {
+    pub conversation_id: async_graphql::ID,
+    /// The `cursor` a previous `messageChanges` call returned for this conversation. Opaque.
+    /// Omit (or pass null) to read the conversation's whole history from the beginning.
+    pub after: Option<String>,
+}
+
+/// Input for `messageChanges`.
+#[derive(InputObject, Clone, Debug)]
+pub struct MessageChangesInput {
+    pub server_id: async_graphql::ID,
+    /// At most 100 conversations; each must be readable by the caller or the request fails.
+    pub conversations: Vec<MessageChangeCursorInput>,
+    /// Maximum changes per conversation. Clamped to 1..=200; defaults to 100.
+    pub limit: Option<i32>,
+}
+
+/// What happened to a message, judged from its state at its newest change. `DELETED` wins over
+/// `EDITED`; a message whose text never changed is `CREATED`.
+#[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MessageChangeKind {
+    Created,
+    Edited,
+    Deleted,
+}
+
+impl From<rim_services::message::dto::MessageChangeKind> for MessageChangeKind {
+    fn from(value: rim_services::message::dto::MessageChangeKind) -> Self {
+        use rim_services::message::dto::MessageChangeKind as Kind;
+        match value {
+            Kind::Created => Self::Created,
+            Kind::Edited => Self::Edited,
+            Kind::Deleted => Self::Deleted,
+        }
+    }
+}
+
+/// A message as it is now, at its newest change. A message appears at most once per page.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MessageChange {
+    pub kind: MessageChangeKind,
+    /// The message's position in its conversation's change sequence, as a decimal string.
+    /// Increases with every change; compare it to a cached copy to keep the newer one.
+    pub version: String,
+    /// When the text last changed; null for a never-edited message.
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The message. Deleted messages come back with `isDeleted: true` and null `text`.
+    pub message: Message,
+}
+
+/// The changes of one conversation after the requested cursor, oldest first.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ConversationMessageChanges {
+    pub conversation_id: async_graphql::ID,
+    pub changes: Vec<MessageChange>,
+    /// Store this and pass it as `after` next time. Opaque.
+    pub cursor: String,
+    /// More changes follow `cursor`; ask again with it right away.
+    pub has_more: bool,
+}
+
+impl From<rim_services::message::dto::ConversationMessageChangesDto>
+    for ConversationMessageChanges
+{
+    fn from(value: rim_services::message::dto::ConversationMessageChangesDto) -> Self {
+        Self {
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            changes: value
+                .changes
+                .into_iter()
+                .map(|change| MessageChange {
+                    kind: change.kind.into(),
+                    version: change.version.to_string(),
+                    edited_at: change.edited_at,
+                    message: change.message.into(),
+                })
+                .collect(),
+            cursor: value.cursor.to_string(),
+            has_more: value.has_more,
+        }
+    }
 }
 
 #[derive(SimpleObject, Clone, Debug)]

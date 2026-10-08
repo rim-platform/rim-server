@@ -131,3 +131,24 @@ pub struct DeleteMessageCmd {
 
     pub hard: bool,
 }
+
+/// One conversation to read in [`ListMessageChangesQuery`], with the version the client last
+/// synced to (`0` for "from the beginning").
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MessageChangeCursor {
+    pub conversation_id: ConversationId,
+    pub after_version: i64,
+}
+
+/// The message change feed: what changed in these conversations since each one's cursor.
+/// See `docs/message-change-feed.md`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ListMessageChangesQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversations: Vec<MessageChangeCursor>,
+    /// Maximum changes returned per conversation.
+    pub limit: u32,
+}

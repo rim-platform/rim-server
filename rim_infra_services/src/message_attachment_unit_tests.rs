@@ -223,6 +223,7 @@ mod tests {
                 has_attachments: bool,
             ) -> RepoResult<Message>;
             async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+            async fn list_message_changes(&self, conversation_id: ConversationId, after_version: i64, limit: u32) -> RepoResult<Vec<rim_core::message::repository::MessageChange>>;
             async fn last_sent_at_by_author(&self, conversation_id: ConversationId, author: UserId) -> RepoResult<Option<chrono::DateTime<chrono::Utc>>>;
             async fn list_thread_participant_ids(&self, thread_id: rim_core::message_thread::model::MessageThreadId) -> RepoResult<Vec<UserId>>;
         }

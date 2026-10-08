@@ -5,11 +5,12 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::message::command::{
     DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-    ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
-    SendMessageCmd,
+    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
+    SearchMessagesQuery, SendMessageCmd,
 };
 use crate::message::dto::{
-    MessageDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
+    ConversationMessageChangesDto, MessageDto, MessagePageCursor, MessageReferenceDto,
+    MessageSearchHitDto,
 };
 use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
@@ -45,6 +46,14 @@ pub trait MessageService: Send + Sync {
         &self,
         query: SearchMessagesQuery,
     ) -> ServiceResult<Page<MessageSearchHitDto, MessagePageCursor>>;
+
+    /// The message change feed (`docs/message-change-feed.md`): for each requested
+    /// conversation, the messages created, edited or deleted after its cursor, in version order.
+    /// Every conversation must be readable by the actor, or the whole request fails.
+    async fn list_message_changes(
+        &self,
+        query: ListMessageChangesQuery,
+    ) -> ServiceResult<Vec<ConversationMessageChangesDto>>;
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto>;
 
