@@ -58,8 +58,9 @@ install-time validation live in the desktop plugin host, not in the backend:
 
 The manifest uses snake_case keys and describes:
 
-- identity: `manifest_version` (always `1`), `plugin_id` (reverse-domain), `display_name`,
-  `version`, `description`, `author`
+- identity: `manifest_version` (always `1`), `plugin_id` (reverse-domain: at least three
+  dot-separated segments of ASCII letters, digits and hyphens), `display_name`, `version`,
+  `description`, `author`
 - runtime: `runtime_kind` (always `"DesktopLocalProcess"`) and `entrypoint`
 - `capabilities` the plugin requests
 - `commands`, each with `id`, `title`, `description`, `arguments`, `dangerous`,
@@ -71,7 +72,7 @@ A plugin without `rim-plugin.json` can instead put its manifest in comment heade
 a `main.ts`, `main.js` or `main.py` entrypoint ("simple mode", `simple_manifest.rs`):
 
 ```text
-# rim-plugin: dev.example.my_tool
+# rim-plugin: dev.example.my-tool
 # rim-name: My Tool
 # rim-version: 1.0.0
 # rim-description: Does useful things

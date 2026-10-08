@@ -56,8 +56,9 @@ in [section 17](#17-method-reference-what-exists-and-what-does-not).
 ## 2. Process and transport
 
 A plugin is a directory with a manifest (`rim-plugin.json`) and an `entrypoint` file. The manifest
-format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`), not by this
-protocol; this document only refers to the manifest fields the protocol depends on.
+format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`, and comment-header
+"simple mode" in `simple_manifest.rs`), not by this protocol; this document only refers to the
+manifest fields the protocol depends on. Section 19 shows a minimal manifest.
 
 The host starts the plugin like this:
 
@@ -147,8 +148,7 @@ Further rules:
   directions are independent: your ids only need to be unique among your own pending requests.
 - The host answers every request you send, including denials, so a plugin never has to time out
   on the host. The host does time out on plugins (10 seconds for the handshake, 5 for a
-  heartbeat, 30 for a command); a late answer to a request the host gave up on is logged and
-  dropped.
+  heartbeat, 30 for a command); a late answer to a request the host gave up on is dropped.
 
 ## 6. Connection lifecycle
 
@@ -178,7 +178,7 @@ host                                              plugin
    and may log. A plugin with nothing to do just waits on stdin.
 4. **Stopping.** The host sends `rim.shutdown`, then closes stdin. The plugin exits
    (section 15). A plugin MUST also exit when stdin reaches end-of-file without a
-   `rim.shutdown`, because that is how a host that crashed or failed the handshake says goodbye.
+   `rim.shutdown`, because that is how a host that crashed says goodbye.
 
 If the plugin exits or crashes on its own, the connection ends, commands for it fail with
 "plugin process is not running", and the user can start it again by re-enabling it. The host does
@@ -242,7 +242,8 @@ any plugin, including one from the future.
   newest one it speaks. Every frame after the handshake follows the chosen version.
 - **A plugin that speaks none of the offered versions** answers `accepted: false`, sets
   `protocolVersion` to the version it does speak, and says why in `error`. The host logs the
-  reason and stops the plugin. For example:
+  reason and stops the plugin, so a plugin that refuses SHOULD exit right after sending its
+  answer. For example:
 
   ```json
   {
@@ -262,6 +263,8 @@ any plugin, including one from the future.
 - The host also stops the plugin when the answer picks a version it did not offer, when
   `pluginId` differs from the one it sent, when the result does not have the shape above, or when
   the answer is a JSON-RPC `error` instead of a `result`.
+- After a failed handshake the host sends no `rim.shutdown` and does not close stdin first; it
+  goes straight to steps 3 to 5 of section 15 (one second to exit, then `SIGTERM`, then a kill).
 - The handshake is the host's first request and happens once per connection. There is no
   re-negotiation; a plugin that wants another version is restarted.
 
@@ -481,15 +484,13 @@ The host enforces capabilities in two places:
 
 ### Capability names
 
-**What a manifest can declare today.** The host's install-time validation
-(`rim-ui/src-tauri/src/plugin_host/validation.rs`) accepts only plugin-scoped keys of the form
-`plugin.<pluginId>.<verb>`, lowercase, from `[a-z0-9_.]`, 4 to 128 bytes, with no segment named
-`system`, `internal`, `admin` or `audit`. For example `plugin.dev.example.k8s_tools.restart_pod`.
-These keys exist so the user can approve, say, "restart pods" separately from "list pods", and
-so `required_capabilities` on a command can point at them. A plugin id containing a character
-outside `[a-z0-9_.]` (a hyphen, for instance) cannot declare any capability.
+The protocol knows two kinds of capability name. Both are valid in `grantedCapabilities` in v1:
 
-**Host capability names.** The host's capability table also knows these built-in names:
+- **Plugin-scoped names**, `plugin.<pluginId>.<verb>`, such as
+  `plugin.dev.example.k8stools.restart_pod`. They exist so the user can approve, say, "restart
+  pods" separately from "list pods", and so `required_capabilities` on a command can point at
+  them. The host guards no method of its own with them; it checks them only on commands.
+- **Built-in names**, which guard host methods:
 
 | Capability | Guards |
 |---|---|
@@ -502,10 +503,32 @@ outside `[a-z0-9_.]` (a hyphen, for instance) cannot declare any capability.
 | `network` | `rim.network.http_request`, `rim.network.websocket_connect` (unimplemented) |
 | `fs.read`, `fs.write` | `rim.fs.read_file`, `rim.fs.list_dir`, `rim.fs.write_file` (unimplemented) |
 
-None of the methods these names guard is part of frozen v1 (section 17), and because install-time
-validation only accepts `plugin.<pluginId>.` keys, **no installed plugin can currently be granted
-a built-in name**. Reconciling the two lists is host work that will land with the first host
-method that needs one; until then, do not declare built-in names in a manifest.
+None of the methods the built-in names guard is part of frozen v1 (section 17).
+
+### What the host enforces today
+
+These are properties of the current rim-ui host, not of the protocol, and a later host may relax
+them without a protocol change. Check the host's install-time validation
+(`rim-ui/src-tauri/src/plugin_host/validation.rs`) for the version you target.
+
+- **Only plugin-scoped names can be declared.** Install-time validation accepts a manifest
+  capability only if it has the form `plugin.<pluginId>.<verb>`, uses only `[a-z0-9_.]`, is 4 to
+  128 bytes long, and has no segment named `system`, `internal`, `admin` or `audit`. A manifest
+  that declares anything else, a built-in name included, **fails to install**. So no installed
+  plugin can hold a built-in name, and `rim.ui.update_panel` is always answered
+  `CAPABILITY_DENIED`.
+- **Some plugin ids cannot declare any capability.** A plugin id is at least three dot-separated
+  segments of ASCII letters, digits and hyphens (`dev.example.hello-world`). Since capability
+  names allow only lowercase letters, digits, `_` and `.`, a plugin id with an uppercase letter or
+  a hyphen can declare no capability at all. Pick a lowercase id without hyphens
+  (`dev.example.k8stools`) if your plugin needs capabilities.
+- **Revocation reaches a running plugin only partly.** `grantedCapabilities` is the approved list
+  when the connection started, and v1 has no notification for changes to it. When the user
+  approves or revokes a capability while the plugin runs, the command gate applies the change at
+  once, but the plugin's own calls to the host are still checked against the start-time list
+  until the process stops. Revoking also marks the plugin disabled, so it does not start with the
+  app next time, but the running process is not stopped. A plugin that needs a newly approved
+  capability should ask the user to disable and re-enable it.
 
 ### Rules for v1
 
@@ -514,12 +537,6 @@ method that needs one; until then, do not declare built-in names in a manifest.
   finding it in `grantedCapabilities`.
 - A capability is a host-side permission, not a sandbox. A local plugin process runs as the user
   and can do anything the user can; capabilities govern what the **host** will do for it.
-- `grantedCapabilities` is the approved list when the connection started, and v1 has no
-  notification for changes to it. If the user approves or revokes a capability while the plugin
-  runs, the command gate applies the change at once, but the plugin's own calls to the host are
-  checked against the start-time list until the plugin is restarted (disabled and enabled, or the
-  app restarted). A plugin that needs a newly approved capability should ask the user to restart
-  it.
 
 ## 13. Heartbeats
 
@@ -656,7 +673,7 @@ on them.
 | `rim.chat.search_messages` | plugin → host | `chat.read` | Not wired, as above. |
 | `rim.events.subscribe` | plugin → host | `events.read` | Not wired: answered `INTERNAL_ERROR` ("event forwarder not configured"). |
 | `rim.event.<type>` | host → plugin | `events.read` | Never sent today, since nothing can subscribe. |
-| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store, but `ui.panel` cannot be granted yet (section 12), so it is answered `CAPABILITY_DENIED`. |
+| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store, but today's host cannot grant `ui.panel` (section 12), so it is answered `CAPABILITY_DENIED`. |
 
 The chat read and send calls are deliberately **not in v1**: they will go through the client's
 single message service, so that a plugin sees exactly what the user sees, before their shapes are
@@ -680,14 +697,14 @@ Calling one gets `METHOD_NOT_FOUND`, except that a name in the host's capability
 
 ## 18. Worked example: one whole session
 
-A plugin `dev.example.k8s_tools` with two commands, `list_pods` and `restart_pod` (dangerous).
+A plugin `dev.example.k8stools` with two commands, `list_pods` and `restart_pod` (dangerous).
 Arrows show direction; each line is one frame's JSON payload.
 
 ```text
 # 1. The host starts the plugin and handshakes. The plugin logs before answering, which is allowed.
-host → plugin  {"jsonrpc":"2.0","id":1,"method":"rim.handshake","params":{"protocolVersion":1,"supportedVersions":[1],"pluginId":"dev.example.k8s_tools","hostVersion":"0.1.0","grantedCapabilities":["plugin.dev.example.k8s_tools.restart_pod"],"principal":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"}}}
-plugin → host  {"jsonrpc":"2.0","method":"rim.log","params":{"level":"info","message":"k8s_tools starting"}}
-plugin → host  {"jsonrpc":"2.0","id":1,"result":{"accepted":true,"protocolVersion":1,"pluginId":"dev.example.k8s_tools"}}
+host → plugin  {"jsonrpc":"2.0","id":1,"method":"rim.handshake","params":{"protocolVersion":1,"supportedVersions":[1],"pluginId":"dev.example.k8stools","hostVersion":"0.1.0","grantedCapabilities":["plugin.dev.example.k8stools.restart_pod"],"principal":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"}}}
+plugin → host  {"jsonrpc":"2.0","method":"rim.log","params":{"level":"info","message":"k8stools starting"}}
+plugin → host  {"jsonrpc":"2.0","id":1,"result":{"accepted":true,"protocolVersion":1,"pluginId":"dev.example.k8stools"}}
 
 # 2. The user runs "List pods" from the palette.
 host → plugin  {"jsonrpc":"2.0","id":2,"method":"rim.command.execute","params":{"commandId":"list_pods","args":{"namespace":"prod"},"invoker":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"},"initiator":"user","confirmed":false}}
@@ -720,8 +737,30 @@ found". Note in step 3 that the plugin's string id `"p-1"` comes back unchanged.
 
 ## 19. A complete plugin in Python
 
-A conforming v1 plugin, standard library only. Save it as `main.py`, make it executable, and
-point the manifest's `entrypoint` at it. It declares one command, `greet`.
+A conforming v1 plugin, standard library only, with one command, `greet`. Put two files in one
+directory: the manifest `rim-plugin.json`,
+
+```json
+{
+  "manifest_version": 1,
+  "plugin_id": "dev.example.greeter",
+  "display_name": "Greeter",
+  "version": "0.1.0",
+  "description": "Says hello.",
+  "runtime_kind": "DesktopLocalProcess",
+  "entrypoint": "main.py",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "Greeter: Greet",
+      "description": "Greets someone by name.",
+      "arguments": [{ "name": "name", "type": "string", "required": false }]
+    }
+  ]
+}
+```
+
+and `main.py`, made executable (`chmod +x main.py`):
 
 ```python
 #!/usr/bin/env python3
