@@ -66,13 +66,20 @@ communication, with the critical addition of capability-based security on every 
 
 ### Wire Protocol
 
-- **Transport:** stdin/stdout
-- **Framing:** 4-byte length-prefixed messages
-- **Format:** JSON-RPC 2.0 (with optional MessagePack upgrade)
-- **Direction:** Bidirectional — host calls plugin, plugin calls host
-- **Security:** Every plugin→host call is checked against approved capabilities
+Plugin protocol v1 is frozen. The normative spec is
+[`docs/specs/plugin-protocol-v1.md`](specs/plugin-protocol-v1.md); the machine-readable contract is
+`rim-ui/protocol/plugin-protocol-v1.schema.json`.
 
-See `docs/local_plugin_host.md` for the full protocol specification.
+- **Transport:** stdin/stdout; stderr is free-form logging
+- **Framing:** 4-byte little-endian length prefix, then UTF-8 JSON, at most 4 MiB per frame
+- **Format:** JSON-RPC 2.0 only (no MessagePack in v1)
+- **Direction:** Bidirectional — host calls plugin, plugin calls host
+- **People:** plugins see a person only as `{ principalId, displayName }`
+- **Security:** Every plugin→host call is checked against approved capabilities, and dangerous
+  commands run only after the user confirms each run
+
+`docs/local_plugin_host.md` describes how the desktop host installs, starts and stops plugins and
+hosts their panels.
 
 ### Plugin Types
 
@@ -90,14 +97,15 @@ The plugin protocol is designed so that:
 
 - A Python script can be a plugin (read stdin, parse JSON, write stdout)
 - A compiled Rust binary can be a plugin
-- No SDK is required — the protocol is simple enough to implement from scratch
-- Optional thin SDKs (rimkit-python, rimkit-rust, rimkit-js) reduce boilerplate
+- No SDK is required — the protocol is simple enough to implement from scratch (the spec ends
+  with a complete plugin in Python)
+- A TypeScript SDK is planned in rim-ui (`sdk/`) to reduce boilerplate; other languages may follow
 
 ## Runtime Kind
 
-The first real plugin system should support only:
+The first real plugin system supports only:
 
-- `desktop_local`
+- `DesktopLocalProcess` (the manifest's `runtime_kind`)
 
 This means plugins are local extensions, not backend-hosted services.
 
@@ -159,6 +167,9 @@ Examples:
 - `local.process`
 - `local.filesystem`
 - `http.outbound`
+
+Protocol v1, section 12, says which capability names a manifest can declare today and which
+host methods each built-in name guards.
 
 Capabilities should be:
 
@@ -234,7 +245,8 @@ supported — they register commands, event handlers, and automations without an
 
 ### UI Slots
 
-Plugins declare their UI surfaces in the manifest. Available slots:
+Direction, not implemented yet: today a manifest panel has only `id`, `title` and `description`,
+and the host decides where it renders. The intended slots are:
 
 | Slot | Location | Size | Use Cases |
 |---|---|---|---|
@@ -262,23 +274,24 @@ provides pre-styled components.
 2. **Frontend channel:** Plugin iframe ↔ Host UI via postMessage.
    Used for: UI rendering, navigation, notifications, theme sync.
 
-The Plugin SDK abstracts both channels behind a single API.
+Only the backend channel is frozen (plugin protocol v1). The frontend channel is not frozen yet;
+`docs/local_plugin_host.md` lists which of its messages work today. A future SDK is meant to
+abstract both channels behind a single API.
 
 ### Headless Plugins
 
 Plugins without UI panels are fully supported:
 - Register commands, context actions, keybinds
-- Subscribe to workspace events
-- Execute automations in response to events
 - Communicate only via the backend JSON-RPC channel
+- Event subscriptions and automations triggered by events are planned; `rim.events.subscribe` is
+  not part of protocol v1 yet
 - Example: CI/CD bot, issue tracker integration, message auto-responder
 
-### Lazy Process Startup
+### Process Startup
 
-Plugin processes are not started at application launch:
-1. Manifests are loaded and extension points registered (metadata only)
-2. Plugin process starts only when first needed (command invoked, panel opened)
-3. After idle timeout, plugin process may be gracefully stopped
+A plugin process starts when the user enables the plugin, and at app start for every plugin that
+was enabled when the app last ran. Lazy start on first use and an idle stop are possible later
+optimisations; neither exists in v1.
 
 ## Future Expansion
 
