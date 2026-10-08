@@ -138,12 +138,45 @@ access to the conversation). Being `Mutating`, they are refused while the caller
 | `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
 | `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
 
-AI-callable builtins: 27 (the 21 of Track 1.1, plus `admin.timeout`, `chat.set_slow_mode` and
-`chat.report_message` from Track 1.2, plus the three `notifications.*` builtins of Track 1.3),
-pinned by `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
-`list_commands_ai_surface_returns_twenty_seven_commands_with_caps` (`command_tests.rs`). The
+General builtins made AI-callable in Track 4.1. None declares a new capability. The navigation
+commands are `DesktopLocal`: the server refuses to execute them, so the desktop agent runs them
+through the client's local handlers, and only when they are `Safe` and not dangerous (anything
+stricter goes to `executeCommand`, which refuses it). The five writes were raised from `Safe` to
+`Mutating` (ai-reframe review §8.3), which has three effects beyond the agent's confirmation
+gate: a timed-out member can no longer run them through the command path (T1; the GraphQL
+`markAsRead` mutation is not affected), server-side pipelines (initiator `Plugin`) can no longer
+run them because nobody is there to confirm, and they count towards the agent's per-turn
+mutating-call cap. Palette and keybind still run them in one step.
+
+| Id | Args | Sensitivity | Agent confirmation | Notes |
+|---|---|---|---|---|
+| `workspace.open_search`, `workspace.search_in_channel`, `workspace.open_marketplace`, `workspace.toggle_sidebar`, `workspace.previous_channel`, `workspace.next_channel`, `workspace.next_unread_channel`, `workspace.close_panel`, `workspace.reopen_last_thread`, `chat.scroll_to_bottom`, `chat.scroll_to_top` | none | `Safe` | no | `DesktopLocal`, run by the client |
+| `state.get` | `server_id`, `key`, `scope?` | `Safe` | no | Read |
+| `state.list` | `server_id`, `prefix?`, `scope?`, `limit?` | `Safe` | no | Read |
+| `state.set` | `server_id`, `key`, `value`, `scope?`, `ttl?` | `Mutating` | yes | |
+| `state.incr` | `server_id`, `key`, `delta?`, `scope?` | `Mutating` | yes | |
+| `state.delete` | `server_id`, `key`, `scope?` | `Mutating` | yes | |
+| `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | |
+| `chat.create_group` | `server_id`, `member_ids`, `title?` | `Mutating` | yes | `member_ids` is a JSON array or one comma-separated string |
+
+Data the agent sends to its model provider grows with this set: `state.get` and `state.list` return
+stored values, including the caller's own `scope: user` entries, and nothing redacts secrets kept
+in workspace state. Kept off the AI surface on purpose: `chat.edit_message`,
+`chat.delete_message`, `chat.reply_to_selected_message` and `chat.copy_message_text` (they act on
+the user's selected message, which the agent cannot supply), `admin.invite_member` (its result is
+an invite token that would pass through the model provider), and `chat.mark_all_as_read`
+(duplicates `notifications.mark_all_read`).
+
+List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
+comma-separated string, because the agent's tool schema types every argument as a scalar.
+
+AI-callable builtins: 45 (the 21 of Track 1.1, plus `admin.timeout`, `chat.set_slow_mode` and
+`chat.report_message` from Track 1.2, plus the three `notifications.*` builtins of Track 1.3, plus
+the eighteen general builtins of Track 4.1), pinned by
+`collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
+`list_commands_ai_surface_returns_forty_five_commands_with_caps` (`command_tests.rs`). The
 capability union the AI surface checks is unchanged (`admin.manage_members`, `chat.read`,
-`chat.write`), since the notification builtins declare none.
+`chat.write`), since neither the notification nor the Track 4.1 builtins declare any.
 
 ### Plugin-Provided Commands
 
