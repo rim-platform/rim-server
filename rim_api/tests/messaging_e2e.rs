@@ -995,3 +995,322 @@ async fn non_members_cannot_page_messages() {
         "non-members cannot post into the DM either"
     );
 }
+
+// ── Message change feed (`docs/message-change-feed.md`) ─────────────────────
+
+const CHANGES_QUERY: &str = r#"
+query Changes($input: MessageChangesInput!) {
+  feed: messageChanges(input: $input) {
+    conversationId status cursor hasMore
+    changes { kind version editedAt message { ...MessageFields } }
+  }
+}
+"#;
+
+/// One feed entry as a client sees it.
+#[derive(Debug)]
+struct Change {
+    kind: String,
+    version: i64,
+    edited: bool,
+    message: Msg,
+}
+
+/// One conversation's slice of a `messageChanges` response.
+#[derive(Debug)]
+struct ConversationChanges {
+    conversation_id: String,
+    status: String,
+    cursor: String,
+    has_more: bool,
+    changes: Vec<Change>,
+}
+
+impl ConversationChanges {
+    fn from_json(v: &Value) -> Self {
+        Self {
+            conversation_id: v["conversationId"].as_str().expect("id").to_string(),
+            status: v["status"].as_str().expect("status").to_string(),
+            cursor: v["cursor"].as_str().expect("cursor").to_string(),
+            has_more: v["hasMore"].as_bool().expect("hasMore"),
+            changes: v["changes"]
+                .as_array()
+                .expect("changes")
+                .iter()
+                .map(|c| Change {
+                    kind: c["kind"].as_str().expect("kind").to_string(),
+                    version: c["version"]
+                        .as_str()
+                        .expect("version")
+                        .parse()
+                        .expect("decimal version"),
+                    edited: !c["editedAt"].is_null(),
+                    message: Msg::from_json(&c["message"]),
+                })
+                .collect(),
+        }
+    }
+
+    fn summary(&self) -> Vec<(String, String)> {
+        self.changes
+            .iter()
+            .map(|c| (c.message.id.clone(), c.kind.clone()))
+            .collect()
+    }
+}
+
+impl Fixture {
+    /// `messageChanges` for `(conversation_id, after)` pairs, as `who`.
+    fn changes_request(
+        &self,
+        who: &Caller,
+        conversations: &[(&str, Option<&str>)],
+        limit: i64,
+    ) -> async_graphql::Request {
+        let conversations: Vec<Value> = conversations
+            .iter()
+            .map(|(id, after)| json!({ "conversationId": id, "after": after }))
+            .collect();
+        who.request(
+            &Self::with_fragments(CHANGES_QUERY),
+            json!({ "input": {
+                "serverId": self.server_id,
+                "conversations": conversations,
+                "limit": limit,
+            } }),
+        )
+    }
+
+    async fn changes(
+        &self,
+        conversations: &[(&str, Option<&str>)],
+        limit: i64,
+    ) -> Vec<ConversationChanges> {
+        let data = exec_ok(
+            &self.schema,
+            self.changes_request(&self.alice, conversations, limit),
+        )
+        .await;
+        data["feed"]
+            .as_array()
+            .expect("feed")
+            .iter()
+            .map(ConversationChanges::from_json)
+            .collect()
+    }
+
+    /// Follow one conversation's feed from `after` until `hasMore` is false, the way a client
+    /// catches up. Returns every change and the cursor to store.
+    async fn sync(
+        &self,
+        conversation_id: &str,
+        after: Option<&str>,
+        limit: i64,
+    ) -> (Vec<Change>, String) {
+        let mut all = Vec::new();
+        let mut cursor = after.map(str::to_string);
+        for _ in 0..50 {
+            let mut feed = self
+                .changes(&[(conversation_id, cursor.as_deref())], limit)
+                .await;
+            let page = feed.pop().expect("one conversation");
+            assert!(page.changes.len() <= limit as usize);
+            all.extend(page.changes);
+            cursor = Some(page.cursor);
+            if !page.has_more {
+                return (all, cursor.expect("cursor"));
+            }
+        }
+        panic!("sync did not terminate");
+    }
+
+    async fn edit(&self, who: &Caller, msg: &Msg, text: &str) {
+        exec_ok(
+            &self.schema,
+            who.request(
+                &Self::with_fragments(EDIT_MUTATION),
+                json!({ "input": {
+                    "serverId": self.server_id,
+                    "conversationId": self.channel_id,
+                    "messageId": msg.id,
+                    "text": text,
+                } }),
+            ),
+        )
+        .await;
+    }
+}
+
+/// A client syncs from scratch, stores the cursor, and later learns about edits and deletes
+/// (timeline and thread alike) without re-reading the conversation.
+#[tokio::test]
+async fn change_feed_reports_creates_edits_and_deletes_since_the_cursor() {
+    let f = setup().await;
+    let sent = f.send_many(3, "feed message").await;
+    let reply = f.reply(&f.bob, &sent[0], "feed reply").await;
+
+    // Initial sync from the beginning, two changes per page.
+    let (initial, cursor) = f.sync(&f.channel_id, None, 2).await;
+    let created: Vec<(String, String)> = initial
+        .iter()
+        .map(|c| (c.message.id.clone(), c.kind.clone()))
+        .collect();
+    let expected: Vec<(String, String)> = sent
+        .iter()
+        .chain(std::iter::once(&reply))
+        .map(|m| (m.id.clone(), "CREATED".to_string()))
+        .collect();
+    assert_eq!(created, expected, "every message once, in write order");
+    assert!(initial.windows(2).all(|w| w[0].version < w[1].version));
+    assert_eq!(
+        initial[3].message.thread_id, reply.thread_id,
+        "thread replies are in the feed"
+    );
+    assert!(initial.iter().all(|c| !c.edited));
+
+    // Nothing changed: an empty page that hands back the same cursor.
+    let idle = f.changes(&[(&f.channel_id, Some(&cursor))], 10).await;
+    assert!(idle[0].changes.is_empty());
+    assert!(!idle[0].has_more);
+    assert_eq!(idle[0].cursor, cursor);
+
+    // An edit, a delete, two edits of one message, and an edit of the thread reply.
+    f.edit(&f.alice, &sent[0], "first, edited").await;
+    let data = exec_ok(
+        &f.schema,
+        f.bob.request(
+            DELETE_MUTATION,
+            json!({ "input": {
+                "serverId": f.server_id,
+                "conversationId": f.channel_id,
+                "messageId": sent[1].id,
+            } }),
+        ),
+    )
+    .await;
+    assert_eq!(data["deleteMessage"], json!(true));
+    f.edit(&f.alice, &sent[2], "third, draft").await;
+    f.edit(&f.alice, &sent[2], "third, final").await;
+    f.edit(&f.bob, &reply, "reply, edited").await;
+
+    let (delta, next_cursor) = f.sync(&f.channel_id, Some(&cursor), 2).await;
+    assert_eq!(
+        delta
+            .iter()
+            .map(|c| (c.message.id.clone(), c.kind.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (sent[0].id.clone(), "EDITED".to_string()),
+            (sent[1].id.clone(), "DELETED".to_string()),
+            (sent[2].id.clone(), "EDITED".to_string()),
+            (reply.id.clone(), "EDITED".to_string()),
+        ],
+        "each changed message once, at its newest change"
+    );
+    assert!(delta[0].version > initial[3].version);
+    assert!(delta.windows(2).all(|w| w[0].version < w[1].version));
+    assert_eq!(delta[0].message.text.as_deref(), Some("first, edited"));
+    assert!(delta[0].edited);
+    assert!(delta[1].message.is_deleted);
+    assert_eq!(delta[1].message.text, None, "a tombstone exposes no text");
+    assert_eq!(delta[2].message.text.as_deref(), Some("third, final"));
+    assert_eq!(delta[3].message.text.as_deref(), Some("reply, edited"));
+
+    let idle = f.changes(&[(&f.channel_id, Some(&next_cursor))], 10).await;
+    assert!(idle[0].changes.is_empty());
+}
+
+/// Several conversations in one request, each with its own cursor and its own status.
+#[tokio::test]
+async fn change_feed_reads_several_conversations_and_enforces_access() {
+    let f = setup().await;
+    let channel_msg = f.send(&f.alice, &f.channel_id, "in the channel").await;
+    let data = exec_ok(
+        &f.schema,
+        f.alice.request(
+            CREATE_CONVERSATION_MUTATION,
+            json!({ "input": { "serverId": f.server_id, "otherUserId": f.bob.user_id.to_string() } }),
+        ),
+    )
+    .await;
+    let dm_id = data["conversation"]["id"]
+        .as_str()
+        .expect("dm id")
+        .to_string();
+    let dm_msg = f.send(&f.alice, &dm_id, "just between us").await;
+
+    let (_, channel_cursor) = f.sync(&f.channel_id, None, 10).await;
+    let later = f.send(&f.bob, &f.channel_id, "later").await;
+
+    let feed = f
+        .changes(
+            &[(&dm_id, None), (&f.channel_id, Some(&channel_cursor))],
+            10,
+        )
+        .await;
+    assert_eq!(feed.len(), 2, "one entry per requested conversation");
+    assert_eq!(feed[0].conversation_id, dm_id, "in request order");
+    assert_eq!(
+        feed[0].summary(),
+        vec![(dm_msg.id.clone(), "CREATED".to_string())]
+    );
+    assert_eq!(feed[1].conversation_id, f.channel_id);
+    assert_eq!(
+        feed[1].summary(),
+        vec![(later.id.clone(), "CREATED".to_string())],
+        "only what changed after the channel's cursor"
+    );
+    assert_ne!(later.id, channel_msg.id);
+
+    assert!(feed.iter().all(|c| c.status == "OK"));
+
+    // Carol is in the workspace but not in the DM: the DM is reported on its own entry and the
+    // channel next to it still syncs. The outsider is not in the workspace at all.
+    let req = f.changes_request(
+        &f.carol,
+        &[(&f.channel_id, None), (&dm_id, Some(&channel_cursor))],
+        10,
+    );
+    let data = exec_ok(&f.schema, req).await;
+    let feed: Vec<_> = data["feed"]
+        .as_array()
+        .expect("feed")
+        .iter()
+        .map(ConversationChanges::from_json)
+        .collect();
+    assert_eq!(feed[0].status, "OK");
+    assert!(
+        !feed[0].changes.is_empty(),
+        "the readable channel still syncs"
+    );
+    assert_eq!(feed[1].conversation_id, dm_id);
+    assert_eq!(feed[1].status, "NO_ACCESS");
+    assert!(feed[1].changes.is_empty(), "nothing from the DM leaks");
+    assert_eq!(feed[1].cursor, channel_cursor, "the cursor is echoed");
+    assert!(!feed[1].has_more);
+    let req = f.changes_request(&f.outsider, &[(&f.channel_id, None)], 10);
+    assert_eq!(exec_err_code(&f.schema, req).await, "FORBIDDEN");
+
+    // A stored cursor ahead of the server (its counters were reset) restarts from the beginning.
+    let feed = f.changes(&[(&dm_id, Some("999999"))], 10).await;
+    assert_eq!(feed[0].status, "RESET");
+    assert_eq!(
+        feed[0].summary(),
+        vec![(dm_msg.id.clone(), "CREATED".to_string())]
+    );
+
+    // A cursor the API never returned.
+    for bad in ["not-a-cursor", "-1"] {
+        let req = f.changes_request(&f.alice, &[(&f.channel_id, Some(bad))], 10);
+        assert_eq!(exec_err_code(&f.schema, req).await, "VALIDATION", "{bad}");
+    }
+
+    let req = anonymous_request(
+        &Fixture::with_fragments(CHANGES_QUERY),
+        json!({ "input": {
+            "serverId": f.server_id,
+            "conversations": [{ "conversationId": f.channel_id }],
+        } }),
+    );
+    assert_eq!(exec_err_code(&f.schema, req).await, "UNAUTHENTICATED");
+}

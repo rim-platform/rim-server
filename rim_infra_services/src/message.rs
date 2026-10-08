@@ -6,6 +6,13 @@ use tracing::{info, instrument};
 /// Maximum number of items any paginated query can return in a single page.
 const MAX_PAGE_LIMIT: u32 = 200;
 
+/// Maximum number of conversations one message change feed request may name.
+const MAX_CHANGE_FEED_CONVERSATIONS: usize = 100;
+
+/// Maximum number of changes one message change feed request returns across all its
+/// conversations: the per-conversation limit is lowered to fit, and `has_more` carries the rest.
+const MAX_CHANGE_FEED_TOTAL: u32 = 1000;
+
 use rim_core::message::model::{Message, NewMessage};
 use rim_core::message::repository::MessageSearchParams;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
@@ -13,10 +20,11 @@ use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
 use rim_services::message::command::{
     DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-    ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd, SearchMessagesQuery,
-    SendMessageCmd,
+    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
+    SearchMessagesQuery, SendMessageCmd,
 };
 use rim_services::message::dto::{
+    ConversationChangesStatus, ConversationMessageChangesDto, MessageChangeDto, MessageChangeKind,
     MessageDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
 };
 use rim_services::message::search_query::{ChannelToken, FromToken, HasFilter, parse_search_query};
@@ -52,7 +60,7 @@ use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_actio
 use crate::repos::AppRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
-    ensure_conversation_writable_with_standing, ensure_not_archived,
+    ensure_conversation_writable_with_standing, ensure_not_archived, member_standing,
 };
 
 #[derive(Clone)]
@@ -1080,6 +1088,122 @@ impl MessageService for DefaultMessageService {
             .collect();
 
         Ok(Page::new(items, next, prev))
+    }
+
+    async fn list_message_changes(
+        &self,
+        query: ListMessageChangesQuery,
+    ) -> ServiceResult<Vec<ConversationMessageChangesDto>> {
+        if query.conversations.len() > MAX_CHANGE_FEED_CONVERSATIONS {
+            return Err(ServiceError::Validation(format!(
+                "too many conversations (max {MAX_CHANGE_FEED_CONVERSATIONS})"
+            )));
+        }
+        if query.conversations.iter().any(|c| c.after_version < 0) {
+            return Err(ServiceError::Validation(
+                "change feed cursor must not be negative".to_string(),
+            ));
+        }
+        // A caller outside the workspace fails as a whole. Below that, access is judged per
+        // conversation and reported on its entry, so losing one channel does not stall the sync
+        // of the others.
+        member_standing(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
+        let conversation_count = u32::try_from(query.conversations.len()).unwrap_or(u32::MAX);
+        let limit = query
+            .limit
+            .clamp(1, MAX_PAGE_LIMIT)
+            .min((MAX_CHANGE_FEED_TOTAL / conversation_count.max(1)).max(1));
+        let mut result = Vec::with_capacity(query.conversations.len());
+        for cursor in query.conversations {
+            match ensure_conversation_member_access(
+                ConversationAccessRepos::from_arcs(
+                    &self.repos.server_member_repo,
+                    &self.repos.conversation_repo,
+                    &self.repos.conversation_member_repo,
+                ),
+                query.actor.user_id,
+                query.server_id,
+                cursor.conversation_id,
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(ServiceError::NotFound | ServiceError::PermissionDenied) => {
+                    result.push(ConversationMessageChangesDto {
+                        conversation_id: cursor.conversation_id,
+                        status: ConversationChangesStatus::NoAccess,
+                        changes: Vec::new(),
+                        cursor: cursor.after_version,
+                        has_more: false,
+                    });
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+
+            // A cursor past the newest version means the counters were reset since the client
+            // stored it; reading on would silently skip changes, so start this conversation over.
+            let reset = cursor.after_version > 0
+                && cursor.after_version
+                    > self
+                        .repos
+                        .message_repo
+                        .latest_change_version(cursor.conversation_id)
+                        .await?;
+            let (status, after_version) = if reset {
+                (ConversationChangesStatus::Reset, 0)
+            } else {
+                (ConversationChangesStatus::Ok, cursor.after_version)
+            };
+            let mut rows = self
+                .repos
+                .message_repo
+                .list_message_changes(cursor.conversation_id, after_version, limit)
+                .await?;
+            let has_more = rows.len() > limit as usize;
+            rows.truncate(limit as usize);
+
+            let next_cursor = rows.last().map_or(after_version, |row| row.version);
+            let (meta, messages): (Vec<_>, Vec<_>) = rows
+                .into_iter()
+                .map(|row| ((row.version, row.edited_at), row.message))
+                .unzip();
+            let dtos = self
+                .map_messages_to_dtos(query.server_id, messages, true)
+                .await?;
+            let changes = meta
+                .into_iter()
+                .zip(dtos)
+                .map(|((version, edited_at), message)| MessageChangeDto {
+                    kind: if message.is_deleted {
+                        MessageChangeKind::Deleted
+                    } else if edited_at.is_some() {
+                        MessageChangeKind::Edited
+                    } else {
+                        MessageChangeKind::Created
+                    },
+                    version,
+                    edited_at,
+                    message,
+                })
+                .collect();
+
+            result.push(ConversationMessageChangesDto {
+                conversation_id: cursor.conversation_id,
+                status,
+                changes,
+                cursor: next_cursor,
+                has_more,
+            });
+        }
+
+        Ok(result)
     }
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto> {

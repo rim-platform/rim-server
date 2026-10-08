@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use entity::message;
 use rim_core::message::model::{Message, MessageId, NewMessage};
 use rim_core::message::repository::{
-    ListMessagesParams, MessageCursor, MessageRepository, MessageSearchHit, MessageSearchParams,
+    ListMessagesParams, MessageChange, MessageCursor, MessageRepository, MessageSearchHit,
+    MessageSearchParams,
 };
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -402,6 +403,50 @@ impl MessageRepository for SeaOrmMessageRepository {
         active.update(&self.db).await.map_err(map_db_err)?;
 
         Ok(())
+    }
+
+    async fn list_message_changes(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        after_version: i64,
+        limit: u32,
+    ) -> RepoResult<Vec<MessageChange>> {
+        let models = message::Entity::find()
+            .filter(message::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(message::Column::Version.gt(after_version))
+            .order_by_asc(message::Column::Version)
+            .limit(u64::from(limit) + 1)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models
+            .into_iter()
+            .map(|m| MessageChange {
+                version: m.version,
+                edited_at: m.edited_at.map(Into::into),
+                message: m.into(),
+            })
+            .collect())
+    }
+
+    async fn latest_change_version(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> RepoResult<i64> {
+        let conversation_uuid: Uuid = conversation_id.into();
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT last_version FROM message_change_seq WHERE conversation_id = $1",
+                [conversation_uuid.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        row.map_or(Ok(0), |row| {
+            row.try_get::<i64>("", "last_version").map_err(map_db_err)
+        })
     }
 
     async fn last_sent_at_by_author(

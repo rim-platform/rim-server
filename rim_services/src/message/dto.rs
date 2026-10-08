@@ -36,6 +36,56 @@ pub struct MessageDto {
     pub sent_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// What a [`MessageChangeDto`] says happened to the message, derived from its state at its
+/// newest version: deleted wins over edited, and a message whose text never changed is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum MessageChangeKind {
+    Created,
+    Edited,
+    Deleted,
+}
+
+/// One entry of the message change feed: the message as it is now, at its newest `version`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MessageChangeDto {
+    pub kind: MessageChangeKind,
+    pub version: i64,
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub message: MessageDto,
+}
+
+/// How one conversation of a change feed request was answered. Reported per conversation, so
+/// one channel the caller lost, or one reset counter, does not stall the sync of the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ConversationChangesStatus {
+    /// The changes after the requested cursor.
+    Ok,
+    /// The caller cannot read the conversation (removed, never a member of a private one, or it
+    /// does not exist in the workspace). No changes; the cursor is echoed.
+    NoAccess,
+    /// The requested cursor is ahead of the conversation's counter (the counters were reset:
+    /// a migration re-run or a restored backup). The changes are read from the beginning; the
+    /// client drops its cached copy of the conversation before applying them.
+    Reset,
+}
+
+/// The changes of one conversation since the requested version, oldest first.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ConversationMessageChangesDto {
+    pub conversation_id: ConversationId,
+    pub status: ConversationChangesStatus,
+    pub changes: Vec<MessageChangeDto>,
+    /// The version to pass back next time: the last change's version, or the requested one when
+    /// nothing changed.
+    pub cursor: i64,
+    /// More changes follow `cursor`; ask again right away.
+    pub has_more: bool,
+}
+
 /// A single full-text search hit: the matched message plus its relevance rank and an optional
 /// highlighted snippet. Wraps [`MessageDto`] rather than flattening its fields, so callers that
 /// only need the message (e.g. the `chat.search_messages` command executor's author/channel
