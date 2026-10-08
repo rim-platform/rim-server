@@ -322,7 +322,8 @@ Current architectural direction:
 - the backend provides stable APIs and command surfaces plugins can call through the host
 - backend-managed plugin installation is not the default first-version architecture
 
-See also: `docs/local_plugin_host.md`.
+See also: `docs/local_plugin_host.md` (the desktop plugin host) and
+`docs/specs/plugin-protocol-v1.md` (the plugin process protocol).
 
 ### Context
 
