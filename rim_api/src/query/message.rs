@@ -2,7 +2,8 @@ use async_graphql::*;
 use rim_services::Actor;
 use rim_services::conversation::service::ConversationService;
 use rim_services::message::command::{
-    GetMessageQuery, GetMessageReferenceQuery, ListMessagesQuery, SearchMessagesQuery,
+    GetMessageQuery, GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery,
+    MessageChangeCursor, SearchMessagesQuery,
 };
 use rim_services::message::service::MessageService;
 
@@ -10,8 +11,9 @@ use crate::auth_context::require_actor;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
 use crate::types::{
-    ConversationTypeEnum, Message, MessageCursorInput, MessagePage, MessageReference,
-    SearchMessagesInput, SearchResultMessage, SearchResultPage,
+    ConversationMessageChanges, ConversationTypeEnum, Message, MessageChangesInput,
+    MessageCursorInput, MessagePage, MessageReference, SearchMessagesInput, SearchResultMessage,
+    SearchResultPage,
 };
 
 #[derive(Default)]
@@ -209,6 +211,57 @@ impl MessageQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(reference.into())
+    }
+
+    /// The message change feed: for each conversation, the messages created, edited or deleted
+    /// after its cursor (timeline and thread replies alike), oldest change first. A client cache
+    /// stores each returned `cursor` and passes it back as `after`. Contract (frozen):
+    /// `docs/message-change-feed.md`.
+    async fn message_changes(
+        &self,
+        ctx: &Context<'_>,
+        input: MessageChangesInput,
+    ) -> Result<Vec<ConversationMessageChanges>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
+
+        let conversations =
+            input
+                .conversations
+                .iter()
+                .map(|c| {
+                    let conversation_id = parse_uuid_id::<
+                        rim_core::conversation::model::ConversationId,
+                    >(&c.conversation_id)?;
+                    let after_version = match c.after.as_deref() {
+                        None => 0,
+                        Some(after) => after.parse::<i64>().map_err(|_| {
+                            crate::errors::map_service_error(
+                                rim_services::ServiceError::Validation(
+                                    "invalid change feed cursor".to_string(),
+                                ),
+                            )
+                        })?,
+                    };
+                    Ok(MessageChangeCursor {
+                        conversation_id,
+                        after_version,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+        let feed = svc
+            .list_message_changes(ListMessageChangesQuery {
+                actor: Actor::new(actor),
+                server_id,
+                conversations,
+                limit: input.limit.unwrap_or(100).max(1) as u32,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(feed.into_iter().map(Into::into).collect())
     }
 }
 
