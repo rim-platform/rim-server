@@ -29,7 +29,8 @@ query MessageChanges($input: MessageChangesInput!) {
 input MessageChangesInput {
   serverId: ID!
   conversations: [MessageChangeCursorInput!]!   # at most 100
-  limit: Int                                     # per conversation; clamped to 1..=200, default 100
+  limit: Int                                     # per conversation; clamped to 1..=200, default 100,
+                                                 # lowered so one request returns at most 1000 changes
 }
 
 input MessageChangeCursorInput {
@@ -46,6 +47,13 @@ The result has one entry per requested conversation, in request order.
   carries `threadId`). Each requested conversation must be readable by the caller (same gate as
   `messages`); if any is not, the whole request fails with that error (`NOT_FOUND` or
   `FORBIDDEN`). An `after` that is not a cursor this API returned fails with `VALIDATION`.
+- **Budget.** One request returns at most 1000 changes in total: with many conversations the
+  per-conversation `limit` is lowered to share that budget (never below 1). Follow `hasMore`.
+- **Reset.** If the server's counters were reset after a client stored a cursor (the migration
+  rolled back and re-run, or a database restored from an older backup), the stored cursor is
+  ahead of the conversation and the request fails with `CONFLICT`. The client drops its cached
+  copy of that conversation and syncs again with `after: null`. Without this check the feed
+  would silently return nothing until the counter caught up, skipping real changes.
 - **Order.** Changes come oldest first, ordered by `version`.
 - **One entry per message.** A message appears once, at its newest version, carrying its current
   state. Three edits since the cursor give one `EDITED` entry with the latest text, not three.
@@ -85,6 +93,11 @@ reader cannot see version N+1 while N is still uncommitted, which is what makes 
 cursor" safe. A global sequence would not give this: it hands out numbers at insert time, so a
 later number can commit and become visible first.
 
+Deleting a conversation while a message is being written into it can deadlock (the delete
+cascades to the counter row while the send holds it and waits on the conversation row);
+Postgres aborts one of the two and nothing else is affected.
+
 Existing messages were numbered `1..n` per conversation in `(sent_at, id)` order when the
-migration ran. The migration is additive; `down` drops the trigger, the counter table and the
+migration ran. The back-fill rewrites every message row while `message` is locked, so on a large
+table run the migration in a maintenance window. The migration is additive; `down` drops the trigger, the counter table and the
 two columns, and clients then re-sync from the beginning once it runs again.

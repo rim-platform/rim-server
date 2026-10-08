@@ -430,6 +430,25 @@ impl MessageRepository for SeaOrmMessageRepository {
             .collect())
     }
 
+    async fn latest_change_version(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> RepoResult<i64> {
+        let conversation_uuid: Uuid = conversation_id.into();
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT last_version FROM message_change_seq WHERE conversation_id = $1",
+                [conversation_uuid.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        row.map_or(Ok(0), |row| {
+            row.try_get::<i64>("", "last_version").map_err(map_db_err)
+        })
+    }
+
     async fn last_sent_at_by_author(
         &self,
         conversation_id: rim_core::conversation::model::ConversationId,
