@@ -73,6 +73,9 @@ run yet and the client keeps no history between launches.
 | Client history | None kept on disk; TanStack Query memory only |
 | Identity | Username and password per server; `Principal` is an in-memory struct with no table |
 | Message edits | No `updated_at` or version on `message`, so a client cache cannot see edits yet |
+| Shell | Side rail, workspace rail, tool panel, docked thread pane, status bar, spatial navigation, layout presets, zen mode, density modes, modal composer |
+| Security | Argon2id, HttpOnly session cookies with HMAC double-submit CSRF, login and reset rate limits, SSRF-safe link previews, storage quotas, CSP on desktop and web |
+| Showcase vertical | Incidents, on-call schedules, escalation policies, alert webhooks; optional per workspace since 0.4 |
 | rim-cli | Initial commit only |
 | Quality | Server CI (fmt, clippy, single-threaded tests, coverage gate, audit, Docker) and client CI (ESLint, Prettier, tsc, Vitest, build, Docker) green |
 
@@ -103,13 +106,14 @@ marked **Done** are merged on both repositories.
    confirmation and a shell allowlist; plugin install URL validation (scheme allowlist, no
    `ext::`, `--` separator, `GIT_ALLOW_PROTOCOL`); no `npm`/`pip` install without a consent
    step that names it as arbitrary code execution.
-2. **Open (decision 10).** **Terminal decision** (S): remove the embedded terminal from the product (recommended) or
-   keep it as a capability-gated desktop feature. The PTY code is also finding S-H1's root.
-3. **Done** (audit retention still waits on its variant). **Repo hygiene** (S): merge `rim-ui` `feature/initial-code` to `master`; `cargo audit`
-   blocking; close stale issues; schedule the audit retention job once the variant is picked;
-   delete the dead server-side `plugin_host` module; messaging e2e test that walks
-   pagination both ways; split `mutation.rs`/`query.rs`/`types.rs` by domain before more
-   resolvers land.
+2. **Open (decision 10).** **Terminal decision** (S): remove the embedded terminal from the
+   product (recommended) or keep it as a capability-gated desktop feature. The PTY code is
+   also finding S-H1's root.
+3. **Done** (audit retention still waits on its variant). **Repo hygiene** (S): merge `rim-ui`
+   `feature/initial-code` to `master`; `cargo audit` blocking; close stale issues; schedule
+   the audit retention job once the variant is picked; delete the dead server-side
+   `plugin_host` module; messaging e2e test that walks pagination both ways; split
+   `mutation.rs`/`query.rs`/`types.rs` by domain before more resolvers land.
 4. **Done.** **Make the showcase vertical optional** (S/M): a per-workspace feature flag that hides
    the incident and on-call commands, settings and AI surface. Communities that do not run
    services never see SEV levels. This also starts the mechanism Track 2.4 needs for
@@ -131,8 +135,9 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 4. **Message rendering** (S/M): code blocks with language hints, image and video embeds,
    quoting. Markdown remains the format and DOMPurify the backstop; no new content model.
 5. **Reach** (L, lower priority): the web build made installable as a PWA with web push and a
-   narrow layout per `docs/ui-shell.md`. Native mobile out of scope. One-command deployment
-   (compose file, backup and restore runbook).
+   narrow layout per rim-ui `docs/ui-shell.md`. Native mobile out of scope. One-command
+   deployment (compose file, backup and restore runbook), which the master plan pulls forward
+   to Stage 2 (see Cross-cutting work).
 
 ### Track 2 — The plugin platform (bet 2, the main investment, XL total)
 
@@ -199,10 +204,10 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 1. Shareable profiles: export and import keybinds, macros and pipelines; a few curated
    starting profiles (minimal, vim, mouse-friendly).
 2. Composer and navigation: fuzzy jump-to-anything, command history, per-context keybind
-   hints, the open items in `docs/ui-shell.md`.
+   hints, the open items in rim-ui `docs/ui-shell.md`.
 3. Light theme, i18n layer (the two Czech labels are the reminder), accessibility pass.
 
-### Track 6 — Security and sovereignty (bet 5, now)
+### Track 6 — Security and sovereignty (bet 5)
 
 1. **Account security — folded into Track 7.2 (Stage 3).** The device list with revoke and
    session rotation come from device keys. TOTP and passkeys are not built for new accounts;
@@ -419,8 +424,9 @@ Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in
   core module. Showcase plugins instead.
 - **A native media stack, integration-directory breadth, enterprise agent platform.**
 - **Marketplace monetization** before there is a network of plugins.
-- **Domain federation (`name@domain`), Matrix-style room replication, or peer-to-peer.**
-  Rejected for the key-identity model; see `docs/decisions/decentralization-2026-10-08.md`.
+- **Domain federation (`name@domain` as identity), Matrix-style room replication, or
+  peer-to-peer.** Rejected for the key-identity model; a domain may return later only as an
+  optional alias on top of a key. See `docs/decisions/decentralization-2026-10-08.md`.
 - **Encrypted channels.** Channels stay plaintext so server search, pipelines and the agent
   keep working there; E2EE covers DMs and private groups.
 
@@ -462,9 +468,9 @@ client-side plugin reframe.
 Phases 0–4 of the April 2026 roadmap (communication core, command system, keybinds,
 plugins, incident mode v1, AI agent reframe phases 1–5) and Tracks A, B, C1, C2 of the July
 2026 roadmap (foundations, search/alerts/email, on-call and escalation, agent-operator
-fusion) are merged on `rim-server` `master` (PR #11, 2026-10-04) and on `rim-ui`
-`feature/initial-code` (`d907c86`). Point-in-time specs live in `docs/specs/`,
-`docs/design/`, `docs/plans/` (rim-ui) and `docs/research/`.
+fusion) are merged on `rim-server` `master` (PR #11, 2026-10-04) and on `rim-ui` `master`
+(through `feature/initial-code`, merged in rim-ui PR #1). Point-in-time specs live in
+`docs/specs/`, `docs/design/`, `docs/plans/` (rim-ui) and `docs/research/`.
 
 Tracks 0.1, 0.3, 0.4 and 1.1 to 1.3 of the 2026-10-04 roadmap are merged on both `master`
-branches (rim-server through PR #21, `a668c05`).
+branches (rim-server through PR #21, `a668c05`; rim-ui through PR #9, `b62e31d`).
