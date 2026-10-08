@@ -538,8 +538,9 @@ mod tests {
     // `chat.report_message` (`chat.write`) and `admin.timeout` (`admin.manage_members`, now also
     // granted by the mock): 21→24. Track 1.3 adds three notification builtins with no
     // capability (`notifications.set_level`, `notifications.dnd`, `notifications.mark_all_read`):
-    // 24→27.
-    async fn list_commands_ai_surface_returns_twenty_seven_commands_with_caps() {
+    // 24→27. Track 4.1 flips eighteen general builtins (navigation, `chat.mark_as_read`,
+    // `chat.create_group`, `state.*`), none needing a new capability: 27→45.
+    async fn list_commands_ai_surface_returns_forty_five_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -597,16 +598,20 @@ mod tests {
                 "admin.timeout",
                 "chat.archive_channel",
                 "chat.create_channel",
+                "chat.create_group",
                 "chat.get_recent_messages",
                 "chat.invite_to_conversation",
                 "chat.join_channel",
                 "chat.leave_conversation",
                 "chat.list_channels",
                 "chat.list_members",
+                "chat.mark_as_read",
                 "chat.open_thread",
                 "chat.pin_message",
                 "chat.post_message",
                 "chat.report_message",
+                "chat.scroll_to_bottom",
+                "chat.scroll_to_top",
                 "chat.search_messages",
                 "chat.set_slow_mode",
                 "chat.toggle_reaction",
@@ -618,9 +623,23 @@ mod tests {
                 "notifications.set_level",
                 "oncall.take_shift",
                 "oncall.who",
+                "state.delete",
+                "state.get",
+                "state.incr",
+                "state.list",
+                "state.set",
+                "workspace.close_panel",
                 "workspace.navigate_to_channel",
+                "workspace.next_channel",
+                "workspace.next_unread_channel",
+                "workspace.open_marketplace",
+                "workspace.open_search",
                 "workspace.open_settings",
+                "workspace.previous_channel",
+                "workspace.reopen_last_thread",
+                "workspace.search_in_channel",
                 "workspace.switch_workspace",
+                "workspace.toggle_sidebar",
             ]
         );
     }

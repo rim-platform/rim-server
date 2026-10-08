@@ -95,9 +95,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Open the workspace-wide message search overlay. \
+                 Use when the user wants to search everything themselves."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "open search".to_string(),
+                "let me search the workspace".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
@@ -118,9 +125,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Open message search scoped to the channel the user is viewing."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "search in this channel".to_string(),
+                "find something in this channel".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
@@ -141,9 +154,16 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Open the plugin marketplace. \
+                 Use when the user wants to browse or install plugins."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "open the marketplace".to_string(),
+                "show me plugins I can install".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
@@ -187,9 +207,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Show or hide the sidebar."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "hide the sidebar".to_string(),
+                "toggle the sidebar".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Toggle,
             rate_limit_per_minute: None,
@@ -358,9 +384,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Move the user's view to the previous channel in the sidebar list."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "previous channel".to_string(),
+                "go back one channel".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
@@ -381,9 +413,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Move the user's view to the next channel in the sidebar list."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "next channel".to_string(),
+                "go to the next channel".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
@@ -404,9 +442,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Move the user's view to the next channel with unread messages."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "next unread channel".to_string(),
+                "take me to what I haven't read".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
@@ -427,9 +471,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Close the open thread pane, or return from settings, search or another surface to the conversation view."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "close the thread".to_string(),
+                "close this panel".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Close,
             rate_limit_per_minute: None,
@@ -450,9 +500,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(
+                "Reopen the thread the user closed most recently."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "reopen the last thread".to_string(),
+                "bring that thread back".to_string(),
+            ],
+            ai_callable: true,
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
