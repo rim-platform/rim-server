@@ -517,10 +517,11 @@ check `rim-ui/src-tauri/src/plugin_host/validation.rs` in the host version you t
 
 - **Which names a manifest may declare.** A manifest that declares any other name fails to
   install.
-  - From rim-ui #16 onward: the built-in names `chat.read`, `chat.write`, `events.read`,
-    `ui.panel` and `ui.notify`, and the plugin's own keys `plugin.<pluginId>.<verb>`, where the
-    verb uses only `[a-z0-9_.]` and neither starts nor ends with `.` nor contains `..`.
-    `local.process`, `network`, `fs.read` and `fs.write` guard nothing yet and are rejected.
+  - From rim-ui #16 onward: the built-in names `ui.panel` and `ui.notify`, and the plugin's own
+    keys `plugin.<pluginId>.<verb>`, where the verb uses only `[a-z0-9_.]` and neither starts
+    nor ends with `.` nor contains `..`. The other built-in names are rejected: `chat.read`,
+    `chat.write` and `events.read` guard calls that nothing serves yet and that are not in v1,
+    and `local.process`, `network`, `fs.read` and `fs.write` guard nothing at all.
   - Before rim-ui #16: only `plugin.<pluginId>.<verb>` keys, with the **whole** key in
     `[a-z0-9_.]`. No plugin could hold a built-in name, so `rim.ui.update_panel` was always
     answered `CAPABILITY_DENIED`, and a plugin id with an uppercase letter or a hyphen could
@@ -677,10 +678,10 @@ on them.
 
 | Method | Direction | Capability | What happens today |
 |---|---|---|---|
-| `rim.chat.send_message` | plugin → host | `chat.write` | Not wired: answered `INTERNAL_ERROR` ("backend client not configured"). |
-| `rim.chat.get_messages` | plugin → host | `chat.read` | Not wired, as above. |
-| `rim.chat.search_messages` | plugin → host | `chat.read` | Not wired, as above. |
-| `rim.events.subscribe` | plugin → host | `events.read` | Not wired: answered `INTERNAL_ERROR` ("event forwarder not configured"). |
+| `rim.chat.send_message` | plugin → host | `chat.write` | Answered `CAPABILITY_DENIED`, since no host lets a manifest request `chat.write` (section 12). Behind the gate it is not wired either. |
+| `rim.chat.get_messages` | plugin → host | `chat.read` | As above, with `chat.read`. |
+| `rim.chat.search_messages` | plugin → host | `chat.read` | As above, with `chat.read`. |
+| `rim.events.subscribe` | plugin → host | `events.read` | As above, with `events.read`. |
 | `rim.event.<type>` | host → plugin | `events.read` | Never sent today, since nothing can subscribe. |
 | `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store. Hosts before rim-ui #16 cannot grant `ui.panel` (section 12) and answer `CAPABILITY_DENIED`. The panel page does not receive the stored state yet. |
 
