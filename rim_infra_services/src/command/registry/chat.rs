@@ -172,10 +172,17 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             keybind_capable: true,
             dangerous: false,
             user_command_id: None,
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
-            sensitivity: CommandSensitivityDto::Safe,
+            nl_description: Some(
+                "Mark one conversation as read for the current user. \
+                 Clears its unread count."
+                    .to_string(),
+            ),
+            intent_samples: vec![
+                "mark #general as read".to_string(),
+                "mark this channel read".to_string(),
+            ],
+            ai_callable: true,
+            sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
             feature: None,
