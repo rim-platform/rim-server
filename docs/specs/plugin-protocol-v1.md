@@ -762,6 +762,8 @@ def handle(msg):
         ok = VERSION in params.get("supportedVersions", []) and params.get("pluginId") == PLUGIN_ID
         answer(msg, {"accepted": ok, "protocolVersion": VERSION, "pluginId": PLUGIN_ID,
                      **({} if ok else {"error": "need protocol 1 and plugin id " + PLUGIN_ID})})
+        if not ok:
+            sys.exit(0)  # refused: the host stops us anyway
     elif method == "rim.heartbeat":
         answer(msg, {})
     elif method == "rim.command.execute":
@@ -785,7 +787,8 @@ def main():
             return  # the host closed stdin: exit
         except ValueError:
             continue  # not JSON: drop it, framing is still intact
-        handle(msg)
+        if isinstance(msg, dict):  # anything else is not JSON-RPC: drop it too
+            handle(msg)
 
 if __name__ == "__main__":
     main()
