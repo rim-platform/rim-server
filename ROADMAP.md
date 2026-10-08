@@ -62,8 +62,9 @@ _Verified against code and GitHub on 2026-10-04, both repositories._
   over a locked `rim-plugin://` scheme, git install, trust badges, plugin AI consent. No
   public SDK or docs for third parties yet; nothing runs on the web build.
 - **Agent (bet 3)**: client-side, Anthropic and OpenAI, keys in the OS keyring via the Rust
-  proxy, tool calls through the unified dispatcher, confirmation modal, audit emission. Only
-  the incident and on-call commands are flipped to AI-callable so far.
+  proxy, tool calls through the unified dispatcher, confirmation modal, audit emission. The
+  incident, on-call, chat, navigation and workspace-state commands are AI-callable (Track 4.1);
+  every agent write goes through the confirmation gate.
 - **Shell (bet 4)**: side rail, workspace rail, tool panel, docked thread pane, status bar,
   spatial navigation, layout presets, zen mode, density modes, modal composer, 15 settings
   tabs.
