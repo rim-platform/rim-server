@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing::{info, instrument};
@@ -6,6 +7,7 @@ use tracing::{info, instrument};
 use rim_core::conversation::model::{
     Conversation, ConversationType as CoreConversationType, NewConversation,
 };
+use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
@@ -32,15 +34,64 @@ use crate::util::{
     ensure_server_owner_or_moderator, ensure_workspace_writable, member_standing,
 };
 
+/// The refusal of a member who cannot read an encrypted conversation.
+fn not_ready() -> ServiceError {
+    ServiceError::Validation(
+        "every member of an encrypted conversation needs a device set up for encryption"
+            .to_string(),
+    )
+}
+
 #[derive(Clone)]
 pub struct DefaultConversationService {
     repos: ConversationRepos,
     observers: Observers,
+    /// Readiness of members for encrypted conversations. `None` in unit tests that are not about
+    /// them; the composition root wires it.
+    e2ee_repo: Option<Arc<dyn E2eeRepository>>,
 }
 
 impl DefaultConversationService {
     pub fn new(repos: ConversationRepos, observers: Observers) -> Self {
-        Self { repos, observers }
+        Self {
+            repos,
+            observers,
+            e2ee_repo: None,
+        }
+    }
+
+    pub fn with_e2ee_repo(mut self, e2ee_repo: Arc<dyn E2eeRepository>) -> Self {
+        self.e2ee_repo = Some(e2ee_repo);
+        self
+    }
+
+    /// `Validation` unless every one of `user_ids` is ready for encryption: a principal and a
+    /// device that uploaded key packages within the activity window.
+    async fn ensure_ready(&self, user_ids: &[UserId]) -> ServiceResult<()> {
+        let e2ee_repo = self.e2ee_repo.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("encryption is not configured"))
+        })?;
+        let ready: HashSet<UserId> = e2ee_repo
+            .ready_users(user_ids, crate::e2ee::active_since(chrono::Utc::now()))
+            .await?
+            .into_iter()
+            .collect();
+        if user_ids.iter().all(|id| ready.contains(id)) {
+            Ok(())
+        } else {
+            Err(not_ready())
+        }
+    }
+
+    /// Tell an encrypted conversation's members that its group should add or remove devices.
+    fn emit_mls_membership_changed(&self, conversation: &Conversation, member_ids: Vec<UserId>) {
+        if conversation.is_encrypted() {
+            self.observers.emit(WorkspaceEvent::MlsMembershipChanged {
+                workspace_id: conversation.server_id,
+                conversation_id: conversation.id,
+                member_user_ids: member_ids,
+            });
+        }
     }
 
     async fn to_dto(&self, conversation: Conversation) -> ServiceResult<ConversationDto> {
@@ -69,6 +120,7 @@ impl DefaultConversationService {
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
             slow_mode_seconds: conversation.slow_mode_seconds,
+            encrypted_at: conversation.encrypted_at,
         }
     }
 
@@ -180,8 +232,13 @@ impl DefaultConversationService {
                 workspace_id: conversation.server_id,
                 conversation_id: conversation.id,
                 user_id,
-                member_user_ids: notify_user_ids,
+                member_user_ids: notify_user_ids.clone(),
             });
+        let remaining = notify_user_ids
+            .into_iter()
+            .filter(|id| *id != user_id)
+            .collect();
+        self.emit_mls_membership_changed(conversation, remaining);
         Ok(())
     }
 
@@ -230,6 +287,11 @@ impl ConversationService for DefaultConversationService {
         if cmd.is_private && cmd.participants != ConversationParticipants::Channel {
             return Err(ServiceError::Validation(
                 "only channels can be private".to_string(),
+            ));
+        }
+        if cmd.encrypted && cmd.participants == ConversationParticipants::Channel {
+            return Err(ServiceError::Validation(
+                "only direct messages and groups are encrypted".to_string(),
             ));
         }
 
@@ -335,6 +397,15 @@ impl ConversationService for DefaultConversationService {
         };
 
         let member_count = member_ids.len();
+        if cmd.encrypted {
+            if member_count > rim_services::e2ee::MAX_ENCRYPTED_MEMBERS {
+                return Err(ServiceError::Validation(format!(
+                    "an encrypted conversation has at most {} members",
+                    rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
+                )));
+            }
+            self.ensure_ready(&member_ids).await?;
+        }
 
         let conversation = self
             .repos
@@ -346,6 +417,7 @@ impl ConversationService for DefaultConversationService {
                     title,
                     is_private: cmd.is_private,
                     created_by: Some(cmd.actor.user_id),
+                    encrypted: cmd.encrypted,
                 },
                 &member_ids,
             )
@@ -572,6 +644,25 @@ impl ConversationService for DefaultConversationService {
                 )));
             }
         }
+        if conversation.is_encrypted() {
+            let current = self
+                .repos
+                .conversation_member_repo
+                .list_member_ids(conversation.id)
+                .await?;
+            let joining: Vec<UserId> = targets
+                .iter()
+                .copied()
+                .filter(|id| !current.contains(id))
+                .collect();
+            if current.len() + joining.len() > rim_services::e2ee::MAX_ENCRYPTED_MEMBERS {
+                return Err(ServiceError::Validation(format!(
+                    "an encrypted conversation has at most {} members",
+                    rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
+                )));
+            }
+            self.ensure_ready(&joining).await?;
+        }
 
         let mut added = Vec::new();
         for user_id in targets {
@@ -582,7 +673,11 @@ impl ConversationService for DefaultConversationService {
 
         info!(added = added.len(), "added conversation members");
 
+        let encrypted = conversation.clone();
         let dto = self.to_dto(conversation).await?;
+        if !added.is_empty() {
+            self.emit_mls_membership_changed(&encrypted, dto.member_ids.clone());
+        }
         for user_id in added {
             self.observers
                 .emit(WorkspaceEvent::MemberAddedToConversation {

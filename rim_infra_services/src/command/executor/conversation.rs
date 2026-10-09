@@ -185,6 +185,7 @@ pub(super) async fn create_group(
             participants: ConversationParticipants::Group { member_ids },
             title: optional_string_arg(&args, "title"),
             is_private: false,
+            encrypted: false,
         })
         .await?;
 
@@ -285,6 +286,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 

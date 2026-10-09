@@ -185,6 +185,8 @@ impl ModerationRepository for SeaOrmModerationRepository {
             message_id: Set(report.message_id.into()),
             reporter_user_id: Set(report.reporter_user_id.into()),
             reason: Set(report.reason),
+            franking_verified_at: Set(report.franked_content.as_ref().map(|_| Utc::now().into())),
+            franked_content: Set(report.franked_content),
             status: Set(MessageReportStatus::Open.into()),
             resolved_by: Set(None),
             resolved_at: Set(None),

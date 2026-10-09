@@ -232,6 +232,7 @@ async fn reports_are_unique_paginated_and_resolved_once() {
                 message_id: message.id,
                 reporter_user_id: reporter,
                 reason: format!("reason {i}"),
+                franked_content: None,
             })
             .await
             .unwrap(),
@@ -245,6 +246,7 @@ async fn reports_are_unique_paginated_and_resolved_once() {
             message_id: reports[0].message_id,
             reporter_user_id: reporter,
             reason: "again".to_string(),
+            franked_content: None,
         })
         .await
         .unwrap_err();

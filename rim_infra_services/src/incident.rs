@@ -431,6 +431,7 @@ impl DefaultIncidentService {
                         text: Some(text),
                         parent_message_id: None,
                         attachments: vec![],
+                        forwarded_from_message_id: None,
                     };
                     if let Err(e) = self.message_service.send_message(cmd).await {
                         tracing::warn!(
@@ -577,7 +578,7 @@ impl IncidentService for DefaultIncidentService {
 
         // The actor must be able to write to the conversation: it exists in this server, is
         // readable by them (private channels/DMs/groups need membership) and is not archived.
-        ensure_conversation_writable(
+        let conversation = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -588,6 +589,12 @@ impl IncidentService for DefaultIncidentService {
             cmd.conversation_id,
         )
         .await?;
+        // An incident posts plaintext messages, which an encrypted conversation refuses.
+        if conversation.is_encrypted() {
+            return Err(ServiceError::Validation(
+                "incidents cannot be declared in an encrypted conversation".to_string(),
+            ));
+        }
 
         // Validate title
         if cmd.title.is_empty() || cmd.title.chars().count() > 200 {

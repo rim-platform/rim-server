@@ -84,6 +84,9 @@ pub struct DefaultKeyAuthService {
     signup_rate_limiter: RegistrationRateLimiter,
     /// Announces a key-only signup through a workspace invite (`MemberJoined`).
     observers: Observers,
+    /// Told when a user's devices change, so their encrypted groups are updated. `None` in
+    /// unit tests; the composition root wires it.
+    e2ee_service: Option<Arc<dyn rim_services::e2ee::service::E2eeService>>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -213,6 +216,24 @@ impl DefaultKeyAuthService {
             failure_rate_limiter: RegistrationRateLimiter::new(900, 20),
             signup_rate_limiter,
             observers,
+            e2ee_service: None,
+        }
+    }
+
+    pub fn with_e2ee_service(
+        mut self,
+        e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService>,
+    ) -> Self {
+        self.e2ee_service = Some(e2ee_service);
+        self
+    }
+
+    /// Best-effort: the user's encrypted groups may now have devices to remove.
+    async fn devices_changed(&self, user_id: UserId) {
+        if let Some(e2ee) = &self.e2ee_service
+            && let Err(e) = e2ee.devices_changed(user_id).await
+        {
+            warn!(error = %e, user_id = %user_id, "could not announce a device change to encrypted conversations");
         }
     }
 
@@ -762,6 +783,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         let ended_sessions = repos.session_repo.revoke_all_for_device(device.id).await?;
         Self::commit(scope).await?;
         if newly_revoked {
+            self.devices_changed(user_id).await;
             info!(
                 target = "audit",
                 event = "device_key_revoked",
@@ -863,6 +885,9 @@ impl KeyAuthService for DefaultKeyAuthService {
             insert_device(&repos, new_device(user_id, cert, device)).await?;
         }
         Self::commit(scope).await?;
+        if revoked_devices > 0 {
+            self.devices_changed(user_id).await;
+        }
 
         info!(
             target = "audit",

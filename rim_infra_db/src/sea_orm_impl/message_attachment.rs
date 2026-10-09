@@ -52,6 +52,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             file_size,
             mime_type,
             metadata,
+            blob_sha256,
         } = attachment;
 
         let active = message_attachment::ActiveModel {
@@ -62,6 +63,7 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             file_size: Set(file_size),
             mime_type: Set(mime_type),
             metadata: Set(metadata),
+            blob_sha256: Set(blob_sha256),
         };
 
         let inserted = active.insert(&self.db).await.map_err(map_db_err)?;

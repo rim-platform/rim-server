@@ -34,6 +34,7 @@ impl AttachmentMutations {
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: input.blob_sha256,
                 actor: Actor::new(actor),
                 server_id,
                 conversation_id,
@@ -106,6 +107,8 @@ pub struct CreateAttachmentInput {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: u64,
+    /// Required in an encrypted conversation: unpadded base64url SHA-256 of the blob.
+    pub blob_sha256: Option<String>,
 }
 
 #[derive(InputObject)]

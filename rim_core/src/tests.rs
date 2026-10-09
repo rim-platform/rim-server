@@ -46,6 +46,7 @@ mod domain_helpers {
             text: Some("hello".to_string()),
             is_deleted: false,
             has_attachments: false,
+            encryption: None,
         };
         let reply = Message {
             thread_id: Some(MessageThreadId::new()),

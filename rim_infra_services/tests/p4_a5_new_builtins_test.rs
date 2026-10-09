@@ -190,6 +190,7 @@ fn msg(
         thread_root_message_id: None,
         is_deleted: false,
         sent_at: chrono::Utc::now(),
+        encryption: None,
     }
 }
 
@@ -467,6 +468,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     },
                     ConversationDto {
                         id: conv_b,
@@ -479,6 +481,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     },
                 ])
             })

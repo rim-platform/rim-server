@@ -49,6 +49,7 @@ impl ConversationMutations {
                 participants,
                 title: input.title,
                 is_private: input.is_private,
+                encrypted: input.encrypted.unwrap_or(false),
             })
             .await
             .map_err(map_service_error)?;
@@ -336,6 +337,10 @@ pub struct CreateConversationInput {
     /// Channels only: visible to invited members alone. Cannot be changed later.
     #[graphql(default)]
     pub is_private: bool,
+
+    /// DMs and groups only: end-to-end encrypted from creation. Every member needs a device set
+    /// up for encryption. Defaults to false.
+    pub encrypted: Option<bool>,
 }
 
 #[derive(InputObject)]

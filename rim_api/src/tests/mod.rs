@@ -434,6 +434,7 @@ fn test_conversation_dto() -> rim_services::conversation::dto::ConversationDto {
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        encrypted_at: None,
     }
 }
 
@@ -530,6 +531,7 @@ fn test_message_dto() -> rim_services::message::dto::MessageDto {
         thread_root_message_id: None,
         is_deleted: false,
         sent_at: chrono::Utc::now(),
+        encryption: None,
     }
 }
 
@@ -604,6 +606,7 @@ fn test_attachment_dto() -> rim_services::message_attachment::dto::AttachmentDto
         size_bytes: 42,
         storage_key: Some("uploads/test/file.txt".to_string()),
         created_at: chrono::Utc::now(),
+        blob_sha256: None,
     }
 }
 
@@ -817,6 +820,11 @@ impl AppServiceProvider for TestAppServiceProvider {
     ) -> Arc<dyn rim_services::device_link::service::DeviceLinkService> {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::device_link::service::MockDeviceLinkService::new())
+    }
+
+    fn e2ee_service(&self) -> Arc<dyn rim_services::e2ee::service::E2eeService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::e2ee::service::MockE2eeService::new())
     }
 
     fn workspace_plugin_service(

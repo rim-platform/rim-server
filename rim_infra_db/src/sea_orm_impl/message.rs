@@ -64,6 +64,7 @@ impl From<MessageSearchRow> for MessageSearchHit {
                 text: row.text,
                 is_deleted: row.is_deleted,
                 has_attachments: row.has_attachments,
+                encryption: None,
             },
             rank: row.rank,
             headline: row.headline,
@@ -315,6 +316,7 @@ impl MessageRepository for SeaOrmMessageRepository {
                     websearch_to_tsquery('english', $1) AS q(query)
                WHERE m.conversation_id = ANY($2)
                  AND m.is_deleted = false
+                 AND NOT m.encrypted
                  AND ($1 = '' OR m.search_tsv @@ q.query)
                  AND ($3::uuid IS NULL OR m.sent_by = $3)
                  AND (NOT $4 OR m.text ~* 'https?://')
@@ -400,6 +402,8 @@ impl MessageRepository for SeaOrmMessageRepository {
 
         let mut active: message::ActiveModel = msg.into();
         active.is_deleted = Set(true);
+        // A deleted encrypted message keeps its franking columns, not its ciphertext.
+        active.mls_ciphertext = Set(None);
         active.update(&self.db).await.map_err(map_db_err)?;
 
         Ok(())

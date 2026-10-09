@@ -21,6 +21,8 @@ pub struct Session {
     pub revoked_at: Option<DateTime<Utc>>,
     pub user_agent: Option<String>,
     pub ip: Option<String>,
+    /// The device a key login or enrollment bound the session to.
+    pub device_key_id: Option<crate::key_identity::model::DeviceKeyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -30,6 +30,11 @@ impl MessageMutations {
             None => None,
             Some(id) => Some(parse_uuid_id::<rim_core::message::model::MessageId>(&id)?),
         };
+        let forwarded_from_message_id = input
+            .forwarded_from_message_id
+            .as_ref()
+            .map(parse_uuid_id::<rim_core::message::model::MessageId>)
+            .transpose()?;
 
         let text_for_preview = input.text.clone();
         let msg = svc
@@ -40,6 +45,7 @@ impl MessageMutations {
                 text: Some(input.text),
                 parent_message_id,
                 attachments: vec![],
+                forwarded_from_message_id,
             })
             .await
             .map_err(map_service_error)?;
@@ -259,6 +265,10 @@ pub struct SendMessageInput {
     pub conversation_id: ID,
     pub text: String,
     pub parent_message_id: Option<ID>,
+    /// The message this one forwards by sending its content again (an encrypted message's
+    /// content, after the person confirmed it is posted unencrypted). The caller must be able
+    /// to read it.
+    pub forwarded_from_message_id: Option<ID>,
 }
 
 #[derive(InputObject)]

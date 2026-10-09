@@ -184,6 +184,7 @@ async fn search_messages_query_returns_matches() {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 }])
             })
         });

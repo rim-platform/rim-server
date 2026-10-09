@@ -94,6 +94,7 @@ fn conversation(server_id: ServerId, kind: ConversationType) -> Conversation {
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        encrypted_at: None,
     }
 }
 
@@ -109,6 +110,7 @@ fn message(conversation_id: ConversationId, author: UserId, text: &str) -> Messa
         text: Some(text.to_string()),
         is_deleted: false,
         has_attachments: false,
+        encryption: None,
     }
 }
 
@@ -187,6 +189,7 @@ async fn notify_stores_rows_and_emits_one_private_event_per_recipient() {
             conversation: conv.clone(),
             message: msg.clone(),
             member_user_ids: vec![alice, bob, carol, dave],
+            encrypted_mentions: None,
         })
         .await
         .expect("notify");
@@ -257,6 +260,7 @@ async fn notify_emits_only_for_rows_actually_inserted() {
             conversation: conv,
             message: msg,
             member_user_ids: vec![alice, bob],
+            encrypted_mentions: None,
         })
         .await
         .expect("notify");
@@ -286,6 +290,7 @@ async fn notify_without_other_members_touches_nothing() {
             conversation: conv.clone(),
             message: message(conv.id, alice, "talking to myself"),
             member_user_ids: vec![alice],
+            encrypted_mentions: None,
         })
         .await
         .expect("notify");
@@ -357,6 +362,7 @@ async fn thread_reply_notifies_participants() {
             conversation: conv,
             message: msg,
             member_user_ids: vec![alice, bob, carol],
+            encrypted_mentions: None,
         })
         .await
         .expect("notify");

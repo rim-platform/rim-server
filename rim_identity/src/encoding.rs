@@ -161,6 +161,13 @@ impl PublicKey {
         }
     }
 
+    /// The raw key bytes, without the algorithm tag.
+    pub fn key_bytes(&self) -> Vec<u8> {
+        match &self.0 {
+            KeyMaterial::Ed25519(key) => key.as_bytes().to_vec(),
+        }
+    }
+
     /// SHA-256 of the canonical tagged text. Servers index device keys by it, so the index
     /// stays small whatever the key size; the key-hash migration computes the same value in SQL.
     pub fn key_hash(&self) -> [u8; 32] {

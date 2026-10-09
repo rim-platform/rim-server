@@ -27,6 +27,7 @@ pub(crate) mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod e2ee;
 pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -120,4 +121,5 @@ pub(crate) struct QueryGroup7(
     key_identity::KeyIdentityQueries,
     device_link::DeviceLinkQueries,
     workspace_plugin::WorkspacePluginQueries,
+    e2ee::E2eeQueries,
 );
