@@ -26,11 +26,21 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-server | #45 | W4-0: `web-plugins-v1.md` and `workspace-plugins-v1.md` |
 | rim-server | #46 | S3-10a: workspace plugin registry, signed manifests, bundle endpoints |
 | rim-ui | #36 | S3-9: web plugins (`WebSandboxed` kind, frame shell, host, SDK transport, GitHub PRs showcase) |
+| rim-server | #48 | `ServerMember.principalId`, for the trust badge |
+| rim-ui | #37 | S3-10b: registry client (verify on both platforms, sign and publish, palette, required/update/removal flows) |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.
 
-## Left, as PRs
+## Status
+
+**Stage 3 is complete as of 2026-10-09.** Every row below shipped; the table above lists the PRs.
+What remains is manual: one real run of device linking (desktop ↔ desktop, desktop ↔ browser),
+of the identity-key takeover on a linked device, and of a plugin signed on one account and
+installed on another, on the desktop and on the web. Stage 4 (MLS encryption) starts only on
+Jakub's go.
+
+## The PRs, as planned
 
 Sizes: S under a day, M a day or two, L several days of agent work.
 

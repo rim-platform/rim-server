@@ -185,7 +185,9 @@ The server keeps copies because the web app fetches with `fetch()`, which needs 
 release hosts (GitHub releases, most object stores by default) do not send; a copy also keeps a
 required plugin installable when the publisher's host goes away. An entry may still name an external
 `https://` URL: clients fetch it with `credentials: "omit"`, and the web app needs that host to send
-`Access-Control-Allow-Origin: *`.
+`Access-Control-Allow-Origin: *`. The server's own copy (a `bundleUrl` that is a path, or a URL on
+the API's origin) needs the session, so clients fetch it with credentials, and send credentials to
+no other host.
 
 Two endpoints in `rim_server`, in the `file_handlers.rs` pattern (a non-GraphQL transport that
 depends on a `PluginBundleService` trait in `rim_services`, never on its implementation):
@@ -437,8 +439,9 @@ Install GitHub Pull Requests             Required by Acme · signed by RIM team 
 
 The **trust badge** is `Signed by <publisherName> · rimp1_<first 8 characters after the prefix>`,
 with the whole id on hover and copy. `publisherName` is self-asserted, so when a member of the
-workspace has this `principalId` (`User.principalId`), the badge shows that member's name from the
-workspace instead; otherwise the name is quoted and marked "not a member of this workspace". On the
+workspace has this `principalId` (`ServerMember.principalId`, from `serverMembers`), the badge
+shows that member's name from the workspace instead; otherwise the name is quoted and marked "not a
+member of this workspace". On the
 web, `DesktopLocalProcess` entries are listed with "Needs the desktop app" and cannot be chosen.
 An entry that fails verification is listed as "Signature does not verify" with the reason, and is
 never offered.
@@ -466,9 +469,10 @@ server enforces nothing: `required` is the workspace's strong recommendation.
 
 - **Updates.** On workspace open and on `WorkspacePluginChanged`, the client compares each registry
   install's `statementSha256` with the entry's. A changed entry is verified, then installed at once
-  when it keeps the runtime kind and the publisher, asks for no capability the person has not
-  approved, adds no AI-callable command beyond those consented, and adds no post-install step; the
-  person sees "Updated Kubernetes Pods to 0.3.0". Otherwise the update waits behind a prompt that
+  when it keeps the runtime kind and the publisher, asks for no capability the installed copy did
+  not ask for and the person has not approved, adds no AI-callable command beyond the installed
+  copy's and those consented, and adds no post-install step; the approvals carry over to the new
+  copy, and the person sees "Updated Kubernetes Pods to 0.3.0". Otherwise the update waits behind a prompt that
   shows what is new, with a warning when the publisher changed. A failed update keeps the old copy.
 - **Removal.** When the entry disappears, the client stops and disables the plugin and asks "Acme
   removed Kubernetes Pods from its plugins. Remove it from this device?" "Remove" uninstalls it and
