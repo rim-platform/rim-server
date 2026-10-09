@@ -33,6 +33,7 @@ pub struct Model {
     )]
     pub key_hash: Vec<u8>,
     pub last_key_package_upload_at: Option<DateTimeWithTimeZone>,
+    pub request_highest_seq: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
