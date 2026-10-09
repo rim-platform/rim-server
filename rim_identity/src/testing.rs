@@ -4,7 +4,7 @@
 //!
 //! Every builder takes the statement version to write. [`TestIdentity`] writes its own
 //! `version` (version 1 unless set), and the device helpers write the version of the key log
-//! head they are given.
+//! head they are given. Plugin manifests are always version 2.
 
 pub use ed25519_dalek::SigningKey;
 use uuid::Uuid;
@@ -293,4 +293,53 @@ pub fn device_self_revoke(
         device,
         revocation_payload(state.version, state, device_id, RevocationSigner::Device),
     )
+}
+
+/// A plugin manifest statement signed by the identity key from seed 1 at `keySeq` 0, the
+/// inception of [`TestIdentity::with_version`]`(1, V2)`, over the bundle
+/// [`KNOWN_PLUGIN_BUNDLE`].
+pub const KNOWN_PLUGIN_MANIFEST_PAYLOAD: &str = r#"{"v":2,"type":"plugin-manifest","principalId":"rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0","keySeq":0,"publisherName":"Ada","pluginId":"dev.example.hello-web","version":"0.1.0","manifest":"{\"manifest_version\":1,\"plugin_id\":\"dev.example.hello-web\",\"display_name\":\"Hello Web\",\"version\":\"0.1.0\",\"description\":\"Says hello from a sandboxed frame.\",\"runtime_kind\":\"WebSandboxed\",\"entrypoint\":\"main.mjs\",\"commands\":[{\"id\":\"greet\",\"title\":\"Hello Web: Greet\",\"description\":\"Greets the signed-in user.\"}]}","source":{"kind":"bundle","sha256":"5b154b3eb45c3ebc44f6820ba30a389ce85b43dea34bcbf652b9b1a5416fbe85","size":1605},"issuedAt":"2026-10-09T00:00:00Z"}"#;
+pub const KNOWN_PLUGIN_MANIFEST_SIGNATURE: &str = "ed25519:FRHxrYnev03jlVo484kL4PLh7GMArjEE4q1wiBNMSx7rD8CAis8YIivjSccshXkEdvYEw-wAIjzQgzDRj6kGCg";
+
+/// A web plugin bundle of 1,605 bytes with SHA-256
+/// `5b154b3eb45c3ebc44f6820ba30a389ce85b43dea34bcbf652b9b1a5416fbe85`.
+pub const KNOWN_PLUGIN_BUNDLE: &[u8] = include_bytes!("testdata/hello-web.rimbundle");
+
+/// A compact `WebSandboxed` manifest with one command.
+pub fn web_manifest(plugin_id: &str, version: &str) -> String {
+    format!(
+        r#"{{"manifest_version":1,"plugin_id":{},"display_name":"Hello Web","version":{},"description":"Says hello from a sandboxed frame.","runtime_kind":"WebSandboxed","entrypoint":"main.mjs","commands":[{{"id":"greet","title":"Hello Web: Greet","description":"Greets the signed-in user."}}]}}"#,
+        serde_json::Value::from(plugin_id),
+        serde_json::Value::from(version),
+    )
+}
+
+/// A `bundle` source object.
+pub fn bundle_source(sha256: &str, size: u64) -> String {
+    format!(r#"{{"kind":"bundle","sha256":"{sha256}","size":{size}}}"#)
+}
+
+/// A plugin manifest payload embedding `manifest`; `pluginId` and `version` are copied from it.
+/// `source` is the JSON text of the source object.
+pub fn plugin_manifest_payload(
+    principal_id: &str,
+    key_seq: u32,
+    publisher_name: &str,
+    manifest: &str,
+    source: &str,
+) -> String {
+    let fields: serde_json::Value = serde_json::from_str(manifest).unwrap_or_default();
+    let field = |name: &str| fields.get(name).cloned().unwrap_or_default();
+    format!(
+        r#"{{"v":2,"type":"plugin-manifest","principalId":"{principal_id}","keySeq":{key_seq},"publisherName":{},"pluginId":{},"version":{},"manifest":{},"source":{source},"issuedAt":"{TEST_TIME}"}}"#,
+        serde_json::Value::from(publisher_name),
+        field("plugin_id"),
+        field("version"),
+        serde_json::Value::from(manifest),
+    )
+}
+
+/// Sign a plugin manifest payload with `key`.
+pub fn sign_plugin_manifest(key: &SigningKey, payload: impl Into<String>) -> SignedStatement {
+    sign(Purpose::PluginManifest, StatementVersion::V2, key, payload)
 }

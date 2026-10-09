@@ -11,6 +11,8 @@
 //! - [`verify_device_cert`], [`UnverifiedRevocation`]: device keys certified and revoked.
 //! - [`verify_profile_card`]: the signed card with display name, relays and devices.
 //! - [`UnverifiedLogin`]: the proof a device signs over a server's login challenge.
+//! - [`verify_plugin_manifest`]: a publisher's signature over a plugin's manifest and source,
+//!   checked against their [`KeyHistory`].
 //! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
 //!   and tests use it; the server only relays the sealed bytes.
 
@@ -20,6 +22,7 @@ mod encoding;
 mod error;
 mod key_log;
 mod login;
+mod plugin_manifest;
 mod profile_card;
 mod statement;
 #[cfg(test)]
@@ -36,7 +39,12 @@ pub use encoding::{
     Algorithm, PRINCIPAL_ID_PREFIX, PublicKey, is_principal_id, principal_id_for_inception,
 };
 pub use error::{IdentityError, IdentityResult};
-pub use key_log::{KeyState, RotationSigner, rotation_principal_id};
+pub use key_log::{KeyState, RotationSigner, entry_signer, rotation_principal_id};
 pub use login::{LoginProof, UnverifiedLogin};
+pub use plugin_manifest::{
+    KeyHistory, KeyHistoryEntry, MAX_BUNDLE_SIZE, MAX_GIT_URL_LEN, MAX_MANIFEST_LEN,
+    MAX_PLUGIN_VERSION_CHARS, MAX_PUBLISHER_NAME_CHARS, PluginManifestStatement, PluginRuntimeKind,
+    PluginSource, Validity, read_plugin_manifest, verify_plugin_manifest,
+};
 pub use profile_card::{CardDevice, ProfileCard, verify_profile_card};
 pub use statement::{Purpose, SignedStatement, StatementVersion, sign};
