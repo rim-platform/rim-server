@@ -32,6 +32,7 @@ pub(crate) mod thread;
 pub(crate) mod user;
 pub(crate) mod workspace;
 pub(crate) mod workspace_feature;
+pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
 pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
@@ -116,6 +117,10 @@ pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
 pub use workspace::{Server, ServerMember, ServerMemberRoleGql};
 pub use workspace_feature::{WorkspaceFeature, WorkspaceFeatureState};
+pub use workspace_plugin::{
+    AddWorkspacePluginInput, PluginRuntimeKind, PluginSignatureStatus, PluginSource,
+    PluginSourceKind, UpdateWorkspacePluginInput, WorkspacePlugin, WorkspacePluginStatus,
+};
 pub use workspace_state::{
     DeleteWorkspaceStateInput, IncrementWorkspaceStateInput, SetWorkspaceStateInput,
     WorkspaceStateEntryGql, WorkspaceStateScopeGql,
