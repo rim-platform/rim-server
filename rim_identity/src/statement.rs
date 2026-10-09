@@ -61,6 +61,8 @@ pub enum Purpose {
     ProfileCard,
     Login,
     PluginManifest,
+    MlsKey,
+    MlsReadd,
 }
 
 impl Purpose {
@@ -73,6 +75,8 @@ impl Purpose {
             Self::ProfileCard => b"rim.profile-card.v1\0",
             Self::Login => b"rim.login.v1\0",
             Self::PluginManifest => b"rim.plugin-manifest.v1\0",
+            Self::MlsKey => b"rim.mls-key.v1\0",
+            Self::MlsReadd => b"rim.mls-readd.v1\0",
         }
     }
 

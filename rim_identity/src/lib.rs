@@ -13,6 +13,8 @@
 //! - [`UnverifiedLogin`]: the proof a device signs over a server's login challenge.
 //! - [`verify_plugin_manifest`]: a publisher's signature over a plugin's manifest and source,
 //!   checked against their [`KeyHistory`].
+//! - [`verify_mls_key`], [`verify_mls_readd`]: a device's MLS signature key and its requests to
+//!   be added to a group again, both signed by its device key.
 //! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
 //!   and tests use it; the server only relays the sealed bytes.
 
@@ -22,6 +24,7 @@ mod encoding;
 mod error;
 mod key_log;
 mod login;
+mod mls;
 mod plugin_manifest;
 mod profile_card;
 mod statement;
@@ -41,6 +44,11 @@ pub use encoding::{
 pub use error::{IdentityError, IdentityResult};
 pub use key_log::{KeyState, RotationSigner, entry_signer, rotation_principal_id};
 pub use login::{LoginProof, UnverifiedLogin};
+pub use mls::{
+    MAX_MLS_CREDENTIAL_LEN, MLS_READD_NONCE_LEN, MlsKeyStatement, MlsReaddRequest,
+    UnverifiedMlsKey, UnverifiedMlsReadd, mls_credential_identity, read_mls_credential,
+    verify_mls_key, verify_mls_readd,
+};
 pub use plugin_manifest::{
     KeyHistory, KeyHistoryEntry, MAX_BUNDLE_SIZE, MAX_GIT_URL_LEN, MAX_MANIFEST_LEN,
     MAX_PLUGIN_VERSION_CHARS, MAX_PUBLISHER_NAME_CHARS, PluginManifestStatement, PluginRuntimeKind,

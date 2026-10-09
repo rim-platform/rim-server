@@ -343,3 +343,68 @@ pub fn plugin_manifest_payload(
 pub fn sign_plugin_manifest(key: &SigningKey, payload: impl Into<String>) -> SignedStatement {
     sign(Purpose::PluginManifest, StatementVersion::V2, key, payload)
 }
+
+/// An `mls-key` payload certifying `mls_key` for a device.
+pub fn mls_key_payload(principal_id: &str, device_id: Uuid, mls_key: &SigningKey) -> String {
+    format!(
+        r#"{{"v":2,"type":"mls-key","principalId":"{principal_id}","deviceId":"{device_id}","mlsKey":"{}","issuedAt":"{TEST_TIME}"}}"#,
+        key_text(StatementVersion::V2, mls_key),
+    )
+}
+
+/// A device certifying its MLS signature key.
+pub fn device_mls_key(
+    device: &SigningKey,
+    principal_id: &str,
+    device_id: Uuid,
+    mls_key: &SigningKey,
+) -> SignedStatement {
+    sign(
+        Purpose::MlsKey,
+        StatementVersion::V2,
+        device,
+        mls_key_payload(principal_id, device_id, mls_key),
+    )
+}
+
+/// An `mls-readd` payload.
+pub fn mls_readd_payload(
+    principal_id: &str,
+    device_id: Uuid,
+    conversation_id: Uuid,
+    incarnation: u32,
+    last_epoch: Option<u64>,
+    nonce: &[u8],
+) -> String {
+    use base64::Engine;
+    let last_epoch = last_epoch.map_or("null".to_string(), |e| e.to_string());
+    format!(
+        r#"{{"v":2,"type":"mls-readd","principalId":"{principal_id}","deviceId":"{device_id}","conversationId":"{conversation_id}","incarnation":{incarnation},"lastEpoch":{last_epoch},"nonce":"{}","issuedAt":"{TEST_TIME}"}}"#,
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce),
+    )
+}
+
+/// A device asking to be added to a conversation's group again.
+pub fn device_mls_readd(
+    device: &SigningKey,
+    principal_id: &str,
+    device_id: Uuid,
+    conversation_id: Uuid,
+    incarnation: u32,
+    last_epoch: Option<u64>,
+    nonce: &[u8],
+) -> SignedStatement {
+    sign(
+        Purpose::MlsReadd,
+        StatementVersion::V2,
+        device,
+        mls_readd_payload(
+            principal_id,
+            device_id,
+            conversation_id,
+            incarnation,
+            last_epoch,
+            nonce,
+        ),
+    )
+}
