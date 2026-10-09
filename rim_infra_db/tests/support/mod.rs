@@ -136,6 +136,7 @@ TRUNCATE TABLE
   on_call_schedule,
   password_reset_token,
   pipeline,
+  plugin_bundle,
   profile_card,
   server,
   server_ban,
@@ -149,6 +150,7 @@ TRUNCATE TABLE
   "user",
   workspace_feature,
   workspace_ingest_token,
+  workspace_plugin,
   workspace_state
 RESTART IDENTITY CASCADE;
 "#;

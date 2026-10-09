@@ -181,6 +181,19 @@ pub fn rotation_principal_id(entry: &SignedStatement) -> IdentityResult<String> 
     Ok(raw.principal_id)
 }
 
+/// Only the `signer` field of a key log entry; an inception has none.
+#[derive(Deserialize)]
+struct EntrySigner {
+    signer: Option<RotationSigner>,
+}
+
+/// Who signed a key log entry: `None` for the inception, the rotation's `signer` otherwise.
+/// Unverified: use it only on entries whose signatures were checked when they were stored.
+pub fn entry_signer(entry: &SignedStatement) -> IdentityResult<Option<RotationSigner>> {
+    let raw: EntrySigner = parse(Purpose::KeyLog, &entry.payload)?;
+    Ok(raw.signer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +425,19 @@ mod tests {
         let state = KeyState::from_inception(&inception).expect("inception");
         let rotation = id.rotate_with_identity(&state, 2);
         assert_eq!(rotation_principal_id(&rotation), Ok(state.principal_id));
+    }
+
+    #[test]
+    fn entry_signer_reads_the_signer_field() {
+        let mut id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let r1 = id.rotate_with_identity(&state, 2);
+        let (state1, _) = state.apply(&r1).expect("r1");
+        let r2 = id.recover(&state1, 3);
+        assert_eq!(entry_signer(&inception), Ok(None));
+        assert_eq!(entry_signer(&r1), Ok(Some(RotationSigner::Identity)));
+        assert_eq!(entry_signer(&r2), Ok(Some(RotationSigner::Recovery)));
     }
 
     #[test]
