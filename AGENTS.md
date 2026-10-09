@@ -72,7 +72,7 @@ Local dev typically uses `.env` (loaded via `dotenvy` in `rim_server` and `rim_l
 - `DATABASE_URL`: Postgres connection string (migrations/tests)
 - `RIM_SERVER_HOST`: bind host (see `rim_server/src/config.rs`)
 - `RIM_SERVER_PORT`: bind port
-- `RIM_LOG_LEVEL`: `error|warn|info|debug|trace` (default `info`)
+- `RUST_LOG`: tracing filter, e.g. `info` or `rim_server=debug,info` (default `info`)
 
 CI uses Postgres 17. For local dev:
 

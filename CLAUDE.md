@@ -118,7 +118,7 @@ Cross-cutting contracts that define boundaries between layers:
 
 ## Local Dev Environment
 
-Requires `.env` file with: `DATABASE_URL`, `RIM_SERVER_HOST`, `RIM_SERVER_PORT`, `RIM_LOG_LEVEL`. Config loaded via `dotenvy` in `rim_server/src/config.rs`.
+Requires `.env` file with: `DATABASE_URL`, `RIM_SERVER_HOST`, `RIM_SERVER_PORT`; the log filter comes from `RUST_LOG` (default `info`). Config loaded via `dotenvy` in `rim_server/src/config.rs`.
 
 ## GraphQL Schema Export (CRITICAL for frontend codegen)
 

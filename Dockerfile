@@ -1,6 +1,7 @@
 # =============================================================================
 # RIM Server — Production Dockerfile
-# Multi-stage build: chef → planner → builder → migrator → runtime
+# Multi-stage build: chef → planner → builder → runtime
+# (the builder compiles both the server and the `migration` binary)
 # =============================================================================
 
 # ---------- Stage 1: Chef (cargo-chef for dependency caching) ----------------
@@ -55,22 +56,21 @@ USER rim
 #   DATABASE_URL          — PostgreSQL connection string (required)
 #   RIM_SERVER_HOST       — Bind address (default: 0.0.0.0)
 #   RIM_SERVER_PORT       — Listen port (default: 8080)
-#   RIM_LOG_LEVEL         — Log level (default: INFO)
+#   RUST_LOG              — Log filter, e.g. info or rim_server=debug (default: info)
 #   RIM_CORS_ALLOWED_ORIGIN — CORS origin (optional)
 #   RIM_DATA_DIR          — Data directory (default: ./data)
-#   RIM_STORAGE_BACKEND   — Storage backend: local | s3 (default: local)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
 
 ENV RIM_SERVER_HOST=0.0.0.0 \
     RIM_SERVER_PORT=8080 \
-    RIM_LOG_LEVEL=INFO \
     RIM_DATA_DIR=/app/data \
-    RIM_STORAGE_BACKEND=local \
     RIM_STORAGE_LOCAL_PATH=/app/data/uploads
 
 EXPOSE 8080
 
+# /api accepts only POST. A query (not a mutation) needs no session and no CSRF token.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/api?query=%7B__typename%7D || exit 1
+    CMD curl -fsS -X POST -H 'Content-Type: application/json' \
+        --data '{"query":"{__typename}"}' http://localhost:8080/api || exit 1
 
 ENTRYPOINT ["/app/rim-server"]
