@@ -1,6 +1,5 @@
-//! Device links (Stage 3, `docs/specs/device-linking-v1.md`): a signed-in device lets a new
-//! device get its own certified device key, with the server relaying a sealed offer and a
-//! sealed answer it cannot read.
+//! Device links: a signed-in device lets a new device get its own certified device key, with
+//! the server relaying a sealed offer and a sealed answer it cannot read.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -20,6 +19,10 @@ pub enum DeviceLinkState {
 }
 
 impl DeviceLinkState {
+    /// The states a link may still move on from unless it expired.
+    pub const LIVE: [Self; 3] = [Self::Open, Self::Offered, Self::Answered];
+
+    /// The value stored in `device_link.state`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Open => "open",
@@ -30,6 +33,7 @@ impl DeviceLinkState {
         }
     }
 
+    /// The state stored as `s`, if any.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "open" => Some(Self::Open),
@@ -41,9 +45,9 @@ impl DeviceLinkState {
         }
     }
 
-    /// `open`, `offered` or `answered`: the link may still move on unless it expired.
+    /// Whether the state is one of [`Self::LIVE`].
     pub fn is_live(self) -> bool {
-        matches!(self, Self::Open | Self::Offered | Self::Answered)
+        Self::LIVE.contains(&self)
     }
 }
 

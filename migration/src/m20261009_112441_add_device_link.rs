@@ -1,9 +1,7 @@
 use sea_orm_migration::prelude::*;
 
-/// Device linking (Stage 3; `docs/specs/device-linking-v1.md`).
-///
-/// `device_link` holds the links a signed-in device starts so a new device can get its own
-/// certified device key, with the server as a courier for the sealed offer and answer:
+/// Adds `device_link`: the links a signed-in device starts so a new device can get its own
+/// certified device key, with the server relaying the sealed offer and answer.
 ///
 /// - `link_hash` is the SHA-256 of the 16-byte link id. The id itself is a bearer capability
 ///   (post an offer, read the answer, cancel), so a database read must not hand it out.

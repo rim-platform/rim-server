@@ -1,6 +1,4 @@
-//! Device linking (Stage 3). Contract: `docs/specs/device-linking-v1.md`.
-//!
-//! The server is a courier: it stores the new device's sealed offer and the old device's sealed
+//! Device linking: the server is a courier. it stores the new device's sealed offer and the old device's sealed
 //! answer, checks only their encoding and size, and never reads them. The state machine lives
 //! in the repository's conditional transitions; this module decides who may call what, turns
 //! a refused transition into the right error, and rate-limits anonymous callers. It does not
@@ -18,7 +16,9 @@ use sha2::{Digest, Sha256};
 use tracing::{info, instrument, warn};
 
 use rim_auth::session_token::generate_link_id;
-use rim_core::device_link::model::{DeviceLink, DeviceLinkState, NewDeviceLink, SealedBytes};
+use rim_core::device_link::model::{
+    DeviceLink, DeviceLinkId, DeviceLinkState, NewDeviceLink, SealedBytes,
+};
 use rim_core::device_link::repository::DeviceLinkRepository;
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
@@ -47,6 +47,8 @@ const LINK_ID_LEN: usize = 16;
 const LINK_ID_TEXT_LEN: usize = 22;
 
 const NONCE_LEN: usize = 12;
+/// The nonce as unpadded base64url text.
+const NONCE_TEXT_LEN: usize = 16;
 /// One byte of plaintext plus the 16-byte tag.
 const MIN_CIPHERTEXT_LEN: usize = 17;
 /// 16 KiB of plaintext plus the tag.
@@ -94,9 +96,9 @@ fn link_hash(link_id: &str) -> Option<Vec<u8>> {
 /// Decode a sealed message, checking only its encoding and size. The engine refuses padding
 /// and non-zero trailing bits, so the bytes re-encode to exactly the text received.
 fn decode_sealed(field: &str, sealed: &SealedPayload, max: usize) -> ServiceResult<SealedBytes> {
-    let nonce = URL_SAFE_NO_PAD
-        .decode(&sealed.nonce)
-        .ok()
+    let nonce = Some(&sealed.nonce)
+        .filter(|text| text.len() == NONCE_TEXT_LEN)
+        .and_then(|text| URL_SAFE_NO_PAD.decode(text).ok())
         .filter(|n| n.len() == NONCE_LEN)
         .ok_or_else(|| {
             ServiceError::Validation(format!(
@@ -161,18 +163,19 @@ fn conflict(link: &DeviceLink, wanted: &str) -> ServiceError {
     })
 }
 
-fn audit(event: &str, link: &DeviceLink, message: &str) {
-    // The row id and the user, never the link id or the sealed bytes.
+/// Log an audit event with the link's row id and user, never its link id or sealed bytes.
+fn audit(event: &str, link_row_id: DeviceLinkId, user_id: UserId, message: &str) {
     info!(
         target = "audit",
         event,
-        link = %link.id,
-        user_id = %link.user_id,
+        link_row_id = %link_row_id,
+        user_id = %user_id,
         "{message}"
     );
 }
 
 impl DefaultDeviceLinkService {
+    /// The service with the default limits; `db` makes `start` transactional.
     pub fn new(repos: DeviceLinkRepos, db: Option<DatabaseConnection>) -> Self {
         Self {
             repos,
@@ -260,13 +263,8 @@ impl DefaultDeviceLinkService {
         result
     }
 
-    /// The caller's link; `NotFound` for a malformed or unknown id and for another user's link.
-    async fn find_own(
-        &self,
-        link_hash: Option<&[u8]>,
-        user_id: UserId,
-    ) -> ServiceResult<DeviceLink> {
-        let link_hash = link_hash.ok_or(ServiceError::NotFound)?;
+    /// The caller's link; `NotFound` for an unknown link and for another user's link.
+    async fn find_own(&self, link_hash: &[u8], user_id: UserId) -> ServiceResult<DeviceLink> {
         self.repos
             .device_link_repo
             .find(link_hash)
@@ -288,7 +286,8 @@ impl DefaultDeviceLinkService {
                 .ok_or(ServiceError::Unauthenticated)?;
             audit(
                 "device_link_cancelled",
-                &link,
+                link.id,
+                link.user_id,
                 "device link cancelled by a holder of the link id",
             );
             Ok(())
@@ -333,7 +332,7 @@ impl DeviceLinkService for DefaultDeviceLinkService {
                 "this account has no key identity yet".to_string(),
             ));
         }
-        let cancelled_previous = repos.device_link_repo.cancel_live_links(user_id).await?;
+        let cancelled = repos.device_link_repo.cancel_live_links(user_id).await?;
         let link = repos
             .device_link_repo
             .create(NewDeviceLink {
@@ -344,13 +343,19 @@ impl DeviceLinkService for DefaultDeviceLinkService {
             .await?;
         Self::commit(scope).await?;
 
-        info!(
-            target = "audit",
-            event = "device_link_started",
-            link = %link.id,
-            user_id = %user_id,
-            cancelled_previous,
-            "device link started"
+        for link_row_id in cancelled {
+            audit(
+                "device_link_cancelled",
+                link_row_id,
+                user_id,
+                "device link cancelled by a new link",
+            );
+        }
+        audit(
+            "device_link_started",
+            link.id,
+            user_id,
+            "device link started",
         );
         Ok(StartedDeviceLinkDto {
             link_id,
@@ -370,7 +375,12 @@ impl DeviceLinkService for DefaultDeviceLinkService {
                 .offer(&link_hash, offer.clone())
                 .await?
             {
-                audit("device_link_offered", &link, "device link offer received");
+                audit(
+                    "device_link_offered",
+                    link.id,
+                    link.user_id,
+                    "device link offer received",
+                );
                 return Ok(());
             }
             // A retry of the offer that won (its answer was lost) succeeds again.
@@ -389,9 +399,8 @@ impl DeviceLinkService for DefaultDeviceLinkService {
 
     #[instrument(name = "device_link.get", skip_all, fields(actor_id = %query.actor.user_id))]
     async fn get(&self, query: GetDeviceLinkQuery) -> ServiceResult<DeviceLinkDto> {
-        let link = self
-            .find_own(link_hash(&query.link_id).as_deref(), query.actor.user_id)
-            .await?;
+        let link_hash = link_hash(&query.link_id).ok_or(ServiceError::NotFound)?;
+        let link = self.find_own(&link_hash, query.actor.user_id).await?;
         Ok(link_dto(&link))
     }
 
@@ -406,10 +415,15 @@ impl DeviceLinkService for DefaultDeviceLinkService {
             .answer(&link_hash, user_id, answer.clone(), LINK_TTL)
             .await?
         {
-            audit("device_link_answered", &link, "device link answer received");
+            audit(
+                "device_link_answered",
+                link.id,
+                link.user_id,
+                "device link answer received",
+            );
             return Ok(link_dto(&link));
         }
-        let link = self.find_own(Some(&link_hash), user_id).await?;
+        let link = self.find_own(&link_hash, user_id).await?;
         // A retry of the answer that was stored succeeds again.
         if link.state == DeviceLinkState::Answered && link.answer.as_ref() == Some(&answer) {
             return Ok(link_dto(&link));
@@ -467,10 +481,15 @@ impl DeviceLinkService for DefaultDeviceLinkService {
             .complete(&link_hash, user_id)
             .await?
         {
-            audit("device_link_completed", &link, "device link completed");
+            audit(
+                "device_link_completed",
+                link.id,
+                link.user_id,
+                "device link completed",
+            );
             return Ok(());
         }
-        let link = self.find_own(Some(&link_hash), user_id).await?;
+        let link = self.find_own(&link_hash, user_id).await?;
         if link.state == DeviceLinkState::Consumed {
             return Ok(());
         }
@@ -484,7 +503,8 @@ impl DeviceLinkService for DefaultDeviceLinkService {
             if let Some(link) = repo.cancel(&link_hash, Some(actor.user_id)).await? {
                 audit(
                     "device_link_cancelled",
-                    &link,
+                    link.id,
+                    link.user_id,
                     "device link cancelled by its user",
                 );
                 return Ok(());

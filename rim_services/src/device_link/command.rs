@@ -2,7 +2,7 @@ use crate::Actor;
 
 /// A sealed message as the client sends and receives it: the 12-byte nonce and the AES-GCM
 /// ciphertext with its tag appended, both unpadded base64url. The server checks only the
-/// encoding and the size. Format: `docs/specs/device-linking-v1.md`.
+/// encoding and the size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedPayload {
     pub nonce: String,

@@ -9,9 +9,9 @@ use crate::device_link::command::{
 };
 use crate::device_link::dto::{DeviceLinkDto, StartedDeviceLinkDto};
 
-/// Device linking (Stage 3, `docs/specs/device-linking-v1.md`): a courier for the sealed offer
-/// and answer through which a signed-in device certifies a new device's key. It never reads
-/// the sealed bytes, and depends on nothing of key login but the account's principal id.
+/// Device linking: a courier for the sealed offer and answer through which a signed-in device
+/// certifies a new device's key. It never reads the sealed bytes, and depends on nothing of key
+/// login but the account's principal id.
 ///
 /// Anonymous calls answer `Unauthenticated` alike for every link they cannot act on; calls
 /// with a session answer `NotFound` for a malformed or unknown link id and for another

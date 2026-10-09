@@ -1,12 +1,11 @@
-//! Device linking channel: the reference implementation of `docs/specs/device-linking-v1.md`.
+//! The sealed channel through which a signed-in device certifies a new device's key.
 //!
 //! The old device shows a [`LinkCode`] (`rim-link:1:<linkId>:<secret>:<endpoint>`); both
 //! devices derive one AES-256-GCM key per direction from its secret ([`Channel`]); the new
 //! device seals an [`Offer`] and the old device answers with an [`Answer`] carrying the device
 //! certificate. Both screens show the offer's [`Fingerprint`] for the person to compare.
 //!
-//! The server is only a courier for the sealed bytes and never calls this module; clients and
-//! tests do.
+//! The server only relays the sealed bytes and never calls this module; clients and tests do.
 
 use std::fmt;
 
@@ -74,6 +73,9 @@ pub enum DeviceLinkError {
     #[error("the plaintext exceeds {max} bytes")]
     TooLarge { max: usize },
 
+    #[error("the message could not be sealed")]
+    SealFailed,
+
     /// The message failed to open, or opened to a plaintext that breaks the offer or answer
     /// rules. The two are deliberately one error: either way, someone other than the intended
     /// device wrote it.
@@ -105,10 +107,12 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 pub struct LinkId([u8; LINK_ID_LEN]);
 
 impl LinkId {
+    /// A link id from its raw bytes.
     pub fn from_bytes(bytes: [u8; LINK_ID_LEN]) -> Self {
         Self(bytes)
     }
 
+    /// The raw bytes.
     pub fn as_bytes(&self) -> &[u8; LINK_ID_LEN] {
         &self.0
     }
@@ -141,10 +145,12 @@ impl LinkSecret {
         Self(random_bytes())
     }
 
+    /// A secret from its raw bytes.
     pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Self {
         Self(bytes)
     }
 
+    /// The raw bytes.
     pub fn as_bytes(&self) -> &[u8; SECRET_LEN] {
         &self.0
     }
@@ -200,8 +206,8 @@ impl LinkCode {
         })
     }
 
-    /// Read a code as pasted: whitespace anywhere is ignored (chat apps and mail wrap long
-    /// lines), the scheme is compared case-insensitively, and the endpoint keeps its own colons.
+    /// Read a code as pasted: ASCII whitespace (tab, LF, FF, CR, space) anywhere is ignored,
+    /// the scheme is compared case-insensitively, and the endpoint keeps its own colons.
     pub fn parse(text: &str) -> DeviceLinkResult<Self> {
         let text: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
         if text.len() > MAX_CODE_LEN {
@@ -218,10 +224,13 @@ impl LinkCode {
         else {
             return Err(DeviceLinkError::NotALinkCode);
         };
-        if version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(DeviceLinkError::NotALinkCode);
-        }
-        if version != CODE_VERSION.to_string() {
+        // A version is a decimal number above 0, spelled without leading zeros.
+        let version = version
+            .parse::<u32>()
+            .ok()
+            .filter(|v| *v > 0 && v.to_string() == version)
+            .ok_or(DeviceLinkError::NotALinkCode)?;
+        if version != CODE_VERSION {
             return Err(DeviceLinkError::UnsupportedVersion);
         }
         let link_id = LinkId::parse(link_id)?;
@@ -330,10 +339,12 @@ impl SealedMessage {
         })
     }
 
+    /// The nonce as unpadded base64url.
     pub fn nonce_text(&self) -> String {
         b64(&self.nonce)
     }
 
+    /// The ciphertext as unpadded base64url.
     pub fn ciphertext_text(&self) -> String {
         b64(&self.ciphertext)
     }
@@ -387,6 +398,7 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// The value written in the offer's `platform`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Desktop => "desktop",
@@ -435,7 +447,7 @@ pub struct Offer {
 }
 
 impl Offer {
-    /// The plaintext, fields in the order of the spec and no spaces.
+    /// The plaintext: fields in a fixed order, no spaces.
     pub fn to_json(&self) -> String {
         format!(
             r#"{{"v":{CODE_VERSION},"type":"link-offer","deviceId":"{}","deviceKey":"{}","name":{},"platform":"{}","statementVersion":{}}}"#,
@@ -498,7 +510,7 @@ pub struct Answer {
 }
 
 impl Answer {
-    /// The plaintext, fields in the order of the spec and no spaces.
+    /// The plaintext: fields in a fixed order, no spaces.
     pub fn to_json(&self) -> String {
         format!(
             r#"{{"v":{CODE_VERSION},"type":"link-answer","certificate":{{"payload":{},"signature":{}}}}}"#,
@@ -566,6 +578,7 @@ impl fmt::Debug for Channel {
 }
 
 impl Channel {
+    /// Derive both keys of the link from its id and secret.
     pub fn new(link_id: &LinkId, secret: &LinkSecret) -> Self {
         Self {
             link_id: *link_id,
@@ -606,7 +619,7 @@ impl Channel {
                     aad: &aad(&self.link_id, direction),
                 },
             )
-            .map_err(|_| DeviceLinkError::TooLarge { max })?;
+            .map_err(|_| DeviceLinkError::SealFailed)?;
         Ok(SealedMessage { nonce, ciphertext })
     }
 
@@ -715,7 +728,7 @@ mod tests {
         LinkCode::new(link_id(), secret(), ENDPOINT).expect("code")
     }
 
-    /// Appendix B's device (seed 20, device id …0001, name `Laptop`) as a desktop offer.
+    /// The known-answer device (seed 20, device id …0001, name `Laptop`) as a desktop offer.
     fn offer() -> Offer {
         Offer {
             device_id: Uuid::from_u128(1),
@@ -726,7 +739,8 @@ mod tests {
         }
     }
 
-    /// Appendix B's identity, its head and its certificate for [`offer`]'s device.
+    /// The known-answer identity (seed 1, version 2), its head and its certificate for
+    /// [`offer`]'s device.
     fn certified() -> (KeyState, Answer) {
         let id = TestIdentity::with_version(1, V2);
         let state = KeyState::from_inception(&id.inception()).expect("inception");
@@ -743,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn appendix_a_code_keys_and_aad() {
+    fn known_answer_code_keys_and_aad() {
         assert_eq!(link_id().to_string(), LINK_ID);
         assert_eq!(secret().encode(), SECRET);
         let code = code();
@@ -766,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn appendix_a_offer() {
+    fn known_answer_offer() {
         let plaintext = offer().to_json();
         assert_eq!(plaintext, OFFER_PLAINTEXT);
         assert_eq!(plaintext.len(), 201);
@@ -799,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn appendix_a_answer() {
+    fn known_answer_answer() {
         let (state, answer) = certified();
         let plaintext = answer.to_json();
         assert_eq!(plaintext, ANSWER_PLAINTEXT);
@@ -969,8 +983,15 @@ mod tests {
 
     #[test]
     fn code_reader_ignores_whitespace_and_scheme_case() {
-        let wrapped = format!(" {}\n{}\r\n\t{} ", &CODE[..30], &CODE[30..70], &CODE[70..]);
+        let wrapped = format!(
+            " {}\n{}\r\n\t{}\x0c ",
+            &CODE[..30],
+            &CODE[30..70],
+            &CODE[70..]
+        );
         assert_eq!(LinkCode::parse(&wrapped), Ok(code()));
+        // Vertical tab is not in the set.
+        assert!(LinkCode::parse(&format!("{}\x0b{}", &CODE[..30], &CODE[30..])).is_err());
         let upper = CODE.replacen("rim-link:", "RIM-Link:", 1);
         assert_eq!(LinkCode::parse(&upper), Ok(code()));
         // Writers write lowercase.
@@ -984,13 +1005,16 @@ mod tests {
             Err(DeviceLinkError::UnsupportedVersion)
         );
         assert_eq!(
-            LinkCode::parse(&CODE.replacen(":1:", ":01:", 1)),
+            LinkCode::parse(&CODE.replacen(":1:", ":10:", 1)),
             Err(DeviceLinkError::UnsupportedVersion)
         );
-        assert_eq!(
-            LinkCode::parse(&CODE.replacen(":1:", ":x:", 1)),
-            Err(DeviceLinkError::NotALinkCode)
-        );
+        for version in ["0", "01", "x", "", "+1", "99999999999"] {
+            assert_eq!(
+                LinkCode::parse(&CODE.replacen(":1:", &format!(":{version}:"), 1)),
+                Err(DeviceLinkError::NotALinkCode),
+                "{version}"
+            );
+        }
         for text in [
             "",
             "rim-link",
