@@ -100,7 +100,6 @@ impl DefaultAppServiceProvider {
     pub fn new(
         repos: &AppRepos,
         db: DatabaseConnection,
-        bootstrap_secret: Option<String>,
         session_ttl: Duration,
         observers: Observers,
         storage_service: Arc<dyn StorageService>,
@@ -117,7 +116,6 @@ impl DefaultAppServiceProvider {
             crate::auth::DefaultAuthService::new(
                 repos.for_auth(),
                 Some(db.clone()),
-                bootstrap_secret,
                 session_ttl,
                 observers.clone(),
                 Arc::clone(&email_sender),

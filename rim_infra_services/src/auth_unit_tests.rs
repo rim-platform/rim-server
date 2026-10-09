@@ -22,8 +22,8 @@ mod tests {
     use rim_core::user::model::{NewUser, User, UserId};
     use rim_core::user::repository::MockUserRepository;
     use rim_services::auth::command::{
-        AcceptInviteCmd, BootstrapCmd, CreateInstanceInviteCmd, CreateInviteCmd, LoginCmd,
-        LogoutCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
+        AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
+        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
         SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
@@ -208,87 +208,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_denies_if_secret_missing() {
-        let (
-            user_repo,
-            server_repo,
-            server_member_repo,
-            session_repo,
-            invite_repo,
-            conversation_repo,
-        ) = repos();
-
-        let svc = DefaultAuthService::new(
-            make_auth_repos(
-                user_repo,
-                server_repo,
-                server_member_repo,
-                session_repo,
-                invite_repo,
-                conversation_repo,
-            ),
-            None,
-            None,
-            Duration::hours(1),
-            noop_observers(),
-            Arc::new(crate::email::LogEmailSender),
-            None,
-        );
-
-        let err = svc
-            .bootstrap(BootstrapCmd {
-                secret: "secret".to_string(),
-                username: "u".to_string(),
-                password: "p".to_string(),
-                server_name: "s".to_string(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied));
-    }
-
-    #[tokio::test]
-    async fn bootstrap_denies_if_users_exist() {
-        let (
-            mut user_repo,
-            server_repo,
-            server_member_repo,
-            session_repo,
-            invite_repo,
-            conversation_repo,
-        ) = repos();
-        user_repo.expect_any_users_exist().returning(|| Ok(true));
-
-        let svc = DefaultAuthService::new(
-            make_auth_repos(
-                user_repo,
-                server_repo,
-                server_member_repo,
-                session_repo,
-                invite_repo,
-                conversation_repo,
-            ),
-            None,
-            Some("secret".to_string()),
-            Duration::hours(1),
-            noop_observers(),
-            Arc::new(crate::email::LogEmailSender),
-            None,
-        );
-
-        let err = svc
-            .bootstrap(BootstrapCmd {
-                secret: "secret".to_string(),
-                username: "u".to_string(),
-                password: "p".to_string(),
-                server_name: "s".to_string(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied));
-    }
-
-    #[tokio::test]
     async fn logout_denies_if_session_belongs_to_other_user() {
         let actor_user_id = UserId::new();
         let other_user_id = UserId::new();
@@ -329,7 +248,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(crate::email::LogEmailSender),
@@ -369,7 +287,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(crate::email::LogEmailSender),
@@ -415,7 +332,6 @@ mod tests {
                     conversation_repo,
                 ),
                 None,
-                Some("secret".to_string()),
                 Duration::hours(1),
                 noop_observers(),
                 Arc::new(crate::email::LogEmailSender),
@@ -494,7 +410,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(email_sender),
@@ -559,7 +474,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(email_sender),
@@ -604,7 +518,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(crate::email::LogEmailSender),
@@ -673,7 +586,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(email_sender),
@@ -757,7 +669,6 @@ mod tests {
                 conversation_repo,
             ),
             None,
-            Some("secret".to_string()),
             Duration::hours(1),
             noop_observers(),
             Arc::new(crate::email::LogEmailSender),
@@ -773,175 +684,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(m) if m.contains("username")));
-    }
-
-    #[tokio::test]
-    async fn bootstrap_maps_repo_errors_to_service_error() {
-        let now = chrono::Utc::now();
-
-        let (
-            mut user_repo,
-            mut server_repo,
-            mut server_member_repo,
-            mut session_repo,
-            invite_repo,
-            conversation_repo,
-        ) = repos();
-        user_repo.expect_any_users_exist().returning(|| Ok(false));
-        user_repo
-            .expect_create_user()
-            .returning(move |_new: NewUser| {
-                Err(RepoError::with_message(
-                    RepoErrorKind::Conflict,
-                    "duplicate",
-                ))
-            });
-
-        server_repo.expect_create_server().never();
-        server_member_repo.expect_add_member().never();
-        session_repo.expect_create_session().never();
-
-        let svc = DefaultAuthService::new(
-            make_auth_repos(
-                user_repo,
-                server_repo,
-                server_member_repo,
-                session_repo,
-                invite_repo,
-                conversation_repo,
-            ),
-            None,
-            Some("secret".to_string()),
-            Duration::hours(1),
-            noop_observers(),
-            Arc::new(crate::email::LogEmailSender),
-            None,
-        );
-
-        let err = svc
-            .bootstrap(BootstrapCmd {
-                secret: "secret".to_string(),
-                username: "testuser".to_string(),
-                password: "password123".to_string(),
-                server_name: "s".to_string(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(m) if m == "duplicate"));
-
-        let _ = now;
-    }
-
-    #[tokio::test]
-    async fn bootstrap_happy_path_calls_repos() {
-        let now = chrono::Utc::now();
-        let server_id = ServerId::new();
-        let user_id = UserId::new();
-        let session_id = SessionId::new();
-
-        let (
-            mut user_repo,
-            mut server_repo,
-            mut server_member_repo,
-            mut session_repo,
-            invite_repo,
-            conversation_repo,
-        ) = repos();
-
-        user_repo.expect_any_users_exist().returning(|| Ok(false));
-        user_repo
-            .expect_create_user()
-            .returning(move |new: NewUser| {
-                assert_eq!(new.username, "testuser");
-                Ok(User {
-                    id: user_id,
-                    username: new.username,
-                    password_hash: new.password,
-                    created_at: now,
-                    updated_at: now,
-                    last_login_at: Some(now),
-                    display_name: new.display_name,
-                    avatar_url: None,
-                    status_text: None,
-                    bio: None,
-                    email: new.email,
-                    timezone: None,
-                    principal_id: None,
-                })
-            });
-
-        server_repo.expect_create_server().returning(move |name| {
-            assert_eq!(name, "s");
-            Ok(Server {
-                id: server_id,
-                name: name.to_string(),
-                created_at: now,
-                updated_at: now,
-            })
-        });
-
-        server_member_repo
-            .expect_add_member()
-            .returning(move |sid, uid, role| {
-                assert_eq!(sid, server_id);
-                assert_eq!(uid, user_id);
-                assert_eq!(role, ServerMemberRole::Owner);
-                Ok(ServerMember {
-                    id: ServerMemberId::new(),
-                    server_id: sid,
-                    user_id: uid,
-                    member_role: role,
-                    joined_at: now,
-                })
-            });
-
-        session_repo.expect_create_session().returning(move |new| {
-            assert_eq!(new.user_id, user_id);
-            Ok(Session {
-                id: session_id,
-                user_id: new.user_id,
-                token_hash: new.token_hash,
-                created_at: now,
-                expires_at: new.expires_at,
-                last_seen_at: None,
-                revoked_at: None,
-                user_agent: new.user_agent,
-                ip: new.ip,
-            })
-        });
-
-        let svc = DefaultAuthService::new(
-            make_auth_repos(
-                user_repo,
-                server_repo,
-                server_member_repo,
-                session_repo,
-                invite_repo,
-                conversation_repo,
-            ),
-            None,
-            Some("secret".to_string()),
-            Duration::hours(1),
-            noop_observers(),
-            Arc::new(crate::email::LogEmailSender),
-            None,
-        );
-
-        let res = svc
-            .bootstrap(BootstrapCmd {
-                secret: "secret".to_string(),
-                username: "testuser".to_string(),
-                password: "password123".to_string(),
-                server_name: "s".to_string(),
-            })
-            .await
-            .unwrap();
-        assert_eq!(res.user_id, user_id);
-        assert_eq!(res.server_id, server_id);
-        assert_eq!(res.session.user_id, user_id);
-        assert_eq!(res.session.session_id, session_id);
-        assert!(res.session_token.starts_with("rim_sess_"));
-        assert!(res.csrf_token.starts_with("rim_csrf_"));
     }
 
     // ── §8.1 Registration unit tests ─────────────────────────────────────────
@@ -969,7 +711,6 @@ mod tests {
                 bootstrap_repo,
                 instance_invite_repo,
             ),
-            None,
             None,
             Duration::hours(1),
             noop_observers(),
@@ -1542,7 +1283,6 @@ mod tests {
                 instance_invite_repo,
             ),
             None,
-            None,
             Duration::hours(1),
             noop_observers(),
             Arc::new(email_sender),
@@ -1612,7 +1352,6 @@ mod tests {
                 MockBootstrapTokenRepository::new(),
                 instance_invite_repo,
             ),
-            None,
             None,
             Duration::hours(1),
             noop_observers(),
@@ -1687,7 +1426,6 @@ mod tests {
                 MockBootstrapTokenRepository::new(),
                 instance_invite_repo,
             ),
-            None,
             None,
             Duration::hours(1),
             noop_observers(),
@@ -2272,7 +2010,6 @@ mod tests {
                 bt_repo,
                 MockInstanceInviteRepository::new(),
             ),
-            None,
             None,
             Duration::hours(1),
             noop_observers(),
@@ -2860,7 +2597,6 @@ mod tests {
         let (_, sr, smr, _, ir, cr) = repos();
         DefaultAuthService::new(
             make_auth_repos(user_repo, sr, smr, session_repo, ir, cr),
-            None,
             None,
             Duration::hours(1),
             noop_observers(),

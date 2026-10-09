@@ -87,14 +87,6 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(())
     }
 
-    async fn any_users_exist(&self) -> RepoResult<bool> {
-        let model = user::Entity::find()
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(model.is_some())
-    }
-
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User> {
         let model = user::Entity::find_by_id(id)
             .one(&self.db)

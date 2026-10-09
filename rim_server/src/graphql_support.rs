@@ -50,9 +50,7 @@ fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
 /// exempt from CSRF validation because they are used before the client has
 /// a CSRF token.
 const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
-    "bootstrap",
     "login",
-    "acceptInvite",
     "logout",
     // signupWithInvite is unauthenticated (no session, no CSRF token yet).
     "signupWithInvite",
