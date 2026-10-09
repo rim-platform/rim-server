@@ -11,8 +11,9 @@
 
 Every asymmetric primitive RIM uses or plans to use is classical: Ed25519 for the key log,
 device certificates, revocations, profile cards and login proofs (`docs/specs/key-identity-v1.md`),
-X25519 inside MLS for DMs and private groups (Stage 4), and Ed25519 HTTP Message Signatures for
-the server-to-server API (Stage 5). A large enough quantum computer breaks all of them.
+X25519 inside MLS for DMs and private groups (Stage 4), and HTTP Message Signatures for the
+server-to-server API (Stage 5; the algorithm is not fixed yet, Ed25519 was the working
+assumption). A large enough quantum computer breaks all of them.
 
 The two kinds of break differ in urgency. Ciphertext recorded today can be decrypted once such
 a computer exists ("harvest now, decrypt later"), so key agreement is exposed from the day a
@@ -47,25 +48,34 @@ post-quantum algorithm alone.**
   64 and 32 for Ed25519, so key logs, profile cards and every signed server-to-server request
   grow roughly forty times. ML-KEM-768 adds 1,184 bytes per encapsulation key and 1,088 bytes
   per ciphertext to MLS key packages and Welcome messages.
-- **Library maturity is a Stage 4 risk.** Hybrid MLS cipher suites are an IETF draft
-  (draft-ietf-mls-pq-ciphersuites, no code points assigned yet), so suite ids may change and
-  other MLS implementations may not interoperate; RIM only needs its own clients to agree.
-  OpenMLS has carried an X-Wing (X25519 + ML-KEM-768) suite on a private code point through
-  Cryspen's libcrux provider since 2024. Candidate Rust crates: libcrux (formally verified
-  ML-KEM and ML-DSA), RustCrypto `ml-kem` and `ml-dsa` (pure Rust, pre-1.0, not audited) and
-  aws-lc-rs. The crate is chosen at the start of Stage 4, kept behind one crypto seam, and
-  tested against NIST known-answer vectors.
+- **Library maturity is a Stage 4 risk.** Hybrid MLS cipher suites are not standardized yet:
+  draft-ietf-mls-pq-ciphersuites (ML-KEM-768 + X25519 among others) is an Internet-Draft with
+  placeholder code points and no IANA assignment, so suite ids and details may change and other
+  MLS implementations may not interoperate; RIM only needs its own clients to agree. OpenMLS has
+  carried an X-Wing suite (also X25519 + ML-KEM-768, from the separate individual draft
+  draft-mahy-mls-xwing) on the unassigned code point 0x004D through Cryspen's libcrux provider
+  since April 2024; X-Wing combines the two keys differently from the working-group draft, so
+  starting on it may mean a suite migration later. Candidate Rust crates: libcrux (hax proofs
+  cover the Rust source of its ML-KEM and ML-DSA, not intrinsics or the compiled code; an
+  unverified SHA-3 fallback gave wrong results on some ARM64 platforms until November 2025),
+  RustCrypto `ml-kem` and `ml-dsa` (pure Rust; `ml-dsa` fixed a signing timing leak and a
+  signature malleability bug in 2026), all pre-1.0, and aws-lc-rs (1.x, bindings to AWS-LC's C
+  code; which of its post-quantum APIs are stable is checked at selection). The crate is chosen
+  at the start of Stage 4, kept behind one crypto seam, and tested against NIST known-answer
+  vectors.
 - **Existing Ed25519 identities rotate to hybrid with a rotation signed by the old Ed25519
   key.** Once Ed25519 can be forged, an attacker could forge a fork of an old log for a server
-  that has never seen the real one. This is the same class as the accepted stolen-old-key limit
-  in `key-identity-v1.md`; clients and relays pin the newest head they have seen, and a later
-  cutoff can refuse Ed25519-only rotations.
+  that has never seen the real one. This is the same class as the limit accepted when rim-server
+  #30 merged (a stolen old identity key can claim the id first on a server that has not seen the
+  log; the recovery key takes it back), which `key-identity-v1.md` does not describe yet. The
+  planned mitigation: clients and relays pin the newest head they have seen, and a later cutoff
+  refuses Ed25519-only rotations.
 
 ## Rejected alternatives
 
 - **Post-quantum only (ML-KEM, ML-DSA alone):** the algorithms and their implementations are
-  young; a flaw in either would leave RIM with no classical fallback. Hybrid costs a few dozen
-  bytes over pure post-quantum.
+  young; a flaw in either would leave RIM with no classical fallback. Hybrid costs under a
+  hundred bytes per key, signature or ciphertext over pure post-quantum.
 - **Stay classical until quantum computers arrive:** recorded DMs could be decrypted
   retroactively, and moving a deployed identity format later is far harder than reserving room
   now.
