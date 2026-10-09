@@ -152,6 +152,11 @@ pub async fn serve(
             )
             .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)))
             .service(
+                web::resource("/api/remote/{host_server_id}/{tail:.*}")
+                    .route(web::get().to(crate::remote_handlers::handle_remote))
+                    .route(web::post().to(crate::remote_handlers::handle_remote)),
+            )
+            .service(
                 web::resource("/api/hooks/alerts/generic")
                     .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
                     .route(web::post().to(ingest_generic)),

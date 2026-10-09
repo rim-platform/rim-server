@@ -254,7 +254,16 @@ pub async fn handle_file_upload(
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    upload_as(user_id, payload, attachment_service.get_ref().as_ref()).await
+}
 
+/// Complete an attachment upload for `user_id`: the session path above and forwarded requests
+/// from another relay share it.
+pub(crate) async fn upload_as(
+    user_id: rim_core::user::model::UserId,
+    payload: Multipart,
+    attachment_service: &dyn MessageAttachmentService,
+) -> HttpResponse {
     let upload = match read_multipart_fields(payload, MAX_UPLOAD_BYTES).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -394,9 +403,24 @@ pub async fn handle_attachment_download(
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    attachment_download_as(
+        user_id,
+        &path.into_inner(),
+        attachment_service.get_ref().as_ref(),
+        storage_backend.get_ref().as_ref(),
+    )
+    .await
+}
 
-    let attachment_id = match path
-        .into_inner()
+/// Serve an attachment to `user_id` if they may read it: the session path above and forwarded
+/// requests from another relay share it.
+pub(crate) async fn attachment_download_as(
+    user_id: rim_core::user::model::UserId,
+    attachment_id: &str,
+    attachment_service: &dyn MessageAttachmentService,
+    storage_backend: &dyn StorageBackend,
+) -> HttpResponse {
+    let attachment_id = match attachment_id
         .parse::<uuid::Uuid>()
         .map(rim_core::message_attachment::model::MessageAttachmentId::from)
     {
@@ -430,7 +454,7 @@ pub async fn handle_attachment_download(
         }
     };
 
-    let data = match read_stored_file(storage_backend.get_ref().as_ref(), &storage_key).await {
+    let data = match read_stored_file(storage_backend, &storage_key).await {
         Ok(d) => d,
         Err(resp) => return resp,
     };

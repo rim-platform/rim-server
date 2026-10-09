@@ -65,8 +65,8 @@ impl E2eeQueries {
         Ok(page.into())
     }
 
-    /// The certified devices of principals who share a workspace with the caller; an empty
-    /// list for any other principal. At most 100 ids.
+    /// The certified devices of principals who share a workspace with the caller (the direct
+    /// space included); an empty list for any other principal. At most 100 ids.
     async fn principal_devices(
         &self,
         ctx: &Context<'_>,
@@ -74,6 +74,13 @@ impl E2eeQueries {
     ) -> Result<Vec<PrincipalDevices>> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn E2eeService>>()?;
+        // Remote principals' stored copies are refreshed from their relays when over an hour
+        // old; a relay that does not answer leaves the stored copy.
+        if let Ok(federation) = ctx.data::<crate::federation::FederationContext>()
+            && let Err(e) = federation.host.refresh_remote(principal_ids.clone()).await
+        {
+            tracing::warn!(error = %e, "could not refresh remote principals");
+        }
         let devices = svc
             .principal_devices(PrincipalDevicesQuery {
                 actor: Actor::new(actor),

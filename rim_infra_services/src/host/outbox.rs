@@ -693,7 +693,7 @@ mod tests {
             user_id: UserId::new(),
             status: "online".to_string(),
         };
-        let plans = planned(&typing, &[guest.clone()]);
+        let plans = planned(&typing, std::slice::from_ref(&guest));
         assert_eq!(plans[0].stream, "e");
         let plugin = WorkspaceEvent::WorkspacePluginChanged {
             workspace_id: ServerId::new(),
