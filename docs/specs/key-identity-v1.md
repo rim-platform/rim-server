@@ -231,6 +231,9 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
    same timing as a wrong password), `requestPasswordReset` sends nothing, and an outstanding
    reset link is refused with `FORBIDDEN`.
 
+After enrolling, the client offers to sign out other sessions: `logoutOtherSessions` ends every
+session of the account but the caller's and answers how many.
+
 ### Key-only signup
 
 `signupWithKey(input: { username, displayName, keyLog, device, proof, bootstrapToken,
@@ -377,6 +380,7 @@ type Mutation {
   revokeDeviceKey(revocation: SignedStatementInput!): DeviceKey!
   rotateIdentityKey(input: RotateIdentityKeyInput!): KeyIdentity!
   publishProfileCard(card: SignedStatementInput!): ProfileCard!
+  logoutOtherSessions: Int!                       # sessions ended; the caller's stays
 }
 ```
 
@@ -445,6 +449,9 @@ offers recovery must read.
   opens the workspace its preview named). Unconfirmed keys whose principal has no key log on the
   server (a signup or enrollment that never reached it) are removed when signing in with them
   fails. The web app keeps password signup only.
+- **Other sessions.** Right after an enrollment, Settings > Security offers "Sign out other
+  sessions" (`logoutOtherSessions`); Account settings offers it for every account, on the
+  desktop and the web.
 - **Audience.** The `host[:port]` of the GraphQL endpoint URL as written, lowercased, the same
   rule the server applies to `RIM_PUBLIC_BASE_URL`.
 - **Sign-in.** On a cold start whose session cookie is gone or refused, the app signs in with the
@@ -539,8 +546,6 @@ before the attempt are put back; with no answer the keys stay for the next try.
   courier) is specified in `device-linking-v1.md`.
 - Usernames stay unique across the table; uniqueness among local users only, and rows of kind
   `remote`, come with Stage 5.
-- Password sessions that existed before enrollment are not ended automatically. The client can
-  offer "sign out other sessions" after enrolling.
 
 ## Appendix A: known-answer vectors (version 1)
 

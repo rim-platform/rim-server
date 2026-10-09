@@ -122,4 +122,21 @@ impl SessionRepository for SeaOrmSessionRepository {
             .map_err(map_db_err)?;
         Ok(res.rows_affected)
     }
+
+    async fn revoke_all_for_user_except(
+        &self,
+        user_id: UserId,
+        keep: SessionId,
+    ) -> RepoResult<u64> {
+        let now: DateTime<Utc> = Utc::now();
+        let res = session::Entity::update_many()
+            .filter(session::Column::UserId.eq(sea_orm::Value::Uuid(Some(user_id.into()))))
+            .filter(session::Column::Id.ne(sea_orm::Value::Uuid(Some(keep.into()))))
+            .filter(session::Column::RevokedAt.is_null())
+            .col_expr(session::Column::RevokedAt, Expr::value(now))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
+    }
 }
