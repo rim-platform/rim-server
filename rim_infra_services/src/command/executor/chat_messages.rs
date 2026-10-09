@@ -31,6 +31,7 @@ pub(super) async fn post_message(
             conversation_id,
             text: Some(text),
             attachments: vec![],
+            forwarded_from_message_id: None,
             parent_message_id: None,
         })
         .await?;
@@ -78,6 +79,7 @@ pub(super) async fn reply_to_selected_message(
             conversation_id,
             text: Some(text),
             attachments: vec![],
+            forwarded_from_message_id: None,
             parent_message_id: Some(parent_message_id),
         })
         .await?;
@@ -276,6 +278,7 @@ mod tests {
             thread_root_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            encryption: None,
         }
     }
 

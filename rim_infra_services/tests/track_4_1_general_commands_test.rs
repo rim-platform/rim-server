@@ -406,6 +406,7 @@ async fn agent_create_group_with_proof_accepts_comma_separated_member_ids() {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
             })
         });

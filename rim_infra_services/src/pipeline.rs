@@ -154,6 +154,10 @@ impl DefaultPipelineService {
         for condition in &filter.conditions {
             match condition {
                 FilterCondition::MessageContains { pattern } => {
+                    // The server cannot read an encrypted message's text.
+                    if event_message_is_encrypted(event) {
+                        return false;
+                    }
                     let text = event_message_text(event);
                     if !text.as_deref().unwrap_or("").contains(pattern.as_str()) {
                         return false;
@@ -235,6 +239,14 @@ fn event_author_id(event: &WorkspaceEvent) -> Option<UserId> {
         WorkspaceEvent::NewMessage { message, .. }
         | WorkspaceEvent::MessageUpdated { message, .. } => Some(message.author_id),
         _ => None,
+    }
+}
+
+fn event_message_is_encrypted(event: &WorkspaceEvent) -> bool {
+    match event {
+        WorkspaceEvent::NewMessage { message, .. }
+        | WorkspaceEvent::MessageUpdated { message, .. } => message.encryption.is_some(),
+        _ => false,
     }
 }
 
@@ -761,6 +773,7 @@ mod tests {
                 forwarded_from_message_id: None,
                 is_deleted: false,
                 sent_at: chrono::Utc::now(),
+                encryption: None,
                 reactions: vec![],
             },
         }

@@ -29,6 +29,33 @@ pub struct SendMessageCmd {
     pub parent_message_id: Option<MessageId>,
 
     pub attachments: Vec<MessageAttachmentRef>,
+
+    /// The message this one forwards, recorded as its origin; the caller must be able to read
+    /// it.
+    pub forwarded_from_message_id: Option<MessageId>,
+}
+
+/// An encrypted message, sent from the session's device under a client-chosen id.
+#[derive(Debug, Clone)]
+pub struct SendEncryptedMessageCmd {
+    pub caller: crate::e2ee::command::MlsCaller,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    /// The `MLSMessage` bytes as unpadded base64url.
+    pub envelope: String,
+    pub thread_root_message_id: Option<MessageId>,
+    pub forwarded_from_message_id: Option<MessageId>,
+}
+
+/// A new envelope for an encrypted message, carrying its complete new content.
+#[derive(Debug, Clone)]
+pub struct EditEncryptedMessageCmd {
+    pub caller: crate::e2ee::command::MlsCaller,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    pub envelope: String,
 }
 
 #[derive(Debug, Clone)]

@@ -23,6 +23,9 @@ pub struct AttachmentDto {
 
     /// Timestamp extracted from the UUID v7 attachment ID.
     pub created_at: chrono::DateTime<chrono::Utc>,
+
+    /// SHA-256 of an encrypted conversation's blob.
+    pub blob_sha256: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]

@@ -54,6 +54,8 @@ pub struct JoinServerByInviteResultDto {
 pub struct RequestAuthResultDto {
     pub user_id: Option<UserId>,
     pub session_id: Option<rim_core::auth::model::SessionId>,
+    /// The device the session is bound to.
+    pub device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
 }
 
 /// Result of any signup path (bootstrap, instance-invite, open).

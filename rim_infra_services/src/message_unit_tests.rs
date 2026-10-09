@@ -163,6 +163,7 @@ mod tests {
                 text: Some("   ".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .unwrap();
@@ -251,6 +252,7 @@ mod tests {
                 text: Some("hi".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .unwrap();
@@ -1075,6 +1077,7 @@ mod tests {
             text: Some("hello".to_string()),
             parent_message_id: None,
             attachments: vec![],
+            forwarded_from_message_id: None,
         }
     }
 
@@ -1380,6 +1383,7 @@ mod tests {
                 text: Some("hi".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .expect("the send succeeds although notifications failed");

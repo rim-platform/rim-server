@@ -99,6 +99,7 @@ mod tests {
                 },
                 title: None,
                 is_private: false,
+                encrypted: false,
             })
             .await
             .unwrap_err();
@@ -140,6 +141,7 @@ mod tests {
                 },
                 title: Some("name".to_string()),
                 is_private: false,
+                encrypted: false,
             })
             .await
             .unwrap_err();
@@ -204,6 +206,7 @@ mod tests {
                 participants: ConversationParticipants::Channel,
                 title: Some("  Launches  ".to_string()),
                 is_private: false,
+                encrypted: false,
             })
             .await
             .unwrap();
@@ -263,6 +266,7 @@ mod tests {
                 },
                 title: None,
                 is_private: false,
+                encrypted: false,
             })
             .await
             .unwrap();
@@ -837,6 +841,7 @@ mod tests {
                     participants,
                     title: None,
                     is_private: true,
+                    encrypted: false,
                 })
                 .await
                 .unwrap_err();
@@ -1213,6 +1218,7 @@ mod tests {
                     participants,
                     title: Some("guest-room".to_string()),
                     is_private: false,
+                    encrypted: false,
                 })
                 .await
                 .unwrap_err();
@@ -1276,6 +1282,7 @@ mod tests {
                 participants: ConversationParticipants::Channel,
                 title: Some("muted".to_string()),
                 is_private: false,
+                encrypted: false,
             })
             .await
             .unwrap_err();

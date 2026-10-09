@@ -99,4 +99,16 @@ pub struct NotifyForMessageCmd {
     pub conversation: Conversation,
     pub message: Message,
     pub member_user_ids: Vec<UserId>,
+    /// The mentions of an encrypted message, from its authenticated data; `None` for a
+    /// plaintext message, whose mentions are read from its text.
+    pub encrypted_mentions: Option<EncryptedMentions>,
+}
+
+/// Who an encrypted message mentions, as its sender declared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EncryptedMentions {
+    /// Members only, the author excluded.
+    pub user_ids: Vec<UserId>,
+    /// `@here` / `@channel`.
+    pub all: bool,
 }
