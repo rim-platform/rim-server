@@ -41,8 +41,8 @@ linking, the 12-word recovery phrase, the client UI, plugin manifest signing, an
 - A person holds three kinds of key:
   - the **identity key**, which signs the key log, device certificates, revocations and the
     profile card. It stays off day-to-day devices where possible;
-  - the **recovery key**, kept offline (later: derived from the recovery phrase). It can
-    replace a lost identity key;
+  - the **recovery key**, kept offline (derived from the 12-word recovery phrase, see "Recovery
+    kit"). It can replace a lost identity key;
   - one **device key** per device, certified by the identity key. Only device keys sign in.
 - The identity key must differ from the recovery key, and a device key must differ from both.
 
@@ -454,9 +454,44 @@ offers recovery must read.
   enrolled" proves nothing, so nothing removes keys on that basis (closing Settings mid-way keeps
   them; a later check removes them if the enrollment never landed).
 
-### Recovery kit, v1
+### Recovery kit
 
-Shown once at enrollment, as text the person saves:
+Shown once at enrollment, as text the person saves. Clients write version 2; readers accept
+both versions, as a whole kit or as the bare secret alone (a 12-word phrase or a `RK1-` key),
+and tell them apart by content, not by the header line. Either way the secret is a 32-byte seed
+used as the Ed25519 recovery key (`SigningKey::from_bytes`); the key log's `recoveryKey` is its
+public key. Nothing is migrated: an account enrolled with a version 1 kit recovers with its
+`RK1-` key.
+
+**Version 2, the recovery phrase.**
+
+```
+RIM recovery kit (v2)
+Account id: rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo
+Recovery phrase: word1 word2 … word12
+```
+
+- **Entropy**: 16 random bytes from the OS.
+- **Phrase**: the BIP39 encoding of those bytes with the English word list: 128 bits plus a 4-bit
+  checksum (the first 4 bits of SHA-256 of the entropy), 12 words of 11 bits each.
+- **Seed**: `HKDF-SHA256(ikm = the 16 entropy bytes, salt = "rim.recovery-phrase.v1",
+  info = "recovery key")`, expanded to 32 bytes. It is **not** BIP39's PBKDF2 seed: a passphrase
+  and 2,048 rounds add nothing to 128 random bits.
+- **Reading**: case, extra spaces and line breaks are ignored, and so is numbering in front of a
+  word (`1.`, `1)`, or a number on its own, as copied from a numbered list). The kit's header
+  and account id lines and the `Recovery phrase:` label are skipped. A phrase that is not 12
+  words is refused; so is a word outside the list, with a message naming its position and the
+  word as typed; so is a phrase whose checksum fails (most typos and swapped words).
+
+Known-answer vector (never use it for a real account):
+
+| Item | Value |
+|---|---|
+| Entropy | `000102030405060708090a0b0c0d0e0f` |
+| Phrase | `abandon amount liar amount expire adjust cage candy arch gather drum buyer` |
+| Recovery key | `ed25519:K2c3c55QDKnCUKWO8yTdZm25JIT20PKr5vaNC91F4cw` |
+
+**Version 1, the recovery key.**
 
 ```
 RIM recovery kit (v1)
@@ -467,9 +502,9 @@ Recovery key: RK1-…   (14 groups of 4 characters)
 The recovery key is `RK1-` and the RFC 4648 base32 (uppercase, no padding) of the 32-byte
 recovery seed followed by the first 3 bytes of `SHA-256("rim.recovery-kit.v1\0" || seed)`, in
 groups of 4 joined by `-`. Readers ignore case, spaces and `-`, read `0` as `O` and `1` as `I`,
-and refuse a key whose check bytes do not match. The seed is the Ed25519 secret key
-(`SigningKey::from_bytes`). The 12-word recovery phrase of a later PR replaces this format; readers
-keep accepting it.
+and refuse a key whose check bytes do not match. Version 2 replaced this format for new
+enrollments; readers keep accepting it. A text holds a version 1 key when a line other than the
+account id's has a word starting with `RK1`; a phrase never does.
 
 **Recovering** (signed out, every device lost): the app reads the kit, fetches `keyLog` for the
 account id, replays it, checks that the head's `recoveryKey` is the kit's, and signs a rotation
@@ -485,6 +520,8 @@ before the attempt are put back; with no answer the keys stay for the next try.
 
 ## Deferred
 
+- QR device linking (a new device gets its certificate from the old one through the server as a
+  courier) is specified in `device-linking-v1.md`.
 - Usernames stay unique across the table; uniqueness among local users only, and rows of kind
   `remote`, come with Stage 5.
 - Password sessions that existed before enrollment are not ended automatically. The client can
