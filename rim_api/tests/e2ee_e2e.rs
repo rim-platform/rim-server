@@ -236,8 +236,13 @@ impl Member {
     /// A key package as uploaded: an `MLSMessage`, unpadded base64url. Its private keys stay in
     /// this device's provider.
     fn key_package(&self, last_resort: bool) -> String {
+        self.key_package_for(last_resort, 90 * 86_400)
+    }
+
+    /// A key package that expires `seconds` from now.
+    fn key_package_for(&self, last_resort: bool, seconds: u64) -> String {
         let mut builder = KeyPackage::builder()
-            .key_package_lifetime(Lifetime::new(90 * 86_400))
+            .key_package_lifetime(Lifetime::new(seconds))
             .leaf_node_capabilities(capabilities());
         if last_resort {
             builder = builder.mark_as_last_resort();
@@ -1804,4 +1809,25 @@ async fn a_moderator_outside_the_dm_reads_downloads_and_deletes_a_reported_messa
     let reopened =
         exec_ok(&f.schema, carol.request(REPORT_ONE, one)).await["messageReport"].clone();
     assert_eq!(reopened["frankedContent"], json!(b64(&sent_content)));
+}
+
+/// A device whose clock runs a few minutes ahead of the server's still uploads key packages
+/// that expire 90 days after its own clock; ten minutes ahead is refused.
+#[tokio::test]
+async fn finding_10_key_packages_from_a_clock_minutes_ahead_are_accepted() {
+    let f = fixture().await;
+    let ahead = f.alice.key_package_for(false, 90 * 86_400 + 4 * 60);
+    let data = exec_ok(
+        &f.schema,
+        f.alice.request(UPLOAD, json!({ "keyPackages": [ahead] })),
+    )
+    .await;
+    assert_eq!(data["uploadMlsKeyPackages"]["available"], json!(1));
+    let too_far = f.alice.key_package_for(false, 90 * 86_400 + 10 * 60);
+    let (code, extensions) = exec_err(
+        &f.schema,
+        f.alice.request(UPLOAD, json!({ "keyPackages": [too_far] })),
+    )
+    .await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
 }

@@ -1315,6 +1315,15 @@ mod tests {
             Lifetime::new(days * 86_400)
         }
 
+        /// A lifetime ending `days` days and `secs` seconds from now.
+        pub(super) fn until(days: u64, secs: u64) -> Lifetime {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_secs();
+            Lifetime::init(now - 3600, now + days * 86_400 + secs)
+        }
+
         pub(super) fn expired() -> Lifetime {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1435,6 +1444,24 @@ mod tests {
         assert!(validation(err).contains("1 to 50"));
         let err = upload(&f, a, vec!["x".to_string(); 51]).await.unwrap_err();
         assert!(validation(err).contains("1 to 50"));
+    }
+
+    #[tokio::test]
+    async fn finding_10_a_client_clock_minutes_ahead_still_uploads() {
+        let f = Fixture::new();
+        let a = &f.alice;
+        let package = |secs| {
+            b64(&packages::build(
+                packages::SUITE,
+                &a.mls,
+                identity_of(a, a.device_id, &a.key),
+                false,
+                packages::until(90, secs),
+            ))
+        };
+        assert_eq!(upload(&f, a, vec![package(4 * 60)]).await.unwrap(), 1);
+        let err = upload(&f, a, vec![package(6 * 60)]).await.unwrap_err();
+        assert!(validation(err).contains("within 90 days"));
     }
 
     #[tokio::test]
