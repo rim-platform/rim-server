@@ -14,13 +14,7 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use async_graphql::{Request, Variables};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::Signer as _;
-use hmac::{Hmac, Mac};
 use openmls::prelude::*;
-use openmls_rust_crypto::OpenMlsRustCrypto;
-use openmls_traits::signatures::{Signer, SignerError};
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -33,7 +27,7 @@ use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::server::model::Server;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::User;
-use rim_identity::testing::{SigningKey, TestIdentity, device_login, device_mls_key, signing_key};
+use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
 use rim_identity::{KeyState, SignedStatement, StatementVersion};
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_services::email::{EmailMessage, EmailSender};
@@ -41,9 +35,10 @@ use rim_services::auth::dto::RegistrationMode;
 use rim_services::provider::AppServiceProvider;
 
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::mls::{
+    MlsDevice, SUITE, b64, capabilities, commit_aad, content, hmac, join_config, unb64,
+};
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
-
-const SUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519;
 
 const ENROLL: &str = r#"
 mutation Enroll($input: EnrollIdentityKeyInput!) { enrollIdentityKey(input: $input) { principalId } }"#;
@@ -129,22 +124,6 @@ query Attachment($serverId: ID!, $attachmentId: ID!) {
 const PRINCIPAL_DEVICES: &str = r#"
 query Devices($ids: [String!]!) { principalDevices(principalIds: $ids) { principalId devices { deviceId mlsActive } } }"#;
 
-fn b64(bytes: &[u8]) -> String {
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn unb64(text: &str) -> Vec<u8> {
-    URL_SAFE_NO_PAD.decode(text).expect("base64url")
-}
-
-fn hmac(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac key");
-    for part in parts {
-        mac.update(part);
-    }
-    mac.finalize().into_bytes().into()
-}
-
 fn statement(s: &SignedStatement) -> Value {
     json!({ "payload": s.payload, "signature": s.signature })
 }
@@ -162,50 +141,26 @@ async fn exec_err(schema: &AppSchema, request: Request) -> (String, Value) {
 
 // ── The MLS test client ─────────────────────────────────────────────────────────────────
 
-struct MlsSigner(SigningKey);
-
-impl Signer for MlsSigner {
-    fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SignerError> {
-        Ok(self.0.sign(payload).to_bytes().to_vec())
-    }
-
-    fn signature_scheme(&self) -> SignatureScheme {
-        SignatureScheme::ED25519
-    }
-}
-
-/// Leaf capabilities naming the suite explicitly: OpenMLS's defaults list it only when its own
-/// post-quantum feature is on.
-fn capabilities() -> Capabilities {
-    Capabilities::new(
-        None,
-        Some(&[SUITE]),
-        Some(&[ExtensionType::LastResort]),
-        None,
-        Some(&[CredentialType::Basic]),
-    )
-}
-
-fn join_config() -> MlsGroupJoinConfig {
-    MlsGroupJoinConfig::builder()
-        .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
-        .use_ratchet_tree_extension(true)
-        .padding_size(256)
-        .max_past_epochs(2)
-        .build()
-}
-
-/// A signed-in device: its session, its keys and its MLS state.
+/// A signed-in device: its session and its MLS side.
 struct Member {
     user: User,
     caller: Caller,
     device_key_id: DeviceKeyId,
-    device_id: Uuid,
-    principal_id: String,
-    device_key: SigningKey,
-    signer: MlsSigner,
-    provider: OpenMlsRustCrypto,
-    group: Option<MlsGroup>,
+    mls: MlsDevice,
+}
+
+impl std::ops::Deref for Member {
+    type Target = MlsDevice;
+
+    fn deref(&self) -> &MlsDevice {
+        &self.mls
+    }
+}
+
+impl std::ops::DerefMut for Member {
+    fn deref_mut(&mut self) -> &mut MlsDevice {
+        &mut self.mls
+    }
 }
 
 impl Member {
@@ -218,182 +173,6 @@ impl Member {
                     .with_device_key_id(Some(self.device_key_id)),
             )
     }
-
-    fn credential(&self) -> CredentialWithKey {
-        let statement = device_mls_key(
-            &self.device_key,
-            &self.principal_id,
-            self.device_id,
-            &self.signer.0,
-        );
-        CredentialWithKey {
-            credential: BasicCredential::new(rim_identity::mls_credential_identity(&statement))
-                .into(),
-            signature_key: self.signer.0.verifying_key().to_bytes().to_vec().into(),
-        }
-    }
-
-    /// A key package as uploaded: an `MLSMessage`, unpadded base64url. Its private keys stay in
-    /// this device's provider.
-    fn key_package(&self, last_resort: bool) -> String {
-        let mut builder = KeyPackage::builder()
-            .key_package_lifetime(Lifetime::new(90 * 86_400))
-            .leaf_node_capabilities(capabilities());
-        if last_resort {
-            builder = builder.mark_as_last_resort();
-        }
-        let bundle = builder
-            .build(SUITE, &self.provider, &self.signer, self.credential())
-            .expect("key package");
-        b64(&MlsMessageOut::from(bundle.key_package().clone())
-            .to_bytes()
-            .expect("encode"))
-    }
-
-    fn group(&mut self) -> &mut MlsGroup {
-        self.group.as_mut().expect("group")
-    }
-
-    /// Merge this device's own Commit once the server accepted it.
-    fn merge_pending(&mut self) {
-        let group = self.group.as_mut().expect("group");
-        group.merge_pending_commit(&self.provider).expect("merge");
-    }
-
-    /// An empty Commit with an update path.
-    fn self_update(&mut self) -> String {
-        let group = self.group.as_mut().expect("group");
-        group.set_aad(commit_aad(&[], &[]));
-        let bundle = group
-            .self_update(&self.provider, &self.signer, LeafNodeParameters::default())
-            .expect("self update");
-        b64(&bundle.commit().to_bytes().expect("commit"))
-    }
-
-    fn epoch(&self) -> i64 {
-        self.group.as_ref().expect("group").epoch().as_u64() as i64
-    }
-
-    /// An application message carrying `content` under franking key `fk`, its authenticated
-    /// data naming `message_id` and mentioning `mentions`.
-    fn encrypt(
-        &mut self,
-        message_id: Uuid,
-        content: &[u8],
-        fk: [u8; 32],
-        mentions: &[&str],
-    ) -> String {
-        let commitment = hmac(&fk, &[b"rim.e2ee.franking.v1\0", content]);
-        let aad = json!({
-            "v": 1,
-            "type": "application",
-            "messageId": message_id,
-            "franking": b64(&commitment),
-            "mentions": mentions,
-            "mentionAll": false,
-        });
-        let mut data = vec![1u8];
-        data.extend_from_slice(&fk);
-        data.extend_from_slice(content);
-        let group = self.group.as_mut().expect("group");
-        group.set_aad(aad.to_string().into_bytes());
-        let message = group
-            .create_message(&self.provider, &self.signer, &data)
-            .expect("encrypt");
-        b64(&message.to_bytes().expect("encode"))
-    }
-
-    /// Decrypt an application message and return its content, checking the franking
-    /// commitment and the message id as a receiver does.
-    fn decrypt(&mut self, ciphertext: &str, message_id: &str) -> (Vec<u8>, [u8; 32]) {
-        let message =
-            MlsMessageIn::tls_deserialize_exact_bytes(&unb64(ciphertext)).expect("decode");
-        let group = self.group.as_mut().expect("group");
-        let processed = group
-            .process_message(
-                &self.provider,
-                message
-                    .try_into_protocol_message()
-                    .expect("protocol message"),
-            )
-            .expect("decrypt");
-        let aad: Value = serde_json::from_slice(processed.aad()).expect("aad");
-        assert_eq!(aad["messageId"], json!(message_id));
-        let ProcessedMessageContent::ApplicationMessage(application) = processed.into_content()
-        else {
-            panic!("not an application message");
-        };
-        let data = application.into_bytes();
-        assert_eq!(data[0], 1, "format version");
-        let fk: [u8; 32] = data[1..33].try_into().expect("franking key");
-        let content = data[33..].to_vec();
-        let commitment = hmac(&fk, &[b"rim.e2ee.franking.v1\0", &content]);
-        assert_eq!(
-            aad["franking"],
-            json!(b64(&commitment)),
-            "the commitment matches the content"
-        );
-        (content, fk)
-    }
-
-    /// Process another device's Commit.
-    fn process_commit(&mut self, commit: &str) {
-        let message = MlsMessageIn::tls_deserialize_exact_bytes(&unb64(commit)).expect("decode");
-        let group = self.group.as_mut().expect("group");
-        let processed = group
-            .process_message(
-                &self.provider,
-                message
-                    .try_into_protocol_message()
-                    .expect("protocol message"),
-            )
-            .expect("process commit");
-        let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() else {
-            panic!("not a Commit");
-        };
-        group
-            .merge_staged_commit(&self.provider, *staged)
-            .expect("merge");
-    }
-}
-
-/// The authenticated data of a Commit adding and removing devices.
-fn commit_aad(adds: &[(&Member, Vec<u8>)], removes: &[&Member]) -> Vec<u8> {
-    json!({
-        "v": 1,
-        "type": "commit",
-        "adds": adds.iter().map(|(m, r)| json!({
-            "principalId": m.principal_id,
-            "deviceId": m.device_id,
-            "keyPackageRef": b64(r),
-        })).collect::<Vec<_>>(),
-        "removes": removes.iter().map(|m| json!({
-            "principalId": m.principal_id,
-            "deviceId": m.device_id,
-        })).collect::<Vec<_>>(),
-    })
-    .to_string()
-    .into_bytes()
-}
-
-/// Message content, with the fields in the documented order.
-fn content(id: Uuid, rev: u32, body: &str, mentions: &[&str]) -> Vec<u8> {
-    json!({
-        "v": 1,
-        "type": "message",
-        "id": id,
-        "rev": rev,
-        "threadRootId": null,
-        "body": body,
-        "mentions": mentions,
-        "mentionAll": false,
-        "replyTo": null,
-        "forwardedFrom": null,
-        "attachments": [],
-        "linkPreviews": [],
-    })
-    .to_string()
-    .into_bytes()
 }
 
 // ── Fixture ─────────────────────────────────────────────────────────────────────────────
@@ -462,12 +241,12 @@ async fn member(ctx: &TestCtx, schema: &AppSchema, name: &str, seed: u8) -> Memb
         device_key_id: session
             .device_key_id
             .expect("the enrolling session is bound"),
-        device_id,
-        principal_id: state.principal_id,
-        device_key,
-        signer: MlsSigner(signing_key(seed.wrapping_add(150))),
-        provider: OpenMlsRustCrypto::default(),
-        group: None,
+        mls: MlsDevice::new(
+            device_id,
+            state.principal_id,
+            device_key,
+            signing_key(seed.wrapping_add(150)),
+        ),
     }
 }
 
@@ -596,7 +375,7 @@ impl Fixture {
             self.alice.credential(),
         )
         .expect("group");
-        group.set_aad(commit_aad(&[(&self.bob, key_package_ref)], &[]));
+        group.set_aad(commit_aad(&[(&self.bob.mls, key_package_ref)], &[]));
         let (commit, welcome, _) = group
             .add_members(&self.alice.provider, &self.alice.signer, &[package])
             .expect("add");
@@ -1265,10 +1044,11 @@ async fn messages_follow_the_epoch_and_wait_for_removals() {
         .find(|m| m.signature_key == f.bob.signer.0.verifying_key().to_bytes())
         .expect("bob's leaf")
         .index;
-    let group = f.alice.group.as_mut().expect("group");
-    group.set_aad(commit_aad(&[], &[&f.bob]));
+    let alice = &mut f.alice.mls;
+    let group = alice.group.as_mut().expect("group");
+    group.set_aad(commit_aad(&[], &[&f.bob.mls]));
     let (commit, _, _) = group
-        .remove_members(&f.alice.provider, &f.alice.signer, &[bob_leaf])
+        .remove_members(&alice.provider, &alice.signer, &[bob_leaf])
         .expect("remove");
     let epoch = f.alice.epoch();
     exec_ok(
