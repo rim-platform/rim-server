@@ -3807,6 +3807,7 @@ dependencies = [
  "rim_services",
  "sea-orm",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "uuid",
