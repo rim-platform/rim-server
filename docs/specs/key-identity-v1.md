@@ -430,6 +430,21 @@ offers recovery must read.
   keys; keys whose principal the server never accepted are removed. The recovery key is never
   stored. The app then publishes a profile card (display name, this server's URL, the active
   devices).
+- **Key-only signup** (the join pages, next to the password form, with the page's token if it
+  has one): the person picks a username, an optional display name and this device's name; the
+  app creates the keys as for enrollment, shows the recovery kit once, and only sends
+  `signupWithKey` after the person confirms they saved it. The keys are written to the keyring
+  **before** it is sent. When it fails, the app reads `keyLog` for the new principal: an empty log
+  means the server refused, so the keys are removed and the draft stays in memory, letting the
+  person retry with the same keys (and the kit they saved) or discard them; a log that holds the
+  principal means an attempt whose answer was lost created the account, so the app writes the
+  draft's keys back if a failed attempt removed them and signs in with the device key (also when
+  the person discards the draft); with no answer the keys stay for a later sign-in. On success the
+  keys are confirmed and linked to the returned user id, the profile card is published, and the
+  app opens the account as after a password signup (a workspace invite whose answer was lost
+  opens the workspace its preview named). Unconfirmed keys whose principal has no key log on the
+  server (a signup or enrollment that never reached it) are removed when signing in with them
+  fails. The web app keeps password signup only.
 - **Audience.** The `host[:port]` of the GraphQL endpoint URL as written, lowercased, the same
   rule the server applies to `RIM_PUBLIC_BASE_URL`.
 - **Sign-in.** On a cold start whose session cookie is gone or refused, the app signs in with the
