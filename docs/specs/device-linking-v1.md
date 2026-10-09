@@ -76,12 +76,15 @@ rim-link:1:AAECAwQFBgcICQoLDA0ODw:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8:ht
 
 Readers:
 
-1. Remove every ASCII whitespace character (chat apps and mail wrap long lines).
+1. Remove every ASCII whitespace character (chat apps and mail wrap long lines): exactly TAB,
+   LF, FF, CR and SPACE (`0x09`, `0x0A`, `0x0C`, `0x0D`, `0x20`), not VT (`0x0B`) and nothing
+   outside ASCII. A JavaScript reader must not use `/\s/`, which matches more.
 2. Refuse anything longer than **334 characters** (78 fixed + a 256-byte endpoint).
 3. Strip the scheme and split the rest at the **first three** `:` into version, link id, secret
    and endpoint (the endpoint keeps its own colons).
-4. Refuse a version they do not implement with "this code was made by a newer app; update this
-   device". Decode link id and secret strictly (no padding, canonical trailing bits, exact length).
+4. The version is a decimal number above 0 without leading zeros; anything else (`0`, `01`, `x`)
+   is not a link code. Refuse a higher version than they implement with "this code was made by a
+   newer app; update this device". Decode link id and secret strictly (no padding, canonical trailing bits, exact length).
 5. The endpoint must start with `http://` or `https://`, be 1 to 256 bytes of printable ASCII
    (`0x21` to `0x7E`) and contain no `?`, `#` or `@`.
 
