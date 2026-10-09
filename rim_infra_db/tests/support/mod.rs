@@ -9,7 +9,6 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::message::model::NewMessage;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_thread::model::MessageThreadId;
-use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
@@ -17,7 +16,6 @@ use rim_core::user::repository::UserRepository;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
-use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
@@ -210,12 +208,26 @@ impl TestCtx {
         .unwrap()
     }
 
+    /// Inserts a thread with no root message. Production threads always start from a root
+    /// (`create_thread_for_root`); tests that only need a thread to hang replies on use this.
     pub async fn create_thread(
         &self,
         conv_id: ConversationId,
     ) -> rim_core::message_thread::model::MessageThread {
-        let repo = SeaOrmMessageThreadRepository::new(self.db.clone());
-        repo.create_thread(conv_id).await.unwrap()
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let now: sea_orm::prelude::DateTimeWithTimeZone = chrono::Utc::now().into();
+        entity::message_thread::ActiveModel {
+            id: Set(MessageThreadId::new().into()),
+            conversation_id: Set(conv_id.into()),
+            first_message_id: Set(None),
+            created_at: Set(now),
+            last_message_at: Set(now),
+        }
+        .insert(&self.db)
+        .await
+        .unwrap()
+        .into()
     }
 
     pub async fn create_message(

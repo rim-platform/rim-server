@@ -17,11 +17,6 @@ pub trait LinkPreviewService: Send + Sync {
         urls: Vec<String>,
     ) -> ServiceResult<Vec<LinkPreviewDto>>;
 
-    async fn get_previews_for_message(
-        &self,
-        message_id: MessageId,
-    ) -> ServiceResult<Vec<LinkPreviewDto>>;
-
     async fn get_previews_for_messages(
         &self,
         message_ids: &[MessageId],

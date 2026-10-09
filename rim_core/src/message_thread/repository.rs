@@ -29,22 +29,11 @@ pub trait MessageThreadRepository: Send + Sync {
         message_ids: &[MessageId],
     ) -> RepoResult<HashMap<MessageId, MessageThreadId>>;
 
-    /// Creates an empty thread. For the typical "thread per root message" flow, you create a
-    /// thread first, then create the root message with that thread id, then call
-    /// `set_first_message`.
-    async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread>;
-
     async fn create_thread_for_root(
         &self,
         conversation_id: ConversationId,
         message_id: MessageId,
     ) -> RepoResult<MessageThread>;
-
-    async fn set_first_message(
-        &self,
-        thread_id: MessageThreadId,
-        message_id: MessageId,
-    ) -> RepoResult<()>;
 
     async fn touch_last_message_at(
         &self,

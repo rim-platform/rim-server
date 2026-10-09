@@ -840,13 +840,6 @@ mod tests {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
-        async fn get_members_for_conversation(
-            &self,
-            _conversation_id: ConversationId,
-        ) -> RepoResult<Vec<rim_core::conversation_member::model::ConversationMember>> {
-            Ok(vec![])
-        }
-
         async fn is_member(
             &self,
             _conversation_id: ConversationId,

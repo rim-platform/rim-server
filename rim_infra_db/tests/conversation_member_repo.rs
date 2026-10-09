@@ -43,9 +43,6 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
 
     let ids = repo.list_member_ids(conv.id).await.unwrap();
     assert_eq!(ids.len(), 2);
-
-    let members = repo.get_members_for_conversation(conv.id).await.unwrap();
-    assert_eq!(members.len(), 2);
 }
 
 #[tokio::test]

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
@@ -24,16 +22,6 @@ pub trait StorageBackend: Send + Sync {
 
     /// Delete a file by key.
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
-
-    /// Return a URL for direct access (presigned URL for S3, filesystem path for local).
-    fn public_url(&self, key: &str) -> Option<String>;
-
-    /// Backend type identifier for configuration.
-    fn backend_type(&self) -> &str;
-
-    /// Resolve a key to an absolute filesystem path (for local serving).
-    /// Returns an error if the path would escape the storage root.
-    fn resolve_path(&self, key: &str) -> Result<PathBuf, StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]

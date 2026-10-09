@@ -113,18 +113,6 @@ impl StorageBackend for LocalFileStorage {
         tokio::fs::remove_file(&full_path).await?;
         Ok(())
     }
-
-    fn public_url(&self, key: &str) -> Option<String> {
-        Some(format!("/api/files/{}", key))
-    }
-
-    fn backend_type(&self) -> &str {
-        "local"
-    }
-
-    fn resolve_path(&self, key: &str) -> Result<PathBuf, StorageError> {
-        self.validate_path(key)
-    }
 }
 
 #[cfg(test)]
@@ -182,22 +170,5 @@ mod tests {
 
         let err = storage.get("nonexistent.txt").await;
         assert!(err.is_err());
-    }
-
-    #[tokio::test]
-    async fn public_url_format() {
-        let tmp = TempDir::new().unwrap();
-        let storage = LocalFileStorage::new(tmp.path().to_path_buf());
-        assert_eq!(
-            storage.public_url("uploads/test.txt"),
-            Some("/api/files/uploads/test.txt".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn backend_type_is_local() {
-        let tmp = TempDir::new().unwrap();
-        let storage = LocalFileStorage::new(tmp.path().to_path_buf());
-        assert_eq!(storage.backend_type(), "local");
     }
 }

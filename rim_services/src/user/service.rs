@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use mockall::automock;
 
 use crate::ServiceResult;
-use crate::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
+use crate::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use crate::user::dto::UserDto;
 use rim_core::user::model::UserId;
 
@@ -11,8 +11,6 @@ use rim_core::user::model::UserId;
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait UserService: Send + Sync {
     async fn get_me(&self, query: GetMeQuery) -> ServiceResult<UserDto>;
-
-    async fn get_user(&self, query: GetUserQuery) -> ServiceResult<UserDto>;
 
     async fn get_users_by_ids(&self, ids: &[UserId]) -> ServiceResult<Vec<UserDto>>;
 

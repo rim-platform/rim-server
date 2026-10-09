@@ -686,10 +686,21 @@ async fn migration_backfill_makes_workspace_members_channel_members() {
         .await
         .unwrap();
 
-    let members = member_repo
-        .get_members_for_conversation(general.id)
-        .await
-        .unwrap();
+    let members: Vec<rim_core::conversation_member::model::ConversationMember> = {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        entity::conversation_member::Entity::find()
+            .filter(
+                entity::conversation_member::Column::ConversationId
+                    .eq(uuid::Uuid::from(general.id)),
+            )
+            .all(&ctx.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    };
     let mut ids: Vec<_> = members.iter().map(|m| m.user_id).collect();
     ids.sort_by_key(|id| uuid::Uuid::from(*id));
     let mut expected = vec![alice, bob];

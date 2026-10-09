@@ -6,16 +6,12 @@ use crate::capability::model::{CapabilitySourceKind, RegisteredCapability};
 use crate::repository::error::RepoResult;
 
 /// Persistence surface for the `capability_registry` table — Phase 1 §3.3
-/// (closes Black Widow C1). The runtime gate calls `is_registered` on every
-/// capability the actor's required capability list mentions; an unknown key
+/// (closes Black Widow C1). The runtime gate calls `get` on every capability
+/// the actor's required capability list mentions; an unknown or retired key
 /// denies by default.
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
 pub trait CapabilityRegistryRepository: Send + Sync {
-    /// Returns `Ok(true)` when the key is present in the registry AND not
-    /// retired. Returns `Ok(false)` otherwise — never silently allows.
-    async fn is_registered(&self, capability_key: &str) -> RepoResult<bool>;
-
     /// Insert-only seed semantics: write the row when missing, **leave
     /// existing rows untouched** (including their `retired_at` value).
     ///
@@ -60,7 +56,7 @@ pub trait CapabilityRegistryRepository: Send + Sync {
     /// service surface is stable across phases.
     async fn retire_for_plugin(&self, plugin_id: uuid::Uuid) -> RepoResult<()>;
 
-    /// Returns the full registry row for diagnostics / `audit_inventory`
-    /// emission. Hot-path callers should prefer `is_registered`.
+    /// Returns the full registry row, retired or not. The runtime gate treats a
+    /// missing row or one with `retired_at` set as unregistered.
     async fn get(&self, capability_key: &str) -> RepoResult<Option<RegisteredCapability>>;
 }

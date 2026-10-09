@@ -107,18 +107,6 @@ impl DefaultAuthService {
         }
     }
 
-    /// Access the preview rate limiter — primarily useful for testing / introspection.
-    #[allow(dead_code)]
-    pub fn preview_rate_limiter(&self) -> &RegistrationRateLimiter {
-        &self.preview_rate_limiter
-    }
-
-    /// Access the signup rate limiter — primarily useful for testing / introspection.
-    #[allow(dead_code)]
-    pub fn signup_rate_limiter(&self) -> &RegistrationRateLimiter {
-        &self.signup_rate_limiter
-    }
-
     /// Replace the login rate limiters (per-IP attempts, per-(IP, username) failures,
     /// per-username failures from any IP).
     ///

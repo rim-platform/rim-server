@@ -24,8 +24,6 @@ pub trait StorageService: Send + Sync {
         content_type: &str,
     ) -> ServiceResult<StoredFile>;
 
-    async fn download_file(&self, key: &str) -> ServiceResult<Vec<u8>>;
-
     async fn delete_file(&self, key: &str) -> ServiceResult<()>;
 
     async fn get_quota_usage(&self, workspace_id: ServerId) -> ServiceResult<QuotaUsage>;

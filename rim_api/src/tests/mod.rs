@@ -44,7 +44,6 @@ use rim_services::read_state::service::MockReadStateService;
 use rim_services::server::service::MockServerService;
 use rim_services::server_member::service::MockServerMemberService;
 use rim_services::skill_profile::service::MockSkillProfileService;
-use rim_services::storage::service::MockStorageService;
 use rim_services::user::service::MockUserService;
 use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
@@ -131,7 +130,6 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(user),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -185,7 +183,6 @@ fn schema_with_server_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(server),
             server_member: Arc::new(server_member),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -236,7 +233,6 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -293,7 +289,6 @@ fn schema_with_incident_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(user),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -346,7 +341,6 @@ fn schema_with_oncall_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -399,7 +393,6 @@ fn schema_with_escalation_policy_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -635,7 +628,6 @@ struct TestAppServiceProvider {
     read_state: Arc<dyn rim_services::read_state::service::ReadStateService>,
     server: Arc<dyn rim_services::server::service::ServerService>,
     server_member: Arc<dyn rim_services::server_member::service::ServerMemberService>,
-    storage: Arc<dyn rim_services::storage::service::StorageService>,
     thread: Arc<dyn rim_services::message_thread::service::ThreadService>,
     user: Arc<dyn rim_services::user::service::UserService>,
     request_auth: Arc<dyn rim_services::auth::service::RequestAuthenticator>,
@@ -738,10 +730,6 @@ impl AppServiceProvider for TestAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::server_member::service::ServerMemberService> {
         Arc::clone(&self.server_member)
-    }
-
-    fn storage_service(&self) -> Arc<dyn rim_services::storage::service::StorageService> {
-        Arc::clone(&self.storage)
     }
 
     fn thread_service(&self) -> Arc<dyn rim_services::message_thread::service::ThreadService> {
@@ -851,7 +839,6 @@ fn schema_with_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(thread),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -902,7 +889,6 @@ fn schema_with_capability_mock(capability: MockCapabilityService) -> crate::AppS
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -953,7 +939,6 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -1008,7 +993,6 @@ fn schema_with_audit_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -1060,7 +1044,6 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         read_state: Arc::new(MockReadStateService::new()),
         server: Arc::new(MockServerService::new()),
         server_member: Arc::new(MockServerMemberService::new()),
-        storage: Arc::new(MockStorageService::new()),
         thread: Arc::new(MockThreadService::new()),
         user: Arc::new(MockUserService::new()),
         request_auth: Arc::new(MockRequestAuthenticator::new()),
@@ -1107,7 +1090,6 @@ fn schema_with_ingest_token_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
             request_auth: Arc::new(MockRequestAuthenticator::new()),

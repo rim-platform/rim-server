@@ -270,15 +270,6 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         Ok(results)
     }
 
-    async fn get_previews_for_message(
-        &self,
-        message_id: MessageId,
-    ) -> ServiceResult<Vec<LinkPreviewDto>> {
-        let previews = self.link_preview_repo.get_for_message(message_id).await?;
-
-        Ok(previews.into_iter().map(Into::into).collect())
-    }
-
     async fn get_previews_for_messages(
         &self,
         message_ids: &[MessageId],
