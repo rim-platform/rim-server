@@ -3780,6 +3780,7 @@ dependencies = [
  "entity",
  "migration",
  "rim_core",
+ "rim_identity",
  "rim_services",
  "sea-orm",
  "serde_json",

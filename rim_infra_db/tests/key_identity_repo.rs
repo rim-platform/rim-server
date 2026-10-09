@@ -28,11 +28,19 @@ fn entry(seq: u32, entry_type: KeyLogEntryType) -> NewKeyLogEntry {
     }
 }
 
+/// A stand-in for the SHA-256 the service computes: distinct short keys give distinct values.
+fn test_key_hash(public_key: &str) -> Vec<u8> {
+    let mut hash = public_key.as_bytes().to_vec();
+    hash.resize(32, 0);
+    hash
+}
+
 fn device(user_id: UserId, device_id: Uuid, public_key: &str) -> NewDeviceKey {
     NewDeviceKey {
         user_id,
         device_id,
         public_key: public_key.to_string(),
+        key_hash: test_key_hash(public_key),
         name: "Laptop".to_string(),
         cert_payload: "{}".to_string(),
         cert_signature: "cert-sig".to_string(),

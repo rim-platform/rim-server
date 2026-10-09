@@ -3,7 +3,8 @@ use rim_core::auth::model::SessionId;
 use crate::Actor;
 
 /// A signed statement as the client sent it: the exact JSON text that was signed, and its
-/// unpadded base64url Ed25519 signature. Formats: `docs/specs/key-identity-v1.md`.
+/// signature (`ed25519:<base64url>` in version 2 statements, bare base64url in version 1).
+/// Formats: `docs/specs/key-identity-v1.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedPayload {
     pub payload: String,
