@@ -1,5 +1,6 @@
 > **Status:** Accepted 2026-10-08 by Jakub. Implementation follows Stages 1 to 5 in `ROADMAP.md`.
 > **Do not edit** once implementation lands — historical record. For changes, write a new ADR.
+> **Amended** 2026-10-09 by `relay-proxied-workspaces-2026-10-09.md`: workspace traffic now goes through the user's relay; hosts accept any relay.
 
 # Decentralization: key identity, interchangeable relays, hosted workspaces
 
