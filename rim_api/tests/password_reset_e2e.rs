@@ -82,7 +82,13 @@ async fn reset_password_revokes_sessions_and_outstanding_tokens() {
         .await
         .expect("user lookup failed")
         .expect("user exists");
-    assert!(verify_password("brand-new-password", &user_after.password_hash).unwrap());
+    assert!(
+        verify_password(
+            "brand-new-password",
+            user_after.password_hash.as_deref().expect("password hash"),
+        )
+        .unwrap()
+    );
 
     for id in session_ids {
         let session = session_repo

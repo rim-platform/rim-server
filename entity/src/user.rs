@@ -8,7 +8,8 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub username: String,
-    pub password_hash: String,
+    /// Null for a key-only account.
+    pub password_hash: Option<String>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
     pub last_login_at: Option<DateTimeWithTimeZone>,
@@ -16,7 +17,8 @@ pub struct Model {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
-    pub email: String,
+    /// Null for a key-only account.
+    pub email: Option<String>,
     #[sea_orm(column_type = "String(StringLen::N(64))", nullable)]
     pub timezone: Option<String>,
     #[sea_orm(column_type = "Text")]

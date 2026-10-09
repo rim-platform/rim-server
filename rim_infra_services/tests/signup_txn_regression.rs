@@ -167,9 +167,10 @@ async fn signup_with_bootstrap_rolls_back_on_conflict() {
     user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "collidinguser".to_string(),
-            password: "hash".to_string(),
-            email: "taken@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("taken@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("pre-create user failed");
@@ -245,9 +246,10 @@ async fn signup_with_instance_invite_commits_atomically() {
     let admin = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "inviteadmin".to_string(),
-            password: "hash".to_string(),
-            email: "admin@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("admin@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("pre-create admin failed");
@@ -420,9 +422,10 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
     let admin = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "raceadmin".to_string(),
-            password: "hash".to_string(),
-            email: "raceadmin@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("raceadmin@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("admin create failed");
@@ -483,9 +486,10 @@ async fn concurrent_invite_revoke_exactly_one_wins() {
     let issuer = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "inviteraceadmin".to_string(),
-            password: "hash".to_string(),
-            email: "inviteraceadmin@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("inviteraceadmin@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("admin create failed");
@@ -562,9 +566,10 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
     let owner = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "inviteowner".to_string(),
-            password: "hash".to_string(),
-            email: "owner@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("owner@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("pre-create owner failed");

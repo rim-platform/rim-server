@@ -3,9 +3,10 @@ use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
     AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd,
+    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupToken, SignupWithBootstrapCmd,
     SignupWithInstanceInviteCmd,
 };
+use rim_services::auth::dto::RegistrationMode;
 use rim_services::auth::service::AuthService;
 
 use crate::auth_context::require_actor;
@@ -16,6 +17,38 @@ use crate::types::{CreateInstanceInvitePayloadGql, InstanceInviteGql, SignupWith
 
 #[derive(Default)]
 pub(crate) struct InviteMutations;
+
+/// The registration token a signup presents, under the deployment's mode: exactly one of the
+/// three in invite-only mode, none in open mode. Shared by `signupWithInvite` and
+/// `signupWithKey`.
+///
+/// # Errors
+/// `VALIDATION` when the number of tokens does not fit the mode.
+pub(crate) fn registration_token(
+    mode: &RegistrationMode,
+    bootstrap_token: Option<String>,
+    instance_invite_token: Option<String>,
+    workspace_invite_token: Option<String>,
+) -> Result<Option<SignupToken>> {
+    let tokens: Vec<SignupToken> = [
+        bootstrap_token.map(SignupToken::Bootstrap),
+        instance_invite_token.map(SignupToken::InstanceInvite),
+        workspace_invite_token.map(SignupToken::WorkspaceInvite),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let message = match mode {
+        RegistrationMode::InviteOnly if tokens.len() != 1 => {
+            "exactly one token is required in invite-only mode"
+        }
+        RegistrationMode::Open if !tokens.is_empty() => {
+            "tokens must not be supplied in open registration mode"
+        }
+        _ => return Ok(tokens.into_iter().next()),
+    };
+    Err(async_graphql::Error::new(message).extend_with(|_, e| e.set("code", "VALIDATION")))
+}
 
 #[Object]
 impl InviteMutations {
@@ -97,103 +130,87 @@ impl InviteMutations {
         ctx: &Context<'_>,
         input: SignupWithInviteInput,
     ) -> Result<SignupWithInvitePayloadGql> {
-        use rim_services::auth::dto::RegistrationMode;
-
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
+        let token = registration_token(
+            mode,
+            input.bootstrap_token,
+            input.instance_invite_token,
+            input.workspace_invite_token,
+        )?;
 
-        let token_count = input.bootstrap_token.is_some() as u8
-            + input.instance_invite_token.is_some() as u8
-            + input.workspace_invite_token.is_some() as u8;
+        // Normalise email at the resolver boundary (trim + lowercase) as
+        // defence in depth; the service also validates on the way in.
+        let email = input.email.trim().to_lowercase();
 
-        let (user_id, server_id, session_token, csrf_token) = match mode.as_ref() {
-            RegistrationMode::InviteOnly => {
-                if token_count != 1 {
-                    return Err(async_graphql::Error::new(
-                        "exactly one token is required in invite-only mode",
-                    )
-                    .extend_with(|_, e| e.set("code", "VALIDATION")));
-                }
-
-                // Normalise email at the resolver boundary (trim + lowercase) as
-                // defence in depth; the service also validates on the way in.
-                let normalised_email = input.email.trim().to_lowercase();
-
-                if let Some(raw) = input.bootstrap_token {
-                    let res = auth
-                        .signup_with_bootstrap(SignupWithBootstrapCmd {
-                            bootstrap_token: raw,
-                            username: input.username,
-                            password: input.password,
-                            email: normalised_email,
-                            display_name: input.display_name,
-                        })
-                        .await
-                        .map_err(map_service_error)?;
-                    (
-                        res.user_id,
-                        res.server_id,
-                        res.session_token,
-                        res.csrf_token,
-                    )
-                } else if let Some(raw) = input.instance_invite_token {
-                    let res = auth
-                        .signup_with_instance_invite(SignupWithInstanceInviteCmd {
-                            instance_invite_token: raw,
-                            username: input.username,
-                            password: input.password,
-                            email: normalised_email,
-                            display_name: input.display_name,
-                        })
-                        .await
-                        .map_err(map_service_error)?;
-                    (
-                        res.user_id,
-                        res.server_id,
-                        res.session_token,
-                        res.csrf_token,
-                    )
-                } else {
-                    // workspace_invite_token — delegate to the existing accept_invite path.
-                    let raw = input.workspace_invite_token.unwrap();
-                    let res = auth
-                        .accept_invite(AcceptInviteCmd {
-                            invite_token: raw,
-                            username: input.username,
-                            password: input.password,
-                        })
-                        .await
-                        .map_err(map_service_error)?;
-                    (
-                        res.user_id,
-                        Some(res.server_id),
-                        res.session_token,
-                        res.csrf_token,
-                    )
-                }
+        let (user_id, server_id, session_token, csrf_token) = match token {
+            Some(SignupToken::Bootstrap(raw)) => {
+                let res = auth
+                    .signup_with_bootstrap(SignupWithBootstrapCmd {
+                        bootstrap_token: raw,
+                        username: input.username,
+                        password: input.password,
+                        email,
+                        display_name: input.display_name,
+                    })
+                    .await
+                    .map_err(map_service_error)?;
+                (
+                    res.user_id,
+                    res.server_id,
+                    res.session_token,
+                    res.csrf_token,
+                )
             }
-            RegistrationMode::Open => {
-                if token_count > 0 {
-                    return Err(async_graphql::Error::new(
-                        "tokens must not be supplied in open registration mode",
-                    )
-                    .extend_with(|_, e| e.set("code", "VALIDATION")));
-                }
-
-                // Proof-of-wiring: fail closed if signup rate limiter token is absent.
+            Some(SignupToken::InstanceInvite(raw)) => {
+                let res = auth
+                    .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                        instance_invite_token: raw,
+                        username: input.username,
+                        password: input.password,
+                        email,
+                        display_name: input.display_name,
+                    })
+                    .await
+                    .map_err(map_service_error)?;
+                (
+                    res.user_id,
+                    res.server_id,
+                    res.session_token,
+                    res.csrf_token,
+                )
+            }
+            Some(SignupToken::WorkspaceInvite(raw)) => {
+                // Delegate to the existing accept_invite path.
+                let res = auth
+                    .accept_invite(AcceptInviteCmd {
+                        invite_token: raw,
+                        username: input.username,
+                        password: input.password,
+                    })
+                    .await
+                    .map_err(map_service_error)?;
+                (
+                    res.user_id,
+                    Some(res.server_id),
+                    res.session_token,
+                    res.csrf_token,
+                )
+            }
+            None => {
+                // Open mode. Proof-of-wiring: fail closed if signup rate limiter token is absent.
                 let _ =
                     ctx.data::<std::sync::Arc<rim_services::auth::dto::SignupRateLimiterToken>>();
 
                 // Remote IP for rate limiting — service enforces the limit.
                 let remote_ip = crate::auth_context::remote_ip(ctx);
 
-                let normalised_email_open = input.email.trim().to_lowercase();
                 let res = auth
                     .signup_open(SignupOpenCmd {
                         username: input.username,
                         password: input.password,
                         remote_ip,
-                        email: normalised_email_open,
+                        email,
                         display_name: input.display_name,
                     })
                     .await
@@ -331,4 +348,49 @@ pub struct CreateInstanceInviteInput {
     /// Optional recipient to email the invite link to (Track B3). Validated server-side;
     /// malformed addresses return a validation error.
     pub recipient_email: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn code(err: &async_graphql::Error) -> Option<String> {
+        match err.extensions.as_ref()?.get("code")? {
+            async_graphql::Value::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn invite_only_mode_takes_exactly_one_token() {
+        let mode = RegistrationMode::InviteOnly;
+        assert_eq!(
+            registration_token(&mode, Some("b".into()), None, None).unwrap(),
+            Some(SignupToken::Bootstrap("b".into()))
+        );
+        assert_eq!(
+            registration_token(&mode, None, Some("i".into()), None).unwrap(),
+            Some(SignupToken::InstanceInvite("i".into()))
+        );
+        assert_eq!(
+            registration_token(&mode, None, None, Some("w".into())).unwrap(),
+            Some(SignupToken::WorkspaceInvite("w".into()))
+        );
+        for err in [
+            registration_token(&mode, None, None, None).unwrap_err(),
+            registration_token(&mode, Some("b".into()), Some("i".into()), None).unwrap_err(),
+        ] {
+            assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
+            assert!(err.message.contains("exactly one token"));
+        }
+    }
+
+    #[test]
+    fn open_mode_takes_no_token() {
+        let mode = RegistrationMode::Open;
+        assert_eq!(registration_token(&mode, None, None, None).unwrap(), None);
+        let err = registration_token(&mode, None, None, Some("w".into())).unwrap_err();
+        assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
+        assert!(err.message.contains("must not be supplied"));
+    }
 }

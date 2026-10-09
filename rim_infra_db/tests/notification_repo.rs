@@ -581,6 +581,49 @@ async fn digest_candidates_follow_frequency_age_and_last_digest() {
     assert!(after.iter().all(|c| c.user_id != hourly.user_id));
 }
 
+/// A key-only account has no email address, so it is never a digest candidate, however due.
+#[tokio::test]
+async fn digest_candidates_skip_users_without_email() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmNotificationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("Acme").await;
+    let author = ctx.create_user("author").await.id;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let with_email = ctx.create_user("with_email").await.id;
+    let key_only = ctx
+        .create_key_only_user("key_only", "rimp1_digest")
+        .await
+        .id;
+    for user in [with_email, key_only] {
+        repo.upsert_settings(settings(user, server.id, DigestFrequency::Hourly))
+            .await
+            .unwrap();
+        let msg = ctx.create_message(conv.id, author, "hello").await;
+        repo.create_notifications(
+            &[new_row(
+                user,
+                server.id,
+                &conv,
+                msg.id,
+                NotificationReason::Mention,
+            )],
+            t(-90),
+        )
+        .await
+        .unwrap();
+    }
+
+    let now = t(0);
+    let candidates = repo
+        .list_digest_candidates(now - Duration::minutes(60), now - Duration::hours(24))
+        .await
+        .unwrap();
+    let users: Vec<UserId> = candidates.iter().map(|c| c.user_id).collect();
+    assert_eq!(users, vec![with_email]);
+}
+
 #[tokio::test]
 async fn level_overrides_and_mutes_share_one_row() {
     let ctx = support::TestCtx::new().await;

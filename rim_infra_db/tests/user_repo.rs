@@ -13,9 +13,10 @@ async fn create_and_get_user_roundtrip() {
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_roundtrip".to_string(),
-            password: "pw".to_string(),
-            email: "u_test_roundtrip@test.example.com".to_string(),
+            password: Some("pw".to_string()),
+            email: Some("u_test_roundtrip@test.example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();
@@ -23,7 +24,10 @@ async fn create_and_get_user_roundtrip() {
     let fetched = repo.get_by_id(created.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, created.id);
     assert_eq!(fetched.username, "u_test_roundtrip");
-    assert_eq!(fetched.email, "u_test_roundtrip@test.example.com");
+    assert_eq!(
+        fetched.email.as_deref(),
+        Some("u_test_roundtrip@test.example.com")
+    );
 }
 
 #[tokio::test]
@@ -36,9 +40,10 @@ async fn create_user_duplicate_username_is_conflict() {
     let _u1 = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
-            password: "pw".to_string(),
-            email: "u_test_duplicate@test.example.com".to_string(),
+            password: Some("pw".to_string()),
+            email: Some("u_test_duplicate@test.example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();
@@ -46,9 +51,10 @@ async fn create_user_duplicate_username_is_conflict() {
     let err = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
-            password: "pw2".to_string(),
-            email: "u_test_duplicate2@test.example.com".to_string(),
+            password: Some("pw2".to_string()),
+            email: Some("u_test_duplicate2@test.example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap_err();
@@ -70,9 +76,10 @@ async fn find_by_username() {
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_find".to_string(),
-            password: "pw".to_string(),
-            email: "u_test_find@test.example.com".to_string(),
+            password: Some("pw".to_string()),
+            email: Some("u_test_find@test.example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();

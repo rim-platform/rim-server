@@ -57,9 +57,10 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     // Password reset is used signed out, from the emailed link.
     "requestPasswordReset",
     "resetPassword",
-    // Key login is used before there is a session.
+    // Key login and key-only signup are used before there is a session.
     "keyLoginChallenge",
     "loginWithKey",
+    "signupWithKey",
 ];
 
 /// Mutation fields exempt from CSRF validation only when the request carries no session cookie.
@@ -422,6 +423,7 @@ mod tests {
         for query in [
             "mutation { keyLoginChallenge { nonce } }",
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
+            r#"mutation { signupWithKey(input: { username: "u", keyLog: [], device: { payload: "p", signature: "s" }, proof: { payload: "p", signature: "s" } }) { userId } }"#,
             r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
             r#"mutation { requestPasswordReset(username: "u") }"#,
             r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,

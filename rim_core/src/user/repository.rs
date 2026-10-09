@@ -11,6 +11,14 @@ pub trait UserRepository: Send + Sync {
 
     async fn get_by_ids(&self, ids: &[UserId]) -> RepoResult<Vec<User>>;
 
+    /// Insert a user. With `key_identity` set, the row also carries its `principal_id` and
+    /// `identity_key` (key-only signup); the key log goes through
+    /// `KeyIdentityRepository::insert_key_log`.
+    ///
+    /// # Errors
+    /// `Conflict` when the username, the email or the principal id is taken. A row with neither
+    /// a password nor a principal id is refused by the database (an `Internal` error: no caller
+    /// builds one on purpose).
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User>;
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>>;
 

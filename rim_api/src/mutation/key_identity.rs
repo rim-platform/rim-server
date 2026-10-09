@@ -1,8 +1,9 @@
 use async_graphql::*;
 use rim_services::Actor;
+use rim_services::auth::dto::RegistrationMode;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd,
-    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
+    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignupWithKeyCmd,
 };
 use rim_services::key_auth::service::KeyAuthService;
 
@@ -10,9 +11,10 @@ use crate::auth_context::{require_actor, require_session_id};
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::mutation::auth::LoginPayload;
+use crate::mutation::invite::registration_token;
 use crate::types::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLoginChallenge, ProfileCard,
-    RotateIdentityKeyInput, SignedStatementInput,
+    RotateIdentityKeyInput, SignedStatementInput, SignupWithInvitePayloadGql, SignupWithKeyInput,
 };
 
 #[derive(Default)]
@@ -155,5 +157,49 @@ impl KeyIdentityMutations {
             .await
             .map_err(map_service_error)?;
         Ok(dto.into())
+    }
+
+    /// Create an account from a key identity alone: no password, no email. The registration
+    /// mode applies as for `signupWithInvite` (exactly one token in invite-only mode, none in
+    /// open mode). Signs the new account in on the device that signed up, setting the same
+    /// session and CSRF cookies as `signupWithInvite`.
+    async fn signup_with_key(
+        &self,
+        ctx: &Context<'_>,
+        input: SignupWithKeyInput,
+    ) -> Result<SignupWithInvitePayloadGql> {
+        let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
+        let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
+        let token = registration_token(
+            mode,
+            input.bootstrap_token,
+            input.instance_invite_token,
+            input.workspace_invite_token,
+        )?;
+        let res = svc
+            .signup_with_key(SignupWithKeyCmd {
+                username: input.username,
+                display_name: input.display_name,
+                key_log: input.key_log.into_iter().map(Into::into).collect(),
+                device: input.device.into(),
+                proof: input.proof.into(),
+                registration_mode: mode.as_ref().clone(),
+                token,
+                remote_ip: crate::auth_context::remote_ip(ctx),
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
+            intent.set(AuthIntent::SetSession {
+                session_token: res.session_token,
+                csrf_token: res.csrf_token,
+            });
+        }
+
+        Ok(SignupWithInvitePayloadGql {
+            user_id: ID(res.user_id.to_string()),
+            server_id: res.server_id.map(|id| ID(id.to_string())),
+        })
     }
 }

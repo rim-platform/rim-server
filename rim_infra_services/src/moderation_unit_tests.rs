@@ -114,7 +114,7 @@ mod tests {
         User {
             id,
             username: format!("u{}", &id.to_string()[..8]),
-            password_hash: String::new(),
+            password_hash: Some(String::new()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,
@@ -122,7 +122,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            email: "u@example.com".to_string(),
+            email: Some("u@example.com".to_string()),
             timezone: None,
             principal_id: None,
         }
