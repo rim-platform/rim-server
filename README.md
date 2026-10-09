@@ -108,3 +108,8 @@ Contracts (current):
 
 Dated records (point-in-time, may be stale): `docs/specs/`, `docs/design/`, `docs/research/`,
 `docs/decisions/`, `docs/security/`, and `docs/next-steps-*.md`.
+
+## License
+
+Apache License 2.0, see `LICENSE`. The license does not cover the RIM name or logo; see
+`TRADEMARK.md`. To contribute, see `CONTRIBUTING.md` (commits need a DCO sign-off).
