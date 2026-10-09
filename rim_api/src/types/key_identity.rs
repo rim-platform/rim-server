@@ -170,6 +170,9 @@ pub struct EnrollIdentityKeyInput {
     pub key_log: Vec<SignedStatementInput>,
     /// Certificate of the device enrolling; this session becomes its session.
     pub device: SignedStatementInput,
+    /// A `login` statement signed by that device over a fresh `keyLoginChallenge`, proving the
+    /// caller holds the device key.
+    pub proof: SignedStatementInput,
 }
 
 #[derive(InputObject, Clone, Debug)]

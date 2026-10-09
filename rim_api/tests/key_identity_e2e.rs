@@ -95,12 +95,31 @@ async fn enroll_then_key_login_then_revoke() {
     let device_id = Uuid::now_v7();
     let device = signing_key(20);
     let cert = id.device_cert(&state, device_id, &device, "Laptop");
+    // The enrolling device proves it holds its key by signing a fresh challenge.
+    let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
+    let challenge = &challenge["keyLoginChallenge"];
+    let proof = device_login(
+        &device,
+        &state,
+        device_id,
+        challenge["challengeId"]
+            .as_str()
+            .expect("challengeId")
+            .parse()
+            .expect("uuid"),
+        challenge["nonce"].as_str().expect("nonce"),
+        KEY_LOGIN_AUDIENCE,
+    );
 
     let data = exec_ok(
         &schema,
         caller.request(
             ENROLL,
-            json!({ "input": { "keyLog": [statement(&inception)], "device": statement(&cert) } }),
+            json!({ "input": {
+                "keyLog": [statement(&inception)],
+                "device": statement(&cert),
+                "proof": statement(&proof),
+            } }),
         ),
     )
     .await;

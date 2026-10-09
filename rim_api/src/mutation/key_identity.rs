@@ -75,6 +75,7 @@ impl KeyIdentityMutations {
                 session_id,
                 key_log: input.key_log.into_iter().map(Into::into).collect(),
                 device: input.device.into(),
+                proof: input.proof.into(),
             })
             .await
             .map_err(map_service_error)?;

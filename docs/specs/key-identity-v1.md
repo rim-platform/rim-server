@@ -41,7 +41,8 @@ linking, the 12-word recovery phrase, the client UI, plugin manifest signing, an
 Every statement travels as `{ payload, signature }`:
 
 - `payload` is the **exact UTF-8 JSON text that was signed**. Servers verify the signature over
-  these bytes before parsing, and store and return the text unchanged. Nothing is ever
+  these bytes (they parse the payload first only to learn which key signed it), and store and
+  return the text unchanged. Nothing is ever
   re-serialized, so there is no canonical JSON form: a client may order keys and space the JSON
   however it likes, and must keep the text it signed.
 - `signature` is the Ed25519 signature over `context || payload`, where `context` names the
@@ -74,7 +75,9 @@ principalId = "rimp1_" + base64url(SHA-256("rim.principal.v1\0" || inception pay
 ```
 
 So the id commits to both the first identity key and the recovery key, survives every rotation,
-and cannot be claimed by anyone who did not sign that exact inception.
+and cannot be derived for keys other than those in that exact inception. The log and
+certificates are public, so a server additionally requires proof that the enrolling device holds
+its key (see Enrollment) before it lets an account carry a principal id.
 
 Every later entry is a **rotation**:
 
@@ -139,16 +142,21 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
 
 ### Enrollment
 
-`enrollIdentityKey(input: { keyLog, device })`, signed in with a password session:
+`enrollIdentityKey(input: { keyLog, device, proof })`, signed in with a password session:
 
-1. The whole log is replayed and verified from the inception; the device certificate must be
-   signed by the head identity key.
-2. The account must not have a principal id yet, and no other account on this server may have
+1. The whole log (at most 256 entries) is replayed and verified from the inception; the device
+   certificate must be signed by the head identity key.
+2. `proof` is a `login` statement (same format and context as for challenge login) signed by
+   the enrolling device's key over a fresh `keyLoginChallenge`, naming this log's principal id,
+   the certificate's device id and this server's audience. The challenge is consumed. Without
+   it, anyone who had seen a person's log and a device certificate (every server they use
+   holds them) could enroll that principal on another account elsewhere.
+3. The account must not have a principal id yet, and no other account on this server may have
    this one (both `CONFLICT`).
-3. The server stores the log and the device, sets `user.principal_id` and `user.identity_key`,
+4. The server stores the log and the device, sets `user.principal_id` and `user.identity_key`,
    and binds **the enrolling session to the new device**, so revoking that device later ends it.
    Other existing password sessions stay valid until they expire or are signed out.
-4. From then on the password no longer signs in (`login` answers `UNAUTHENTICATED`, with the
+5. From then on the password no longer signs in (`login` answers `UNAUTHENTICATED`, with the
    same timing as a wrong password), `requestPasswordReset` sends nothing, and an outstanding
    reset link is refused with `FORBIDDEN`.
 
@@ -160,8 +168,9 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
 3. The server finds the account by `principalId` and the device by `deviceId`, verifies the
    signature with that device's key, checks the audience against its accepted audiences, and
    claims the challenge atomically (unused, unexpired, same nonce).
-4. On success it creates a session bound to the device, records the device's `lastUsedAt`, and
-   sets the same session and CSRF cookies as `login`.
+4. On success it locks the user row, reads the device again (a revocation that committed in the
+   meantime refuses the login), creates a session bound to the device, records the device's
+   `lastUsedAt`, and sets the same session and CSRF cookies as `login`.
 5. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
    device, which is `FORBIDDEN` so the client can tell the person to link the device again.
    Failed attempts are limited to 20 per IP per 15 minutes; successful logins do not count.
@@ -170,6 +179,10 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
 When it is unset, the host of `RIM_PUBLIC_BASE_URL` is used; when that is unset too,
 `localhost:PORT` and `127.0.0.1:PORT` (development only). The server logs the list at start-up.
 A host behind a proxy on a public name must set one of the two variables.
+
+`keyLoginChallenge`, `loginWithKey` and `rotateIdentityKey` are exempt from the CSRF header
+check, because they are used without a session. Each of them only acts on a fresh signature, which
+a forged cross-site request cannot produce.
 
 ### Devices
 
@@ -188,7 +201,10 @@ A host behind a proxy on a public name must set one of the two variables.
   come with a certificate for a new device under the new identity key. The server appends the
   entry, **revokes every device and ends every session** of the account, then enrolls the new
   device, which can sign in right away. Anonymous attempts count against the same per-IP
-  failure limit as logins, whether they succeed or not.
+  failure limit as logins, whether they succeed or not. An anonymous rotation for a principal
+  this server does not know is `UNAUTHENTICATED`; other refusals carry the validation reason,
+  so they show whether a principal is enrolled here. That is not secret: `User.principalId` is
+  visible to signed-in users.
 - A rotation that does not extend the current head (wrong `seq` or `prev`) is a `VALIDATION`
   error. Two rotations racing for the same `seq` are serialized by the row lock below, so the
   second one sees the new head and fails the same way; fetch `myKeyIdentity` and sign again.

@@ -56,6 +56,14 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     "logout",
     // signupWithInvite is unauthenticated (no session, no CSRF token yet).
     "signupWithInvite",
+    // Password reset is used signed out, from the emailed link.
+    "requestPasswordReset",
+    "resetPassword",
+    // Key login is used before there is a session. Recovery (`rotateIdentityKey` signed by
+    // the recovery key) is too; any rotation needs a signature a forged request cannot make.
+    "keyLoginChallenge",
+    "loginWithKey",
+    "rotateIdentityKey",
 ];
 
 /// Enforce CSRF for a batch request. Checks once at the HTTP level whether any
@@ -398,6 +406,35 @@ mod tests {
                 .and_then(|ext| ext.get("code")),
             Some(&async_graphql::Value::from("INTERNAL"))
         );
+    }
+
+    #[test]
+    fn signed_out_mutations_skip_csrf() {
+        for query in [
+            "mutation { keyLoginChallenge { nonce } }",
+            r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
+            r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
+            r#"mutation { requestPasswordReset(username: "u") }"#,
+            r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,
+        ] {
+            assert!(
+                !request_needs_csrf(&async_graphql::Request::new(query)),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_mutations_with_a_session_need_csrf() {
+        for query in [
+            r#"mutation { revokeDeviceKey(revocation: { payload: "p", signature: "s" }) { name } }"#,
+            r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } addDeviceKey(certificate: { payload: "p", signature: "s" }) { name } }"#,
+        ] {
+            assert!(
+                request_needs_csrf(&async_graphql::Request::new(query)),
+                "{query}"
+            );
+        }
     }
 
     // ── H1 / H3 tests ───────────────────────────────────────────────────────
