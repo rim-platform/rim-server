@@ -12,6 +12,8 @@
 pub mod graphql;
 #[allow(dead_code)] // Only the encryption tests use the MLS client.
 pub mod mls;
+#[allow(dead_code)] // Only the server-to-server tests start servers.
+pub mod nodes;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 
