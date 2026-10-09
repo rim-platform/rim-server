@@ -126,6 +126,8 @@ const ATTACHMENT: &str = r#"
 query Attachment($serverId: ID!, $attachmentId: ID!) {
   attachment(serverId: $serverId, attachmentId: $attachmentId) { filename contentType sizeBytes blobSha256 }
 }"#;
+const READD: &str = r#"
+mutation Readd($input: RequestMlsReaddInput!) { requestMlsReadd(input: $input) }"#;
 const PRINCIPAL_DEVICES: &str = r#"
 query Devices($ids: [String!]!) { principalDevices(principalIds: $ids) { principalId devices { deviceId mlsActive } } }"#;
 
@@ -1830,4 +1832,53 @@ async fn finding_10_key_packages_from_a_clock_minutes_ahead_are_accepted() {
     )
     .await;
     assert_eq!(code, "VALIDATION", "{extensions}");
+}
+
+/// A re-add request is accepted once: the same signed request sent again is refused, and so is
+/// one issued more than ten minutes ago or one from before the device's latest add.
+#[tokio::test]
+async fn finding_9_a_replayed_readd_request_is_refused() {
+    let mut f = fixture().await;
+    let conv = f.encrypted_dm().await;
+    let conversation_id: Uuid = conv.parse().expect("uuid");
+    let bob = &f.bob;
+    let request = |last_epoch: Option<u64>, nonce: u8, issued_at: chrono::DateTime<chrono::Utc>| {
+        let signed = rim_identity::testing::device_mls_readd_at(
+            &bob.device_key,
+            &bob.principal_id,
+            bob.device_id,
+            conversation_id,
+            1,
+            last_epoch,
+            &[nonce; 16],
+            &issued_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        bob.request(
+            READD,
+            json!({ "input": {
+                "serverId": f.server_id(),
+                "conversationId": conv,
+                "request": statement(&signed),
+            } }),
+        )
+    };
+    let now = chrono::Utc::now();
+    let (code, extensions) = exec_err(
+        &f.schema,
+        request(Some(1), 1, now - chrono::Duration::minutes(11)),
+    )
+    .await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
+    let (code, extensions) = exec_err(&f.schema, request(Some(0), 2, now)).await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
+
+    let data = exec_ok(&f.schema, request(Some(1), 3, now)).await;
+    assert_eq!(data["requestMlsReadd"], json!(true));
+    let (code, extensions) = exec_err(&f.schema, request(Some(1), 3, now)).await;
+    assert_eq!(code, "CONFLICT", "{extensions}");
+    let group = f.group(&conv).await;
+    assert_eq!(
+        group["mlsGroup"]["readdRequests"].as_array().map(Vec::len),
+        Some(1)
+    );
 }

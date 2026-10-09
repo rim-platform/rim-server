@@ -87,6 +87,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261009_182741_add_e2ee_mls::Migration),
             Box::new(m20261009_214158_add_server_identity::Migration),
             Box::new(m20261009_220223_add_report_sender_device::Migration),
+            Box::new(m20261009_230613_add_mls_readd_nonce::Migration),
         ]
     }
 }
@@ -161,3 +162,4 @@ mod m20261009_133359_add_workspace_plugin;
 mod m20261009_182741_add_e2ee_mls;
 mod m20261009_214158_add_server_identity;
 mod m20261009_220223_add_report_sender_device;
+mod m20261009_230613_add_mls_readd_nonce;

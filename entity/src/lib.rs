@@ -66,6 +66,7 @@ pub mod mls_commit;
 pub mod mls_group;
 pub mod mls_group_device;
 pub mod mls_key_package;
+pub mod mls_readd_nonce;
 pub mod mls_readd_request;
 pub mod mls_welcome;
 pub mod mls_welcome_recipient;

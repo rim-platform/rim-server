@@ -40,6 +40,8 @@ pub enum Relation {
     MlsCommit,
     #[sea_orm(has_many = "super::mls_group_device::Entity")]
     MlsGroupDevice,
+    #[sea_orm(has_many = "super::mls_readd_nonce::Entity")]
+    MlsReaddNonce,
     #[sea_orm(has_many = "super::mls_readd_request::Entity")]
     MlsReaddRequest,
 }
@@ -65,6 +67,12 @@ impl Related<super::mls_commit::Entity> for Entity {
 impl Related<super::mls_group_device::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MlsGroupDevice.def()
+    }
+}
+
+impl Related<super::mls_readd_nonce::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::MlsReaddNonce.def()
     }
 }
 

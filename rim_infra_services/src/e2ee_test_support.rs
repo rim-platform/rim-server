@@ -60,6 +60,8 @@ pub(crate) struct State {
     pub(crate) commits: Vec<MlsCommit>,
     pub(crate) welcomes: Welcomes,
     pub(crate) readds: Vec<MlsReaddRequest>,
+    /// Re-add nonces used, per conversation, incarnation and device.
+    pub(crate) readd_nonces: HashSet<(ConversationId, i32, DeviceKeyId, Vec<u8>)>,
     pub(crate) encrypted: HashSet<ConversationId>,
     pub(crate) franking: Vec<FrankingKey>,
     pub(crate) fail_commit_insert: bool,
@@ -701,6 +703,14 @@ impl E2eeRepository for FakeE2ee {
         request: NewMlsReaddRequest,
     ) -> RepoResult<MlsReaddRequest> {
         let mut state = self.state();
+        if !state.readd_nonces.insert((
+            request.conversation_id,
+            request.incarnation,
+            request.device_key_id,
+            request.nonce.clone(),
+        )) {
+            return Err(RepoError::new(RepoErrorKind::Conflict));
+        }
         let stored = MlsReaddRequest {
             id: MlsReaddRequestId::new(),
             conversation_id: request.conversation_id,

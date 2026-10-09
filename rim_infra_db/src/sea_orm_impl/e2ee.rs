@@ -1175,20 +1175,28 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         let id: Uuid = MlsReaddRequestId::new().into();
         let conversation: Uuid = request.conversation_id.into();
         let device: Uuid = request.device_key_id.into();
-        self.execute(
-            "INSERT INTO mls_readd_request \
-             (id, conversation_id, incarnation, device_key_id, payload, signature) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            vec![
-                id.into(),
-                conversation.into(),
-                request.incarnation.into(),
-                device.into(),
-                request.payload.into(),
-                request.signature.into(),
-            ],
-        )
-        .await?;
+        let inserted = self
+            .execute(
+                "WITH nonce AS ( \
+                   INSERT INTO mls_readd_nonce (conversation_id, incarnation, device_key_id, nonce) \
+                   VALUES ($2, $3, $4, $7) ON CONFLICT DO NOTHING RETURNING 1) \
+                 INSERT INTO mls_readd_request \
+                 (id, conversation_id, incarnation, device_key_id, payload, signature) \
+                 SELECT $1, $2, $3, $4, $5, $6 FROM nonce",
+                vec![
+                    id.into(),
+                    conversation.into(),
+                    request.incarnation.into(),
+                    device.into(),
+                    request.payload.into(),
+                    request.signature.into(),
+                    request.nonce.into(),
+                ],
+            )
+            .await?;
+        if inserted == 0 {
+            return Err(RepoError::new(RepoErrorKind::Conflict));
+        }
         let row: Option<ReaddRow> = self
             .one(&format!("{READD_SELECT} WHERE r.id = $1"), vec![id.into()])
             .await?;
@@ -1344,6 +1352,12 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                 vec![seconds(retention.readd_requests)],
             )
             .await?;
+        let readd_nonces = self
+            .execute(
+                "DELETE FROM mls_readd_nonce WHERE created_at < now() - make_interval(secs => $1)",
+                vec![seconds(retention.readd_nonces)],
+            )
+            .await?;
         let franked_contents = self
             .execute(
                 "UPDATE message_report SET franked_content = NULL \
@@ -1357,6 +1371,7 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             welcomes,
             key_packages,
             readd_requests,
+            readd_nonces,
             franked_contents,
         })
     }

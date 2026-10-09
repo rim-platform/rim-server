@@ -134,6 +134,7 @@ TRUNCATE TABLE
   mls_group,
   mls_group_device,
   mls_key_package,
+  mls_readd_nonce,
   mls_readd_request,
   mls_welcome,
   mls_welcome_recipient,

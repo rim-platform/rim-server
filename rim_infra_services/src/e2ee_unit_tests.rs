@@ -32,7 +32,7 @@ mod tests {
     use rim_core::user::model::UserId;
     use rim_identity::StatementVersion;
     use rim_identity::testing::{
-        SigningKey, TestIdentity, device_mls_key, device_mls_readd, signing_key,
+        SigningKey, TestIdentity, device_mls_key, device_mls_readd_at, signing_key,
     };
     use rim_services::e2ee::command::{
         AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery,
@@ -1533,6 +1533,7 @@ mod tests {
         assert!(validation(err).contains("at most 100"));
     }
 
+    /// A re-add request of `d` issued now, with a fresh nonce and `lastEpoch` 1.
     fn readd_cmd(
         f: &Fixture,
         d: &Device,
@@ -1541,14 +1542,48 @@ mod tests {
         conversation: Uuid,
         incarnation: u32,
     ) -> RequestMlsReaddCmd {
-        let statement = device_mls_readd(
+        readd_cmd_with(
+            f,
+            d,
+            signer,
+            device_id,
+            conversation,
+            incarnation,
+            ReaddFields {
+                last_epoch: Some(1),
+                nonce: *Uuid::now_v7().as_bytes(),
+                issued_at: Utc::now(),
+            },
+        )
+    }
+
+    /// The fields of a re-add request that freshness is judged on.
+    struct ReaddFields {
+        last_epoch: Option<u64>,
+        nonce: [u8; 16],
+        issued_at: DateTime<Utc>,
+    }
+
+    fn readd_cmd_with(
+        f: &Fixture,
+        d: &Device,
+        signer: &SigningKey,
+        device_id: Uuid,
+        conversation: Uuid,
+        incarnation: u32,
+        fields: ReaddFields,
+    ) -> RequestMlsReaddCmd {
+        let statement = device_mls_readd_at(
             signer,
             &d.principal,
             device_id,
             conversation,
             incarnation,
-            Some(1),
-            &[7; 16],
+            fields.last_epoch,
+            &fields.nonce,
+            &fields
+                .issued_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
         RequestMlsReaddCmd {
             caller: d.caller(),
@@ -1633,6 +1668,72 @@ mod tests {
             .expect("group");
         assert_eq!(group.readd_requests.len(), 2);
         assert_eq!(group.readd_requests[0].device_id, bob.device_id);
+    }
+
+    #[tokio::test]
+    async fn finding_9_readd_requests_must_be_fresh_and_used_once() {
+        let f = Fixture::new().with_limits(600, 100, 10);
+        let conv: Uuid = f.conv.id.into();
+        let bob = &f.bob;
+        f.group(1, 6, &[&f.alice, bob]);
+        f.repo
+            .state()
+            .group_devices
+            .iter_mut()
+            .filter(|(_, _, d)| d.device.device_key_id == bob.id)
+            .for_each(|(_, _, d)| d.added_epoch = 4);
+        let cmd = |last_epoch: Option<u64>, nonce: u8, issued_at: DateTime<Utc>| {
+            readd_cmd_with(
+                &f,
+                bob,
+                &bob.key,
+                bob.device_id,
+                conv,
+                1,
+                ReaddFields {
+                    last_epoch,
+                    nonce: [nonce; 16],
+                    issued_at,
+                },
+            )
+        };
+        let now = Utc::now();
+        let refusals = [
+            (cmd(Some(5), 1, now - Duration::minutes(11)), "issuedAt"),
+            (cmd(Some(5), 2, now + Duration::minutes(11)), "issuedAt"),
+            (
+                cmd(Some(3), 3, now),
+                "before the epoch this device was added",
+            ),
+            (cmd(Some(7), 4, now), "past the group's epoch"),
+        ];
+        for (request, why) in refusals {
+            let err = f.service.request_readd(request).await.unwrap_err();
+            assert!(validation(err).contains(why), "{why}");
+        }
+
+        // Nine minutes either way, the epoch it was added at and no state at all are accepted.
+        f.service
+            .request_readd(cmd(Some(4), 5, now - Duration::minutes(9)))
+            .await
+            .expect("added epoch");
+        f.service
+            .request_readd(cmd(Some(6), 6, now + Duration::minutes(9)))
+            .await
+            .expect("current epoch");
+        f.service
+            .request_readd(cmd(None, 7, now))
+            .await
+            .expect("no state");
+
+        // A replayed request is refused while the rate limit would still allow it.
+        let err = f
+            .service
+            .request_readd(cmd(Some(4), 5, now - Duration::minutes(9)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+        assert_eq!(f.repo.state().readds.len(), 3);
     }
 
     #[tokio::test]

@@ -212,6 +212,8 @@ pub struct NewMlsReaddRequest {
     pub device_key_id: DeviceKeyId,
     pub payload: String,
     pub signature: String,
+    /// The request's nonce; a device's nonce is accepted once per incarnation.
+    pub nonce: Vec<u8>,
 }
 
 /// An encrypted message row as the sender's request creates it. The id is the client's.
@@ -248,6 +250,7 @@ pub struct MlsRetention {
     pub commits: chrono::Duration,
     pub claimed_key_packages: chrono::Duration,
     pub readd_requests: chrono::Duration,
+    pub readd_nonces: chrono::Duration,
     /// Counted from the report's resolution.
     pub franked_content: chrono::Duration,
 }
@@ -259,5 +262,6 @@ pub struct MlsPurged {
     pub welcomes: u64,
     pub key_packages: u64,
     pub readd_requests: u64,
+    pub readd_nonces: u64,
     pub franked_contents: u64,
 }
