@@ -10,11 +10,10 @@ use crate::graphql_support::{
 };
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
-use log::info;
 use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, info, info_span};
 
 use std::sync::Arc;
 
