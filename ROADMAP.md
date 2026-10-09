@@ -248,12 +248,13 @@ both encryption and relays depend on them.
    existing `user` row with a kind of local or remote, so none of the dozens of tables that
    reference the user id move. Bots, ingest tokens and the CLI keep host-local credentials and
    host-scoped ids. The web app becomes a linked device of the desktop app.
-   _Server foundation in progress:_ the `rim_identity` crate, key columns and tables,
-   enrollment, device add and revoke, identity rotation and recovery, profile cards and
-   challenge login (`docs/specs/key-identity-v1.md`). Still to come: key-only signup, QR
-   linking, the recovery phrase, the client, and algorithm-agile key and signature formats so
-   an identity can later rotate to a hybrid Ed25519 + ML-DSA key
-   (`docs/decisions/post-quantum-hybrid-2026-10-09.md`).
+   _Shipped 2026-10-09_ (`docs/plans/stage-3-remaining-2026-10-09.md` lists the PRs): the
+   `rim_identity` crate, enrollment, devices, rotation and recovery, profile cards, challenge
+   login, algorithm-agile statements, key-only signup, device linking by code (desktop and
+   web), the 12-word recovery phrase, the identity-key backup on the drive, and sign-out of
+   other sessions (`docs/specs/key-identity-v1.md`, `docs/specs/device-linking-v1.md`). Web
+   plugins and workspace plugin registries with signed manifests (Tracks 2.3 and 2.4) shipped
+   with it (`docs/specs/web-plugins-v1.md`, `docs/specs/workspace-plugins-v1.md`).
 3. **E2EE v1 with MLS** (XL, Stage 4): OpenMLS on the Tauri side for DMs and private groups;
    channels stay plaintext. Every server feature that reads text gets a client replacement in
    encrypted conversations; plugins read messages only through the client message service under
