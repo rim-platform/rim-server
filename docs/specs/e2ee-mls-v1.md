@@ -16,7 +16,7 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 3. Credentials: a per-device **MLS signature key** certified by the device key (an `mls-key`
    statement), chained to the key log. Clients verify every leaf.
 4. Each device keeps 20 one-time **key packages** and one last-resort package on the server,
-   30-day lifetime. The server validates them on upload and hands them out once.
+   90-day lifetime. The server validates them on upload and hands them out once.
 5. The server is the **sequencer**: one Commit per `(conversation, incarnation, epoch)`, enforced by
    a row lock and a unique index; the loser gets `STALE_EPOCH`. Application messages are accepted
    only in the current epoch, so the change feed is in epoch order.
@@ -232,8 +232,9 @@ past the server's Commit retention, signs a **re-add request** with its device k
 {"v":2,"type":"mls-readd","principalId":"rimp1_…","deviceId":"<uuid>","conversationId":"<uuid>","incarnation":1,"lastEpoch":41,"nonce":"<16 random bytes>","issuedAt":"…"}
 ```
 
-`lastEpoch` is the last epoch it processed, or `null` with no state. Before asking, it uploads
-fresh key packages and discards its old group state. Protections against a server forcing re-adds:
+`lastEpoch` is the last epoch it processed, or `null` with no state. It discards its old group
+state, sends the request, and only then uploads fresh key packages: a re-add is served from a
+package uploaded after the request, never from one of the lost state. Protections against a server forcing re-adds:
 
 | Rule | Stops |
 |---|---|
