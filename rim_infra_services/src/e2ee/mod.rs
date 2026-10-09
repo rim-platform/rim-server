@@ -1752,25 +1752,35 @@ impl E2eeService for DefaultE2eeService {
             .await?
             .into_iter()
             .collect();
+        let since = active_since(Utc::now());
         let mut result = Vec::with_capacity(principal_ids.len());
         for principal_id in principal_ids {
             let devices = match visible.get(&principal_id) {
-                Some(user_id) => self
-                    .repos
-                    .key_identity_repo
-                    .list_devices(*user_id)
-                    .await?
-                    .into_iter()
-                    .map(|d| PrincipalDeviceDto {
-                        device_id: d.device_id,
-                        name: d.name,
-                        cert_payload: d.cert_payload,
-                        cert_signature: d.cert_signature,
-                        revoked_at: d.revoked_at,
-                        revocation_payload: d.revocation_payload,
-                        revocation_signature: d.revocation_signature,
-                    })
-                    .collect(),
+                Some(user_id) => {
+                    let active: HashSet<uuid::Uuid> = self
+                        .repos
+                        .e2ee_repo
+                        .mls_active_device_ids(*user_id, since)
+                        .await?
+                        .into_iter()
+                        .collect();
+                    self.repos
+                        .key_identity_repo
+                        .list_devices(*user_id)
+                        .await?
+                        .into_iter()
+                        .map(|d| PrincipalDeviceDto {
+                            mls_active: active.contains(&d.device_id),
+                            device_id: d.device_id,
+                            name: d.name,
+                            cert_payload: d.cert_payload,
+                            cert_signature: d.cert_signature,
+                            revoked_at: d.revoked_at,
+                            revocation_payload: d.revocation_payload,
+                            revocation_signature: d.revocation_signature,
+                        })
+                        .collect()
+                }
                 None => Vec::new(),
             };
             result.push(PrincipalDevicesDto {

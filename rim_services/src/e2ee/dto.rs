@@ -105,6 +105,8 @@ pub struct PrincipalDeviceDto {
     pub revoked_at: Option<DateTime<Utc>>,
     pub revocation_payload: Option<String>,
     pub revocation_signature: Option<String>,
+    /// Unrevoked, with a key package upload in the last 60 days.
+    pub mls_active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -127,7 +127,7 @@ query Attachment($serverId: ID!, $attachmentId: ID!) {
   attachment(serverId: $serverId, attachmentId: $attachmentId) { filename contentType sizeBytes blobSha256 }
 }"#;
 const PRINCIPAL_DEVICES: &str = r#"
-query Devices($ids: [String!]!) { principalDevices(principalIds: $ids) { principalId devices { deviceId } } }"#;
+query Devices($ids: [String!]!) { principalDevices(principalIds: $ids) { principalId devices { deviceId mlsActive } } }"#;
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
@@ -1393,6 +1393,10 @@ async fn sessions_groups_and_members_must_be_ready() {
     assert_eq!(
         devices["principalDevices"][0]["devices"][0]["deviceId"],
         json!(f.bob.device_id.to_string())
+    );
+    assert_eq!(
+        devices["principalDevices"][0]["devices"][0]["mlsActive"],
+        json!(true)
     );
 }
 

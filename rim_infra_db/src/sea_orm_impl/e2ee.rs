@@ -452,6 +452,27 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             .collect()
     }
 
+    async fn mls_active_device_ids(
+        &self,
+        user_id: UserId,
+        active_since: DateTime<Utc>,
+    ) -> RepoResult<Vec<Uuid>> {
+        let user: Uuid = user_id.into();
+        let rows = self
+            .db
+            .query_all_raw(Self::statement(
+                "SELECT device_id FROM device_key \
+                 WHERE user_id = $1 AND revoked_at IS NULL \
+                   AND last_key_package_upload_at >= $2",
+                vec![user.into(), utc(active_since)],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.iter()
+            .map(|row| row.try_get::<Uuid>("", "device_id").map_err(map_db_err))
+            .collect()
+    }
+
     async fn desired_devices(
         &self,
         conversation_id: ConversationId,
