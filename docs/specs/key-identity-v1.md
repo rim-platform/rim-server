@@ -469,6 +469,15 @@ offers recovery must read.
   a log that ends before it (a stale copy, or the rotation still in flight) leaves it pending, and
   a retry signs the same pending key again, so a rotation whose answer was lost never loses the
   key it put on the server.
+- **Identity key backup.** With the history archive set up, a device that holds the identity
+  key keeps a copy of it in the archive, sealed under a backup key that only the recovery kit
+  gives (`HKDF-SHA256(ikm = the phrase's 16 bytes, salt = "rim.recovery-phrase.v1",
+  info = "identity backup key")`, or the same over a version 1 kit's 32-byte seed); the device
+  keeps that backup key in its keyring record, never the phrase. It also wraps the archive key
+  under the identity key. A linked device takes the identity key over in Settings > Security
+  with the recovery phrase: the phrase must match the log's `recoveryKey` and the backed-up key
+  the head's `identityKey`; nothing is signed or revoked. Format: rim-ui
+  `docs/specs/history-archive-v1.md`, "Identity key backup".
 - **Profile card.** Lists this server's URL as the one relay and the account's active devices. A
   device is listed only if its certificate verifies against the replayed log at its `keySeq`, so
   a server cannot add a key of its own to the card the identity key signs.
