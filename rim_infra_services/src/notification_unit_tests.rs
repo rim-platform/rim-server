@@ -94,6 +94,7 @@ fn conversation(server_id: ServerId, kind: ConversationType) -> Conversation {
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        encrypted_at: None,
     }
 }
 
@@ -109,6 +110,7 @@ fn message(conversation_id: ConversationId, author: UserId, text: &str) -> Messa
         text: Some(text.to_string()),
         is_deleted: false,
         has_attachments: false,
+        encryption: None,
     }
 }
 

@@ -12,6 +12,8 @@ pub struct MessageAttachment {
     pub file_name: String,
     pub mime_type: String,
     pub metadata: Option<serde_json::Value>,
+    /// SHA-256 of the blob of an encrypted conversation's attachment.
+    pub blob_sha256: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +25,8 @@ pub struct NewMessageAttachment {
     pub file_name: String,
     pub mime_type: String,
     pub metadata: Option<serde_json::Value>,
+    /// SHA-256 of the blob of an encrypted conversation's attachment.
+    pub blob_sha256: Option<Vec<u8>>,
 }
 
 /// Bytes and number of attachments counted against one workspace's storage quota.

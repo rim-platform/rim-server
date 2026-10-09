@@ -248,6 +248,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             file_size: cmd.size_bytes as i64,
             mime_type: cmd.content_type.trim().to_owned(),
             metadata,
+            blob_sha256: None,
         };
         // The declared size is reserved against the workspace quota now, while the upload is
         // still pending; `complete_upload` refuses any file larger than what was declared.

@@ -111,6 +111,7 @@ TRUNCATE TABLE
   escalation_policy,
   escalation_run,
   escalation_step,
+  franking_key,
   incident,
   incident_message_tag,
   incident_phase,
@@ -129,6 +130,13 @@ TRUNCATE TABLE
   message_reaction,
   message_report,
   message_thread,
+  mls_commit,
+  mls_group,
+  mls_group_device,
+  mls_key_package,
+  mls_readd_request,
+  mls_welcome,
+  mls_welcome_recipient,
   notification_preference,
   on_call_override,
   on_call_rotation_layer,
@@ -229,6 +237,7 @@ impl TestCtx {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap()

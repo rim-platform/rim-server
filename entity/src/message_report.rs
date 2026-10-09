@@ -20,6 +20,9 @@ pub struct Model {
     pub resolved_by: Option<Uuid>,
     pub resolved_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
+    #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
+    pub franked_content: Option<Vec<u8>>,
+    pub franking_verified_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

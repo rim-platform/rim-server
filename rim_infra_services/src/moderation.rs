@@ -795,6 +795,7 @@ impl ModerationService for DefaultModerationService {
                 message_id: cmd.message_id,
                 reporter_user_id: cmd.actor.user_id,
                 reason: reason.to_string(),
+                franked_content: None,
             })
             .await
         {

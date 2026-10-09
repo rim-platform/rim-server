@@ -207,6 +207,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -222,6 +223,7 @@ mod tests {
             text: Some(text.to_string()),
             is_deleted: false,
             has_attachments: false,
+            encryption: None,
         }
     }
 

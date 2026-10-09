@@ -34,7 +34,7 @@ impl SeaOrmConversationRepository {
     }
 
     fn new_active_model(conv: NewConversation) -> conversation::ActiveModel {
-        conversation::ActiveModel {
+        let mut active = conversation::ActiveModel {
             id: Set(ConversationId::new().into()),
             conversation_type: Set(conv.conversation_type.into()),
             server_id: Set(conv.server_id.into()),
@@ -42,7 +42,14 @@ impl SeaOrmConversationRepository {
             is_private: Set(conv.is_private),
             created_by: Set(conv.created_by.map(Into::into)),
             ..Default::default()
+        };
+        // An encrypted conversation is encrypted from the instant it is created.
+        if conv.encrypted {
+            let now: sea_orm::prelude::DateTimeWithTimeZone = chrono::Utc::now().into();
+            active.created_at = Set(now);
+            active.encrypted_at = Set(Some(now));
         }
+        active
     }
 
     /// `SELECT conversation_id FROM conversation_member WHERE user_id = $user`.

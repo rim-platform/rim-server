@@ -1,4 +1,5 @@
 use crate::conversation::model::ConversationId;
+use crate::key_identity::model::DeviceKeyId;
 use crate::message_attachment::model::NewMessageAttachment;
 use crate::message_thread::model::MessageThreadId;
 use crate::model_id;
@@ -19,6 +20,25 @@ pub struct Message {
     pub text: Option<String>,
     pub is_deleted: bool,
     pub has_attachments: bool,
+    /// The MLS envelope of an encrypted message, whose `text` is always `None`.
+    pub encryption: Option<MessageEncryption>,
+}
+
+/// The MLS envelope of an encrypted message row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageEncryption {
+    pub incarnation: i32,
+    /// The epoch the application message was sent in.
+    pub epoch: i64,
+    pub sender_device_key_id: Option<DeviceKeyId>,
+    /// The `MLSMessage` bytes; `None` once the message is deleted.
+    pub ciphertext: Option<Vec<u8>>,
+    /// The sender's HMAC commitment to the content, from the authenticated data.
+    pub franking_commitment: Vec<u8>,
+    /// The server's HMAC over the commitment and the message's ids and send time.
+    pub franking_receipt: Vec<u8>,
+    /// The server franking key the receipt was made with.
+    pub franking_key_id: i32,
 }
 
 impl Message {

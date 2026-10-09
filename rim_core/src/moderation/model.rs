@@ -119,6 +119,8 @@ pub struct NewMessageReport {
     pub message_id: MessageId,
     pub reporter_user_id: UserId,
     pub reason: String,
+    /// The verified content of a franked report of an encrypted message.
+    pub franked_content: Option<Vec<u8>>,
 }
 
 #[cfg(test)]

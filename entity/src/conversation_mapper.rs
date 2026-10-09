@@ -22,6 +22,7 @@ impl From<conversation::Model> for Conversation {
             archived_at: m.archived_at.map(Into::into),
             created_by: m.created_by.map(Into::into),
             slow_mode_seconds: m.slow_mode_seconds,
+            encrypted_at: m.encrypted_at.map(Into::into),
         }
     }
 }

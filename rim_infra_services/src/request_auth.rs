@@ -98,6 +98,7 @@ mod tests {
             last_seen_at: Some(chrono::Utc::now()),
             user_agent: None,
             ip: None,
+            device_key_id: None,
         }
     }
 
