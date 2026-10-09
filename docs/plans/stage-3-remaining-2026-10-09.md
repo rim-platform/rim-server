@@ -23,6 +23,9 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-server, rim-ui | #40, #31 | CLAUDE.md: the coordinating session reviews; comment and commit rules |
 | rim-ui | #33 | S3-7: the web app as a linked device (WebCrypto keys, link by code, key sign-in) |
 | rim-ui | #35 | S3-8b: identity-key backup on the drive, takeover on a linked device, archive key wrapped under the identity key |
+| rim-server | #45 | W4-0: `web-plugins-v1.md` and `workspace-plugins-v1.md` |
+| rim-server | #46 | S3-10a: workspace plugin registry, signed manifests, bundle endpoints |
+| rim-ui | #36 | S3-9: web plugins (`WebSandboxed` kind, frame shell, host, SDK transport, GitHub PRs showcase) |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.

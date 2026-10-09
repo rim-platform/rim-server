@@ -44,15 +44,18 @@ Same `rim-plugin.json`, same `manifest_version` 1. What differs for this kind:
 |---|---|
 | `runtime_kind` | `"WebSandboxed"` |
 | `entrypoint` | Bundle path of one ES module ending in `.mjs` or `.js`. Self-contained: no static `import` and no `import()` of bundle files, because the shell loads it from a `blob:` URL where relative specifiers resolve to nothing. No `#!` line. |
-| `network_origins` | New, optional. 1 to 16 origins of the form `https://host[:port]` or, for WebSockets, `wss://host[:port]`: lowercase, no path, query, fragment, userinfo or wildcard, no duplicates. Present exactly when `capabilities` lists `network.fetch`. |
+| `network_origins` | New, optional. 1 to 16 origins of the form `https://host[:port]` or, for WebSockets, `wss://host[:port]`: lowercase, no path, query, fragment, userinfo or wildcard, no duplicates. Present exactly when `capabilities` lists `network.fetch` (`null` counts as absent, as for every optional field). No origin may share the host and port of the app's or the RIM API's origin. |
 | `capabilities` | See [Capabilities](#capabilities). |
-| `panels` | As today (`id`, `title`, `description`, `slot`). A panel's files live under `panels/<id>/`; `index.html` is required. |
+| `panels` | As today (`id`, `title`, `description`, `slot`). A panel's files live under `panels/<id>/`, so its `id` is one bundle path segment; `index.html` is required. The entrypoint is not under `panels/`. |
 
 `network_origins` and `network.fetch` are refused for `DesktopLocalProcess`. A host from before
 S3-9 refuses a web plugin at install with `failed to parse manifest: unknown variant
 WebSandboxed`, because `RuntimeKind` is a closed enum; it never tries to execute the module.
 
-The showcase's manifest:
+The showcase's manifest, as installed (its source names `main.ts`, which the bundler
+builds into `main.mjs`). A panel reaches its plugin only through commands, so adding and
+removing repositories are commands too; they take an argument, so the palette leaves them
+to the panel:
 
 ```json
 { "manifest_version": 1, "plugin_id": "chat.rim.github-prs", "display_name": "GitHub Pull Requests",
@@ -61,7 +64,13 @@ The showcase's manifest:
   "capabilities": ["ui.panel", "network.fetch"],
   "network_origins": ["https://api.github.com", "https://avatars.githubusercontent.com"],
   "commands": [{ "id": "refresh", "title": "Pull requests: Refresh",
-                 "description": "Fetches the open pull requests again.", "keybind_capable": true }],
+                 "description": "Fetches the open pull requests again.", "keybind_capable": true },
+               { "id": "add_repo", "title": "Pull requests: Add repository",
+                 "description": "Adds a public GitHub repository to the list, at most 10.",
+                 "arguments": [{ "name": "repo", "type": "string", "required": true }] },
+               { "id": "remove_repo", "title": "Pull requests: Remove repository",
+                 "description": "Removes a repository from the list.",
+                 "arguments": [{ "name": "repo", "type": "string", "required": true }] }],
   "panels": [{ "id": "prs", "title": "Pull requests", "slot": "tool_panel" }] }
 ```
 
@@ -100,7 +109,10 @@ bytes are, and the hash decides whether they are the right ones.**
 
 The desktop installs a bundle by unpacking it into `~/.rim/plugins/<plugin_id>/` with the staging
 and path checks of a local-folder install (a `DesktopLocalProcess` entrypoint gets mode `0755`,
-every other file `0644`), then records its bundle fingerprint as today.
+every other file `0644`), then records its bundle fingerprint as today. A `WebSandboxed` plugin
+installed from a folder or a git checkout must hold exactly what a bundle of it would: entries
+whose name starts with `.` (`.git`, `.DS_Store`) are skipped, and every other file follows the
+rules above.
 
 ## Runtime
 
@@ -162,9 +174,12 @@ The baseline, a `<meta http-equiv="Content-Security-Policy">` in the shell file:
 
 ```
 default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' blob: 'unsafe-inline';
-img-src 'self' blob: data: https:; font-src blob: data:; media-src blob: data:; connect-src https:;
+img-src 'self' blob: data: https:; font-src blob: data:; media-src blob: data:; connect-src https: wss:;
 worker-src blob:; frame-src 'none'; form-action 'none'; base-uri 'none'
 ```
+
+`connect-src` lists `wss:` beside `https:` because the scheme source `https:` does not match a
+`wss:` URL, and policies intersect: without it no `wss://` origin a plugin lists could connect.
 
 and the per-plugin policy, a second `<meta>` the shell appends to `<head>` before any plugin file
 loads: `connect-src <O>; img-src 'self' blob: data: <O>`, where `<O>` is the granted
@@ -249,12 +264,14 @@ small store per plugin. `rim.storage.get { key }` answers `{ value }` (the store
 `rim.storage.set { key, value }` answers `{ ok: true }`, and `value: null` deletes the key.
 
 - `key` is 1 to 128 characters of `A-Z a-z 0-9 . _ -`; a value is any JSON. At most 1 MiB per
-  store (key lengths plus the values' JSON text): a `set` past it is `INVALID_PARAMS` with
-  `data: { "reason": "quota" }`. With nobody signed in, both answer `INVALID_PARAMS`
-  (`nobody is signed in`). 120 calls a minute.
-- A store belongs to (plugin id, signed-in principal, device). It is not synced, is deleted on
-  uninstall, and is not secret: the host keeps it unencrypted (IndexedDB on the web, the app data
-  directory on the desktop), so a plugin must not keep tokens in it.
+  store (key lengths plus the values' JSON text, in UTF-8 bytes): a `set` past it is
+  `INVALID_PARAMS` with `data: { "reason": "quota" }`. With nobody signed in, both answer
+  `INVALID_PARAMS` (`nobody is signed in`). 120 calls a minute.
+- A store belongs to (plugin id, signed-in account, device). The host names the account by its
+  provisional `rimp0_` principal id, which never changes, so the one switch to a key-based id
+  keeps the plugin's data. It is not synced, is deleted on uninstall, and is not secret: the host
+  keeps it unencrypted (IndexedDB on the web, the app data directory on the desktop), so a plugin
+  must not keep tokens in it.
 - A local-process host answers both with `METHOD_NOT_FOUND`: a process has its own files.
 
 ## Panels
@@ -264,7 +281,11 @@ URL in `script[src]`, `link[rel~=stylesheet]`, `link[rel~=icon]`, `img`, `source
 `video` that names a file of the panel with a `blob:` URL of that file (media type from the
 extension), and turns inline `<script>`s into `blob:` scripts too; swaps in the panel's `<head>` and
 `<body>`; recreates the scripts in document order with `async = false`; then dispatches
-`DOMContentLoaded` and `load`. Absolute URLs stay and fall under the policy. Not supported: module
+`DOMContentLoaded` and `load`, and posts `{ type: "rim.frame.ready", v: 1 }` to `window.parent`, on
+which the host sends `theme.changed` and the panel's stored state (sent earlier, they would
+reach no listener yet). A relative URL that names no file of the panel is removed rather than
+resolved against the shell's URL, and so are `<base>` and `<meta http-equiv="refresh">`.
+Absolute URLs stay and fall under the policy. Not supported: module
 scripts that import other files (bundle them), CSS `url()` and `@import` of panel files (use
 `data:` URIs), and inline event handler attributes, which the policy forbids. The k8s panel's shape
 (an `index.html` with a `<style>` block and `<script src="app.js">`) works unchanged.
@@ -363,10 +384,12 @@ installs update when the entry's statement changes (S3-10); link installs only b
   manifest checks and `validation.rs`), and a `WebPluginStore` interface backed by IndexedDB on the
   web and by Tauri commands on the existing `PluginStateStore` on the desktop, so Settings lists
   both kinds together. `dispatchCommand` routes `plugin.<pluginId>.<command>` by runtime kind.
-- The command gates run in TypeScript in the order of `command_exec.rs`: plugin running, command
-  declared, required capabilities, the dangerous-command confirmation (a host dialog; only the
-  host sets `confirmed`, and the agent never confirms), AI consent for agent runs, 30-second
-  timeout.
+- The command gates run in TypeScript in the order of `command_exec.rs`: for an agent run, AI
+  consent first (on the desktop the Rust host's own check); then the arguments are an object,
+  the command is declared, a panel's request names its own plugin, the dangerous-command
+  confirmation (a host dialog; only the host sets `confirmed`, and the agent never confirms),
+  required capabilities, the plugin running; then 30 seconds to answer. Refusals use the
+  desktop's error kinds (`UNKNOWN_COMMAND`, `CONFIRMATION_REQUIRED`, `PLUGIN_NOT_RUNNING`, …).
 - A new runtime capability, `webPlugins` (on for desktop and web, off for mobile); `pluginHost`
   keeps meaning local processes. On the web, Settings > Plugins lists web plugins, the workspace
   registry and "Install from link", and shows local-process entries as "Needs the desktop app".
@@ -375,6 +398,8 @@ installs update when the entry's statement changes (S3-10); link installs only b
   not started, and Settings says so.
 - The web app derives the provisional `rimp0_` id exactly as `protocol.rs` does and keeps the
   `rimp0_` to `rimp1_` mappings per device in IndexedDB.
+- Install records keep their source as `{ kind: "local" | "git" | "link" | "registry", … }`: on
+  the desktop in the plugin's `PluginRecord`, on the web in the `installs` store.
 
 ## SDK
 
@@ -389,7 +414,8 @@ installs update when the entry's statement changes (S3-10); link installs only b
 - **Bundler.** For `WebSandboxed`, `rim-plugin-bundle` builds with `platform: "browser"`,
   `conditions: ["browser"]`, `format: "esm"`, `target: "es2022"` and no `#!` banner, fails when the
   output still has an `import` or a `node:` reference, and refuses files outside `panels/`. For
-  both kinds it writes the directory as today plus `<plugin_id>-<version>.rimbundle`, and prints
+  both kinds it writes the directory as today plus `<plugin_id>-<version>.rimbundle` beside it
+  (not inside, so the directory stays installable as a folder), and prints
   `sha256 <hex>  size <bytes>`.
 - **Testing.** `startTestHost` gains `transport: "port"`: the plugin runs over a Node
   `MessageChannel` with the same assertions as over stdio.
