@@ -16,14 +16,23 @@ pub enum IdentityError {
     #[error("expected a `{expected}` statement")]
     WrongType { expected: &'static str },
 
-    #[error("{0} is not valid unpadded base64url of the right length")]
+    #[error("{0} is not in its canonical encoding")]
     BadEncoding(&'static str),
+
+    #[error("{0} names an unsupported algorithm `{1}`")]
+    UnsupportedAlgorithm(&'static str, String),
 
     #[error("{0} is a weak or non-canonical Ed25519 key")]
     WeakKey(&'static str),
 
+    #[error("signature algorithm does not match the signing key")]
+    AlgorithmMismatch,
+
     #[error("signature does not verify")]
     BadSignature,
+
+    #[error("a version {got} statement cannot follow a version {head} key log entry")]
+    VersionDowngrade { head: u32, got: u32 },
 
     #[error("statement is for a different principal")]
     PrincipalMismatch,

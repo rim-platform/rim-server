@@ -6,6 +6,11 @@ a user is a key pair, the user id is stable with a signed key log, the web app i
 device, and servers are interchangeable relays. This document is the contract between the
 server (`rim_identity`, `KeyAuthService`) and every client that signs statements._
 
+_Updated 2026-10-09 by the algorithm agility PR (`docs/decisions/post-quantum-hybrid-2026-10-09.md`):
+statement format version 2 tags every key and signature with its algorithm, payload caps fit
+hybrid post-quantum keys, and the server indexes device keys by a hash. Version 1 statements
+stay valid. See "Algorithms and statement versions"._
+
 ## What this PR ships
 
 - **`rim_identity`**, a dependency-light crate that verifies every signed statement below. It
@@ -24,10 +29,11 @@ linking, the 12-word recovery phrase, the client UI, plugin manifest signing, an
 
 ## Keys and encodings
 
-- All keys are **Ed25519**. Public keys and signatures are **unpadded base64url** (RFC 4648
-  §5, no `=`). Decoders are strict: padding, non-canonical trailing bits, wrong lengths,
-  small-order ("weak") keys and non-canonical point encodings are rejected. Signatures are
-  checked with `verify_strict`, so malleable signatures fail.
+- All keys today are **Ed25519**. Key and signature bytes are **unpadded base64url** (RFC 4648
+  §5, no `=`), written with an algorithm tag in front in version 2 statements (next section).
+  Decoders are strict: padding, non-canonical trailing bits, wrong lengths, small-order
+  ("weak") keys and non-canonical point encodings are rejected. Signatures are checked with
+  `verify_strict`, so malleable signatures fail.
 - A person holds three kinds of key:
   - the **identity key**, which signs the key log, device certificates, revocations and the
     profile card. It stays off day-to-day devices where possible;
@@ -35,6 +41,59 @@ linking, the 12-word recovery phrase, the client UI, plugin manifest signing, an
     replace a lost identity key;
   - one **device key** per device, certified by the identity key. Only device keys sign in.
 - The identity key must differ from the recovery key, and a device key must differ from both.
+
+## Algorithms and statement versions
+
+Every payload names its format version in `"v"`. A server accepts versions **1 and 2**; any
+other value is refused with `unsupported statement version N`. **Clients write version 2.**
+Version 1 stays accepted so that statements signed before version 2 existed keep verifying,
+and nothing a server stores is ever re-signed.
+
+The two versions differ **only in how keys and signatures are spelled**; field names, context
+bytes, caps and every rule below are the same.
+
+| | Version 1 | Version 2 |
+|---|---|---|
+| Key (`identityKey`, `recoveryKey`, `deviceKey`) | `<base64url>`, Ed25519 implied | `<algorithm>:<base64url>` |
+| `signature` | `<base64url>`, Ed25519 implied | `<algorithm>:<base64url>` |
+| Algorithms | Ed25519 only | any the server implements |
+
+- **Tagged form.** `<algorithm>` is 1 to 32 characters of `a-z`, `0-9` and `-`, followed by
+  one `:` (not in the base64url alphabet, so the first colon splits). Today the only algorithm
+  is `ed25519` (32-byte key, 64-byte signature), for example
+  `ed25519:iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w`. A version 2 key or signature without a
+  tag, and a version 1 key or signature with one, is a `VALIDATION` error
+  (`identityKey is not in its canonical encoding`). A well-formed name the server does not
+  implement is refused with a message naming it (for example
+  `deviceKey names an unsupported algorithm` followed by the name), so a client can tell
+  "newer than this server" from a malformed value.
+- **A signature's algorithm must be its key's.** A signature tagged with one algorithm never
+  verifies under a key of another (`signature algorithm does not match the signing key`).
+- **One key, two spellings.** A key is the same key in either version: `KeyState`, device
+  uniqueness and the `deviceKey must differ…` checks compare algorithm and key bytes, not text.
+  So a version 1 inception's recovery key and the same key tagged in a version 2 rotation match.
+- **Mixed logs.** A key log may start in version 1 and continue in version 2 (an existing
+  identity moves to the new format, and later to a new algorithm, with an ordinary rotation
+  signed by its current key). It never goes back: once an entry is version 2, a later
+  version 1 entry is refused (`a version 1 statement cannot follow a version 2 key log entry`).
+  Device certificates, revocations, profile cards and login proofs may be either version
+  whatever the log's version; a version 1 statement can only carry and be checked with
+  Ed25519 keys.
+- **The principal id is derived the same way in both versions and for every algorithm**: it
+  is a hash of the inception payload bytes, so rotating to a new version or algorithm keeps
+  it. The same keys incepted once as version 1 and once as version 2 give two different ids
+  (the payloads differ); a client incepts once and keeps that log.
+- **Canonical text.** Servers store and return keys in the tagged form, whichever version
+  carried them (`DeviceKey.publicKey`, `user.identity_key`).
+- **Hashes stay SHA-256.** `principalId`, `prev` and the device key hash are SHA-256, which
+  keeps 128-bit security against quantum search; they are not tagged.
+
+**Planned algorithm (not implemented).** Per the hybrid post-quantum decision, identity,
+recovery and device keys later move to **Ed25519 + ML-DSA-44** (FIPS 204), expected under the
+name `ed25519-mldsa44`: the key and signature carry both parts (32 + 1,312 bytes of key,
+64 + 2,420 bytes of signature) and a signature is valid only when both parts verify. Until a
+server implements it, that name is refused like any unknown algorithm. The payload caps below
+already fit it, including a profile card listing 32 such device keys.
 
 ## Signed statements
 
@@ -45,19 +104,25 @@ Every statement travels as `{ payload, signature }`:
   return the text unchanged. Nothing is ever
   re-serialized, so there is no canonical JSON form: a client may order keys and space the JSON
   however it likes, and must keep the text it signed.
-- `signature` is the Ed25519 signature over `context || payload`, where `context` names the
-  statement's purpose, so a signature made for one purpose never verifies as another:
+- `signature` is the signature over `context || payload`, spelled as the payload's version
+  requires, where `context` names the statement's purpose, so a signature made for one purpose
+  never verifies as another:
 
 | Purpose | Context bytes | Signed by | Max payload |
 |---|---|---|---|
-| Key log entry | `rim.keylog.v1\0` | identity key (inception, identity rotation) or recovery key (recovery rotation) | 4 KiB |
-| Device certificate | `rim.device.v1\0` | current identity key | 4 KiB |
-| Device revocation | `rim.device-revoke.v1\0` | current identity key, or the revoked device itself | 4 KiB |
-| Profile card | `rim.profile-card.v1\0` | current identity key | 16 KiB |
-| Login proof | `rim.login.v1\0` | a device key | 4 KiB |
+| Key log entry | `rim.keylog.v1\0` | identity key (inception, identity rotation) or recovery key (recovery rotation) | 16 KiB |
+| Device certificate | `rim.device.v1\0` | current identity key | 16 KiB |
+| Device revocation | `rim.device-revoke.v1\0` | current identity key, or the revoked device itself | 16 KiB |
+| Profile card | `rim.profile-card.v1\0` | current identity key | 128 KiB |
+| Login proof | `rim.login.v1\0` | a device key | 16 KiB |
 
-`\0` is one zero byte. Every payload has `"v": 1` and a `"type"`. Unknown fields, duplicate
-fields and a wrong `type` are rejected. Timestamps are RFC 3339 and informational only: servers
+`\0` is one zero byte. The contexts end in `v1` in both statement versions: they name the
+purpose, and the version is inside the signed payload. The caps hold for both versions and are
+sized for hybrid keys: a tagged Ed25519 + ML-DSA-44 key is about 1.8 KB of text (ML-DSA-87
+about 3.5 KB), a rotation names two keys, and a card lists up to 32 devices (about 60 KB with
+ML-DSA-44, 115 KB with ML-DSA-87). Every payload has `"v"` (1 or 2) and a `"type"`. Unknown fields, duplicate
+fields and a wrong `type` are rejected. The examples below are version 2; a version 1 payload
+is the same with `"v":1` and bare keys. Timestamps are RFC 3339 and informational only: servers
 do not trust client clocks, so nothing depends on them.
 
 ### Key log and principal id
@@ -65,7 +130,7 @@ do not trust client clocks, so nothing depends on them.
 The key log is the person's history of identity keys. Entry 0 is the **inception**:
 
 ```json
-{"v":1,"type":"inception","seq":0,"identityKey":"…","recoveryKey":"…","createdAt":"2026-10-09T00:00:00Z"}
+{"v":2,"type":"inception","seq":0,"identityKey":"ed25519:…","recoveryKey":"ed25519:…","createdAt":"2026-10-09T00:00:00Z"}
 ```
 
 signed by its own `identityKey`. The **principal id** is fixed by it forever:
@@ -82,11 +147,12 @@ its key (see Enrollment) before it lets an account carry a principal id.
 Every later entry is a **rotation**:
 
 ```json
-{"v":1,"type":"rotate","principalId":"rimp1_…","seq":1,"prev":"…","identityKey":"…","recoveryKey":"…","signer":"identity","createdAt":"…"}
+{"v":2,"type":"rotate","principalId":"rimp1_…","seq":1,"prev":"…","identityKey":"ed25519:…","recoveryKey":"ed25519:…","signer":"identity","createdAt":"…"}
 ```
 
 - `seq` is the previous entry's `seq + 1`; `prev` is base64url(SHA-256(previous entry's payload
-  bytes)); `principalId` is the log's principal id; `identityKey` must change.
+  bytes)); `principalId` is the log's principal id; `identityKey` must change. `v` is at least
+  the previous entry's.
 - `"signer": "identity"`: signed by the current identity key. The recovery key must stay the
   same. Existing devices stay enrolled (their certificates name an older `keySeq`, which is
   fine: a certificate is checked once, when the device is added).
@@ -96,18 +162,19 @@ Every later entry is a **rotation**:
 ### Device certificate
 
 ```json
-{"v":1,"type":"device","principalId":"rimp1_…","deviceId":"<uuid>","deviceKey":"…","name":"Laptop","keySeq":0,"issuedAt":"…"}
+{"v":2,"type":"device","principalId":"rimp1_…","deviceId":"<uuid>","deviceKey":"ed25519:…","name":"Laptop","keySeq":0,"issuedAt":"…"}
 ```
 
 Signed by the identity key at `keySeq`, which must be the head of the log when the server
 receives it. `deviceId` is chosen by the client (UUID v7 recommended). `name` is trimmed, 1 to
 64 characters, no control characters. Per account, a `deviceId` and a `deviceKey` are each used
-once, **revoked devices included**: a revoked device comes back only with a new id and key.
+once, **revoked devices included**: a revoked device comes back only with a new id and key. A
+key counts as used whichever version spelled it.
 
 ### Device revocation
 
 ```json
-{"v":1,"type":"device-revoke","principalId":"rimp1_…","deviceId":"<uuid>","signer":"identity","issuedAt":"…"}
+{"v":2,"type":"device-revoke","principalId":"rimp1_…","deviceId":"<uuid>","signer":"identity","issuedAt":"…"}
 ```
 
 `"signer": "identity"` (current identity key, any device) or `"signer": "device"` (the device
@@ -117,8 +184,8 @@ identity key). Revoking is idempotent: the first signed revocation is kept.
 ### Profile card
 
 ```json
-{"v":1,"type":"profile-card","principalId":"rimp1_…","version":3,"keySeq":0,"displayName":"Ada",
- "relays":["https://relay.rim.chat"],"devices":[{"deviceId":"<uuid>","deviceKey":"…"}],"issuedAt":"…"}
+{"v":2,"type":"profile-card","principalId":"rimp1_…","version":3,"keySeq":0,"displayName":"Ada",
+ "relays":["https://relay.rim.chat"],"devices":[{"deviceId":"<uuid>","deviceKey":"ed25519:…"}],"issuedAt":"…"}
 ```
 
 What a person publishes about themselves, portable between servers. Signed by the current
@@ -131,7 +198,7 @@ certificate.
 ### Login proof
 
 ```json
-{"v":1,"type":"login","challengeId":"<uuid>","nonce":"…","audience":"rim.example.com","principalId":"rimp1_…","deviceId":"<uuid>"}
+{"v":2,"type":"login","challengeId":"<uuid>","nonce":"…","audience":"rim.example.com","principalId":"rimp1_…","deviceId":"<uuid>"}
 ```
 
 Signed by the device key. `challengeId` and `nonce` come from `keyLoginChallenge`. `audience` is
@@ -220,22 +287,27 @@ never interleave.
 | Where | What |
 |---|---|
 | `user.kind` | `local` (default) or `remote`; `remote` is reserved for Stage 5 |
-| `user.principal_id`, `user.identity_key` | Null until enrollment, set together; `principal_id` unique |
+| `user.principal_id`, `user.identity_key` | Null until enrollment, set together; `principal_id` unique; `identity_key` is the current identity key in tagged form |
 | `user.home_relay` | Reserved for Stage 5 |
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
-| `device_key` | Certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, public_key)` |
+| `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
 | `profile_card` | One row per user, the newest card as signed |
 | `key_challenge` | Nonce, expiry, `used_at`; expired rows are deleted when new challenges are issued |
 | `session.device_key_id` | The device a session belongs to; null for password sessions not bound to a device |
 
 The plan called the log table `key_rotation`; it is `key_log_entry` because it also holds the
-inception. Keys live on the existing `user` row, so none of the tables that reference the user
+inception. The device key index is on `key_hash` rather than on the key text, so it stays 32
+bytes per row whatever the algorithm (a hybrid key's text is close to the btree row limit).
+Migration `key_identity_algorithm_agility` prefixed every stored key with `ed25519:` and
+computed `key_hash` for existing rows; its `down` strips the prefix again and refuses to run
+while a key of another algorithm is stored. Signed payloads are never rewritten. Keys live on the existing `user` row, so none of the tables that reference the user
 id move.
 
 ## GraphQL
 
 ```graphql
 type User { principalId: String … }            # null until the account enrolls a key
+type DeviceKey { publicKey: String … }         # tagged: "ed25519:…"
 
 input SignedStatementInput { payload: String!  signature: String! }
 type SignedStatement { payload: String!  signature: String! }
@@ -283,7 +355,7 @@ The client work is a separate rim-ui PR; the server only exposes `principalId`.
 - Password sessions that existed before enrollment are not ended automatically. The client can
   offer "sign out other sessions" after enrolling.
 
-## Appendix A: known-answer vectors
+## Appendix A: known-answer vectors (version 1)
 
 Checked by `rim_identity/src/vectors.rs`. Keys are `SigningKey::from_bytes([seed; 32])`; never
 use these seeds for real keys.
@@ -314,6 +386,48 @@ Login proof (challenge `00000000-0000-0000-0000-000000000009`, nonce `bm9uY2U`, 
 `localhost:8080`):
 
 ```
-{"v":1,"type":"login","challengeId":"00000000-0000-0000-0000-000000000009","nonce":"bm9uY2U","audience":"localhost:8080","principalId":"rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo","deviceId":"00000000-0000-0000-0000-000000000001"}
+{"v":2,"type":"login","challengeId":"00000000-0000-0000-0000-000000000009","nonce":"bm9uY2U","audience":"localhost:8080","principalId":"rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo","deviceId":"00000000-0000-0000-0000-000000000001"}
 jB_BFFAn7e-FMh8wCSWhnCcPzMjoe1fTKwlCoGfE0p1OYkhZWjV4J1c_AgeIhKpWOnLYyB0PqstAEYmaCITXBw
+```
+
+## Appendix B: known-answer vectors (version 2)
+
+Checked by `rim_identity/src/vectors.rs`. Same keys and fields as appendix A, written as
+version 2 statements. The principal id differs from appendix A because the inception payload
+differs.
+
+| Item | Value |
+|---|---|
+| Identity key (seed 1) | `ed25519:iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w` |
+| Device key (seed 20) | `ed25519:IIKL9cW9ystoSGMzbCAvtVmdpIvlWWYVdCFwcFvsqfc` |
+| Principal id | `rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0` |
+
+Inception payload and signature:
+
+```
+{"v":2,"type":"inception","seq":0,"identityKey":"ed25519:iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w","recoveryKey":"ed25519:1i8Bah79Hk_feT60LNhEceG6nwzwTRKHtcxx9hYofLg","createdAt":"2026-10-09T00:00:00Z"}
+ed25519:kGvSf1hR28cdKP2Smwmy2BHEdP7wmKwy0At-DtrUs8mYhfzF0jjHTjpeX4DAzXv5HuCVwFEYWM1DjN-6wkU2Ag
+```
+
+Device certificate (device id `00000000-0000-0000-0000-000000000001`, name `Laptop`):
+
+```
+{"v":2,"type":"device","principalId":"rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0","deviceId":"00000000-0000-0000-0000-000000000001","deviceKey":"ed25519:IIKL9cW9ystoSGMzbCAvtVmdpIvlWWYVdCFwcFvsqfc","name":"Laptop","keySeq":0,"issuedAt":"2026-10-09T00:00:00Z"}
+ed25519:0HjRzn6gQ2q-vCHSkdOPK2ykGGBUpW2fYdDuEdTzf6OxsWzjXeNNpRSVgzPxOEfbYzZ9o9DWqp4NxcTEDhOaDA
+```
+
+Login proof (challenge `00000000-0000-0000-0000-000000000009`, nonce `bm9uY2U`, audience
+`localhost:8080`):
+
+```
+{"v":2,"type":"login","challengeId":"00000000-0000-0000-0000-000000000009","nonce":"bm9uY2U","audience":"localhost:8080","principalId":"rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0","deviceId":"00000000-0000-0000-0000-000000000001"}
+ed25519:3FSH7M9uz0sP42GA0gKPso6JmGSx32Y1WZ-oKBW0VcVWANGEEjkDjaEtDpHNIjdEgC5fFA2jbfzSmuzhW7k1Dg
+```
+
+Mixed log: the appendix A log (version 1 inception) extended by a version 2 identity rotation
+to the key from seed 2. Its `prev` is appendix A's; the principal id stays appendix A's.
+
+```
+{"v":2,"type":"rotate","principalId":"rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo","seq":1,"prev":"o1oFYkMXfjtQJnG6as5GURR0cnzeYNYv5Br-LaeI78I","identityKey":"ed25519:gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q","recoveryKey":"ed25519:1i8Bah79Hk_feT60LNhEceG6nwzwTRKHtcxx9hYofLg","signer":"identity","createdAt":"2026-10-09T00:00:00Z"}
+ed25519:D2moo9U9OjVL9zed4lM0A5cHoGQOVEtUfgKfAmOn0P18x74NEbh4FL4f3PbulQzoVuGAGOEJUZq3R2ZNpeUdCg
 ```

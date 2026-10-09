@@ -20,7 +20,7 @@ mod tests {
     use rim_identity::testing::{
         SigningKey, TestIdentity, device_login, device_self_revoke, signing_key,
     };
-    use rim_identity::{KeyState, SignedStatement};
+    use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
     use rim_services::key_auth::command::{
         AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
         LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
@@ -46,6 +46,10 @@ mod tests {
         cards: HashMap<UserId, StoredProfileCard>,
         challenges: Vec<KeyChallenge>,
         sessions: Vec<(Session, Option<DeviceKeyId>)>,
+        /// `user.identity_key` as the service last wrote it.
+        identity_keys: HashMap<UserId, String>,
+        /// `device_key.key_hash` per stored device, in the same order as `devices`.
+        device_hashes: Vec<Vec<u8>>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -102,7 +106,7 @@ mod tests {
             &self,
             user_id: UserId,
             principal_id: &str,
-            _identity_key: &str,
+            identity_key: &str,
             entries: Vec<NewKeyLogEntry>,
         ) -> RepoResult<()> {
             let mut s = self.0.lock().unwrap();
@@ -112,6 +116,7 @@ mod tests {
                 return Err(conflict());
             }
             s.principals.insert(user_id, principal_id.to_string());
+            s.identity_keys.insert(user_id, identity_key.to_string());
             let entries = entries.into_iter().map(|e| log_entry(user_id, e)).collect();
             s.log.insert(user_id, entries);
             Ok(())
@@ -121,7 +126,7 @@ mod tests {
             &self,
             user_id: UserId,
             entry: NewKeyLogEntry,
-            _identity_key: &str,
+            identity_key: &str,
         ) -> RepoResult<()> {
             let mut s = self.0.lock().unwrap();
             let log = s.log.entry(user_id).or_default();
@@ -129,17 +134,20 @@ mod tests {
                 return Err(conflict());
             }
             log.push(log_entry(user_id, entry));
+            s.identity_keys.insert(user_id, identity_key.to_string());
             Ok(())
         }
 
         async fn add_device(&self, device: NewDeviceKey) -> RepoResult<DeviceKey> {
             let mut s = self.0.lock().unwrap();
-            if s.devices.iter().any(|d| {
+            // Mirrors the unique (user_id, device_id) and (user_id, key_hash) constraints.
+            if s.devices.iter().zip(&s.device_hashes).any(|(d, hash)| {
                 d.user_id == device.user_id
-                    && (d.device_id == device.device_id || d.public_key == device.public_key)
+                    && (d.device_id == device.device_id || *hash == device.key_hash)
             }) {
                 return Err(conflict());
             }
+            s.device_hashes.push(device.key_hash.clone());
             let stored = DeviceKey {
                 id: DeviceKeyId::new(),
                 user_id: device.user_id,
@@ -516,8 +524,13 @@ mod tests {
         }
 
         async fn enroll(&self, seed: u8) -> Enrolled {
+            self.enroll_with(seed, StatementVersion::V1).await
+        }
+
+        /// Like [`Harness::enroll`], with every statement written at `version`.
+        async fn enroll_with(&self, seed: u8, version: StatementVersion) -> Enrolled {
             let (user_id, session) = self.add_user_with_session().await;
-            let id = TestIdentity::new(seed);
+            let id = TestIdentity::with_version(seed, version);
             let inception = id.inception();
             let state = KeyState::from_inception(&inception).unwrap();
             let device_id = Uuid::now_v7();
@@ -1335,5 +1348,124 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    // ── Statement versions and tagged keys ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn version_2_identity_enrolls_signs_in_and_stores_tagged_keys() {
+        let h = harness();
+        let e = h.enroll_with(1, StatementVersion::V2).await;
+        assert_eq!(e.state.version, StatementVersion::V2);
+        assert!(h.login(&e, e.device_id, &e.device, AUDIENCE).await.is_ok());
+
+        let identity = h
+            .svc
+            .get_my_key_identity(GetMyKeyIdentityQuery {
+                actor: Actor::new(e.user_id),
+            })
+            .await
+            .unwrap();
+        let device_key = PublicKey::from(&e.device);
+        assert_eq!(identity.devices[0].public_key, device_key.to_string());
+        assert!(identity.devices[0].public_key.starts_with("ed25519:"));
+
+        let s = h.state.lock().unwrap();
+        assert_eq!(
+            s.identity_keys.get(&e.user_id),
+            Some(&PublicKey::from(&e.id.identity).to_string())
+        );
+        assert_eq!(s.device_hashes[0], device_key.key_hash().to_vec());
+    }
+
+    #[tokio::test]
+    async fn version_1_identity_stores_tagged_keys_too() {
+        let h = harness();
+        let e = h.enroll(1).await;
+        let s = h.state.lock().unwrap();
+        assert_eq!(
+            s.devices[0].public_key,
+            PublicKey::from(&e.device).to_string()
+        );
+        assert!(s.identity_keys[&e.user_id].starts_with("ed25519:"));
+    }
+
+    #[tokio::test]
+    async fn version_1_log_moves_to_version_2_and_never_back() {
+        let h = harness();
+        let mut e = h.enroll(1).await;
+
+        e.id.version = StatementVersion::V2;
+        let rotation = e.id.rotate_with_identity(&e.state, 3);
+        let dto = h
+            .svc
+            .rotate(RotateIdentityKeyCmd {
+                actor: Some(Actor::new(e.user_id)),
+                entry: payload(rotation.clone()),
+                device: None,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .expect("version 2 rotation of a version 1 log");
+        assert_eq!(dto.key_seq, Some(1));
+        e.state = e.state.apply(&rotation).unwrap().0;
+        assert_eq!(
+            h.state.lock().unwrap().identity_keys[&e.user_id],
+            PublicKey::from(&e.id.identity).to_string()
+        );
+
+        // The device enrolled with a version 1 certificate signs in with a version 2 proof.
+        assert!(h.login(&e, e.device_id, &e.device, AUDIENCE).await.is_ok());
+
+        // A version 2 certificate under the rotated key adds a device.
+        let phone_id = Uuid::now_v7();
+        let phone = signing_key(70);
+        let cert = e.id.device_cert(&e.state, phone_id, &phone, "Phone");
+        h.svc
+            .add_device(AddDeviceKeyCmd {
+                actor: Actor::new(e.user_id),
+                device: payload(cert),
+            })
+            .await
+            .expect("version 2 certificate");
+        assert!(h.login(&e, phone_id, &phone, AUDIENCE).await.is_ok());
+
+        // A version 1 rotation after a version 2 entry is refused.
+        e.id.version = StatementVersion::V1;
+        let back = e.id.rotate_with_identity(&e.state, 4);
+        let err = h
+            .svc
+            .rotate(RotateIdentityKeyCmd {
+                actor: Some(Actor::new(e.user_id)),
+                entry: payload(back),
+                device: None,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("cannot follow")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_device_key_spelled_both_ways_is_one_key() {
+        let h = harness();
+        let mut e = h.enroll(1).await;
+        // The enrolled device key again, certified with a version 2 certificate (tagged
+        // spelling) under a new device id.
+        e.id.version = StatementVersion::V2;
+        let cert =
+            e.id.device_cert(&e.state, Uuid::now_v7(), &e.device, "Again");
+        let err = h
+            .svc
+            .add_device(AddDeviceKeyCmd {
+                actor: Actor::new(e.user_id),
+                device: payload(cert),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
     }
 }
