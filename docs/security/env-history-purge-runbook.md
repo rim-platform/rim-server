@@ -23,7 +23,7 @@ committed. The history purge below only removes the now-dead old value from hist
 
 ## Reality vs. the prior handoff (corrected)
 
-The `next-steps-2026-07.md` "Known issues" claimed `.env` was "now gitignored so it won't be
+The 2026-07 handoff note (`next-steps-2026-07.md`, since deleted) claimed `.env` was "now gitignored so it won't be
 re-committed." That was inaccurate: `.env` was **still tracked and committed at HEAD** despite
 `.gitignore` listing it (gitignore does not untrack an already-tracked file). It is on `origin`
 across `master`, `feature/2/3/4/5`, and `feature/10-lets-start-over`. **Treat the old
