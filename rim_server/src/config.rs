@@ -5,7 +5,6 @@ use dotenvy::dotenv;
 use serde::Deserialize;
 
 #[derive(Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct RIMConfig {
     pub server_host: String,
     pub server_port: u16,
@@ -20,10 +19,7 @@ pub struct RIMConfig {
 
     pub data_dir: String,
 
-    pub storage_backend: Option<String>,
     pub storage_local_path: Option<String>,
-    pub storage_s3_bucket: Option<String>,
-    pub storage_s3_region: Option<String>,
     pub max_workspace_storage_bytes: Option<u64>,
 
     /// Bootstrap token TTL in seconds. Default: 900 (15 minutes). Hard cap: 3600 (1 hour).
@@ -123,7 +119,6 @@ impl fmt::Debug for RIMConfig {
             .field("enable_graphiql", &self.enable_graphiql)
             .field("cors_allowed_origin", &self.cors_allowed_origin)
             .field("data_dir", &self.data_dir)
-            .field("storage_backend", &self.storage_backend)
             .field(
                 "trust_forwarded_headers",
                 &self.trust_forwarded_headers.unwrap_or(false),
@@ -167,10 +162,7 @@ impl Default for RIMConfig {
             enable_graphiql: false,
             cors_allowed_origin: None,
             data_dir: "./data".to_string(),
-            storage_backend: Some("local".to_string()),
             storage_local_path: None,
-            storage_s3_bucket: None,
-            storage_s3_region: None,
             max_workspace_storage_bytes: Some(1_073_741_824), // 1 GB default
             bootstrap_token_ttl_seconds: None,
             open_registration: None,
@@ -414,7 +406,6 @@ impl RIMConfig {
             .set_default("session_ttl_days", 30)?
             .set_default("enable_graphiql", false)?
             .set_default("data_dir", "./data")?
-            .set_default("storage_backend", "local")?
             .set_default("max_workspace_storage_bytes", 1_073_741_824_i64)?
             .set_default("alert_rate_limit_per_min", 120_i64)?
             .set_default("alert_max_body_bytes", 262_144_i64)?
