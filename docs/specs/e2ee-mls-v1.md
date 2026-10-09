@@ -16,7 +16,7 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 3. Credentials: a per-device **MLS signature key** certified by the device key (an `mls-key`
    statement), chained to the key log. Clients verify every leaf.
 4. Each device keeps 20 one-time **key packages** and one last-resort package on the server,
-   30-day lifetime. The server validates them on upload and hands them out once.
+   90-day lifetime. The server validates them on upload and hands them out once.
 5. The server is the **sequencer**: one Commit per `(conversation, incarnation, epoch)`, enforced by
    a row lock and a unique index; the loser gets `STALE_EPOCH`. Application messages are accepted
    only in the current epoch, so the change feed is in epoch order.
@@ -43,7 +43,7 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 
 - **Ready member.** A user whose `principal_id` is set and who has at least one *MLS-active* device:
   not revoked, with a key package uploaded in the last 60 days (`device_key.last_key_package_upload_at`,
-  set by every upload; key package rows themselves expire after 30 days). Bots, ingest tokens, the
+  set by every upload; key package rows themselves expire after 90 days). Bots, ingest tokens, the
   CLI and password-only accounts are never ready.
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
@@ -120,7 +120,7 @@ read, and the UI says that a device RIM cannot verify can read new messages.
 | Self-update (post-compromise security) | An empty Commit with an update path, at most every 7 days per device | The device itself, at a random time within a day of becoming due |
 
 **Ranking.** Pending changes come from `Conversation.mlsGroup`. Every group device not in pending
-removes sorts the group devices' ids (lowercase UUID text, ascending) and takes its position as its
+removes sorts the ids of the group devices that are not pending removes (lowercase UUID text, ascending) and takes its position as its
 rank. It waits `min(rank, 8) × 15 s` plus 0 to 3 s of random jitter, refetches the group, and if a
 change it can make is still pending and its local epoch equals the server's, it claims key packages
 and commits **all** pending changes at once. A device that is about to send an application message
@@ -131,11 +131,13 @@ commits pending changes first, without waiting (the server refuses its message o
 
 - **Per device**: 20 unclaimed one-time packages and one last-resort package (OpenMLS
   `mark_as_last_resort`), each with the `lifetime` extension `not_before = now − 1 h`,
-  `not_after = now + 30 days`. Capabilities: suite 0x004F, basic credentials.
+  `not_after = now + 90 days`. Capabilities: suite 0x004F, basic credentials. (OpenMLS checks an
+  added package's lifetime when a device processes the Commit, so a package must outlive the
+  Commit retention a catching-up device may need.)
 - **Rotation**: on start and every 12 hours while running, a device tops up to 20 when fewer than
   10 remain, uploads a new last-resort package when the current one expires within 7 days or was
-  claimed more than 5 times, and deletes private keys of its packages that expired or were
-  replaced more than 7 days ago. Uploading is also the device's MLS-activity signal.
+  claimed more than 5 times (`MlsKeyPackageStatus.lastResortClaims`), and deletes private keys of
+  its packages that expired or were replaced more than 7 days ago. Uploading is also the device's MLS-activity signal.
 - **Server validation at upload**: the bytes decode as an `MLSMessage` carrying a `KeyPackage`; the
   suite is in the server's accepted list (`[0x004F]`); OpenMLS validation passes (signature, protocol
   version); the credential is a basic credential whose `mls-key` statement verifies under **the
@@ -145,15 +147,22 @@ commits pending changes first, without waiting (the server refuses its message o
   replaces the device's previous one in the same transaction.
 - **Claiming**: `claimMlsKeyPackages` takes `(principalId, deviceId)` pairs for one conversation
   and returns one package per device, in one transaction: the oldest unclaimed one-time package
-  (`FOR UPDATE SKIP LOCKED`), else the last-resort package (not consumed). A device with neither
-  (or, for a re-add, with no one-time package) is left out of the answer. The caller must be a
-  session device that is a group device, or, while the conversation has no group, the session of
-  a conversation member. Every target must be a pending add or a re-add target of that
-  conversation, in the group's suite; when the caller may start a new incarnation ("Incarnations")
-  every MLS-active device of a member but the caller's is a target, in the preferred suite. The
-  claim records `(claimed_at, claimed_by_device_key_id, claimed_for_conversation_id)`; a Commit may
-  use a package claimed for its conversation by its committer for one hour. A last-resort row
-  keeps only its latest claim, so a Commit uses it only while that claim is the committer's.
+  (`FOR UPDATE SKIP LOCKED`), else the last-resort package (not consumed). A package with
+  `not_after` less than 14 days away is never handed out and counts as absent; a device with no
+  package is left out of the answer. For a **re-add target** the claim takes the newest one-time
+  package uploaded after the `created_at` of the device's latest open re-add request, never the
+  last-resort package; with none, `VALIDATION` (`the device has not uploaded key packages since
+  its re-add request`). The caller must be a session device that is a group device, or, while
+  the conversation has no group, the session of a conversation member. Every target must be a
+  pending add or a re-add target of that conversation, in the group's suite; when the caller may
+  start a new incarnation ("Incarnations"), the targets are instead the current incarnation's
+  group devices plus pending adds, MLS-active and other than the caller, in the preferred suite,
+  and the claimed packages may be used only by a Commit with `incarnation = current + 1, epoch =
+  0`. The claim records `(claimed_at, claimed_by_device_key_id, claimed_for_conversation_id,
+  claimed_for_incarnation)`, and a last-resort row counts its claims in `claim_count`. A Commit
+  may use a package claimed for its conversation and incarnation by its committer in the last
+  hour; a last-resort row keeps only its latest claim, so a Commit uses it only while that claim
+  is the committer's.
 - **Last resort** packages are never used for re-adds (see "Lost state").
 - An accepted Commit deletes the one-time packages it added. Claimed one-time rows are deleted 7
   days after the claim; expired rows hourly.
@@ -174,6 +183,9 @@ name the conversation and incarnation they expect.
 | Padding | `padding_size(256)` |
 | Sender ratchet | out-of-order tolerance 32, maximum forward distance 10,000 |
 | Past epochs | `max_past_epochs(2)` |
+| Welcome joins | Ratchet-tree leaf lifetimes are not validated (RFC 9420 lets a joiner skip it); the certificate checks and the 60-day removal cover stale leaves |
+| Own pending Commit | Under the pure-ciphertext policy OpenMLS answers `OwnPrivateMessage` for a Commit of one's own; the crate recognizes its pending Commit by its bytes |
+| Features | `draft-ietf-mls-pq-ciphersuites` is enabled on `openmls_traits` and the providers, not on `openmls` (whose feature pulls `openmls_sqlite_storage` and its `rusqlite` 0.37 into the link check); the suite is set explicitly |
 | Proposals | None stand-alone: every change is a Commit with its proposals inline |
 | Authenticated data | Set before every message (`set_aad`), see "Authenticated data". S4-2's first tests confirm that OpenMLS frames it into Commits as well as application messages |
 
@@ -231,10 +243,12 @@ past the server's Commit retention, signs a **re-add request** with its device k
 {"v":2,"type":"mls-readd","principalId":"rimp1_…","deviceId":"<uuid>","conversationId":"<uuid>","incarnation":1,"lastEpoch":41,"nonce":"<16 random bytes>","issuedAt":"…"}
 ```
 
-`lastEpoch` is the last epoch it processed, or `null` with no state. Before asking, it uploads
-fresh key packages and discards its old group state. The server accepts a request only from a
-device that is still a group device of the incarnation it names, which must be the current one
-(an older one is `STALE_EPOCH`), with `lastEpoch` at most the group's epoch. Protections against a server forcing re-adds:
+`lastEpoch` is the last epoch it processed, or `null` with no state. It discards its old group
+state, sends the request, and only then uploads fresh key packages: a re-add is served from a
+package uploaded after the request, never from one of the lost state. The server accepts a
+request only from a device that is still a group device of the incarnation it names, which must
+be the current one (an older one is `STALE_EPOCH`), with `lastEpoch` at most the group's epoch.
+Protections against a server forcing re-adds:
 
 | Rule | Stops |
 |---|---|
@@ -373,9 +387,9 @@ fields refused, every field present, at most 64 KiB):
 | `id` | The message id; must equal the row id and the authenticated data's `messageId` |
 | `rev` | 0 when sent, +1 per edit; a client never replaces a revision it holds with a lower one |
 | `threadRootId` | The thread root's message id for a thread reply, else `null`; must match the row's thread |
-| `body` | 0 to 10,000 characters; mentions are `<@principalId>` tokens |
+| `body` | 0 to 10,000 Unicode scalar values; mentions are `<@principalId>` tokens |
 | `mentions` | The distinct principal ids of the body's `<@…>` tokens, in order of first appearance, at most 100 |
-| `mentionAll` | `true` when the body notifies everyone (`@here`, `@channel`) |
+| `mentionAll` | `true` when the body notifies everyone: a whole-word `@here` or `@channel` outside `<@…>` tokens, as the server detects it for plaintext |
 | `replyTo` | `{"messageId":"<uuid>"}` for a timeline reply, else `null`. Encrypted only: the server's `parent_message_id` stays null |
 | `forwardedFrom` | `{"messageId","conversationId","authorPrincipalId","sentAt"}` or `null`: the forwarder's claim about the origin, shown as "Forwarded by <sender>" |
 | `attachments` | At most 10 entries, see "Attachments" |
@@ -692,7 +706,10 @@ ALTER TABLE message_report
 ```
 
 The migration also adds `device_key.last_key_package_upload_at timestamptz NULL`, the MLS
-activity signal (key package rows are deleted when they expire, so their age cannot carry it).
+activity signal (key package rows are deleted when they expire, so their age cannot carry it),
+and to `mls_key_package` the columns `claimed_for_incarnation integer NULL` (the incarnation a
+claim is for) and `claim_count integer NOT NULL DEFAULT 0` (claims of a last-resort row, shown as
+`MlsKeyPackageStatus.lastResortClaims`).
 The change-feed function also sets `edited_at` when `mls_ciphertext` changes to a new envelope
 (clearing it on delete is not an edit), and the update trigger gains
 `OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
@@ -731,7 +748,7 @@ type MessageEncryption {
 type Message { encryption: MessageEncryption }                         # null for plaintext rows
 type Attachment { blobSha256: String }
 
-type MlsKeyPackageStatus { cipherSuite: Int!  available: Int!  lastResortNotAfter: DateTime  oldestNotAfter: DateTime }
+type MlsKeyPackageStatus { cipherSuite: Int!  available: Int!  lastResortNotAfter: DateTime  lastResortClaims: Int!  oldestNotAfter: DateTime }
 type ClaimedKeyPackage { userId: ID!  principalId: String!  deviceId: ID!  keyPackage: String!  keyPackageRef: String!  lastResort: Boolean! }
 type MlsCommit { id: ID!  incarnation: Int!  epoch: Int!  senderPrincipalId: String  senderDeviceId: ID  message: String!  createdAt: DateTime! }
 type MlsCommitPage { commits: [MlsCommit!]!  hasMore: Boolean! }
@@ -912,9 +929,61 @@ ed25519:6TN4OHOn3VKI00okNthNJOJkuAg1afEO9h-63L9T6VoQxeYA1acXMqTuLBu5_flkzCjPRssE
 
 The credential `identity` is the 382-byte JSON `{"payload":"<the payload above, JSON-escaped>",
 "signature":"<the signature above>"}`, SHA-256
-`b7334437dc6e0da6588fbfc37540416efc0497c0a75d4eccae1fd92cae969a11`. A key package carrying it, and
-its `KeyPackageRef`: to be filled by S4-2 (key packages contain fresh HPKE keys; S4-2 records one
-fixed key package as a fixture and its ref).
+`b7334437dc6e0da6588fbfc37540416efc0497c0a75d4eccae1fd92cae969a11`.
+
+A key package carrying it, recorded by S4-2 (key packages contain fresh HPKE keys, so this one is a
+fixture, not something to reproduce): suite 0x004F, one-time, lifetime `not_before` 1791500400
+(2026-10-08T23:00:00Z) to `not_after` 2107123200 (2036-10-09T00:00:00Z, long so the fixture keeps
+validating), capabilities suite 0x004F, basic credentials and the last-resort extension. Its
+`MLSMessage` is 3,027 bytes, SHA-256
+`8f7acac056ca4c9e0ec4cf18cf5a3f8cb9849ab65e7444fa54e53012c2ad4553`; its `KeyPackageRef` is
+`209c1b0b8c510b5cebec8b09f1ead455e6a8f52e12ec3e2505786f7822ffd055`
+(`IJwbC4xRC1zr7IsJ8erUVeao9S4S7D4lBXhveCL_0FU`). Base64url, wrapped at 100 characters (the line
+breaks are not part of the value):
+
+```
+AAEABQABAE9EwES3AyuWM0YHc8MXfVvFZQJov_coTvKFJI4cxzbziyBJLm3qFkbWNBZRqYArwktAowP7Vt2sLXaWuzpmdw3MeDWH
+w9OyhZ5Sm4O4N1SrGpOjRM8QXfFFgMUYjl33Hs30vMeXgm9wmDurhFKYqgwlbLshAC4YTLeaBD2YFbazEYrkx4EMZ5F4ZN67GAD3
+i5YpaqW0QD7GGgImYBPBnVpKUc4hswa1Yvv4UsYAg2wmcsjTiWp5V1LYcib7cAjasUl7TbJyJ1CKSC_aHhBktSJBWoaQAx_apJ5p
+TEXsuVixG7PaDn_oS33zu8a8awp5G-CsX4RoPXhpLns1wMYBL970FGn7VJnYUWJlqoLgDluKUu5mFyczn86XgZCHAHPyfmpnxbyA
+T9EXxwMFscH8Hg9mTBNnMAEMA9J7krhJgZ_2tQWoA6qmwXcViWM3gdeMLPF3aAmSZwbat4xnDJmHiVtLOnbgSww5FAeyllQ8a2ES
+b0HsAaQkmtuDct9Ds_rjHJFmkdZEVXA6vRdmM6byvcu6FJOmr0yigks7ySrUnqohg-zSqQYgGeOTwlgUZxYkKwP0HI3oGRuHTSGk
+Zl2kzAKzxxqAvoDwcgfnIRMiMfZCtmeBf3jmuv0IBVA0Vp8rXUQygCmqwpXScnw2NwKiK7j5iV0DnWhCYOW3Gl3Ehawsj2qwKBiz
+DR-bv9wBZMH6nBETNVwUOui5LrX0LnggQuNkXKkMWACrBOKFx1DoqLp3U8nSunaQcOMClPfHrv6mDHhCkwKSGJkZLR2ZxQy0HnBq
+A86jaB7yhg-KbQSIMBzhvXljQJhXumXCVbQFNgO8rtgzUu1XOxp7bhtpnU9zWrYaFSXpJyTnW6uawUnjzeA7we8nzS1suCtTkf6Q
+Z1eqU5Z6HonwV1oCuMvSde_aHW4CqL5WKNkXlM2jTstFPpbMRjqQlRkHCtkqlbWiRiemnsKjLmNFD2j7l6-mojuTe511maO7guML
+PPw1ZonXwUcgBqWaXDTFOmFQCLaiDsCKWsXgV9Q5k_sgLEcnBIDIv8VGvDFMEUosSDsVgeHTNsfASzAxfHNbb4KXT02rgfnDHRao
+BF77o7NipFxgMcFYhsEVb27HMOXpZwjmKFlpE6ypzcr2ER5zRRO7g9QhuEY0d5xTGTJqLMMMsk2JJCbaT8lMcZDgfR0zhvJDou75
+CWq8qRmsPragJntRxZnZz_AZIa5lFjWWN6lRIlNRFrDDChIrUrA0LBgID8tQq4EYEeBiCN0bUy3LIVJ5djXzLaloAgXmzD6qS97K
+JZYqK-rzn4eHNpxAsCGwNUpnaXQ6cZLoYKXRaTnJd81mvcdGUQPZjOdpCX7bAMtqE01WhmrUeMzXTWKyYuvZer1RqDpaFX06IrU0
+qPHsz2LpwFfyySUgaIZDP-qkiLBlZfoHiXF4e1XhoJgZHKJlDiUGaGfEHlSomniLDU3oDBTjBD5be1mopmYEw2aXk452IEa6Grym
+b1MJVxx2rLD6Qb0wEJuhdf1sBABFM6_nFQ74tvpHeY2jitGzYqSxU5l0W_IDQSGvZ8oiPyepkPOXcNig7DBMlqmK7F3T-yHY0pip
+SbY9S9dme9v2GxF7mwatWT5qzt7gvUgs-WxEwJt2w1yXh8oiZ7Bgu_8ZN5PyOQ8mGtjiLzdLpxl5cwnMz3HwQrWas6dlBI8RxBEL
+fNtjmu8TiTwRP09ptp7YDGzGW1Z3KHOnI5_DgmYQLBIiry4HG9XLYblMj5MEzP2JwVT1zOuVktchtlMVE_a3R1QoA8RxdP3gbM8H
+x5fUQ5YScKzIAasQOMu8exZEKjYzwDXyimBhtcUTANhhcWc0kYhZhoQYxYKVAZs0J5tyJOcrBhAMQS77sxtIA0n1Il8ZAUjwt9di
+lyy4J2EmLIDnqfhwn3PSKg7WS9X4dhHRpMMVM6A2HzayRWKsFyJ8M35zKDWml6EWZxeZOXmWNAzIVyDiUPoRy6nLZiw2XGd7UmVb
+daTxk1ScPBG8OHOJEa-oet6lsGwQiU0iAdY2LwwJA0tEaOm0RnAAnEtnM1eQkYyaDocKV5kTqMLzM4nIqC_Tk9pQAWToQxnZLE50
+lC4ZWSoHLVoFQS0ppLwDjta3QzGHXoZ6ujy7SemofkURD9qxUvGxFDTQAXgMqBB5XYHxjpeHdNiyrfhbF2hKK5EAYhjMRMjxWOqB
+qdzAMhBnya43ZHKbf0Lkc9Q1cVI3aFHqeLtBJfWAxgIcXT1RsZ3Uu-oHhmCrzNtVHRrpYYJrB7zscqlRBPp6paXFo3OJULkGI3Vz
+kfYJi_NJghDiKLd0ozPizCPVyxApSYyjXKkCnGf0yyREia8povOTCQXhowpKgoxKBsOBM2SGv_phXl6rlDoTPItUV-ejYrFbu3Wp
+jCQmicg6wdKXU9FgmwBXhaM2f3SnKS-jjOvVuUsCZ79mQWpSad1JJpQGD9oEubgTp674aiS3Mrzqlyo7KwnhMmNXG_YDiQz7OB8U
+oMZUP6q7nYMCirnGSY2EhEh5mutEYdMSIbwyXhsnPA6mIqQJz211EIhnIHsCCeKsPkdgTs6MgHwWsPBWEeujJ3qYdAnlni8MD1Nl
+zNXEaHJJcobimtZjWmqTqNWinOqJcZoHUkB4dJmbcpPDaGbZAMcSxrPsTt3WEvh1Jk9qg65prtUHGEulSLy6DwxWueygGDS3Eb4E
+QNMUDHwlb1eoAcG7FOmaazZEZ-rGM6vwENhHr-gaIhu0pj9TqdyFM7kYyIiAUAi0kLHpTUZbEu0SrJdiMVl8kuN4t9jwIqbGx7kU
+dkVpSmrkyjrxuaKJKa-2SX2By0jolRLoAweyAfXRO8BxpRUFS1B5PW2lSnGhIX5zIhliHM5ZYU8qBNGGmoSCtVNSGab1Qgnsf0Un
+lXx4AT_1Qe3JduyUuQQCZXW1uqVWSmTjhisxKqQoT6voBKCznHCcwDcKPjpCF0E0QA6lGFxzV6FCsWk3db04ks98KX4XzyP0CSzw
+SpqsyPK3MtUUFdhQRULBXo_8QB0Df5uQz9JkPDDQDwV4uiuCXcXkdf92F4lZHSbrTA6LYY9gXdqWwslQEVJDHR8YMH01uzu3QZMK
+UZwwrSh1y-IzQelZlkFIUMyXKNiUXztVjQQ8xWfMtH-yYSsyxaN4N9iTDwZaXn2Mb_aHtoO0pj9lH2yoKj7PVM-NQJoO2H_Plzi0
+lRHlElpOZRTjrXYPbDtk5lX_4YTx7-Kyt0XNIraLKPuLgzkdxkxuBuMDlGAg6S62BU_pvGgqG887dZ9lqzikz72BxNHzNC5Myc3t
+iwsAAUF-eyJwYXlsb2FkIjoie1widlwiOjIsXCJ0eXBlXCI6XCJtbHMta2V5XCIsXCJwcmluY2lwYWxJZFwiOlwicmltcDFfdHhE
+TGJuaXBpNWkza0NKdEp3Qk9VaXh6dl9NWThPblUwbWN5LS1UeWplMFwiLFwiZGV2aWNlSWRcIjpcIjAwMDAwMDAwLTAwMDAtMDAw
+MC0wMDAwLTAwMDAwMDAwMDAwMVwiLFwibWxzS2V5XCI6XCJlZDI1NTE5OjZTNjJCVV9wdkdncUc4ODdkWjlscXppa3o3MkJ4Tkh6
+TkM1TXljM3Rpd3NcIixcImlzc3VlZEF0XCI6XCIyMDI2LTEwLTA5VDAwOjAwOjAwWlwifSIsInNpZ25hdHVyZSI6ImVkMjU1MTk6
+NlRONE9IT24zVktJMDBva050aE5KT0prdUFnMWFmRU85aC02M0w5VDZWb1F4ZVlBMWFjWE1xVHVMQnU1X2Zsa3pDalBSc3NFV3BQ
+NkxrVkNpNzRFREEifQIAAQIATwIACgACAAEBAAAAAGrIIHAAAAAAfZgmAABAQDPykHFoKdbKunP7n4FP9UDQ9_En57ppyY1tesmD
+2TojN0TQDOeyxNN-vAYZS5-sV6Vrx-5HGUagOYHEM0bEsA0AQED9vmhWWtk7lh59jGk95noL-_O2QTrXCP6JclnSHMdiystNZKNh
+Ctim0wqW4cjgJerOpJWKJCZNGLpwpYlOrJUC
+```
 
 ### A.3 Attachment
 
@@ -941,12 +1010,37 @@ Message `0199d1a0-0000-7000-8000-000000000002` mentioning appendix A's principal
 | Franking key (bytes `60`..`7f`) | `YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8` |
 | Commitment `c` | `71ec48866b283644c13508ddc5c8d4fcc72ba51721dcd3b74b16e5a50d5a874d` (`cexIhmsoNkTBNQjdxcjU_McrpRch3NO3SxblpQ1ah00`) |
 | Application data (`01` ‖ key ‖ content, 513 bytes), SHA-256 | `2034e24c9ef5d4ad3965448fb6beec5852da1a0c87896bb07f14b3c7f63ab776` |
-| The PrivateMessage carrying it | To be filled by S4-2 (randomized; S4-2 checks that decrypting its fixture yields these 513 bytes) |
+| The PrivateMessage carrying it | Recorded by S4-2, below: 1,059 bytes, SHA-256 `e4feeeb27ad8fe13c9a9ca47b044d2770bfe138278fc953cf05f4c95c880cad1` |
 
 Authenticated data (220 bytes):
 
 ```
 {"v":1,"type":"application","messageId":"0199d1a0-0000-7000-8000-000000000002","franking":"cexIhmsoNkTBNQjdxcjU_McrpRch3NO3SxblpQ1ah00","mentions":["rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo"],"mentionAll":false}
+```
+
+The recorded PrivateMessage (an `MLSMessage`; randomized, so a fixture): group A.1, epoch 1, sent by
+A.2's device (MLS key seed 40) with the authenticated data above, to device
+`00000000-0000-0000-0000-000000000002` of `rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo`
+(device key seed 21, MLS key seed 41). Decrypting it needs that device's group state, which is
+recorded beside it in rim-ui (`src-tauri/crates/rim_mls/src/tests/fixtures/recorded.json`); it
+yields the 513 bytes above, once. Base64url, wrapped at 100 characters:
+
+```
+AAEAAhhyaW0xAZnRoAAAcACAAAAAAAAAAQAAAAEAAAAAAAAAAQFA3HsidiI6MSwidHlwZSI6ImFwcGxpY2F0aW9uIiwibWVzc2Fn
+ZUlkIjoiMDE5OWQxYTAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiZnJhbmtpbmciOiJjZXhJaG1zb05rVEJOUWpkeGNq
+VV9NY3JwUmNoM05PM1N4YmxwUTFhaDAwIiwibWVudGlvbnMiOlsicmltcDFfbnoxUE9tbDhKbUNNY0ZERUNydHU2MGlib2hQS255
+d2hjRXhtT1BNdlRVbyJdLCJtZW50aW9uQWxsIjpmYWxzZX0cLL7g1wnPzKIUoBImlKOgrhhCVqjjc-VnntVg_kMAr6Wk0pZzB4d5
+_6PlQaCph5h39KbBEx_XI8s5qLfNaF4QMvhyqIikXverjJqiXYLIG984_djoNUoTHI_n5UJKcvmekg8AzdCqayDLtvhbC1XKCNwZ
+jbXeuAzKsyYXBe6iSoJV5G6iAaxR3dgIIWRMwEG-lPJCgLAKRZq9OO8gipCgKQBPsx2jYTh9lcTWmZOevEXeu9QNL3v5U73Bysxc
+JIOVJfDJAXNCZetLmKfaIyjCB_TvgkSE5fauernVIQrSBglk-qyz9zm4pLZU1fIYvTsRy5Q2wIPEVrr1gMts1KvAPDmPZwf3QJsf
+G8WxyNo58RccIcu__tl0LVQxNpAz9jmklkwudvFlmJ6W1QwvApprPaLXn0Y8q5_V8EqkE6D3-c_u4-G91SyjxbH6zEkP70bEyS-C
+2YYuakVAzGSOdWBU7qtz74iSr5zQ3QCrn6koC_n-iPoxLyfJ38zth281HxhAmSS_OwpvL5a7eJVM0js48cHByRwW7XEiFGDnQpER
+4tBkp3uIsqb5Tyo9HKu3KEGBibGIThb0bUSy5RVtEaWntoRynwY49PAJG6L02K_djkze8DgL85Bbjxe5jQnip89GZ4_v3zgbcjIV
+net-I-D7sSWa1EeSbAcYi8I60UQ5Kb-txCXzLvFcG2PuFESJVCmbB0HIgbV7vgkmBM0dSFeuKPYtWmnHUoahoaYxPKxrFsNx2qcB
+Vqakpe6UtVFDysrcODec4yO1hOmum3-VIK8sCeyHDJNbOPwSzYQnjkUQJnm_TK-gOxzAhuzBBqm9hPb_P4jbE5ofDMBRrfqjJD67
+bjoEOkw7sM6g1SbPsFxa22xd8VImhCdri-5kUcUuQSzMud9y4Uv2_7c912IM9WqDNcc8A78_64yOeJs56Av3hPipkhRc35ZrLI5l
+_VtBnvgLDn24mAua_GtB4hRJwRcuR58QNEkuq_dsajAy9uH-t7oucN1yGjuo5axBZ5WqqLFfk200cSNc3oa3aEDYrY-7TWpFXa04
+haQfybwlZyfz
 ```
 
 A Commit's authenticated data adding device `…0002` of that principal with the ref of bytes
