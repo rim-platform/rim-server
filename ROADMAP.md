@@ -4,7 +4,9 @@ _Rebuilt 2026-10-04 after Jakub reset the direction; updated 2026-10-08 with the
 that merges the plugin platform and decentralization into five stages. Supersedes the
 2026-07-08 roadmap (incident wedge). See `docs/vision.md` for product principles,
 `docs/decisions/decentralization-2026-10-08.md` for the key-identity decentralization
-decision, `docs/decisions/post-quantum-hybrid-2026-10-09.md` for hybrid post-quantum crypto, and `docs/next-steps-2026-10-04.md` for the 2026-10-04 state of both repositories.
+decision, `docs/decisions/post-quantum-hybrid-2026-10-09.md` for hybrid post-quantum crypto,
+`docs/decisions/relay-proxied-workspaces-2026-10-09.md` for workspace traffic through the
+user's relay, and `docs/next-steps-2026-10-04.md` for the 2026-10-04 state of both repositories.
 The shipped-state ledger is at the end._
 
 ## Strategic Thesis — 2026-10-04
@@ -265,12 +267,21 @@ both encryption and relays depend on them.
    workspace-host roles and a signed server-to-server HTTP API (HTTP Message Signatures with
    replay protection and rotatable server keys); GraphQL stays the client contract.
    - **7.4a** Cross-server DMs and the request inbox.
-   - **7.4b** Remote workspace members and a client that talks to several hosts.
+   - **7.4b** Remote workspace members: the user's relay subscribes to each workspace host
+     with a delegation the user's device signed and forwards traffic both ways, so the client
+     keeps one endpoint.
    - **7.4c** The public relay `relay.rim.chat` with its runbook and abuse policy, where
      registering a key needs proof-of-work or an invite.
 
-   Clients connect directly to each workspace host for workspace traffic; relays carry only
-   DMs, the request inbox, profile cards and MLS key packages, never channel messages.
+   The client keeps one GraphQL endpoint and one WebSocket, to its own relay; the relay is an
+   untrusted courier for all its users' traffic, workspace traffic included. Every write
+   carries the user's device signature and is forwarded unchanged, the host signs its events
+   and the client verifies them against the host key pinned from the invite, and the host stays
+   the only authority and sequencer. Hosts accept any relay by default, with an optional
+   allow-list. A direct connection to a host is the fallback when the relay is unreachable.
+   Stage 5 ships after Stage 4, so DMs and private groups are ciphertext on relays; plaintext
+   channels are readable by the relay while queued. See
+   `docs/decisions/relay-proxied-workspaces-2026-10-09.md`.
 
 ### Architecture guardrails (apply from today)
 
@@ -464,9 +475,9 @@ Decision 1 (go on the first PRs) was answered "go" on 2026-10-08.
 | 15 | Mobile: PWA after Stage 3, or native later? | PWA / native | PWA |
 
 Still open from the decentralization design, none blocking before Stage 5: whether relays
-delete messages once the drive has them, whether a host accepts any relay or only approved
-ones, Matrix interop, and whether losing phrase, drive and devices together is an acceptable
-total loss (the plan assumes yes). The 2026-10-04 open decisions not listed above are
+delete messages once the drive has them, Matrix interop, and whether losing phrase, drive and devices together is an acceptable
+total loss (the plan assumes yes). A host accepts any relay by default, with an optional
+allow-list (decided 2026-10-09). The 2026-10-04 open decisions not listed above are
 settled: the master plan adopts sandboxed iframes for web plugins and DMs plus private groups
 for E2EE v1, Jakub confirmed the decentralization model (see the decision record), and the
 four-role ladder shipped in 1.2.
