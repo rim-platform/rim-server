@@ -95,6 +95,76 @@ async fn touch_and_revoke_are_idempotent_and_revoke_all_counts() {
 }
 
 #[tokio::test]
+async fn revoke_all_for_user_except_keeps_one_session_and_other_users() {
+    let ctx = support::TestCtx::new().await;
+
+    let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let ada = ctx.create_user("ada").await;
+    let grace = ctx.create_user("grace").await;
+
+    let session = |user_id, token_hash: &str| NewSession {
+        user_id,
+        token_hash: token_hash.to_string(),
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        user_agent: None,
+        ip: None,
+    };
+    let current = session_repo
+        .create_session(session(ada.id, "ada-current"))
+        .await
+        .unwrap();
+    let laptop = session_repo
+        .create_session(session(ada.id, "ada-laptop"))
+        .await
+        .unwrap();
+    let phone = session_repo
+        .create_session(session(ada.id, "ada-phone"))
+        .await
+        .unwrap();
+    let already_revoked = session_repo
+        .create_session(session(ada.id, "ada-old"))
+        .await
+        .unwrap();
+    session_repo
+        .revoke_session(already_revoked.id)
+        .await
+        .unwrap();
+    let revoked_at = session_repo
+        .get_by_id(already_revoked.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .revoked_at;
+    let other_user = session_repo
+        .create_session(session(grace.id, "grace"))
+        .await
+        .unwrap();
+
+    let ended = session_repo
+        .revoke_all_for_user_except(ada.id, current.id)
+        .await
+        .unwrap();
+    assert_eq!(ended, 2);
+
+    let get = |id| {
+        let repo = &session_repo;
+        async move { repo.get_by_id(id).await.unwrap().unwrap() }
+    };
+    assert!(get(current.id).await.revoked_at.is_none());
+    assert!(get(laptop.id).await.revoked_at.is_some());
+    assert!(get(phone.id).await.revoked_at.is_some());
+    // An already-revoked session keeps its original revocation time and isn't counted.
+    assert_eq!(get(already_revoked.id).await.revoked_at, revoked_at);
+    assert!(get(other_user.id).await.revoked_at.is_none());
+
+    let again = session_repo
+        .revoke_all_for_user_except(ada.id, current.id)
+        .await
+        .unwrap();
+    assert_eq!(again, 0);
+}
+
+#[tokio::test]
 async fn touch_last_seen_at_updates_timestamp() {
     let ctx = support::TestCtx::new().await;
 

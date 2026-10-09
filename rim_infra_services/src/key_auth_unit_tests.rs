@@ -414,6 +414,24 @@ mod tests {
             Ok(n)
         }
 
+        async fn revoke_all_for_user_except(
+            &self,
+            user_id: UserId,
+            keep: SessionId,
+        ) -> RepoResult<u64> {
+            let mut s = self.0.lock().unwrap();
+            let mut n = 0;
+            for (session, _) in s
+                .sessions
+                .iter_mut()
+                .filter(|(s, _)| s.user_id == user_id && s.id != keep && s.revoked_at.is_none())
+            {
+                session.revoked_at = Some(Utc::now());
+                n += 1;
+            }
+            Ok(n)
+        }
+
         async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()> {
             let mut s = self.0.lock().unwrap();
             for (_, device) in s.sessions.iter_mut().filter(|(s, _)| s.id == id) {
