@@ -131,6 +131,9 @@ mod e2ee_test_support;
 mod e2ee_unit_tests;
 
 #[cfg(test)]
+mod relay_unit_tests;
+
+#[cfg(test)]
 mod encrypted_message_unit_tests;
 
 pub use alert_rate_limiter::AlertRateLimiter;
