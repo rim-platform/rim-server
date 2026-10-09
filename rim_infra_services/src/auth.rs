@@ -12,8 +12,9 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
     AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    ListInvitesQuery, LoginCmd, LogoutCmd, PreviewInviteTokenQuery, RevokeInstanceInviteCmd,
-    RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
+    ListInvitesQuery, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd, PreviewInviteTokenQuery,
+    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd,
+    SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, CreateInstanceInviteResultDto, CreateInviteResultDto,
@@ -538,6 +539,38 @@ impl AuthService for DefaultAuthService {
         self.repos.session_repo.revoke_session(session_id).await?;
 
         Ok(())
+    }
+
+    #[instrument(name = "auth.logout_other_sessions", skip_all, fields(actor_id = %cmd.actor.user_id, session_id = %cmd.session_id))]
+    async fn logout_other_sessions(&self, cmd: LogoutOtherSessionsCmd) -> ServiceResult<u64> {
+        let LogoutOtherSessionsCmd { actor, session_id } = cmd;
+        let sess = self
+            .repos
+            .session_repo
+            .get_by_id(session_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+
+        if sess.user_id != actor.user_id {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        // One statement, so the sessions end together.
+        let ended_sessions = self
+            .repos
+            .session_repo
+            .revoke_all_for_user_except(actor.user_id, session_id)
+            .await?;
+
+        info!(
+            target = "audit",
+            event = "other_sessions_signed_out",
+            user_id = %actor.user_id,
+            kept_session_id = %session_id,
+            ended_sessions,
+            "other sessions signed out"
+        );
+        Ok(ended_sessions)
     }
 
     #[instrument(name = "auth.create_invite", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, max_uses))]

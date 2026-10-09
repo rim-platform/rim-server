@@ -23,7 +23,7 @@ mod tests {
     use rim_core::user::repository::MockUserRepository;
     use rim_services::auth::command::{
         AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, LoginCmd, LogoutCmd,
-        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
+        LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
         SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
@@ -262,6 +262,112 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    /// A service over `session_repo`, with every other repository left without expectations.
+    fn svc_with_sessions(session_repo: MockSessionRepository) -> DefaultAuthService {
+        let (user_repo, server_repo, server_member_repo, _, invite_repo, conversation_repo) =
+            repos();
+        DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conversation_repo,
+            ),
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn logout_other_sessions_keeps_the_caller_and_returns_the_count() {
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_get_by_id()
+            .withf(move |id| *id == session_id)
+            .returning(move |id| Ok(Some(make_session(id, user_id))));
+        session_repo
+            .expect_revoke_all_for_user_except()
+            .withf(move |user, keep| *user == user_id && *keep == session_id)
+            .times(1)
+            .returning(|_, _| Ok(2));
+        session_repo.expect_revoke_all_for_user().never();
+
+        let ended = svc_with_sessions(session_repo)
+            .logout_other_sessions(LogoutOtherSessionsCmd {
+                actor: Actor::new(user_id),
+                session_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ended, 2);
+    }
+
+    #[tokio::test]
+    async fn logout_other_sessions_denies_a_session_of_another_user() {
+        let session_id = SessionId::new();
+        let owner_id = UserId::new();
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(make_session(id, owner_id))));
+        session_repo.expect_revoke_all_for_user_except().never();
+
+        let err = svc_with_sessions(session_repo)
+            .logout_other_sessions(LogoutOtherSessionsCmd {
+                actor: Actor::new(UserId::new()),
+                session_id,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn logout_other_sessions_without_the_calling_session_is_not_found() {
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_get_by_id().returning(|_| Ok(None));
+        session_repo.expect_revoke_all_for_user_except().never();
+
+        let err = svc_with_sessions(session_repo)
+            .logout_other_sessions(LogoutOtherSessionsCmd {
+                actor: Actor::new(UserId::new()),
+                session_id: SessionId::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn logout_other_sessions_passes_a_repository_error_through() {
+        let user_id = UserId::new();
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(make_session(id, user_id))));
+        session_repo
+            .expect_revoke_all_for_user_except()
+            .returning(|_, _| Err(RepoError::new(RepoErrorKind::Unavailable)));
+
+        let err = svc_with_sessions(session_repo)
+            .logout_other_sessions(LogoutOtherSessionsCmd {
+                actor: Actor::new(user_id),
+                session_id: SessionId::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unavailable));
     }
 
     #[tokio::test]

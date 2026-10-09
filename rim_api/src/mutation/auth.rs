@@ -1,6 +1,6 @@
 use async_graphql::*;
 use rim_services::Actor;
-use rim_services::auth::command::{LoginCmd, LogoutCmd};
+use rim_services::auth::command::{LoginCmd, LogoutCmd, LogoutOtherSessionsCmd};
 use rim_services::auth::service::AuthService;
 
 use crate::auth_context::{require_actor, require_session_id};
@@ -53,6 +53,23 @@ impl AuthMutations {
             intent.set(AuthIntent::ClearSession);
         }
         Ok(true)
+    }
+
+    /// End every session of the signed-in account except this one. Returns how many ended.
+    async fn logout_other_sessions(&self, ctx: &Context<'_>) -> Result<i64> {
+        let actor = require_actor(ctx)?;
+        let session_id = require_session_id(ctx)?;
+
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let ended = auth
+            .logout_other_sessions(LogoutOtherSessionsCmd {
+                actor: Actor::new(actor),
+                session_id,
+            })
+            .await
+            .map_err(map_service_error)?;
+
+        Ok(i64::try_from(ended).unwrap_or(i64::MAX))
     }
 }
 
