@@ -313,6 +313,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         member_role: rim_core::server_member::model::ServerMemberRole::Moderator,
                         joined_at: chrono::Utc::now(),
                         timeout_until: None,
+                        principal_id: None,
                     },
                     ServerMemberDto {
                         server_id: ws,
@@ -325,6 +326,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         member_role: rim_core::server_member::model::ServerMemberRole::Member,
                         joined_at: chrono::Utc::now(),
                         timeout_until: None,
+                        principal_id: None,
                     },
                 ])
             })

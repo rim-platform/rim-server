@@ -117,6 +117,8 @@ pub struct ServerMember {
     pub joined_at: chrono::DateTime<chrono::Utc>,
     /// End of the member's timeout while one is in force (Track 1.2), else null.
     pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The member's key identity (`rimp1_…`), once enrolled; null for a password-only account.
+    pub principal_id: Option<String>,
 }
 
 impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
@@ -132,6 +134,7 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             member_role: value.member_role.into(),
             joined_at: value.joined_at,
             timeout_until: value.timeout_until,
+            principal_id: value.principal_id,
         }
     }
 }
