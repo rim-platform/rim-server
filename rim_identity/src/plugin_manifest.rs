@@ -281,7 +281,7 @@ fn read_manifest(manifest: &str) -> IdentityResult<ManifestHead> {
     if !manifest.trim_start().starts_with('{') {
         return Err(invalid("manifest must be a JSON object"));
     }
-    serde_json::from_str(manifest).map_err(|e| invalid(format!("manifest is not valid: {e}")))
+    serde_json::from_str(manifest).map_err(|e| IdentityError::Malformed(format!("manifest: {e}")))
 }
 
 /// Read a plugin manifest statement and check every field rule, without its signature.

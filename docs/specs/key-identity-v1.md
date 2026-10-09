@@ -403,7 +403,10 @@ type Mutation {
 ```
 
 Malformed or unverifiable statements fail with code `VALIDATION` and a short reason such as
-`signature does not verify` or `key log entry has seq 2, expected 1`.
+`signature does not verify` or `key log entry has seq 2, expected 1`. A payload that is not JSON
+of the statement's shape (unknown, duplicate or missing fields, wrong types) is refused with the
+fixed reason `statement payload is not valid`; the JSON parser's own message goes to the server
+log only.
 
 `keyLog` needs no session. The log is public (every server a person uses holds it), and a person
 who lost every device needs its head (`seq` and the hash of the last payload) to sign a recovery

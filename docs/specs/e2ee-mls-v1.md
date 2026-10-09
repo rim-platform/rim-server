@@ -977,7 +977,7 @@ type Mutation {
 | `STALE_EPOCH` (new) | A Commit or message for an epoch or incarnation that is not current | `incarnation`, `epoch` (current) |
 | `MLS_COMMIT_REQUIRED` (new) | A message while removals are pending, or into an encrypted conversation without a group | `reason`: `pendingRemovals` or `noGroup` |
 | `FORBIDDEN` | Session without a device; device not in the group; claim or commit by a non-member | — |
-| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text |
+| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text; JSON that does not parse into its shape gets a fixed reason, never the parser's message |
 | `CONFLICT` | Message id reused with other bytes; second report; a re-add request sent again | — |
 | `TIMED_OUT`, `NOT_FOUND`, `RATE_LIMITED` | As for the plaintext equivalents | as today |
 

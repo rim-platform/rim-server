@@ -1109,10 +1109,15 @@ impl E2eeService for DefaultE2eeService {
                     info.cipher_suite
                 )));
             }
-            let statement = rim_identity::read_mls_credential(&info.credential_identity)
-                .map_err(|e| refused(e.to_string()))?;
-            let mls_key = rim_identity::verify_mls_key(&device_key, &statement)
-                .map_err(|e| refused(format!("mls-key statement: {e}")))?;
+            let statement =
+                rim_identity::read_mls_credential(&info.credential_identity).map_err(|e| {
+                    crate::util::log_statement_detail(&e);
+                    refused(e.to_string())
+                })?;
+            let mls_key = rim_identity::verify_mls_key(&device_key, &statement).map_err(|e| {
+                crate::util::log_statement_detail(&e);
+                refused(format!("mls-key statement: {e}"))
+            })?;
             if mls_key.principal_id != principal_id || mls_key.device_id != device.device_id {
                 return Err(refused(
                     "the mls-key statement names another device".to_string(),
@@ -1630,7 +1635,7 @@ impl E2eeService for DefaultE2eeService {
             signature: cmd.signature.clone(),
         };
         let request = rim_identity::verify_mls_readd(&device_key, &statement)
-            .map_err(|e| ServiceError::Validation(e.to_string()))?;
+            .map_err(crate::util::statement_refused)?;
         if (request.issued_at - Utc::now()).abs() > READD_FRESHNESS {
             return Err(ServiceError::Validation(
                 "issuedAt must be within 10 minutes of the server's clock".to_string(),

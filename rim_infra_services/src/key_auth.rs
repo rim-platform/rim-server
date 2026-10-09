@@ -118,7 +118,7 @@ fn to_statement(p: &SignedPayload) -> SignedStatement {
 }
 
 fn invalid(err: IdentityError) -> ServiceError {
-    ServiceError::Validation(err.to_string())
+    crate::util::statement_refused(err)
 }
 
 fn log_entry_dto(e: KeyLogEntry) -> KeyLogEntryDto {
