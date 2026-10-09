@@ -7,7 +7,9 @@ pub enum IdentityError {
     #[error("statement payload exceeds {max} bytes")]
     TooLarge { max: usize },
 
-    #[error("statement payload is not valid: {0}")]
+    /// The payload is not JSON of the statement's shape. The parser's description is kept for
+    /// the log ([`IdentityError::detail`]) and never shown: it would echo parser internals.
+    #[error("statement payload is not valid")]
     Malformed(String),
 
     #[error("unsupported statement version {0}")]
@@ -48,6 +50,16 @@ pub enum IdentityError {
 
     #[error("{0}")]
     Invalid(String),
+}
+
+impl IdentityError {
+    /// The parser's description of a [`IdentityError::Malformed`] payload, for the log.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Malformed(detail) => Some(detail),
+            _ => None,
+        }
+    }
 }
 
 pub type IdentityResult<T> = Result<T, IdentityError>;

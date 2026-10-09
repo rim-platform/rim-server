@@ -13,6 +13,20 @@ use rim_core::workspace_feature::model::WorkspaceFeature;
 use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::{ServiceError, ServiceResult};
 
+/// Log the parser's description of a malformed statement; the client sees only the error's
+/// fixed message.
+pub(crate) fn log_statement_detail(err: &rim_identity::IdentityError) {
+    if let Some(detail) = err.detail() {
+        tracing::info!(detail, "refused a malformed statement");
+    }
+}
+
+/// A refused statement as `VALIDATION`, its parser detail logged and not returned.
+pub(crate) fn statement_refused(err: rim_identity::IdentityError) -> ServiceError {
+    log_statement_detail(&err);
+    ServiceError::Validation(err.to_string())
+}
+
 /// Minimum repo set needed by [`ensure_conversation_member_access`].
 /// Every service that holds a `*Repos` struct already has these three fields.
 pub struct ConversationAccessRepos<'a> {

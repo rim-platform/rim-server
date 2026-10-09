@@ -107,7 +107,7 @@ fn to_payload(t: StatementText) -> SignedPayload {
 }
 
 fn invalid(err: IdentityError) -> ServiceError {
-    ServiceError::Validation(err.to_string())
+    crate::util::statement_refused(err)
 }
 
 fn validation(message: impl Into<String>) -> ServiceError {

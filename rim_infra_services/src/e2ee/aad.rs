@@ -21,12 +21,19 @@ fn invalid(message: impl Into<String>) -> ServiceError {
     ServiceError::Validation(format!("authenticated data: {}", message.into()))
 }
 
+/// What a client sees for JSON that does not parse into the expected shape.
+const NOT_ITS_SHAPE: &str =
+    "not JSON of its type (unknown, duplicate or missing fields, or wrong types)";
+
 fn parse<'a, T: Deserialize<'a>>(bytes: &'a [u8], max: usize) -> ServiceResult<T> {
     if bytes.len() > max {
         return Err(invalid(format!("larger than {max} bytes")));
     }
     let text = std::str::from_utf8(bytes).map_err(|_| invalid("not UTF-8"))?;
-    serde_json::from_str(text).map_err(|e| invalid(e.to_string()))
+    serde_json::from_str(text).map_err(|e| {
+        tracing::info!(detail = %e, "refused malformed authenticated data");
+        invalid(NOT_ITS_SHAPE)
+    })
 }
 
 fn check_header(v: u32, kind: &str, expected: &str) -> ServiceResult<()> {
@@ -212,14 +219,33 @@ mod tests {
         assert!(!aad.mention_all);
     }
 
+    /// A refusal for JSON of another shape: the fixed text, never the parser's.
+    fn not_its_shape(err: String) {
+        assert_eq!(err, format!("authenticated data: {NOT_ITS_SHAPE}"));
+    }
+
+    #[test]
+    fn finding_27_parser_text_never_reaches_the_client() {
+        for bad in [
+            APPLICATION.replacen('{', r#"{"extra":1,"#, 1),
+            APPLICATION.replacen('{', r#"{"mentionAll":true,"#, 1),
+            APPLICATION.replacen(r#","mentionAll":false"#, "", 1),
+            APPLICATION.replacen(r#""mentionAll":false"#, r#""mentionAll":null"#, 1),
+            APPLICATION.replacen(r#""v":1"#, r#""v":"1""#, 1),
+            "{\"v\":1,".to_string(),
+        ] {
+            let err = refused(parse_application(bad.as_bytes()));
+            for parser_text in ["field `", "at line", "column", "expected", "invalid type"] {
+                assert!(!err.contains(parser_text), "{err}");
+            }
+            not_its_shape(err);
+        }
+        let extra = COMMIT.replacen(r#""deviceId""#, r#""extra":1,"deviceId""#, 1);
+        not_its_shape(refused(parse_commit(extra.as_bytes())));
+    }
+
     #[test]
     fn application_data_rules() {
-        let unknown = APPLICATION.replacen('{', r#"{"extra":1,"#, 1);
-        assert!(refused(parse_application(unknown.as_bytes())).contains("unknown field"));
-        let duplicate = APPLICATION.replacen('{', r#"{"mentionAll":true,"#, 1);
-        assert!(refused(parse_application(duplicate.as_bytes())).contains("duplicate field"));
-        let missing = APPLICATION.replacen(r#","mentionAll":false"#, "", 1);
-        assert!(refused(parse_application(missing.as_bytes())).contains("missing field"));
         let short = APPLICATION.replacen("cexIhmsoNkTBNQjdxcjU_McrpRch3NO3SxblpQ1ah00", "AAAA", 1);
         assert!(refused(parse_application(short.as_bytes())).contains("franking"));
         let not_principal = APPLICATION.replacen(PRINCIPAL, "rimp0_x", 1);
@@ -236,8 +262,6 @@ mod tests {
         assert!(refused(parse_application(v2.as_bytes())).contains("version"));
         let big = format!("{}{}", " ".repeat(MAX_APPLICATION_AAD_BYTES), APPLICATION);
         assert!(refused(parse_application(big.as_bytes())).contains("larger"));
-        let null = APPLICATION.replacen(r#""mentionAll":false"#, r#""mentionAll":null"#, 1);
-        assert!(refused(parse_application(null.as_bytes())).contains("null"));
     }
 
     #[test]
@@ -260,10 +284,8 @@ mod tests {
             1,
         );
         assert!(refused(parse_commit(twice.as_bytes())).contains("removed twice"));
-        let extra = COMMIT.replacen(r#""deviceId""#, r#""extra":1,"deviceId""#, 1);
-        assert!(refused(parse_commit(extra.as_bytes())).contains("unknown field"));
         let no_removes = COMMIT.replacen(r#","removes":[]"#, "", 1);
-        assert!(refused(parse_commit(no_removes.as_bytes())).contains("missing field"));
+        not_its_shape(refused(parse_commit(no_removes.as_bytes())));
         let bad_ref = COMMIT.replacen("wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8", "!!", 1);
         assert!(refused(parse_commit(bad_ref.as_bytes())).contains("keyPackageRef"));
         let big = format!("{}{}", " ".repeat(MAX_COMMIT_AAD_BYTES), COMMIT);
