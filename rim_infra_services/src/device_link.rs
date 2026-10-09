@@ -1,5 +1,5 @@
-//! Device linking: the server is a courier. it stores the new device's sealed offer and the old device's sealed
-//! answer, checks only their encoding and size, and never reads them. The state machine lives
+//! Device linking: the server is a courier. It stores the new device's sealed offer and the
+//! old device's sealed answer, checks only their encoding and size, and never reads them. The state machine lives
 //! in the repository's conditional transitions; this module decides who may call what, turns
 //! a refused transition into the right error, and rate-limits anonymous callers. It does not
 //! depend on key login; it reads only `user.principal_id`.
