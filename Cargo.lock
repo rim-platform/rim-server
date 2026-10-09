@@ -323,6 +323,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -337,6 +338,7 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -4790,6 +4792,7 @@ dependencies = [
 name = "rim_identity"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "base64",
  "chrono",
@@ -4800,6 +4803,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use rim_core::e2ee::repository::E2eeRepository;
 
@@ -86,6 +86,9 @@ impl FrankingKey {
         &self.secret
     }
 }
+
+/// The secret is wiped from memory when the key is dropped.
+impl ZeroizeOnDrop for FrankingKey {}
 
 impl std::fmt::Debug for FrankingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -426,6 +429,12 @@ mod tests {
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn finding_23_franking_keys_are_wiped_on_drop() {
+        fn wiped<T: ZeroizeOnDrop>() {}
+        wiped::<FrankingKey>();
     }
 
     #[test]

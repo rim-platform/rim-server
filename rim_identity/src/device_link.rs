@@ -18,6 +18,7 @@ use hkdf::Hkdf;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::device::{DeviceCert, MAX_DEVICE_NAME_CHARS, verify_device_cert};
 use crate::encoding::{PublicKey, b64};
@@ -95,6 +96,24 @@ fn decode_fixed<const N: usize>(s: &str, what: &'static str) -> DeviceLinkResult
         .map_err(|_| DeviceLinkError::BadEncoding(what))
 }
 
+/// [`decode_fixed`] for a secret: neither the decoded bytes nor the copy outlive their use.
+fn decode_secret<const N: usize>(
+    s: &str,
+    what: &'static str,
+) -> DeviceLinkResult<Zeroizing<[u8; N]>> {
+    let bytes = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(s)
+            .map_err(|_| DeviceLinkError::BadEncoding(what))?,
+    );
+    let mut secret = Zeroizing::new([0u8; N]);
+    if bytes.len() != N {
+        return Err(DeviceLinkError::BadEncoding(what));
+    }
+    secret.copy_from_slice(&bytes);
+    Ok(secret)
+}
+
 fn random_bytes<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
     OsRng.fill_bytes(&mut bytes);
@@ -135,19 +154,22 @@ impl fmt::Debug for LinkId {
     }
 }
 
-/// The 32-byte secret the old device makes. It never reaches the server.
+/// The 32-byte secret the old device makes. It never reaches the server. Wiped from memory when
+/// dropped.
 #[derive(Clone, PartialEq, Eq)]
-pub struct LinkSecret([u8; SECRET_LEN]);
+pub struct LinkSecret(Zeroizing<[u8; SECRET_LEN]>);
 
 impl LinkSecret {
     /// A fresh secret from the OS random generator.
     pub fn generate() -> Self {
-        Self(random_bytes())
+        let mut secret = Zeroizing::new([0u8; SECRET_LEN]);
+        OsRng.fill_bytes(secret.as_mut());
+        Self(secret)
     }
 
     /// A secret from its raw bytes.
     pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Self {
-        Self(bytes)
+        Self(Zeroizing::new(bytes))
     }
 
     /// The raw bytes.
@@ -157,14 +179,16 @@ impl LinkSecret {
 
     /// Strict unpadded base64url of exactly 32 bytes (43 characters).
     pub fn parse(s: &str) -> DeviceLinkResult<Self> {
-        decode_fixed(s, "secret").map(Self)
+        decode_secret(s, "secret").map(Self)
     }
 
     /// The unpadded base64url text written into the code.
     pub fn encode(&self) -> String {
-        b64(&self.0)
+        b64(self.0.as_ref())
     }
 }
+
+impl ZeroizeOnDrop for LinkSecret {}
 
 impl fmt::Debug for LinkSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -301,10 +325,10 @@ impl Direction {
 }
 
 /// `K = HKDF-SHA256(ikm = secret, salt = link id, info = "rim.device-link.v1 <direction>")`.
-fn derive_key(link_id: &LinkId, secret: &LinkSecret, direction: Direction) -> [u8; 32] {
-    let mut key = [0u8; 32];
+fn derive_key(link_id: &LinkId, secret: &LinkSecret, direction: Direction) -> Zeroizing<[u8; 32]> {
+    let mut key = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(link_id.as_bytes()), secret.as_bytes())
-        .expand(direction.info(), &mut key)
+        .expand(direction.info(), key.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     key
 }
@@ -567,9 +591,12 @@ pub struct OpenedOffer {
 #[derive(Clone)]
 pub struct Channel {
     link_id: LinkId,
-    offer_key: [u8; 32],
-    answer_key: [u8; 32],
+    offer_key: Zeroizing<[u8; 32]>,
+    answer_key: Zeroizing<[u8; 32]>,
 }
+
+/// Both keys are wiped from memory when the channel is dropped.
+impl ZeroizeOnDrop for Channel {}
 
 impl fmt::Debug for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -592,7 +619,7 @@ impl Channel {
             Direction::Offer => &self.offer_key,
             Direction::Answer => &self.answer_key,
         };
-        Aes256Gcm::new(key.into())
+        Aes256Gcm::new(key.as_ref().into())
     }
 
     /// Seal `plaintext` with a fresh random nonce.
@@ -766,11 +793,11 @@ mod tests {
         assert_eq!(LinkCode::parse(CODE), Ok(code));
 
         assert_eq!(
-            hex(&derive_key(&link_id(), &secret(), Direction::Offer)),
+            hex(derive_key(&link_id(), &secret(), Direction::Offer).as_ref()),
             K_OFFER
         );
         assert_eq!(
-            hex(&derive_key(&link_id(), &secret(), Direction::Answer)),
+            hex(derive_key(&link_id(), &secret(), Direction::Answer).as_ref()),
             K_ANSWER
         );
         assert_eq!(hex(&aad(&link_id(), Direction::Offer)), OFFER_AAD);
@@ -1209,5 +1236,16 @@ mod tests {
         let stranger = TestIdentity::with_version(2, V2);
         let stranger_state = KeyState::from_inception(&stranger.inception()).expect("inception");
         assert!(answer.verify(&offer(), &stranger_state).is_err());
+    }
+
+    #[test]
+    fn finding_23_link_secrets_and_keys_are_wiped_on_drop() {
+        fn wiped<T: ZeroizeOnDrop>() {}
+        wiped::<LinkSecret>();
+        wiped::<Channel>();
+        let parsed = LinkSecret::parse(&secret().encode()).expect("secret");
+        assert_eq!(parsed, secret());
+        assert!(LinkSecret::parse(&b64(&[1; 31])).is_err());
+        assert!(LinkSecret::parse(&b64(&[1; 33])).is_err());
     }
 }
