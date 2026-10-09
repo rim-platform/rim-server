@@ -350,6 +350,11 @@ pub fn build_test_provider(
         device_link_repo: Arc::new(
             rim_infra_db::sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(db.clone()),
         ),
+        workspace_plugin_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::workspace_plugin::SeaOrmWorkspacePluginRepository::new(
+                db.clone(),
+            ),
+        ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
@@ -449,6 +454,7 @@ pub fn build_test_provider(
     let storage_service: Arc<dyn StorageService> = Arc::new(DefaultStorageService::new(
         Arc::clone(&storage_backend) as Arc<dyn rim_core::storage::StorageBackend>,
         Arc::clone(&repos.message_attachment_repo),
+        Arc::clone(&repos.workspace_plugin_repo),
         1_073_741_824,
     ));
 

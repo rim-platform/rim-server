@@ -26,5 +26,8 @@ pub trait StorageService: Send + Sync {
 
     async fn delete_file(&self, key: &str) -> ServiceResult<()>;
 
+    /// The bytes stored under `key`; `NotFound` when there are none.
+    async fn download_file(&self, key: &str) -> ServiceResult<Vec<u8>>;
+
     async fn get_quota_usage(&self, workspace_id: ServerId) -> ServiceResult<QuotaUsage>;
 }
