@@ -69,6 +69,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn pipeline_service(&self) -> Arc<dyn PipelineService>;
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator>;
     fn device_link_service(&self) -> Arc<dyn DeviceLinkService>;
+    fn e2ee_service(&self) -> Arc<dyn crate::e2ee::service::E2eeService>;
     fn workspace_plugin_service(
         &self,
     ) -> Arc<dyn crate::workspace_plugin::service::WorkspacePluginService>;
