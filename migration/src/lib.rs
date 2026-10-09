@@ -79,6 +79,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261005_024731_add_moderation::Migration),
             Box::new(m20261005_045140_add_notification_rules::Migration),
             Box::new(m20261008_211159_add_message_change_feed::Migration),
+            Box::new(m20261009_054837_add_key_identity::Migration),
         ]
     }
 }
@@ -145,3 +146,4 @@ mod m20261005_024730_add_member_role;
 mod m20261005_024731_add_moderation;
 mod m20261005_045140_add_notification_rules;
 mod m20261008_211159_add_message_change_feed;
+mod m20261009_054837_add_key_identity;

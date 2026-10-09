@@ -65,6 +65,10 @@ fn redact_url(url: &str) -> String {
     "<redacted>".to_string()
 }
 
+/// The audience the test provider accepts in key login proofs.
+#[allow(dead_code)]
+pub const KEY_LOGIN_AUDIENCE: &str = "localhost:8080";
+
 /// Connect to the test database, or **panic loudly**. Only reachable under the
 /// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
 /// so a panic here means the feature was enabled without a usable test DB —
@@ -111,6 +115,7 @@ pub async fn reset_db(conn: &DatabaseConnection) {
     let sql = r#"
 TRUNCATE TABLE
   session,
+  key_challenge,
   bootstrap_token,
   instance_invite,
   invite,
@@ -335,6 +340,12 @@ pub fn build_test_provider(
         server_member_repo: Arc::new(SeaOrmServerMemberRepository::new(db.clone())),
         user_repo: Arc::new(SeaOrmUserRepository::new(db.clone())),
         session_repo: Arc::new(SeaOrmSessionRepository::new(db.clone())),
+        key_identity_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository::new(db.clone()),
+        ),
+        key_challenge_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyChallengeRepository::new(db.clone()),
+        ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
@@ -451,6 +462,7 @@ pub fn build_test_provider(
         Arc::new(rim_infra_services::email::LogEmailSender),
         None, // no public_base_url configured for registration tests
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
+        vec![KEY_LOGIN_AUDIENCE.to_string()],
     ));
 
     (service_provider, observers)

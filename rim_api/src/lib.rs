@@ -95,6 +95,7 @@ fn wire_common_schema_data(
         .data(service_provider.conversation_service())
         .data(service_provider.event_service())
         .data(service_provider.integration_service())
+        .data(service_provider.key_auth_service())
         .data(service_provider.keybind_service())
         .data(service_provider.macro_service())
         .data(service_provider.mention_service())

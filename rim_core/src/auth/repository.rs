@@ -18,6 +18,18 @@ pub trait SessionRepository: Send + Sync {
     async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
     async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;
     async fn revoke_all_for_user(&self, user_id: UserId) -> RepoResult<u64>;
+    /// Record that a key login session belongs to `device_key_id`, so revoking the device ends
+    /// the session.
+    async fn bind_device(
+        &self,
+        id: SessionId,
+        device_key_id: crate::key_identity::model::DeviceKeyId,
+    ) -> RepoResult<()>;
+    /// Revoke every active session of a device. Returns how many were revoked.
+    async fn revoke_all_for_device(
+        &self,
+        device_key_id: crate::key_identity::model::DeviceKeyId,
+    ) -> RepoResult<u64>;
 }
 
 #[cfg_attr(any(test, feature = "mocks"), automock)]

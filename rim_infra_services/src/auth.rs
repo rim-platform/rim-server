@@ -355,6 +355,21 @@ impl DefaultAuthService {
             return Err(ServiceError::Unauthenticated);
         }
 
+        // An account that enrolled a key signs in with a device key only (key-identity spec,
+        // "Password sign-in"). Checked after the password so the answer and its timing are the
+        // same as for a wrong password.
+        if user.principal_id.is_some() {
+            tracing::info!(
+                target = "audit",
+                event = "login_failure",
+                user_id = %user.id,
+                username = %username,
+                reason = "key_account",
+                "login attempt failed: account signs in with a device key"
+            );
+            return Err(ServiceError::Unauthenticated);
+        }
+
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
 
         // H4 audit: successful login.

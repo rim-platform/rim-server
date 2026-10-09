@@ -29,6 +29,7 @@ pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod invite;
+pub(crate) mod key_identity;
 pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
@@ -51,6 +52,7 @@ pub struct Mutation(
     MutationGroup4,
     MutationGroup5,
     MutationGroup6,
+    MutationGroup7,
 );
 
 #[derive(MergedObject, Default)]
@@ -106,3 +108,6 @@ pub(crate) struct MutationGroup6(
     moderation::ModerationMutations,
     notification::NotificationMutations,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct MutationGroup7(key_identity::KeyIdentityMutations);

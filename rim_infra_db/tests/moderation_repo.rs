@@ -393,14 +393,17 @@ async fn role_migration_turns_existing_guests_into_members() {
         .expect("migration must be registered");
     let steps = u32::try_from(names.len() - index).expect("step count fits u32");
 
+    // Users and the server are created on the current schema: the entities know columns that
+    // later migrations added, so inserting through them after the rollback would fail.
+    let server = ctx.create_server("pre-roles").await;
+    let owner = ctx.create_user("owner").await.id;
+    let guest = ctx.create_user("old-guest").await.id;
+
     Migrator::down(&conn, Some(steps))
         .await
         .expect("roll back to before add_member_role");
 
     // Seed with raw SQL: the old three-value enum has no `member`.
-    let server = ctx.create_server("pre-roles").await;
-    let owner = ctx.create_user("owner").await.id;
-    let guest = ctx.create_user("old-guest").await.id;
     for (user, role) in [(owner, "owner"), (guest, "guest")] {
         conn.execute_unprepared(&format!(
             "INSERT INTO server_member (id, server_id, user_id, member_role) \

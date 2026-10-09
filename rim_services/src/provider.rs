@@ -13,6 +13,7 @@ use crate::event::service::EventService;
 use crate::incident::service::IncidentService;
 use crate::ingest_token::service::IngestTokenService;
 use crate::integration::service::IntegrationService;
+use crate::key_auth::service::KeyAuthService;
 use crate::keybind::service::KeybindService;
 use crate::link_preview::service::LinkPreviewService;
 use crate::macro_def::service::MacroService;
@@ -51,6 +52,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn incident_service(&self) -> Arc<dyn IncidentService>;
     fn ingest_token_service(&self) -> Arc<dyn IngestTokenService>;
     fn integration_service(&self) -> Arc<dyn IntegrationService>;
+    fn key_auth_service(&self) -> Arc<dyn KeyAuthService>;
     fn keybind_service(&self) -> Arc<dyn KeybindService>;
     fn macro_service(&self) -> Arc<dyn MacroService>;
     fn mention_service(&self) -> Arc<dyn MentionService>;

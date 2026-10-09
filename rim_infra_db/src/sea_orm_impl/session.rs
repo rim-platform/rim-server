@@ -9,6 +9,7 @@ use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::auth::model::{NewSession, Session, SessionId};
 use rim_core::auth::repository::SessionRepository;
+use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 
@@ -83,6 +84,31 @@ impl SessionRepository for SeaOrmSessionRepository {
             .await
             .map_err(map_db_err)?;
         Ok(())
+    }
+
+    async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()> {
+        session::Entity::update_many()
+            .col_expr(
+                session::Column::DeviceKeyId,
+                Expr::value(Some(sea_orm::prelude::Uuid::from(device_key_id))),
+            )
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64> {
+        let now: DateTime<Utc> = Utc::now();
+        let res = session::Entity::update_many()
+            .filter(session::Column::DeviceKeyId.eq(sea_orm::prelude::Uuid::from(device_key_id)))
+            .filter(session::Column::RevokedAt.is_null())
+            .col_expr(session::Column::RevokedAt, Expr::value(now))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
     }
 
     async fn revoke_all_for_user(&self, user_id: UserId) -> RepoResult<u64> {
