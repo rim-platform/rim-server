@@ -187,7 +187,7 @@ mod tests {
         sign_with_context(Purpose::DeviceRequest.context(), &signing_key(20), text)
     }
 
-    /// A.6 of the server-to-server specification.
+    /// The known-answer device request: its exact payload and signature.
     #[test]
     fn a6_device_request_vector() {
         let body = br#"{"query":"mutation($id:ID!){deleteMessage(messageId:$id)}","variables":{"id":"0199d1a0-0000-7000-8000-000000000004"}}"#;
