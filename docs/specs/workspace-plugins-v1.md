@@ -165,8 +165,12 @@ A new module, `plugin_manifest`: `Purpose::PluginManifest` (the context and the 
 `KeyHistory`, the replayed log keeping each entry's identity key and signer; and
 `verify_plugin_manifest(&KeyHistory, &SignedStatement)`, which runs steps 1 and 3 and the field
 rules, and answers the parsed statement with `Validity::Valid` or `Validity::PublisherRecovered {
-at_seq }`. The server and the Tauri host call it; the web app's TypeScript port is checked against
-appendix A.
+at_seq }`, where `at_seq` is the seq of the first recovery rotation after `keySeq`. Of the
+manifest it reads only `manifest_version`, `plugin_id`, `display_name`, `version` and
+`runtime_kind` (each must be present with its JSON type); the server's step 4 checks on their
+values live in the server. `read_plugin_manifest` runs the field rules without the signature, for
+statements read back from storage. The server and the Tauri host call it; the web app's
+TypeScript port is checked against appendix A.
 
 ## Bundles on the server
 
@@ -193,18 +197,21 @@ depends on a `PluginBundleService` trait in `rim_services`, never on its impleme
   version, sorted unique paths, path rules, `rim-plugin.json` present), stores the bytes through
   `StorageService` under `plugin-bundles/<serverId>/<sha256>`, and answers `201` (`200` when that
   hash was already there) with `{ "sha256": "…", "size": 1605, "url":
-  "/api/plugin-bundles/<serverId>/<sha256>" }`. Refusals: `401` without a session, `403` for a
-  missing CSRF header, a non-member or a role below Moderator, `413` over 8 MiB, `422` not a bundle
-  (with the reason), `429` over the rate limit. Bundle bytes count toward the workspace's storage
-  quota.
+  "/api/plugin-bundles/<serverId>/<sha256>" }`. Refusals, checked in this order: `401` without a
+  session, `403` for a missing CSRF header, `403` for a `serverId` that is not a UUID, `415` for
+  another `Content-Type`, `413` over 8 MiB, then `429` over the rate limit, `403` for a non-member
+  or a role below Moderator, `422` not a bundle or over the storage quota (with the reason).
+  Bundle bytes count toward the workspace's storage quota, which attachments and bundles share.
 - **`GET /api/plugin-bundles/{serverId}/{sha256}`**: session; the caller is a member of
   `serverId`, else `404`, as for an unknown hash. Answers the bytes with `Content-Type:
   application/vnd.rim.plugin-bundle+json`, `X-Content-Type-Options: nosniff`,
   `Content-Disposition: attachment` and `Cache-Control: private, max-age=31536000, immutable`, with
-  the CORS headers of `/api`.
+  the CORS headers of `/api` (the server's CORS policy covers every route).
 
-Each upload also deletes, best effort, the workspace's bundles no entry names that are over 24
-hours old.
+Each upload that passes the role and structure checks also deletes, best effort, the workspace's
+bundles no entry names that are over 24 hours old. It runs before the upload looks for the hash,
+so a bundle re-uploaded after it aged out is stored again (`201`) rather than deleted after a
+`200`.
 
 ## Storage
 
@@ -359,9 +366,14 @@ type Mutation {
   and no `bundleUrl`, a bundle with that hash and size must have been uploaded to this workspace;
   a given `bundleUrl` must be `https://` and at most 2,048 bytes, and is not allowed for a `git`
   source.
-- `updateWorkspacePlugin` changes any of statement, status and URL (at least one). A new statement
-  must name the same `pluginId`; its version and runtime kind may change, and a lower version is an
-  ordinary update, because a pin is exact and versions are never compared.
+- `updateWorkspacePlugin` changes any of statement, status and URL (at least one; a
+  `publisherKeyLog` alone changes nothing). A new statement must name the same `pluginId`; its
+  version and runtime kind may change, and a lower version is an ordinary update, because a pin is
+  exact and versions are never compared. A new statement with a `bundle` source and no `bundleUrl`
+  points at this server's copy, which must be uploaded, even when the entry had an external URL.
+  A `publisherKeyLog` without a statement re-verifies the stored statement against it, keeping the
+  stored source. Without a `publisherKeyLog`, a publisher not enrolled here is verified against
+  the log the entry keeps, when the statement names the same publisher.
 - `removeWorkspacePlugin` deletes the entry and answers `true`. The bundle goes with the next
   cleanup.
 
@@ -486,7 +498,8 @@ no new statement.
 The limiters are the in-memory `RegistrationRateLimiter`, per node; correctness never depends on
 them. Audit events `workspace_plugin_added`, `workspace_plugin_updated`, `workspace_plugin_removed`
 and `plugin_bundle_uploaded` carry the server id, the acting user id, the plugin id, version,
-status, publisher principal id and bundle hash, never the statement text or bundle bytes.
+status, publisher principal id and bundle hash (a bundle upload: the hash, the size and whether it
+was stored or already there), never the statement text or bundle bytes.
 
 ## Test plan
 
@@ -506,7 +519,10 @@ status, publisher principal id and bundle hash, never the statement text or bund
   (`201`, then `200`); add appendix A's statement as an Owner with the inception as
   `publisherKeyLog` (`VALID`); read as a Member and a Guest; download as a member (`200`) and a
   non-member (`404`); a Member's add `FORBIDDEN`; a tampered signature `VALIDATION`; a status update
-  emitting the event; removal, then `NOT_FOUND`; the mutations and the upload need the CSRF header.
+  emitting the event; removal, then `NOT_FOUND`. The e2e harness executes the schema directly, so
+  it drives the bundle endpoints through `PluginBundleService`; the endpoints' status codes and
+  headers, and the CSRF header on the upload and the mutations, are tested in `rim_server` with
+  actix test requests.
 - **Clients:** verification in the Tauri host and in TypeScript on appendix A and one refusal per
   step; `treeSha256` on a fixture repository; the signing dialog's statement verifying with
   `rim_identity` and its hash equal to `rim-plugin-bundle`'s; the badge with and without a
