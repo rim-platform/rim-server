@@ -147,6 +147,28 @@ pub trait E2eeRepository: Send + Sync {
         incarnation: i32,
     ) -> RepoResult<Option<ClaimedKeyPackage>>;
 
+    /// Hand out a key package of the device for a claim from another server, which records no
+    /// claimer or conversation here: one of its one-time packages when `one_time` allows,
+    /// else its last-resort package, counted.
+    async fn claim_key_package_for_peer(
+        &self,
+        device_key_id: DeviceKeyId,
+        cipher_suite: i32,
+        one_time: bool,
+    ) -> RepoResult<Option<ClaimedKeyPackage>>;
+
+    /// Store a key package of a remote user's device, claimed from their relay, as claimed by
+    /// `claimed_by` for the conversation and incarnation. A package stored before (a
+    /// last-resort one claimed again) gets this claim; a new last-resort package replaces the
+    /// device's previous one.
+    async fn store_claimed_key_package(
+        &self,
+        package: NewMlsKeyPackage,
+        claimed_by: DeviceKeyId,
+        conversation_id: ConversationId,
+        incarnation: i32,
+    ) -> RepoResult<()>;
+
     async fn find_key_packages_by_refs(&self, refs: &[Vec<u8>]) -> RepoResult<Vec<MlsKeyPackage>>;
 
     /// Delete one-time key packages a Commit used. Last-resort ones are kept.
