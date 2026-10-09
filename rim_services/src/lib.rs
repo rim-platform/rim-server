@@ -48,7 +48,6 @@ use rim_core::user::model::UserId;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Actor {
     pub principal: Principal,
     pub user_id: UserId,

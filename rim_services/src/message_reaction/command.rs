@@ -4,7 +4,6 @@ use rim_core::message::model::MessageId;
 use rim_core::server::model::ServerId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ToggleReactionCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -14,7 +13,6 @@ pub struct ToggleReactionCmd {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetMessageReactionsQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -23,7 +21,6 @@ pub struct GetMessageReactionsQuery {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetReactionsForMessagesQuery {
     pub actor: Actor,
     pub message_ids: Vec<MessageId>,

@@ -1,5 +1,4 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SettingScopeDto {
     User,
     Workspace,
@@ -19,7 +18,6 @@ impl From<rim_core::setting::model::SettingScope> for SettingScopeDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SettingDto {
     pub id: String,
     pub scope: SettingScopeDto,

@@ -11,7 +11,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IncidentDto {
     pub id: IncidentId,
     pub server_id: ServerId,
@@ -61,7 +60,6 @@ impl From<Incident> for IncidentDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IncidentPhaseDto {
     pub id: IncidentPhaseId,
     pub incident_id: IncidentId,
@@ -85,7 +83,6 @@ impl From<IncidentPhaseRecord> for IncidentPhaseDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IncidentMessageTagDto {
     pub message_id: MessageId,
     pub incident_id: IncidentId,
@@ -105,7 +102,6 @@ impl From<IncidentMessageTag> for IncidentMessageTagDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IncidentTimelineDto {
     pub incident: IncidentDto,
     pub phases: Vec<IncidentPhaseDto>,
@@ -117,7 +113,6 @@ pub struct IncidentTimelineDto {
 /// Mirrors the repo cursor 1:1 — wrapped here so transport layers depend on
 /// `rim_services` rather than reaching into `rim_core::incident::repository`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IncidentListPageCursor {
     pub created_at: DateTime<Utc>,
     pub incident_id: IncidentId,

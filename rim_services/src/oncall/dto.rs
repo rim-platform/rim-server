@@ -8,7 +8,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OnCallScheduleDto {
     pub id: OnCallScheduleId,
     pub server_id: ServerId,
@@ -34,7 +33,6 @@ impl From<OnCallSchedule> for OnCallScheduleDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RotationLayerDto {
     pub id: RotationLayerId,
     pub schedule_id: OnCallScheduleId,
@@ -49,7 +47,6 @@ pub struct RotationLayerDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RotationParticipantDto {
     pub id: RotationParticipantId,
     pub layer_id: RotationLayerId,
@@ -69,7 +66,6 @@ impl From<RotationParticipant> for RotationParticipantDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OnCallOverrideDto {
     pub id: OnCallOverrideId,
     pub schedule_id: OnCallScheduleId,
@@ -94,7 +90,6 @@ impl From<OnCallOverride> for OnCallOverrideDto {
 
 /// Answer to "who is on call right now" for a schedule (`whoIsOnCall` GraphQL query).
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OnCallNowDto {
     pub schedule_id: OnCallScheduleId,
     /// `None` if no override applies and every layer is empty (nobody on call).
@@ -112,7 +107,6 @@ pub struct OnCallNowDto {
 /// One contiguous block of on-call coverage (`onCallShifts` GraphQL query) — a 1:1 mapping of
 /// [`rim_core::oncall::resolve::OnCallShift`].
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OnCallShiftDto {
     /// `None` if nobody was covering during this block (an empty schedule/layer).
     pub user_id: Option<UserId>,

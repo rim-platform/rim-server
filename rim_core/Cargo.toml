@@ -21,8 +21,4 @@ version = "0.13"
 optional = true
 
 [features]
-# serde derives are always-on (see the `serde =` dependency above) — this feature name is kept
-# as an empty no-op alias so existing `features = ["serde"]` call sites elsewhere in the
-# workspace still resolve without needing an edit (#58).
-serde = []
 mocks = ["dep:mockall"]

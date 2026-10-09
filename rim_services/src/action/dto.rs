@@ -1,5 +1,4 @@
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ActionDto {
     pub id: String,
     pub title: String,

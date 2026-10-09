@@ -72,7 +72,6 @@ pub const MAX_CONFIRMATION_TTL_SECS: i64 = 60;
 /// arrives via a side channel (e.g. an MCP capability grant). Phase 1 only
 /// records the request-id; verification returns `Unsupported`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConfirmationProof {
     InBandToken {
         token: String,
@@ -90,7 +89,6 @@ pub enum ConfirmationProof {
 /// confirmation. The frontend presents this to the user and re-submits the
 /// command together with a matching [`ConfirmationProof::InBandToken`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConfirmationChallengeDto {
     pub token: String,
     pub args_hash: String,
@@ -100,7 +98,6 @@ pub struct ConfirmationChallengeDto {
 /// High-level outcome of the confirmation gate, surfaced by
 /// `execute_command` so the caller knows whether to retry with a proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConfirmationFlowDto {
     /// Command was executed (either non-dangerous, or proof verified).
     NotRequired,

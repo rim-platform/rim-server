@@ -7,7 +7,6 @@ use rim_core::user::model::UserId;
 use crate::message_attachment::dto::AttachmentDto;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageDto {
     pub id: MessageId,
     pub server_id: ServerId,
@@ -39,7 +38,6 @@ pub struct MessageDto {
 /// What a [`MessageChangeDto`] says happened to the message, derived from its state at its
 /// newest version: deleted wins over edited, and a message whose text never changed is created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MessageChangeKind {
     Created,
     Edited,
@@ -48,7 +46,6 @@ pub enum MessageChangeKind {
 
 /// One entry of the message change feed: the message as it is now, at its newest `version`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageChangeDto {
     pub kind: MessageChangeKind,
     pub version: i64,
@@ -59,7 +56,6 @@ pub struct MessageChangeDto {
 /// How one conversation of a change feed request was answered. Reported per conversation, so
 /// one channel the caller lost, or one reset counter, does not stall the sync of the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ConversationChangesStatus {
     /// The changes after the requested cursor.
     Ok,
@@ -74,7 +70,6 @@ pub enum ConversationChangesStatus {
 
 /// The changes of one conversation since the requested version, oldest first.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConversationMessageChangesDto {
     pub conversation_id: ConversationId,
     pub status: ConversationChangesStatus,
@@ -91,7 +86,6 @@ pub struct ConversationMessageChangesDto {
 /// only need the message (e.g. the `chat.search_messages` command executor's author/channel
 /// resolution helpers, which take `&[MessageDto]`) can trivially project `hit.message`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageSearchHitDto {
     pub message: MessageDto,
     /// `ts_rank` score against the query — informational, not the sort key. See
@@ -102,7 +96,6 @@ pub struct MessageSearchHitDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageReferenceDto {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
@@ -113,7 +106,6 @@ pub struct MessageReferenceDto {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessagePageCursor {
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub message_id: MessageId,
