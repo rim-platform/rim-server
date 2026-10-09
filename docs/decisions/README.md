@@ -14,3 +14,4 @@ Sealed, historical design records. ADR-style.
 
 - `registration-redesign-2026-04-28.md` — Multi-tenant registration onboarding (bootstrap CLI, instance invites, signup mutations, BOOTSTRAP/INSTANCE/WORKSPACE token types).
 - `decentralization-2026-10-08.md` — Decentralization model: key identity, interchangeable relays, hosted workspaces, MLS for DMs and private groups, signed server-to-server HTTP API.
+- `post-quantum-hybrid-2026-10-09.md` — Post-quantum cryptography goes hybrid (X25519 + ML-KEM-768 for MLS key agreement, Ed25519 + ML-DSA-44 for signatures), never pure; Stage 3 formats become algorithm-agile.
