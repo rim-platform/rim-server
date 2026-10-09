@@ -11,6 +11,7 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::device_link::repository::DeviceLinkRepository;
+use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::escalation::repository::{
     ConversationEscalationPolicyRepository, EscalationPolicyRepository, EscalationRunRepository,
     EscalationStepRepository,
@@ -96,6 +97,7 @@ pub struct AppRepos {
     pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
     pub device_link_repo: Arc<dyn DeviceLinkRepository>,
     pub workspace_plugin_repo: Arc<dyn WorkspacePluginRepository>,
+    pub e2ee_repo: Arc<dyn E2eeRepository>,
 }
 
 #[derive(Clone)]
@@ -363,6 +365,18 @@ impl AppRepos {
         }
     }
 
+    pub fn for_e2ee(&self) -> crate::e2ee::E2eeRepos {
+        crate::e2ee::E2eeRepos {
+            e2ee_repo: Arc::clone(&self.e2ee_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            message_repo: Arc::clone(&self.message_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
+        }
+    }
+
     pub fn for_device_link(&self) -> crate::device_link::DeviceLinkRepos {
         crate::device_link::DeviceLinkRepos {
             user_repo: Arc::clone(&self.user_repo),
@@ -470,6 +484,7 @@ impl AppRepos {
             notification_repo: Arc::clone(&self.notification_repo),
             message_repo: Arc::clone(&self.message_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 
@@ -758,6 +773,9 @@ impl AppRepos {
                     handle.clone(),
                 ),
             ),
+            e2ee_repo: Arc::new(sea_orm_impl::e2ee::SeaOrmE2eeRepository::new(
+                handle.clone(),
+            )),
         }
     }
 }
