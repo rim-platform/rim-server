@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rim_infra_db::TransactionScope;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
@@ -13,23 +17,33 @@ const MAX_CHANGE_FEED_CONVERSATIONS: usize = 100;
 /// conversations: the per-conversation limit is lowered to fit, and `has_more` carries the rest.
 const MAX_CHANGE_FEED_TOTAL: u32 = 1000;
 
-use rim_core::message::model::{Message, NewMessage};
+use rim_core::conversation::model::Conversation;
+use rim_core::e2ee::model::NewEncryptedMessage;
+use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
+use rim_core::key_identity::model::DeviceKeyId;
+use rim_core::message::model::{Message, MessageEncryption, MessageId, NewMessage};
 use rim_core::message::repository::MessageSearchParams;
+use rim_core::message_thread::model::MessageThread;
+use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
+use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
+use rim_services::e2ee::wire::{MlsContentType, MlsWire};
+use rim_services::e2ee::{MAX_ENVELOPE_BYTES, MlsCommitRequiredReason};
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
 use rim_services::message::command::{
-    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
-    SearchMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditEncryptedMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
+    GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery,
+    ReplyToMessageCmd, SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
 };
 use rim_services::message::dto::{
     ConversationChangesStatus, ConversationMessageChangesDto, MessageChangeDto, MessageChangeKind,
-    MessageDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
+    MessageDto, MessageEncryptionDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
 };
 use rim_services::message::search_query::{ChannelToken, FromToken, HasFilter, parse_search_query};
 use rim_services::message::service::MessageService;
 use rim_services::message_attachment::dto::AttachmentDto;
+use rim_services::notification::command::EncryptedMentions;
 use rim_services::{ServiceError, ServiceResult};
 
 /// Maximum allowed length (in characters) for message text.
@@ -55,6 +69,12 @@ pub(crate) fn slow_mode_retry_after(
 }
 
 use crate::MessageRepos;
+use crate::e2ee::aad::{ApplicationAad, parse_application};
+use crate::e2ee::franking::{ReceiptFields, receipt, sent_at_us};
+use crate::e2ee::{
+    GroupState, check_group_id, decode_b64, read_private_message, require_device, session_device,
+    stale,
+};
 use crate::mention::parse_mention_ids;
 use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_action};
 use crate::repos::AppRepos;
@@ -62,6 +82,27 @@ use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
     ensure_conversation_writable_with_standing, ensure_not_archived, member_standing,
 };
+
+/// The refusal of a plaintext write into an encrypted conversation.
+fn encrypted_conversation() -> ServiceError {
+    ServiceError::Validation("this conversation is encrypted".to_string())
+}
+
+/// What encrypted messages need besides the message repositories: the MLS storage, bound to
+/// the message's transaction, and the framing decoder.
+#[derive(Clone)]
+pub(crate) struct MessageE2ee {
+    pub e2ee_repo: Arc<dyn E2eeRepository>,
+    pub wire: Arc<dyn MlsWire>,
+}
+
+/// An encrypted message's envelope and authenticated data, checked against the request.
+struct DecodedEnvelope {
+    bytes: Vec<u8>,
+    group_id: Vec<u8>,
+    epoch: i64,
+    aad: ApplicationAad,
+}
 
 #[derive(Clone)]
 pub struct DefaultMessageService {
@@ -75,6 +116,9 @@ pub struct DefaultMessageService {
     /// `None` in unit tests that are not about notifications; the composition root wires it.
     notification_service:
         Option<std::sync::Arc<dyn rim_services::notification::service::NotificationService>>,
+    /// Encrypted messages. `None` in unit tests that are not about them; the composition root
+    /// wires it.
+    e2ee: Option<MessageE2ee>,
 }
 
 impl DefaultMessageService {
@@ -85,7 +129,19 @@ impl DefaultMessageService {
             observers,
             audit_log_service: None,
             notification_service: None,
+            e2ee: None,
         }
+    }
+
+    pub fn with_e2ee(mut self, e2ee_repo: Arc<dyn E2eeRepository>, wire: Arc<dyn MlsWire>) -> Self {
+        self.e2ee = Some(MessageE2ee { e2ee_repo, wire });
+        self
+    }
+
+    fn e2ee(&self) -> ServiceResult<&MessageE2ee> {
+        self.e2ee.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("encrypted messages are not configured"))
+        })
     }
 
     pub fn with_notification_service(
@@ -106,6 +162,7 @@ impl DefaultMessageService {
         conversation: &rim_core::conversation::model::Conversation,
         message: Message,
         member_user_ids: Vec<rim_core::user::model::UserId>,
+        encrypted_mentions: Option<EncryptedMentions>,
     ) {
         let Some(notification_service) = &self.notification_service else {
             return;
@@ -117,6 +174,7 @@ impl DefaultMessageService {
                 conversation: conversation.clone(),
                 message,
                 member_user_ids,
+                encrypted_mentions,
             })
             .await
         {
@@ -300,6 +358,10 @@ impl DefaultMessageService {
             .into_iter()
             .map(crate::message_attachment::DefaultMessageAttachmentService::attachment_dto)
             .collect();
+        let device_ids = self
+            .sender_device_ids(std::slice::from_ref(&message))
+            .await?;
+        let encryption = Self::encryption_dto(&message, &device_ids);
 
         Ok(MessageDto {
             id: message.id,
@@ -316,6 +378,47 @@ impl DefaultMessageService {
             thread_root_message_id: None,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
+            encryption,
+        })
+    }
+
+    /// The client device ids of the devices that sent the encrypted ones among `messages`.
+    async fn sender_device_ids(
+        &self,
+        messages: &[Message],
+    ) -> ServiceResult<HashMap<DeviceKeyId, uuid::Uuid>> {
+        let mut ids = HashMap::new();
+        let Some(e2ee) = &self.e2ee else {
+            return Ok(ids);
+        };
+        let senders: std::collections::HashSet<DeviceKeyId> = messages
+            .iter()
+            .filter_map(|m| m.encryption.as_ref()?.sender_device_key_id)
+            .collect();
+        for device_key_id in senders {
+            if let Some(device) = e2ee.e2ee_repo.get_device(device_key_id).await? {
+                ids.insert(device_key_id, device.device_id);
+            }
+        }
+        Ok(ids)
+    }
+
+    fn encryption_dto(
+        message: &Message,
+        device_ids: &HashMap<DeviceKeyId, uuid::Uuid>,
+    ) -> Option<MessageEncryptionDto> {
+        let encryption = message.encryption.as_ref()?;
+        Some(MessageEncryptionDto {
+            incarnation: encryption.incarnation,
+            epoch: encryption.epoch,
+            sender_device_id: encryption
+                .sender_device_key_id
+                .and_then(|id| device_ids.get(&id).copied())
+                .unwrap_or_default(),
+            ciphertext: encryption.ciphertext.clone(),
+            franking_receipt: encryption.franking_receipt.clone(),
+            franking_key_id: encryption.franking_key_id,
+            sent_at_us: sent_at_us(message.sent_at),
         })
     }
 
@@ -326,6 +429,7 @@ impl DefaultMessageService {
         root_thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
         attachments: Vec<AttachmentDto>,
         thread_root_message_id: Option<rim_core::message::model::MessageId>,
+        encryption: Option<MessageEncryptionDto>,
     ) -> MessageDto {
         MessageDto {
             id: message.id,
@@ -342,7 +446,192 @@ impl DefaultMessageService {
             thread_root_message_id,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
+            encryption,
         }
+    }
+
+    /// The thread rooted at `root_message_id`, created when it has none; `true` when created.
+    async fn find_or_create_thread(
+        repos: &MessageRepos,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        root_message_id: MessageId,
+    ) -> ServiceResult<(MessageThread, bool)> {
+        if let Some(existing) = repos
+            .message_thread_repo
+            .get_by_root_message(root_message_id)
+            .await?
+        {
+            return Ok((existing, false));
+        }
+        match repos
+            .message_thread_repo
+            .create_thread_for_root(conversation_id, root_message_id)
+            .await
+        {
+            Ok(thread) => Ok((thread, true)),
+            Err(err) if matches!(err.kind(), RepoErrorKind::Conflict) => {
+                // Race condition: another request created the thread concurrently.
+                let thread = repos
+                    .message_thread_repo
+                    .get_by_root_message(root_message_id)
+                    .await?
+                    .ok_or(ServiceError::Conflict(
+                        "thread already exists for message".to_string(),
+                    ))?;
+                Ok((thread, false))
+            }
+            Err(err) => Err(ServiceError::from(err)),
+        }
+    }
+
+    /// The origin of a forward: a message the caller can read that is not deleted.
+    async fn ensure_forward_source_readable(
+        &self,
+        actor: UserId,
+        server_id: rim_core::server::model::ServerId,
+        source: MessageId,
+    ) -> ServiceResult<()> {
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(source)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            actor,
+            server_id,
+            message.conversation_id,
+        )
+        .await?;
+        if message.is_deleted {
+            return Err(ServiceError::Validation(
+                "cannot forward a deleted message".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Begin a write that also touches MLS storage, in one transaction when a database is
+    /// configured.
+    async fn begin_encrypted_write(
+        &self,
+    ) -> ServiceResult<(
+        MessageRepos,
+        Arc<dyn E2eeRepository>,
+        Option<TransactionScope>,
+    )> {
+        let e2ee = self.e2ee()?;
+        match &self.db {
+            Some(db) => {
+                let scope = begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?;
+                let repos = AppRepos::with_handle(&scope.handle());
+                Ok((repos.for_message(), repos.e2ee_repo, Some(scope)))
+            }
+            None => Ok((self.repos.clone(), Arc::clone(&e2ee.e2ee_repo), None)),
+        }
+    }
+
+    /// Decode an envelope and check that its authenticated data names `message_id`.
+    fn decode_envelope(
+        &self,
+        envelope: &str,
+        message_id: MessageId,
+    ) -> ServiceResult<DecodedEnvelope> {
+        let e2ee = self.e2ee()?;
+        let bytes = decode_b64("envelope", envelope, MAX_ENVELOPE_BYTES)?;
+        let header = read_private_message(e2ee.wire.as_ref(), &bytes, MlsContentType::Application)?;
+        let aad = parse_application(&header.authenticated_data)?;
+        if aad.message_id != uuid::Uuid::from(message_id) {
+            return Err(ServiceError::Validation(
+                "the authenticated data names another message".to_string(),
+            ));
+        }
+        let epoch = i64::try_from(header.epoch)
+            .map_err(|_| ServiceError::Validation("the epoch is out of range".to_string()))?;
+        Ok(DecodedEnvelope {
+            bytes,
+            group_id: header.group_id,
+            epoch,
+            aad,
+        })
+    }
+
+    /// Inside the message's transaction: the group must be at the envelope's incarnation and
+    /// epoch, the sending device one of its leaves, and no removal pending. Returns the
+    /// incarnation.
+    async fn check_envelope_against_group(
+        e2ee_repo: &dyn E2eeRepository,
+        conversation: &Conversation,
+        envelope: &DecodedEnvelope,
+        device_key_id: DeviceKeyId,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<i32> {
+        let group = e2ee_repo
+            .lock_current_group(conversation.id, GroupLock::Share)
+            .await?
+            .ok_or(ServiceError::MlsCommitRequired {
+                reason: MlsCommitRequiredReason::NoGroup,
+            })?;
+        check_group_id(conversation.id, &group, &envelope.group_id)?;
+        if envelope.epoch != group.epoch {
+            return Err(stale(&group));
+        }
+        let state = GroupState::load(e2ee_repo, group, now).await?;
+        let sender_pending_removal = state
+            .pending_removes()
+            .any(|d| d.device.device_key_id == device_key_id);
+        if !state.is_device(device_key_id) || sender_pending_removal {
+            return Err(ServiceError::Forbidden(
+                "this device is not in the conversation's group".to_string(),
+            ));
+        }
+        if state.pending_removes().next().is_some() {
+            return Err(ServiceError::MlsCommitRequired {
+                reason: MlsCommitRequiredReason::PendingRemovals,
+            });
+        }
+        Ok(state.group.incarnation)
+    }
+
+    /// The members an encrypted message mentions, by principal id: current members only, the
+    /// author skipped.
+    async fn encrypted_mentions(
+        e2ee_repo: &dyn E2eeRepository,
+        conversation: &Conversation,
+        aad: &ApplicationAad,
+        author: UserId,
+    ) -> ServiceResult<EncryptedMentions> {
+        let mut user_ids: Vec<UserId> = e2ee_repo
+            .members_by_principal(conversation.id, &aad.mentions)
+            .await?
+            .into_iter()
+            .map(|(_, user_id)| user_id)
+            .filter(|user_id| *user_id != author)
+            .collect();
+        user_ids.dedup();
+        Ok(EncryptedMentions {
+            user_ids,
+            all: aad.mention_all,
+        })
+    }
+
+    /// The franking receipt of an envelope, under the server's current franking key.
+    async fn frank(
+        e2ee_repo: &dyn E2eeRepository,
+        fields: ReceiptFields,
+        commitment: &[u8],
+    ) -> ServiceResult<(i32, Vec<u8>)> {
+        let mut secret = vec![0u8; 32];
+        getrandom::fill(&mut secret).map_err(|e| ServiceError::internal(anyhow::anyhow!("{e}")))?;
+        let key = e2ee_repo.current_franking_key(secret).await?;
+        Ok((key.id, receipt(&key.secret, &fields, commitment).to_vec()))
     }
 
     async fn ensure_thread_in_conversation(
@@ -447,8 +736,10 @@ impl DefaultMessageService {
             std::collections::HashMap::new()
         };
 
+        let device_ids = self.sender_device_ids(&messages).await?;
         let mut items = Vec::with_capacity(messages.len());
         for message in messages {
+            let encryption = Self::encryption_dto(&message, &device_ids);
             let root_thread_id = if include_root_thread_ids && message.thread_id.is_none() {
                 root_thread_ids.get(&message.id).copied()
             } else {
@@ -470,6 +761,7 @@ impl DefaultMessageService {
                 root_thread_id,
                 attachments,
                 thread_root_message_id,
+                encryption,
             ));
         }
 
@@ -502,6 +794,9 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        if conv.is_encrypted() {
+            return Err(encrypted_conversation());
+        }
         self.ensure_slow_mode_allows(&conv, &standing, cmd.actor.user_id)
             .await?;
 
@@ -509,6 +804,10 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::Validation(
                 "attachments are not supported in v0".to_string(),
             ));
+        }
+        if let Some(source) = cmd.forwarded_from_message_id {
+            self.ensure_forward_source_readable(cmd.actor.user_id, cmd.server_id, source)
+                .await?;
         }
 
         let text = cmd.text.as_deref().map(str::trim).map(ToString::to_string);
@@ -549,7 +848,7 @@ impl MessageService for DefaultMessageService {
             sent_by: cmd.actor.user_id,
             thread_id: None,
             parent_message_id,
-            forwarded_from_message_id: None,
+            forwarded_from_message_id: cmd.forwarded_from_message_id,
             attachments: vec![],
         };
 
@@ -586,7 +885,7 @@ impl MessageService for DefaultMessageService {
 
         self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
             .await;
-        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids)
+        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids, None)
             .await;
 
         Ok(dto)
@@ -617,6 +916,9 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        if conv.is_encrypted() {
+            return Err(encrypted_conversation());
+        }
         self.ensure_slow_mode_allows(&conv, &standing, cmd.actor.user_id)
             .await?;
 
@@ -657,42 +959,8 @@ impl MessageService for DefaultMessageService {
         let (repos, scope) = self.begin_write().await?;
 
         // 5. Find or create thread
-        let mut thread_was_created = false;
-        let thread = match repos
-            .message_thread_repo
-            .get_by_root_message(cmd.root_message_id)
-            .await?
-        {
-            Some(existing) => existing,
-            None => {
-                match repos
-                    .message_thread_repo
-                    .create_thread_for_root(cmd.conversation_id, cmd.root_message_id)
-                    .await
-                {
-                    Ok(thread) => {
-                        thread_was_created = true;
-                        thread
-                    }
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            rim_core::repository::error::RepoErrorKind::Conflict
-                        ) =>
-                    {
-                        // Race condition: another request created the thread concurrently.
-                        repos
-                            .message_thread_repo
-                            .get_by_root_message(cmd.root_message_id)
-                            .await?
-                            .ok_or(ServiceError::Conflict(
-                                "thread already exists for message".to_string(),
-                            ))?
-                    }
-                    Err(err) => return Err(ServiceError::from(err)),
-                }
-            }
-        };
+        let (thread, thread_was_created) =
+            Self::find_or_create_thread(&repos, cmd.conversation_id, cmd.root_message_id).await?;
 
         // Validate parent_message_id if provided
         let parent_message_id = match cmd.parent_message_id {
@@ -780,7 +1048,7 @@ impl MessageService for DefaultMessageService {
         self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
             .await;
         // 11. Notifications (best-effort, after commit)
-        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids)
+        self.notify_recipients(cmd.server_id, &conv, message, member_user_ids, None)
             .await;
 
         Ok(dto)
@@ -1250,6 +1518,10 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::PermissionDenied);
         }
 
+        if msg.encryption.is_some() {
+            return Err(encrypted_conversation());
+        }
+
         if msg.is_deleted {
             return Err(ServiceError::Validation(
                 "cannot edit a deleted message".to_string(),
@@ -1345,6 +1617,16 @@ impl MessageService for DefaultMessageService {
             ));
         }
 
+        // Encrypted messages are forwarded by sending their content again.
+        if source_msg.encryption.is_some() {
+            return Err(ServiceError::Validation(
+                "an encrypted message is forwarded by sending its content".to_string(),
+            ));
+        }
+        if target_conv.is_encrypted() {
+            return Err(encrypted_conversation());
+        }
+
         // Create the forwarded message in the target conversation
         let new_message = NewMessage {
             conversation_id: cmd.target_conversation_id,
@@ -1389,7 +1671,7 @@ impl MessageService for DefaultMessageService {
         });
 
         // A forward is a send into the target: it notifies like one.
-        self.notify_recipients(cmd.server_id, &target_conv, message, member_user_ids)
+        self.notify_recipients(cmd.server_id, &target_conv, message, member_user_ids, None)
             .await;
 
         Ok(dto)
@@ -1475,6 +1757,323 @@ impl MessageService for DefaultMessageService {
         });
 
         Ok(())
+    }
+
+    #[instrument(
+        name = "message.send_encrypted_message",
+        skip_all,
+        fields(
+            actor_id = %cmd.caller.actor.user_id,
+            conversation_id = %cmd.conversation_id,
+            message_id = %cmd.message_id
+        )
+    )]
+    async fn send_encrypted_message(
+        &self,
+        cmd: SendEncryptedMessageCmd,
+    ) -> ServiceResult<MessageDto> {
+        let e2ee = self.e2ee()?;
+        require_device(&cmd.caller)?;
+        let author = cmd.caller.actor.user_id;
+        let conv = ensure_conversation_writable(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            author,
+            cmd.server_id,
+            cmd.conversation_id,
+        )
+        .await?;
+        if !conv.is_encrypted() {
+            return Err(ServiceError::Validation(
+                "this conversation is not encrypted".to_string(),
+            ));
+        }
+        if uuid::Uuid::from(cmd.message_id).get_version_num() != 7 {
+            return Err(ServiceError::Validation(
+                "messageId must be a UUID v7".to_string(),
+            ));
+        }
+        let envelope = self.decode_envelope(&cmd.envelope, cmd.message_id)?;
+
+        // A retry of a send that was stored answers the stored message.
+        if let Some(existing) = self.repos.message_repo.get_by_id(cmd.message_id).await? {
+            let same = existing.conversation_id == conv.id
+                && existing.sent_by == author
+                && existing
+                    .encryption
+                    .as_ref()
+                    .and_then(|e| e.ciphertext.as_deref())
+                    == Some(envelope.bytes.as_slice());
+            if same {
+                return self.to_dto(existing, cmd.server_id).await;
+            }
+            return Err(ServiceError::Conflict(
+                "the message id is taken".to_string(),
+            ));
+        }
+        let device = session_device(e2ee.e2ee_repo.as_ref(), &cmd.caller).await?;
+        if let Some(root_id) = cmd.thread_root_message_id {
+            let root = self
+                .repos
+                .message_repo
+                .get_by_id(root_id)
+                .await?
+                .ok_or(ServiceError::NotFound)?;
+            if root.conversation_id != conv.id || root.thread_id.is_some() {
+                return Err(ServiceError::NotFound);
+            }
+        }
+        if let Some(source) = cmd.forwarded_from_message_id {
+            self.ensure_forward_source_readable(author, cmd.server_id, source)
+                .await?;
+        }
+
+        let now = Utc::now();
+        let sent_at = DateTime::from_timestamp_micros(now.timestamp_micros()).unwrap_or(now);
+        let (repos, e2ee_repo, scope) = self.begin_encrypted_write().await?;
+        let incarnation = Self::check_envelope_against_group(
+            e2ee_repo.as_ref(),
+            &conv,
+            &envelope,
+            device.device_key_id,
+            now,
+        )
+        .await?;
+        let (franking_key_id, franking_receipt) = Self::frank(
+            e2ee_repo.as_ref(),
+            ReceiptFields {
+                message_id: cmd.message_id.into(),
+                conversation_id: conv.id.into(),
+                sender_user_id: author.into(),
+                sender_device_id: device.device_id,
+                sent_at_us: sent_at_us(sent_at),
+            },
+            &envelope.aad.franking,
+        )
+        .await?;
+        let thread = match cmd.thread_root_message_id {
+            Some(root_id) => Some(Self::find_or_create_thread(&repos, conv.id, root_id).await?),
+            None => None,
+        };
+        let message = e2ee_repo
+            .insert_encrypted_message(NewEncryptedMessage {
+                id: cmd.message_id,
+                conversation_id: conv.id,
+                sent_by: author,
+                thread_id: thread.as_ref().map(|(t, _)| t.id),
+                forwarded_from_message_id: cmd.forwarded_from_message_id,
+                sent_at,
+                envelope: MessageEncryption {
+                    incarnation,
+                    epoch: envelope.epoch,
+                    sender_device_key_id: Some(device.device_key_id),
+                    ciphertext: Some(envelope.bytes),
+                    franking_commitment: envelope.aad.franking.to_vec(),
+                    franking_receipt,
+                    franking_key_id,
+                },
+            })
+            .await
+            .map_err(|e| match e.kind() {
+                RepoErrorKind::Conflict => {
+                    ServiceError::Conflict("the message id is taken".to_string())
+                }
+                _ => e.into(),
+            })?;
+        if let Some((thread, _)) = &thread {
+            repos
+                .message_thread_repo
+                .touch_last_message_at(thread.id, message.sent_at)
+                .await?;
+        }
+        repos
+            .conversation_repo
+            .touch_last_activity_at(conv.id, message.sent_at)
+            .await?;
+        let mentions =
+            Self::encrypted_mentions(e2ee_repo.as_ref(), &conv, &envelope.aad, author).await?;
+        if !mentions.user_ids.is_empty() {
+            repos
+                .message_mention_repo
+                .create_mentions(message.id, &mentions.user_ids)
+                .await?;
+        }
+        Self::commit_if_present(scope).await?;
+        info!(
+            message_id = %message.id,
+            incarnation,
+            epoch = envelope.epoch,
+            device_key_id = %device.device_key_id,
+            "created encrypted message"
+        );
+
+        let dto = self.to_dto(message.clone(), cmd.server_id).await?;
+        let member_user_ids = self.list_member_user_ids(conv.id).await?;
+        if let Some((thread, true)) = &thread {
+            self.observers.emit(WorkspaceEvent::ThreadCreated {
+                workspace_id: cmd.server_id,
+                conversation_id: conv.id,
+                thread_id: thread.id,
+                root_message_id: thread.first_message_id.unwrap_or(message.id),
+                conversation_type: conv.conversation_type.as_str().to_string(),
+                is_private: conv.is_private,
+                member_user_ids: member_user_ids.clone(),
+            });
+        }
+        self.observers.emit(WorkspaceEvent::NewMessage {
+            workspace_id: cmd.server_id,
+            conversation_id: conv.id,
+            conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
+            member_user_ids: member_user_ids.clone(),
+            message: MessageEventData::from(&dto),
+        });
+        if !mentions.user_ids.is_empty() {
+            self.observers.emit(WorkspaceEvent::UserMentioned {
+                workspace_id: cmd.server_id,
+                conversation_id: conv.id,
+                message_id: message.id,
+                mentioned_user_ids: mentions.user_ids.clone(),
+                author_id: author,
+            });
+        }
+        self.notify_recipients(
+            cmd.server_id,
+            &conv,
+            message,
+            member_user_ids,
+            Some(mentions),
+        )
+        .await;
+        Ok(dto)
+    }
+
+    #[instrument(
+        name = "message.edit_encrypted_message",
+        skip_all,
+        fields(
+            actor_id = %cmd.caller.actor.user_id,
+            conversation_id = %cmd.conversation_id,
+            message_id = %cmd.message_id
+        )
+    )]
+    async fn edit_encrypted_message(
+        &self,
+        cmd: EditEncryptedMessageCmd,
+    ) -> ServiceResult<MessageDto> {
+        let e2ee = self.e2ee()?;
+        require_device(&cmd.caller)?;
+        let author = cmd.caller.actor.user_id;
+        let conv = ensure_conversation_writable(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            author,
+            cmd.server_id,
+            cmd.conversation_id,
+        )
+        .await?;
+        let envelope = self.decode_envelope(&cmd.envelope, cmd.message_id)?;
+        let msg = self
+            .repos
+            .message_repo
+            .get_by_id(cmd.message_id)
+            .await?
+            .filter(|m| m.conversation_id == conv.id)
+            .ok_or(ServiceError::NotFound)?;
+        let Some(current) = msg.encryption.as_ref() else {
+            return Err(ServiceError::Validation(
+                "this message is not encrypted".to_string(),
+            ));
+        };
+        if msg.sent_by != author {
+            return Err(ServiceError::PermissionDenied);
+        }
+        if msg.is_deleted {
+            return Err(ServiceError::Validation(
+                "cannot edit a deleted message".to_string(),
+            ));
+        }
+        // A retry of an edit that was stored answers the message as it is.
+        if current.ciphertext.as_deref() == Some(envelope.bytes.as_slice()) {
+            return self.to_dto(msg, cmd.server_id).await;
+        }
+        let device = session_device(e2ee.e2ee_repo.as_ref(), &cmd.caller).await?;
+
+        let now = Utc::now();
+        let (repos, e2ee_repo, scope) = self.begin_encrypted_write().await?;
+        let incarnation = Self::check_envelope_against_group(
+            e2ee_repo.as_ref(),
+            &conv,
+            &envelope,
+            device.device_key_id,
+            now,
+        )
+        .await?;
+        let (franking_key_id, franking_receipt) = Self::frank(
+            e2ee_repo.as_ref(),
+            ReceiptFields {
+                message_id: msg.id.into(),
+                conversation_id: conv.id.into(),
+                sender_user_id: author.into(),
+                sender_device_id: device.device_id,
+                sent_at_us: sent_at_us(msg.sent_at),
+            },
+            &envelope.aad.franking,
+        )
+        .await?;
+        let updated = e2ee_repo
+            .replace_envelope(
+                msg.id,
+                MessageEncryption {
+                    incarnation,
+                    epoch: envelope.epoch,
+                    sender_device_key_id: Some(device.device_key_id),
+                    ciphertext: Some(envelope.bytes),
+                    franking_commitment: envelope.aad.franking.to_vec(),
+                    franking_receipt,
+                    franking_key_id,
+                },
+            )
+            .await?;
+        // Edits replace the mention rows and notify no one again.
+        let mentions =
+            Self::encrypted_mentions(e2ee_repo.as_ref(), &conv, &envelope.aad, author).await?;
+        repos
+            .message_mention_repo
+            .delete_mentions_for_message(msg.id)
+            .await?;
+        if !mentions.user_ids.is_empty() {
+            repos
+                .message_mention_repo
+                .create_mentions(msg.id, &mentions.user_ids)
+                .await?;
+        }
+        Self::commit_if_present(scope).await?;
+        info!(
+            message_id = %msg.id,
+            incarnation,
+            epoch = envelope.epoch,
+            device_key_id = %device.device_key_id,
+            "edited encrypted message"
+        );
+
+        let dto = self.to_dto(updated, cmd.server_id).await?;
+        let member_user_ids = self.list_member_user_ids(conv.id).await?;
+        self.observers.emit(WorkspaceEvent::MessageUpdated {
+            workspace_id: cmd.server_id,
+            conversation_id: conv.id,
+            conversation_type: conv.conversation_type.as_str().to_string(),
+            is_private: conv.is_private,
+            member_user_ids,
+            message: MessageEventData::from(&dto),
+        });
+        Ok(dto)
     }
 
     async fn get_messages_by_ids(

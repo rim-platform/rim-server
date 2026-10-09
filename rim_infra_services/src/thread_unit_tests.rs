@@ -248,6 +248,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -315,6 +316,7 @@ mod tests {
             sent_by: actor_id,
             text: Some("root".to_string()),
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,
@@ -414,6 +416,7 @@ mod tests {
                         sent_by: actor_id,
                         text: Some("root".to_string()),
                         has_attachments: false,
+                        encryption: None,
                         parent_message_id: None,
                         forwarded_from_message_id: None,
                         is_deleted: false,
@@ -540,6 +543,7 @@ mod tests {
             sent_by: UserId::new(),
             text: None,
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,

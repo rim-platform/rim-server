@@ -96,9 +96,20 @@ pub(crate) async fn record_moderation_action(
     audit_log_service: Option<&Arc<dyn AuditLogService>>,
     entry: ModerationAuditEntry,
 ) {
+    record_audit_action(audit_log_service, entry, MODERATION_AUDIT_INITIATOR).await;
+}
+
+/// [`record_moderation_action`] for any `initiator`: the tracing line and, when wired, the
+/// `command_audit_log` row.
+pub(crate) async fn record_audit_action(
+    audit_log_service: Option<&Arc<dyn AuditLogService>>,
+    entry: ModerationAuditEntry,
+    initiator: &str,
+) {
     tracing::info!(
         target: "audit",
         event = "moderation_action",
+        initiator,
         actor_id = %entry.actor,
         server_id = %entry.server_id,
         command_id = entry.command_id,
@@ -112,7 +123,7 @@ pub(crate) async fn record_moderation_action(
         actor_user_id: entry.actor.into(),
         server_id: entry.server_id.into(),
         command_id: entry.command_id.to_string(),
-        initiator: MODERATION_AUDIT_INITIATOR.to_string(),
+        initiator: initiator.to_string(),
         args_redacted: entry.args,
         sensitivity: "restricted".to_string(),
         dangerous: entry.dangerous,
@@ -130,7 +141,7 @@ pub(crate) async fn record_moderation_action(
             event = "audit_db_write_failed",
             error = %e,
             command_id = entry.command_id,
-            "audit DB write failed for moderation action (tracing line already emitted)"
+            "audit DB write failed (tracing line already emitted)"
         );
     }
 }
@@ -302,11 +313,11 @@ impl DefaultModerationService {
             .conversation_repo
             .list_joined_conversation_ids(server_id, user_id)
             .await?;
-        for conversation_id in joined {
+        for conversation_id in &joined {
             match self
                 .repos
                 .conversation_member_repo
-                .remove_member(conversation_id, user_id)
+                .remove_member(*conversation_id, user_id)
                 .await
             {
                 Ok(()) => {}
@@ -318,6 +329,31 @@ impl DefaultModerationService {
             workspace_id: server_id,
             user_id,
         });
+        // The user's devices are now waiting to be removed from encrypted groups.
+        let encrypted: Vec<_> = self
+            .repos
+            .conversation_repo
+            .get_by_ids(&joined)
+            .await?
+            .into_iter()
+            .filter(Conversation::is_encrypted)
+            .map(|c| c.id)
+            .collect();
+        if encrypted.is_empty() {
+            return Ok(());
+        }
+        let mut members = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids_for_conversations(&encrypted)
+            .await?;
+        for conversation_id in encrypted {
+            self.observers.emit(WorkspaceEvent::MlsMembershipChanged {
+                workspace_id: server_id,
+                conversation_id,
+                member_user_ids: members.remove(&conversation_id).unwrap_or_default(),
+            });
+        }
         Ok(())
     }
 
@@ -341,6 +377,7 @@ impl DefaultModerationService {
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
             slow_mode_seconds: conversation.slow_mode_seconds,
+            encrypted_at: conversation.encrypted_at,
         })
     }
 
@@ -785,6 +822,11 @@ impl ModerationService for DefaultModerationService {
                 "cannot report a deleted message".to_string(),
             ));
         }
+        if message.encryption.is_some() {
+            return Err(ServiceError::Validation(
+                "an encrypted message is reported with reportEncryptedMessage".to_string(),
+            ));
+        }
 
         let report = match self
             .repos
@@ -795,6 +837,7 @@ impl ModerationService for DefaultModerationService {
                 message_id: cmd.message_id,
                 reporter_user_id: cmd.actor.user_id,
                 reason: reason.to_string(),
+                franked_content: None,
             })
             .await
         {

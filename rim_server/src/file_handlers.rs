@@ -22,6 +22,9 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
         rim_services::ServiceError::PermissionDenied => {
             HttpResponse::Forbidden().json(serde_json::json!({"error": "access denied"}))
         }
+        rim_services::ServiceError::Forbidden(msg) => {
+            HttpResponse::Forbidden().json(serde_json::json!({"error": msg}))
+        }
         rim_services::ServiceError::Unauthenticated => HttpResponse::Unauthorized()
             .json(serde_json::json!({"error": "authentication required"})),
         rim_services::ServiceError::Validation(msg) => {
@@ -73,6 +76,13 @@ const ALLOWED_MIME_PREFIXES: &[&str] = &[
     "application/zip",
     "application/gzip",
 ];
+
+/// The type of an encrypted conversation's blob. The service accepts it only for an attachment
+/// created with a `blobSha256`, and checks the bytes against it.
+const ENCRYPTED_BLOB_MIME: &str = "application/octet-stream";
+
+/// The file name every encrypted blob is downloaded under; the real one is in the message.
+const ENCRYPTED_BLOB_FILENAME: &str = "encrypted.bin";
 
 /// MIME types allowed for avatar uploads.
 const ALLOWED_AVATAR_MIMES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -245,7 +255,9 @@ pub async fn handle_file_upload(
         Err(resp) => return resp,
     };
 
-    if !is_mime_allowed(&upload.content_type, ALLOWED_MIME_PREFIXES) {
+    if !is_mime_allowed(&upload.content_type, ALLOWED_MIME_PREFIXES)
+        && !is_mime_allowed(&upload.content_type, &[ENCRYPTED_BLOB_MIME])
+    {
         return HttpResponse::UnsupportedMediaType()
             .json(serde_json::json!({"error": "file type not allowed"}));
     }
@@ -426,13 +438,18 @@ pub async fn handle_attachment_download(
         }
     };
 
-    let content_type = &attachment_dto.content_type;
-    let safe_name = attachment_dto
-        .filename
-        .replace(['\0', '"', '\\', '\r', '\n'], "");
+    // An encrypted blob is served as opaque bytes; the client checks its hash and decrypts it.
+    let (content_type, filename) = match attachment_dto.blob_sha256 {
+        Some(_) => (ENCRYPTED_BLOB_MIME, ENCRYPTED_BLOB_FILENAME),
+        None => (
+            attachment_dto.content_type.as_str(),
+            attachment_dto.filename.as_str(),
+        ),
+    };
+    let safe_name = filename.replace(['\0', '"', '\\', '\r', '\n'], "");
 
     HttpResponse::Ok()
-        .content_type(content_type.as_str())
+        .content_type(content_type)
         .insert_header((
             "Content-Disposition",
             format!("attachment; filename=\"{}\"", safe_name),

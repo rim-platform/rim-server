@@ -341,6 +341,35 @@ pub enum WorkspaceEvent {
         plugin_id: String,
         change: WorkspacePluginChange,
     },
+    /// The server accepted a Commit of an encrypted conversation's group. `epoch` is the epoch
+    /// the Commit was created in. Delivered to the conversation's members.
+    MlsCommitAccepted {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        incarnation: i32,
+        epoch: i64,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    /// The devices an encrypted conversation's group should add or remove changed: membership,
+    /// devices, key package activity or re-add requests. Clients refetch `Conversation.mlsGroup`.
+    MlsMembershipChanged {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
+    /// A Welcome waits for one of `user_id`'s devices; other devices ignore it. Delivered to
+    /// `user_id` only.
+    MlsWelcomeAvailable {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        /// The client device id.
+        device_id: uuid::Uuid,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
 }
 
 /// What happened to a registry entry.
@@ -375,6 +404,37 @@ pub struct MessageEventData {
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub reactions: Vec<ReactionGroupData>,
+    /// The envelope of an encrypted message; `None` for plaintext.
+    pub encryption: Option<MessageEncryptionData>,
+}
+
+/// An encrypted message's envelope in events. Binary values are unpadded base64url; `sent_at_us`
+/// is decimal microseconds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEncryptionData {
+    pub incarnation: i32,
+    pub epoch: i64,
+    pub sender_device_id: uuid::Uuid,
+    pub ciphertext: Option<String>,
+    pub franking_receipt: String,
+    pub franking_key_id: i32,
+    pub sent_at_us: String,
+}
+
+impl From<&crate::message::dto::MessageEncryptionDto> for MessageEncryptionData {
+    fn from(dto: &crate::message::dto::MessageEncryptionDto) -> Self {
+        use base64::Engine;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        Self {
+            incarnation: dto.incarnation,
+            epoch: dto.epoch,
+            sender_device_id: dto.sender_device_id,
+            ciphertext: dto.ciphertext.as_deref().map(b64),
+            franking_receipt: b64(&dto.franking_receipt),
+            franking_key_id: dto.franking_key_id,
+            sent_at_us: dto.sent_at_us.to_string(),
+        }
+    }
 }
 
 impl From<&MessageDto> for MessageEventData {
@@ -397,6 +457,7 @@ impl From<&MessageDto> for MessageEventData {
             is_deleted: dto.is_deleted,
             sent_at: dto.sent_at,
             reactions: vec![],
+            encryption: dto.encryption.as_ref().map(Into::into),
         }
     }
 }
@@ -440,7 +501,10 @@ impl WorkspaceEvent {
             | Self::EscalationStepFired { workspace_id, .. }
             | Self::IncidentAcknowledged { workspace_id, .. }
             | Self::NotificationDue { workspace_id, .. }
-            | Self::WorkspacePluginChanged { workspace_id, .. } => workspace_id.to_string(),
+            | Self::WorkspacePluginChanged { workspace_id, .. }
+            | Self::MlsCommitAccepted { workspace_id, .. }
+            | Self::MlsMembershipChanged { workspace_id, .. }
+            | Self::MlsWelcomeAvailable { workspace_id, .. } => workspace_id.to_string(),
         }
     }
 
@@ -521,6 +585,16 @@ impl WorkspaceEvent {
             } => Some(member_user_ids),
             // NotificationDue is scoped to its one recipient.
             Self::NotificationDue {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            // MLS events reach the conversation's members; a Welcome only its device's user.
+            Self::MlsCommitAccepted {
+                member_user_ids, ..
+            }
+            | Self::MlsMembershipChanged {
+                member_user_ids, ..
+            }
+            | Self::MlsWelcomeAvailable {
                 member_user_ids, ..
             } => Some(member_user_ids),
         }

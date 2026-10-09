@@ -83,6 +83,7 @@ pub struct DefaultAppServiceProvider {
     pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
     device_link_service: Arc<dyn DeviceLinkService>,
+    e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService>,
     workspace_plugin_service: Arc<dyn WorkspacePluginService>,
     plugin_bundle_service: Arc<dyn PluginBundleService>,
 }
@@ -122,15 +123,14 @@ impl DefaultAppServiceProvider {
             .with_known_login_sources(known_login_sources.clone())
             .with_signup_rate_limiter(signup_rate_limiter.clone()),
         );
-        let key_auth_service: Arc<dyn KeyAuthService> =
-            Arc::new(crate::key_auth::DefaultKeyAuthService::new(
-                repos.for_key_auth(),
-                Some(db.clone()),
-                session_ttl,
-                key_login_audiences,
-                observers.clone(),
-                signup_rate_limiter,
-            ));
+        let key_auth = crate::key_auth::DefaultKeyAuthService::new(
+            repos.for_key_auth(),
+            Some(db.clone()),
+            session_ttl,
+            key_login_audiences,
+            observers.clone(),
+            signup_rate_limiter,
+        );
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
         );
@@ -144,16 +144,20 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&audit_log_repo),
                 Arc::clone(&capability_service),
             ));
-        let conversation_service: Arc<dyn ConversationService> =
-            Arc::new(crate::conversation::DefaultConversationService::new(
+        let conversation_service: Arc<dyn ConversationService> = Arc::new(
+            crate::conversation::DefaultConversationService::new(
                 repos.for_conversation(),
                 observers.clone(),
-            ));
+            )
+            .with_e2ee_repo(Arc::clone(&repos.e2ee_repo)),
+        );
         let notification_service: Arc<dyn NotificationService> =
             Arc::new(crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
                 observers.clone(),
             ));
+        let mls_wire: Arc<dyn rim_services::e2ee::wire::MlsWire> =
+            Arc::new(crate::e2ee::openmls_wire::OpenMlsWire::new());
         let message_service: Arc<dyn MessageService> = Arc::new(
             crate::message::DefaultMessageService::new(
                 repos.for_message(),
@@ -161,8 +165,20 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
-            .with_notification_service(Arc::clone(&notification_service)),
+            .with_notification_service(Arc::clone(&notification_service))
+            .with_e2ee(Arc::clone(&repos.e2ee_repo), Arc::clone(&mls_wire)),
         );
+        let e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService> = Arc::new(
+            crate::e2ee::DefaultE2eeService::new(
+                repos.for_e2ee(),
+                Some(db.clone()),
+                Arc::clone(&mls_wire),
+                observers.clone(),
+            )
+            .with_audit_log_service(Arc::clone(&audit_log_service)),
+        );
+        let key_auth_service: Arc<dyn KeyAuthService> =
+            Arc::new(key_auth.with_e2ee_service(Arc::clone(&e2ee_service)));
         let moderation_service: Arc<dyn ModerationService> = Arc::new(
             crate::moderation::DefaultModerationService::new(
                 repos.for_moderation(),
@@ -412,6 +428,7 @@ impl DefaultAppServiceProvider {
             pipeline_service,
             request_authenticator,
             device_link_service,
+            e2ee_service,
             workspace_plugin_service,
             plugin_bundle_service,
         }
@@ -524,6 +541,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn device_link_service(&self) -> Arc<dyn DeviceLinkService> {
         Arc::clone(&self.device_link_service)
+    }
+    fn e2ee_service(&self) -> Arc<dyn rim_services::e2ee::service::E2eeService> {
+        Arc::clone(&self.e2ee_service)
     }
     fn workspace_plugin_service(&self) -> Arc<dyn WorkspacePluginService> {
         Arc::clone(&self.workspace_plugin_service)

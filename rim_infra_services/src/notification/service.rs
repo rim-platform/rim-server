@@ -417,6 +417,7 @@ impl NotificationService for DefaultNotificationService {
             prefs_by_user: &prefs_by_user,
             settings_by_user: &settings_by_user,
             now,
+            encrypted_mentions: cmd.encrypted_mentions.as_ref(),
         });
         if decisions.is_empty() {
             return Ok(0);

@@ -33,6 +33,24 @@ pub struct MessageDto {
     pub is_deleted: bool,
 
     pub sent_at: chrono::DateTime<chrono::Utc>,
+
+    /// The MLS envelope of an encrypted message; `None` for plaintext.
+    pub encryption: Option<MessageEncryptionDto>,
+}
+
+/// An encrypted message's envelope as members see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageEncryptionDto {
+    pub incarnation: i32,
+    pub epoch: i64,
+    /// The sender's client device id.
+    pub sender_device_id: uuid::Uuid,
+    /// The `MLSMessage` bytes; `None` once deleted.
+    pub ciphertext: Option<Vec<u8>>,
+    pub franking_receipt: Vec<u8>,
+    pub franking_key_id: i32,
+    /// `sent_at` in microseconds since the Unix epoch, as covered by the receipt.
+    pub sent_at_us: i64,
 }
 
 /// What a [`MessageChangeDto`] says happened to the message, derived from its state at its

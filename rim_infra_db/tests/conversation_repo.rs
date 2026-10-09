@@ -33,6 +33,7 @@ async fn create_conversation_and_get_by_id() {
             title: Some("Team".to_string()),
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -61,6 +62,7 @@ async fn create_conversation_with_members_is_atomic() {
                 title: Some("Project".to_string()),
                 is_private: false,
                 created_by: Some(u1),
+                encrypted: false,
             },
             &[u1, u2],
         )
@@ -103,6 +105,7 @@ async fn find_direct_between_users() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -130,6 +133,7 @@ async fn touch_last_activity_at_updates_and_not_found() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -164,6 +168,7 @@ async fn list_inbox_conversations_paginates_and_orders() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -174,6 +179,7 @@ async fn list_inbox_conversations_paginates_and_orders() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -184,6 +190,7 @@ async fn list_inbox_conversations_paginates_and_orders() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -247,6 +254,7 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
             title: Some("alpha".to_string()),
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -257,6 +265,7 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
             title: Some("beta".to_string()),
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -320,6 +329,7 @@ async fn list_inbox_before_returns_conversations_adjacent_to_cursor() {
                 title: None,
                 is_private: false,
                 created_by: None,
+                encrypted: false,
             })
             .await
             .unwrap();
@@ -379,6 +389,7 @@ async fn list_channels_before_returns_channels_adjacent_to_cursor() {
                 title: Some(format!("channel-{i}")),
                 is_private: false,
                 created_by: None,
+                encrypted: false,
             })
             .await
             .unwrap();
@@ -444,6 +455,7 @@ async fn channel(
         title: Some(title.to_string()),
         is_private,
         created_by,
+        encrypted: false,
     })
     .await
     .unwrap()
@@ -608,6 +620,7 @@ async fn accessible_ids_include_private_channels_only_for_members() {
                 title: None,
                 is_private: false,
                 created_by: Some(alice),
+                encrypted: false,
             },
             &[alice],
         )
@@ -670,6 +683,7 @@ async fn migration_backfill_makes_workspace_members_channel_members() {
                 title: None,
                 is_private: false,
                 created_by: Some(alice),
+                encrypted: false,
             },
             &[alice],
         )
@@ -751,6 +765,7 @@ async fn public_channel_ids_exclude_private_archived_and_other_servers() {
         title: None,
         is_private: false,
         created_by: None,
+        encrypted: false,
     })
     .await
     .unwrap();
@@ -786,6 +801,7 @@ async fn joined_conversation_ids_cover_membership_rows_only() {
                 title: None,
                 is_private: false,
                 created_by: Some(alice),
+                encrypted: false,
             },
             &[alice],
         )

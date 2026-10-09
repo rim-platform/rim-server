@@ -267,7 +267,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // Background tasks: notification digest and retention (Track 1.3), next to the escalation
     // driver and under the same single-scheduler-node assumption. The jobs live in
     // `rim_infra_services::notification` behind `NotificationJobs`; this loop only times them.
+    // The hourly retention tick also purges MLS rows the encryption retention rules let go.
     {
+        let e2ee_service = service_provider.e2ee_service();
         let jobs: Arc<dyn rim_infra_services::notification::NotificationJobs> = Arc::new(
             rim_infra_services::notification::DefaultNotificationJobs::new(
                 repos.for_notification_jobs(),
@@ -306,6 +308,17 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                             Ok(deleted) if deleted > 0 => tracing::info!(deleted, "purged expired notifications"),
                             Ok(_) => {}
                             Err(e) => tracing::error!(error = %e, "notification retention purge failed"),
+                        }
+                        match e2ee_service.purge().await {
+                            Ok(purged) => tracing::info!(
+                                commits = purged.commits,
+                                welcomes = purged.welcomes,
+                                key_packages = purged.key_packages,
+                                readd_requests = purged.readd_requests,
+                                franked_contents = purged.franked_contents,
+                                "purged MLS rows past retention"
+                            ),
+                            Err(e) => tracing::error!(error = %e, "MLS retention purge failed"),
                         }
                     }
                     _ = shutdown_rx4.changed() => {

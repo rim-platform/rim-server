@@ -49,6 +49,7 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
         Ok(RequestAuthResultDto {
             user_id: Some(session.user_id),
             session_id: Some(session.id),
+            device_key_id: session.device_key_id,
         })
     }
 }
@@ -98,6 +99,7 @@ mod tests {
             last_seen_at: Some(chrono::Utc::now()),
             user_agent: None,
             ip: None,
+            device_key_id: None,
         }
     }
 

@@ -147,6 +147,7 @@ mod tests {
             revoked_at: None,
             user_agent: None,
             ip: None,
+            device_key_id: None,
         }
     }
 
@@ -201,6 +202,7 @@ mod tests {
                         archived_at: None,
                         created_by: conv.created_by,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     })
                 })
             });
@@ -234,6 +236,7 @@ mod tests {
                 revoked_at: None,
                 user_agent: None,
                 ip: None,
+                device_key_id: None,
             }))
         });
         session_repo.expect_revoke_session().never();

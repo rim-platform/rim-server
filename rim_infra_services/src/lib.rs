@@ -9,6 +9,7 @@ pub mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod e2ee;
 // pub(crate) promoted to pub: EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig are
 // constructed directly by the composition root (rim_server/src/app.rs) — mirrors the
 // DefaultAuthService precedent above (Track B3, 2026-07-10).
@@ -119,6 +120,15 @@ mod workspace_plugin_unit_tests;
 
 #[cfg(test)]
 mod plugin_bundle_unit_tests;
+
+#[cfg(test)]
+mod e2ee_test_support;
+
+#[cfg(test)]
+mod e2ee_unit_tests;
+
+#[cfg(test)]
+mod encrypted_message_unit_tests;
 
 pub use alert_rate_limiter::AlertRateLimiter;
 pub use auth::DefaultAuthService;

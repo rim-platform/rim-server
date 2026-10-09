@@ -409,6 +409,9 @@ pub fn build_test_provider_with(
                 db.clone(),
             ),
         ),
+        e2ee_repo: Arc::new(rim_infra_db::sea_orm_impl::e2ee::SeaOrmE2eeRepository::new(
+            db.clone(),
+        )),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),

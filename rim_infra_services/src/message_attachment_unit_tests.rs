@@ -274,6 +274,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -287,6 +288,7 @@ mod tests {
             sent_by: UserId::new(),
             text: Some("hello".to_string()),
             has_attachments: true,
+            encryption: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         }
@@ -301,6 +303,7 @@ mod tests {
             file_size: 10,
             mime_type: "text/plain".to_string(),
             metadata: None,
+            blob_sha256: None,
         }
     }
 
@@ -373,6 +376,7 @@ mod tests {
         size_bytes: u64,
     ) -> CreateAttachmentCmd {
         CreateAttachmentCmd {
+            blob_sha256: None,
             actor: Actor::new(actor_id),
             server_id,
             conversation_id,
@@ -527,6 +531,7 @@ mod tests {
                 file_size: new.file_size,
                 mime_type: new.mime_type,
                 metadata: new.metadata,
+                blob_sha256: None,
             })
         });
         let mut storage = MockStorageService::new();
@@ -605,6 +610,7 @@ mod tests {
                     file_size: size,
                     mime_type: "text/plain".to_string(),
                     metadata,
+                    blob_sha256: None,
                 }))
             });
 
@@ -951,6 +957,7 @@ mod tests {
         // Filenames containing ".." are rejected outright (not stripped).
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,
@@ -966,6 +973,7 @@ mod tests {
         // Null bytes in filename should be stripped
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,
@@ -1006,6 +1014,7 @@ mod tests {
 
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id: ConversationId::new(),
@@ -1100,6 +1109,7 @@ mod tests {
                     file_size: att.file_size,
                     mime_type: att.mime_type,
                     metadata: att.metadata,
+                    blob_sha256: None,
                 })
             },
         );
@@ -1127,6 +1137,7 @@ mod tests {
                     file_size: 10,
                     mime_type: "text/plain".to_string(),
                     metadata: Some(serde_json::json!({ "status": status })),
+                    blob_sha256: None,
                 }))
             });
 
@@ -1148,6 +1159,7 @@ mod tests {
                     file_size: 10,
                     mime_type: "text/plain".to_string(),
                     metadata: Some(serde_json::json!({ "status": "ready" })),
+                    blob_sha256: None,
                 })
             });
 
@@ -1198,6 +1210,7 @@ mod tests {
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,

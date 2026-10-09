@@ -379,6 +379,7 @@ mod tests {
                 revoked_at: None,
                 user_agent: new.user_agent,
                 ip: new.ip,
+                device_key_id: None,
             };
             self.0
                 .lock()

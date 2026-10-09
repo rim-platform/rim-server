@@ -232,6 +232,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -309,6 +310,7 @@ mod tests {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 }))
             })
         });

@@ -169,6 +169,7 @@ async fn guest_invite_grants_guest_without_channel_auto_join() {
             title: Some("general".to_string()),
             is_private: false,
             created_by: Some(owner.id),
+            encrypted: false,
         })
         .await
         .expect("channel");

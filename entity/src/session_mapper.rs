@@ -13,6 +13,7 @@ impl From<session::Model> for Session {
             revoked_at: m.revoked_at.map(Into::into),
             user_agent: m.user_agent,
             ip: m.ip,
+            device_key_id: m.device_key_id.map(Into::into),
         }
     }
 }

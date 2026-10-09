@@ -802,6 +802,7 @@ mod tests {
                 revoked_at: None,
                 user_agent: new.user_agent,
                 ip: new.ip,
+                device_key_id: None,
             })
         });
         let (session, raw, csrf) = create_session(&repo, Duration::days(1), user_id, None, None)

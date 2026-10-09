@@ -49,6 +49,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -60,6 +61,7 @@ mod tests {
             sent_by: author,
             text: Some("t".to_string()),
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,
@@ -121,6 +123,7 @@ mod tests {
                         sent_by,
                         text: None,
                         has_attachments: false,
+                        encryption: None,
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
                     })
@@ -160,6 +163,7 @@ mod tests {
                 text: Some("   ".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .unwrap();
@@ -248,6 +252,7 @@ mod tests {
                 text: Some("hi".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .unwrap();
@@ -525,6 +530,7 @@ mod tests {
             sent_by: actor_id,
             text: Some("reply".to_string()),
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,
@@ -1029,6 +1035,7 @@ mod tests {
                     sent_by: msg.sent_by,
                     text: msg.text,
                     has_attachments: false,
+                    encryption: None,
                     parent_message_id: None,
                     forwarded_from_message_id: None,
                     is_deleted: false,
@@ -1070,6 +1077,7 @@ mod tests {
             text: Some("hello".to_string()),
             parent_message_id: None,
             attachments: vec![],
+            forwarded_from_message_id: None,
         }
     }
 
@@ -1375,6 +1383,7 @@ mod tests {
                 text: Some("hi".to_string()),
                 parent_message_id: None,
                 attachments: vec![],
+                forwarded_from_message_id: None,
             })
             .await
             .expect("the send succeeds although notifications failed");

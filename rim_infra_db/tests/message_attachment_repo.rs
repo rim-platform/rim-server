@@ -55,6 +55,7 @@ async fn add_get_and_list_attachments_for_message() {
             file_size: 123,
             mime_type: "text/plain".to_owned(),
             metadata: None,
+            blob_sha256: None,
         })
         .await
         .unwrap();
@@ -142,6 +143,7 @@ async fn get_attachments_for_messages_batch() {
         file_size: 10,
         mime_type: "text/plain".to_owned(),
         metadata: None,
+        blob_sha256: None,
     })
     .await
     .unwrap();
@@ -154,6 +156,7 @@ async fn get_attachments_for_messages_batch() {
         file_size: 20,
         mime_type: "text/plain".to_owned(),
         metadata: None,
+        blob_sha256: None,
     })
     .await
     .unwrap();
@@ -167,6 +170,7 @@ async fn get_attachments_for_messages_batch() {
         file_size: 30,
         mime_type: "text/plain".to_owned(),
         metadata: None,
+        blob_sha256: None,
     })
     .await
     .unwrap();
@@ -221,6 +225,7 @@ fn attachment_for(
         file_size,
         mime_type: "application/octet-stream".to_owned(),
         metadata: Some(serde_json::json!({ "status": status })),
+        blob_sha256: None,
     }
 }
 

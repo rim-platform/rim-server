@@ -47,6 +47,7 @@ pub struct Message {
     pub forwarded_from_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
+    pub encryption: Option<super::MessageEncryption>,
 }
 
 #[derive(SimpleObject, Clone, Debug)]
@@ -99,6 +100,7 @@ impl From<rim_services::message::dto::MessageDto> for Message {
                 .map(|id| async_graphql::ID(id.to_string())),
             is_deleted: value.is_deleted,
             sent_at: value.sent_at,
+            encryption: value.encryption.map(Into::into),
         }
     }
 }
@@ -204,6 +206,12 @@ impl Message {
     #[graphql(complexity = "child_complexity * 10")]
     async fn mentions(&self, ctx: &Context<'_>) -> Result<Vec<User>> {
         ctx.load_mentions(&self.id).await
+    }
+
+    /// The MLS envelope of an encrypted message, whose `text` is always null; null for
+    /// plaintext messages.
+    async fn encryption(&self) -> &Option<super::MessageEncryption> {
+        &self.encryption
     }
 }
 

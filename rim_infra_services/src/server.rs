@@ -62,6 +62,7 @@ async fn create_default_channels(
                     title: Some(channel_name.to_string()),
                     is_private: false,
                     created_by: Some(creator_id),
+                    encrypted: false,
                 },
                 &[creator_id],
             )

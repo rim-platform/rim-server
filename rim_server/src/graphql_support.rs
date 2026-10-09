@@ -184,14 +184,21 @@ pub async fn extract_actor_and_session_id(
     Option<rim_core::user::model::UserId>,
     Option<rim_core::auth::model::SessionId>,
 )> {
+    let result = extract_auth(req, request_authenticator).await?;
+    Ok((result.user_id, result.session_id))
+}
+
+/// The session cookie's user, session and the device the session is bound to.
+pub async fn extract_auth(
+    req: &HttpRequest,
+    request_authenticator: &dyn RequestAuthenticator,
+) -> rim_services::ServiceResult<rim_services::auth::dto::RequestAuthResultDto> {
     let session_token = req
         .cookie(COOKIE_SESSION)
         .map(|cookie| cookie.value().to_string());
-    let result = request_authenticator
+    request_authenticator
         .authenticate_session_token(session_token.as_deref())
-        .await?;
-
-    Ok((result.user_id, result.session_id))
+        .await
 }
 
 pub fn internal_graphql_error_response(message: &str) -> GraphQLResponse {
@@ -397,6 +404,7 @@ mod tests {
                     Ok(RequestAuthResultDto {
                         user_id: Some(user_id),
                         session_id: Some(session_id),
+                        device_key_id: None,
                     })
                 })
             });

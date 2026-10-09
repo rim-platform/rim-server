@@ -250,6 +250,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -263,6 +264,7 @@ mod tests {
             sent_by,
             text: Some("hello".to_string()),
             has_attachments: false,
+            encryption: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
         }

@@ -425,6 +425,7 @@ mod tests {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: cmd.seconds,
+                        encrypted_at: None,
                     })
                 })
             });

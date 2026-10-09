@@ -4,9 +4,9 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message::command::{
-    DeleteMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
-    SearchMessagesQuery, SendMessageCmd,
+    DeleteMessageCmd, EditEncryptedMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
+    GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery,
+    ReplyToMessageCmd, SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
 };
 use crate::message::dto::{
     ConversationMessageChangesDto, MessageDto, MessagePageCursor, MessageReferenceDto,
@@ -61,6 +61,25 @@ pub trait MessageService: Send + Sync {
     async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto>;
 
     async fn delete_message(&self, cmd: DeleteMessageCmd) -> ServiceResult<()>;
+
+    /// Store an encrypted message in the conversation's current epoch. Repeating the same id
+    /// with the same envelope answers the stored message.
+    ///
+    /// # Errors
+    /// - `StaleEpoch` when the envelope's epoch or incarnation is not current.
+    /// - `MlsCommitRequired` while devices that left are still in the group, or before the
+    ///   conversation has a group.
+    /// - `Conflict` when the id is taken by other bytes.
+    async fn send_encrypted_message(
+        &self,
+        cmd: SendEncryptedMessageCmd,
+    ) -> ServiceResult<MessageDto>;
+
+    /// Replace an encrypted message's envelope with an edit from one of its author's devices.
+    async fn edit_encrypted_message(
+        &self,
+        cmd: EditEncryptedMessageCmd,
+    ) -> ServiceResult<MessageDto>;
 
     async fn get_messages_by_ids(&self, ids: &[MessageId]) -> ServiceResult<Vec<MessageDto>>;
 }

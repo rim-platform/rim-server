@@ -7,6 +7,7 @@ pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
 pub mod device_link;
+pub mod e2ee;
 pub mod escalation;
 pub mod events;
 pub mod incident;
@@ -147,6 +148,21 @@ pub enum ServiceError {
     #[error("timed out until {until}")]
     TimedOut {
         until: chrono::DateTime<chrono::Utc>,
+    },
+
+    /// Refused with a reason the caller may see, as `FORBIDDEN`.
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    /// An MLS Commit or message for an epoch or incarnation that is not the conversation's
+    /// current one. Carries the current ones, so the client knows what to catch up to.
+    #[error("stale MLS epoch; the group is at incarnation {incarnation}, epoch {epoch}")]
+    StaleEpoch { incarnation: i32, epoch: i64 },
+
+    /// An encrypted message needs a Commit first.
+    #[error("an MLS Commit is required first: {}", reason.as_str())]
+    MlsCommitRequired {
+        reason: crate::e2ee::MlsCommitRequiredReason,
     },
 
     #[error("internal error")]

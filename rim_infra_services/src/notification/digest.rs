@@ -23,6 +23,7 @@ use rim_core::notification::model::{DigestCandidate, UserNotification};
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
+use rim_core::user::repository::UserRepository;
 use rim_services::presence::PresenceService;
 
 use crate::email::EmailSender;
@@ -125,6 +126,7 @@ pub(crate) fn build_digest_groups(
     pending: &[UserNotification],
     messages: &HashMap<rim_core::message::model::MessageId, Message>,
     conversations: &HashMap<ConversationId, Conversation>,
+    authors: &HashMap<UserId, String>,
     base_url: Option<&str>,
 ) -> Vec<DigestGroup> {
     let mut groups: Vec<DigestGroup> = Vec::new();
@@ -136,8 +138,21 @@ pub(crate) fn build_digest_groups(
         else {
             continue;
         };
+        let text = match message.encryption {
+            // The server cannot read it; the email names only who sent it.
+            Some(_) => format!(
+                "Encrypted message from {}",
+                authors
+                    .get(&message.sent_by)
+                    .map_or("a member", String::as_str)
+            ),
+            None => message
+                .text
+                .clone()
+                .unwrap_or_else(|| "(attachment)".to_string()),
+        };
         let item = DigestItem {
-            snippet: snippet(message.text.as_deref().unwrap_or("(attachment)")),
+            snippet: snippet(&text),
             link: message_link(base_url, server_id, message),
         };
         let slot = *index
@@ -161,6 +176,8 @@ pub struct NotificationJobRepos {
     pub notification_repo: Arc<dyn NotificationRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
+    /// Names the senders of encrypted messages.
+    pub user_repo: Arc<dyn UserRepository>,
 }
 
 pub struct DefaultNotificationJobs {
@@ -214,12 +231,31 @@ impl DefaultNotificationJobs {
             .into_iter()
             .map(|c| (c.id, c))
             .collect();
+        let mut encrypted_authors: Vec<UserId> = messages
+            .values()
+            .filter(|m| m.encryption.is_some())
+            .map(|m| m.sent_by)
+            .collect();
+        encrypted_authors.sort_by_key(|id| uuid::Uuid::from(*id));
+        encrypted_authors.dedup();
+        let authors: HashMap<UserId, String> = if encrypted_authors.is_empty() {
+            HashMap::new()
+        } else {
+            self.repos
+                .user_repo
+                .get_by_ids(&encrypted_authors)
+                .await?
+                .into_iter()
+                .map(|u| (u.id, u.display_name.unwrap_or(u.username)))
+                .collect()
+        };
 
         let groups = build_digest_groups(
             candidate.server_id,
             &pending,
             &messages,
             &conversations,
+            &authors,
             self.public_base_url.as_deref(),
         );
         let ids: Vec<_> = pending.iter().map(|n| n.id).collect();
@@ -428,6 +464,7 @@ mod tests {
             text: Some(text.to_string()),
             is_deleted: deleted,
             has_attachments: false,
+            encryption: None,
         }
     }
 
@@ -458,6 +495,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -490,6 +528,7 @@ mod tests {
             &pending,
             &messages,
             &conversations,
+            &HashMap::new(),
             Some("https://rim.example.com/"),
         );
         assert_eq!(groups.len(), 2);
@@ -513,7 +552,14 @@ mod tests {
                 .as_deref()
                 .is_some_and(|l| l.contains("/threads/"))
         );
-        let without_base = build_digest_groups(server, &pending, &messages, &conversations, None);
+        let without_base = build_digest_groups(
+            server,
+            &pending,
+            &messages,
+            &conversations,
+            &HashMap::new(),
+            None,
+        );
         assert!(without_base[0].items[0].link.is_none());
     }
 
@@ -537,6 +583,7 @@ mod tests {
                 notification_repo: Arc::new(notification_repo),
                 message_repo: Arc::new(message_repo),
                 conversation_repo: Arc::new(conversation_repo),
+                user_repo: Arc::new(rim_core::user::repository::MockUserRepository::new()),
             },
             Arc::new(email),
             Arc::new(FixedPresence(presence)),
