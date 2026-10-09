@@ -10,8 +10,8 @@ mod tests {
     use rim_core::auth::model::{NewSession, Session, SessionId};
     use rim_core::auth::repository::SessionRepository;
     use rim_core::key_identity::model::{
-        DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, NewDeviceKey,
-        NewKeyLogEntry, StoredProfileCard,
+        DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, KeyLogEntryType,
+        NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
     };
     use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
     use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
@@ -22,9 +22,9 @@ mod tests {
     };
     use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
     use rim_services::key_auth::command::{
-        AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
-        LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
-        SignedPayload,
+        AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
+        IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
+        RotateIdentityKeyCmd, SignedPayload,
     };
     use rim_services::key_auth::service::KeyAuthService;
     use rim_services::{Actor, ServiceError};
@@ -679,6 +679,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn key_log_is_public_by_principal_id() {
+        let h = harness();
+        let e = h.enroll(1).await;
+
+        let log = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: e.state.principal_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].seq, 0);
+
+        let unknown = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: "rimp1_unknown".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(unknown.is_empty());
+        // Too long to be a principal id: not looked up at all.
+        let oversized = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: format!("{}{}", e.state.principal_id, "x".repeat(64)),
+            })
+            .await
+            .unwrap();
+        assert!(oversized.is_empty());
+    }
+
+    #[tokio::test]
     async fn enroll_twice_or_with_a_taken_principal_conflicts() {
         let h = harness();
         let e = h.enroll(1).await;
@@ -1186,6 +1220,60 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn identity_rotations_stop_at_the_key_log_cap_and_recovery_does_not() {
+        let h = harness();
+        let mut e = h.enroll(1).await;
+        let rotate = |entry: SignedStatement, actor: Option<Actor>| RotateIdentityKeyCmd {
+            actor,
+            entry: payload(entry),
+            device: None,
+            remote_ip: IP.to_string(),
+        };
+        // Entries 1 to 255, written straight to the store: the log reaches 256 entries.
+        for n in 1..256u32 {
+            let entry =
+                e.id.rotate_with_identity(&e.state, if n % 2 == 0 { 3 } else { 4 });
+            e.state = e.state.apply(&entry).unwrap().0;
+            let mut s = h.state.lock().unwrap();
+            let entry = log_entry(
+                e.user_id,
+                NewKeyLogEntry {
+                    seq: n,
+                    entry_type: KeyLogEntryType::Rotate,
+                    payload: entry.payload,
+                    signature: entry.signature,
+                },
+            );
+            s.log.get_mut(&e.user_id).unwrap().push(entry);
+        }
+        let entry = e.id.rotate_with_identity(&e.state, 5);
+        let err = h
+            .svc
+            .rotate(rotate(entry, Some(Actor::new(e.user_id))))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("at most 256 entries")),
+            "{err:?}"
+        );
+
+        // The person can still get back in with the recovery key.
+        let recovery = e.id.recover(&e.state, 6);
+        let next = e.state.apply(&recovery).unwrap().0;
+        let (device_id, device) = (Uuid::now_v7(), signing_key(70));
+        let cert = e.id.device_cert(&next, device_id, &device, "New");
+        let dto = h
+            .svc
+            .rotate(RotateIdentityKeyCmd {
+                device: Some(payload(cert)),
+                ..rotate(recovery, None)
+            })
+            .await
+            .unwrap();
+        assert_eq!(dto.key_seq, Some(256));
     }
 
     #[tokio::test]

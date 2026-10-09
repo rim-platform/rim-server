@@ -72,3 +72,10 @@ pub struct PublishProfileCardCmd {
 pub struct GetMyKeyIdentityQuery {
     pub actor: Actor,
 }
+
+/// The public key log of a principal, by id. No session: a device that lost every key reads
+/// it to sign a recovery rotation that extends the current head.
+#[derive(Debug, Clone)]
+pub struct GetKeyLogQuery {
+    pub principal_id: String,
+}

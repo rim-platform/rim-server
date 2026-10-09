@@ -265,12 +265,17 @@ mutation, because an identity rotation is accepted on the strength of that sessi
 
 `rotateIdentityKey(input: { entry, device })`:
 
-- An **identity rotation** needs a session of that account. Devices stay enrolled.
+- An **identity rotation** needs a session of that account. Devices stay enrolled. It is
+  refused (`VALIDATION`, `a key log may have at most 256 entries`) when the log already has 256
+  entries, the same cap as at enrollment, so a log grown by identity rotations can always be
+  enrolled on another server.
 - A **recovery rotation** works **without a session** (the person lost every device). It must
   come with a certificate for a new device under the new identity key. The server appends the
   entry, **revokes every device and ends every session** of the account, then enrolls the new
-  device, which can sign in right away. Anonymous attempts count against the same per-IP
-  failure limit as logins, whether they succeed or not. An anonymous rotation for a principal
+  device, which can sign in right away. The 256-entry cap does not stop a recovery: being
+  locked out of the account is worse than a log too long to carry elsewhere. A log that
+  recoveries took past 256 entries is refused by enrollment on other servers. Anonymous attempts
+  count against the same per-IP failure limit as logins, whether they succeed or not. An anonymous rotation for a principal
   this server does not know is `UNAUTHENTICATED`; other refusals carry the validation reason,
   so they show whether a principal is enrolled here. That is not secret: `User.principalId` is
   visible to signed-in users.
@@ -312,7 +317,10 @@ type DeviceKey { publicKey: String … }         # tagged: "ed25519:…"
 input SignedStatementInput { payload: String!  signature: String! }
 type SignedStatement { payload: String!  signature: String! }
 
-type Query { myKeyIdentity: KeyIdentity! }
+type Query {
+  myKeyIdentity: KeyIdentity!
+  keyLog(principalId: String!): [KeyLogEntry!]!   # public, no session; [] when not enrolled here
+}
 type Mutation {
   keyLoginChallenge: KeyLoginChallenge!
   loginWithKey(proof: SignedStatementInput!): LoginPayload!
@@ -327,6 +335,13 @@ type Mutation {
 Malformed or unverifiable statements fail with code `VALIDATION` and a short reason such as
 `signature does not verify` or `key log entry has seq 2, expected 1`.
 
+`keyLog` needs no session. The log is public (every server a person uses holds it), and a person
+who lost every device needs its head (`seq` and the hash of the last payload) to sign a recovery
+rotation. It answers `[]` for a principal no account here has (and for anything longer than 64
+characters, which is not a principal id). It is not rate-limited: unlike the anonymous rotation,
+it checks no secret, and principal ids are 256-bit hashes that cannot be guessed, so answering
+whether one is enrolled here tells nothing a holder of the id does not already know.
+
 ## Plugin principal ids: `rimp0_` to `rimp1_`
 
 Plugins see `{ principalId, displayName }` (`docs/specs/plugin-protocol-v1.md`). Until now the
@@ -340,12 +355,85 @@ This PR adds `User.principalId`. The mapping happens **once, in the client**:
    on the first fetch on another device), the plugin host computes the account's old `rimp0_`
    id the same way as before and records `rimp0_… → rimp1_…` in its local store.
 2. It sends running plugins `rim.principal.changed` with the new principal, plus the old-to-new
-   mapping notification promised in plugin-protocol-v1 ("Today's ids are provisional"), so a
-   plugin can rewrite stored ids.
+   mapping in `rim.principals.remapped` (plugin-protocol-v1, section 11), so a plugin can
+   rewrite stored ids. It sends the mapping again after every handshake, so a plugin that was
+   not running at the switch still gets it.
 3. Other people's ids map the same way when their `User.principalId` is first seen non-null. An
    account that never enrolls keeps its `rimp0_` id.
 
-The client work is a separate rim-ui PR; the server only exposes `principalId`.
+The desktop client does this since the second Stage 3 PR (rim-ui); the server only exposes
+`principalId`.
+
+## Desktop client (rim-ui)
+
+What the desktop app does with these statements. Other clients (the web app as a linked device,
+the CLI) may choose differently, except for the recovery kit format, which every client that
+offers recovery must read.
+
+- **Where keys live.** Every secret goes through the app's one OS keyring helper
+  (`src-tauri/src/secret_store.rs`), one entry per principal: the device key, and on the device
+  that enrolled the identity, the identity key. The identity key stays on that device until device
+  linking can move it off; the device key alone signs in. Keys never reach the webview: it asks the
+  Tauri side for a signed statement and sends that.
+- **Enrollment** (Settings > Security, signed in with a password): the app creates the identity,
+  recovery and device keys, shows the recovery kit once, and only enrolls after the person
+  confirms they saved it. The device and identity keys are written to the keyring **before**
+  `enrollIdentityKey` is sent, so a crash in between never leaves an enrolled account without its
+  keys; keys whose principal the server never accepted are removed. The recovery key is never
+  stored. The app then publishes a profile card (display name, this server's URL, the active
+  devices).
+- **Audience.** The `host[:port]` of the GraphQL endpoint URL as written, lowercased, the same
+  rule the server applies to `RIM_PUBLIC_BASE_URL`.
+- **Sign-in.** On a cold start whose session cookie is gone or refused, the app signs in with the
+  device key of the account it was last signed in to. After an explicit sign-out it waits on the
+  sign-in screen, which offers "Sign in with this device" for every account this device holds a
+  key for on this server. A `FORBIDDEN` answer says the device was revoked; the
+  sign-in screen then offers to remove that device's keys from this computer.
+- **Statement version.** The app writes version 2 (tagged keys and signatures) and reads both.
+  Keys and signatures are opaque text outside the one module that signs and verifies, so a hybrid
+  algorithm is added there alone. A version 1 log (an identity enrolled by an older client) is
+  extended in version 2 by its next rotation.
+- **Identity rotation** keeps the recovery key and every device. The new identity key is stored as
+  pending, with the `seq` its rotation creates, before `rotateIdentityKey` is sent. A verified log
+  whose head names it promotes it; a log that already holds that `seq` with another key drops it;
+  a log that ends before it (a stale copy, or the rotation still in flight) leaves it pending, and
+  a retry signs the same pending key again, so a rotation whose answer was lost never loses the
+  key it put on the server.
+- **Profile card.** Lists this server's URL as the one relay and the account's active devices. A
+  device is listed only if its certificate verifies against the replayed log at its `keySeq`, so
+  a server cannot add a key of its own to the card the identity key signs.
+- **Enrollment in flight.** While `enrollIdentityKey` has not answered, the server saying "not
+  enrolled" proves nothing, so nothing removes keys on that basis (closing Settings mid-way keeps
+  them; a later check removes them if the enrollment never landed).
+
+### Recovery kit, v1
+
+Shown once at enrollment, as text the person saves:
+
+```
+RIM recovery kit (v1)
+Account id: rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo
+Recovery key: RK1-…   (14 groups of 4 characters)
+```
+
+The recovery key is `RK1-` and the RFC 4648 base32 (uppercase, no padding) of the 32-byte
+recovery seed followed by the first 3 bytes of `SHA-256("rim.recovery-kit.v1\0" || seed)`, in
+groups of 4 joined by `-`. Readers ignore case, spaces and `-`, read `0` as `O` and `1` as `I`,
+and refuse a key whose check bytes do not match. The seed is the Ed25519 secret key
+(`SigningKey::from_bytes`). The 12-word recovery phrase of a later PR replaces this format; readers
+keep accepting it.
+
+**Recovering** (signed out, every device lost): the app reads the kit, fetches `keyLog` for the
+account id, replays it, checks that the head's `recoveryKey` is the kit's, and signs a rotation
+with `"signer": "recovery"` that keeps the same recovery key and names a new identity key, plus a
+certificate for a new device at the new `seq`. It stores the new keys, sends `rotateIdentityKey`
+without a session, and signs in with the new device key. Every other device and session of the
+account is signed out by the server.
+
+Whether a recovery landed is read from the key log, not from the error: when `rotateIdentityKey`
+fails, the app fetches `keyLog` again. If the log ends at its rotation it signs in; if the log
+answers without it, the attempt's keys are removed and any keys this device held for the account
+before the attempt are put back; with no answer the keys stay for the next try.
 
 ## Deferred
 
