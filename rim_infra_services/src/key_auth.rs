@@ -50,7 +50,7 @@ const FAILURE_KEY: &str = "key_auth_failure";
 
 /// Most entries a key log may have: at enrollment (every entry is verified before the user row
 /// is locked, so the bound keeps one request's work small), and grown by identity rotations,
-/// so that every stored log can be enrolled on another server.
+/// so that a log they grew can be enrolled on another server. Recoveries may pass it.
 const MAX_KEY_LOG_LEN: usize = 256;
 
 /// Longest `principalId` the public key log query looks up (a real one is 49 characters).
