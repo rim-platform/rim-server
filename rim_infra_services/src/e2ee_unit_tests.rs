@@ -21,7 +21,9 @@ mod tests {
     use rim_core::key_identity::repository::MockKeyIdentityRepository;
     use rim_core::message::model::{Message, MessageEncryption, MessageId};
     use rim_core::message::repository::MockMessageRepository;
-    use rim_core::moderation::model::{MessageReport, MessageReportId, MessageReportStatus};
+    use rim_core::moderation::model::{
+        MessageReport, MessageReportId, MessageReportStatus, NewFrankedReport,
+    };
     use rim_core::moderation::repository::MockModerationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::ServerId;
@@ -98,7 +100,7 @@ mod tests {
     }
 
     type Messages = Arc<Mutex<HashMap<MessageId, Message>>>;
-    type Reports = Arc<Mutex<Vec<(MessageId, UserId, Option<Vec<u8>>)>>>;
+    type Reports = Arc<Mutex<Vec<(MessageId, UserId, Option<NewFrankedReport>)>>>;
 
     struct Fixture {
         repo: Arc<FakeE2ee>,
@@ -298,7 +300,7 @@ mod tests {
                     reports.push((
                         report.message_id,
                         report.reporter_user_id,
-                        report.franked_content.clone(),
+                        report.franked.clone(),
                     ));
                     Ok(MessageReport {
                         id: MessageReportId::new(),
@@ -311,6 +313,7 @@ mod tests {
                         resolved_by: None,
                         resolved_at: None,
                         created_at: Utc::now(),
+                        franked: None,
                     })
                 };
                 Box::pin(async move { result })
@@ -1777,8 +1780,11 @@ mod tests {
             .await
             .expect("verified");
         assert_eq!(
-            f.reports.lock().unwrap()[0].2.as_deref(),
-            Some(content.as_slice())
+            f.reports.lock().unwrap()[0].2,
+            Some(NewFrankedReport {
+                content: content.clone(),
+                sender_device_id: f.bob.device_id,
+            })
         );
         let second = f
             .service

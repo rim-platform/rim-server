@@ -26,6 +26,10 @@ use rim_core::key_identity::model::{DeviceKeyId, NewDeviceKey};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::message::model::{MessageEncryption, MessageId};
 use rim_core::message::repository::MessageRepository;
+use rim_core::message_attachment::model::{MessageAttachmentId, NewMessageAttachment};
+use rim_core::message_attachment::repository::MessageAttachmentRepository;
+use rim_core::moderation::model::{MessageReportStatus, NewFrankedReport, NewMessageReport};
+use rim_core::moderation::repository::ModerationRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server::model::Server;
 use rim_core::user::model::{User, UserId};
@@ -34,6 +38,8 @@ use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRep
 use rim_infra_db::sea_orm_impl::e2ee::SeaOrmE2eeRepository;
 use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
+use rim_infra_db::sea_orm_impl::moderation::SeaOrmModerationRepository;
 
 const MIGRATION_NAME: &str = "m20261009_182741_add_e2ee_mls";
 const SUITE: i32 = 79;
@@ -1019,6 +1025,155 @@ async fn readd_requests_and_retention() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+/// A franked report as the e2ee service stores it.
+fn franked_report(f: &Fixture, message: MessageId, reporter: &Member) -> NewMessageReport {
+    NewMessageReport {
+        server_id: f.server.id,
+        conversation_id: f.conv.id,
+        message_id: message,
+        reporter_user_id: reporter.user.id,
+        reason: "abuse".to_string(),
+        franked: Some(NewFrankedReport {
+            content: b"{\"body\":\"hi\"}".to_vec(),
+            sender_device_id: f.alice.device_id,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn verified_report_content_is_cleared_90_days_after_resolution() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let reports = SeaOrmModerationRepository::new(f.ctx.db.clone());
+    let first = insert_message(&f.repo, &f, 1, b"hi").await;
+    let second = insert_message(&f.repo, &f, 1, b"ho").await;
+    let unreported = insert_message(&f.repo, &f, 1, b"hm").await;
+
+    let old = reports
+        .create_report(franked_report(&f, first.id, &f.bob))
+        .await
+        .expect("report");
+    let recent = reports
+        .create_report(franked_report(&f, first.id, &f.alice))
+        .await
+        .expect("report");
+    let open = reports
+        .create_report(franked_report(&f, second.id, &f.bob))
+        .await
+        .expect("report");
+    let verified = old.franked.clone().expect("franked");
+    assert_eq!(verified.content.as_deref(), Some(&b"{\"body\":\"hi\"}"[..]));
+    assert_eq!(verified.sender_device_id, Some(f.alice.device_id));
+    for (report, days) in [(&old, 91), (&recent, 89)] {
+        reports
+            .resolve_report(
+                report.id,
+                MessageReportStatus::Resolved,
+                f.alice.user.id,
+                Utc::now() - Duration::days(days),
+            )
+            .await
+            .expect("resolve");
+    }
+
+    let purged = f
+        .repo
+        .purge(MlsRetention {
+            commits: Duration::days(90),
+            claimed_key_packages: Duration::days(7),
+            readd_requests: Duration::days(7),
+            franked_content: Duration::days(90),
+        })
+        .await
+        .unwrap();
+    assert_eq!(purged.franked_contents, 1);
+    let cleared = reports
+        .get_report(old.id)
+        .await
+        .unwrap()
+        .and_then(|r| r.franked)
+        .expect("still verified");
+    assert_eq!(cleared.content, None);
+    assert_eq!(cleared.sender_device_id, Some(f.alice.device_id));
+    for kept in [recent.id, open.id] {
+        let franked = reports
+            .get_report(kept)
+            .await
+            .unwrap()
+            .and_then(|r| r.franked);
+        assert!(franked.and_then(|r| r.content).is_some());
+    }
+
+    assert!(
+        reports
+            .has_verified_report(f.server.id, first.id)
+            .await
+            .unwrap(),
+        "a cleared report stays verified"
+    );
+    assert!(
+        !reports
+            .has_verified_report(f.server.id, unreported.id)
+            .await
+            .unwrap()
+    );
+    let other = f.ctx.create_server("other").await;
+    assert!(
+        !reports
+            .has_verified_report(other.id, first.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_stored_blob_is_found_by_hash_within_its_workspace() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let message = insert_message(&f.repo, &f, 1, b"file").await;
+    let attachments = SeaOrmMessageAttachmentRepository::new(f.ctx.db.clone());
+    let add = |storage_url: &str, hash: u8| NewMessageAttachment {
+        id: MessageAttachmentId::new(),
+        storage_url: storage_url.to_string(),
+        message_id: message.id,
+        file_size: 34,
+        file_name: "encrypted".to_string(),
+        mime_type: "application/octet-stream".to_string(),
+        metadata: None,
+        blob_sha256: Some(vec![hash; 32]),
+    };
+    attachments
+        .add_attachment(add("pending://upload", 1))
+        .await
+        .unwrap();
+    let stored = attachments
+        .add_attachment(add("uploads/blob", 2))
+        .await
+        .unwrap();
+
+    let found = attachments
+        .find_stored_by_blob_sha256(f.server.id, vec![2; 32])
+        .await
+        .unwrap();
+    assert_eq!(found.map(|a| a.id), Some(stored.id));
+    assert_eq!(
+        attachments
+            .find_stored_by_blob_sha256(f.server.id, vec![1; 32])
+            .await
+            .unwrap(),
+        None,
+        "a pending upload holds no blob"
+    );
+    let other = f.ctx.create_server("other").await;
+    assert_eq!(
+        attachments
+            .find_stored_by_blob_sha256(other.id, vec![2; 32])
+            .await
+            .unwrap(),
+        None
     );
 }
 

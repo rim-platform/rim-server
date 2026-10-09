@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use tracing::info;
 
@@ -15,6 +17,7 @@ use rim_core::conversation::model::{Conversation, ConversationId, ConversationTy
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::repository::MessageRepository;
+use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::moderation::model::{
     MemberTimeout, MessageReport, MessageReportStatus, NewMessageReport, ServerBan,
 };
@@ -32,15 +35,17 @@ use rim_services::command::verb::TypedVerb;
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::moderation::command::{
-    BanMemberCmd, ClearTimeoutCmd, KickMemberCmd, ListBansQuery, ListReportsQuery,
-    ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd,
-    UnbanMemberCmd,
+    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
+    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd,
+    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::dto::{
-    MemberTimeoutDto, MessageReportDto, ReportPageCursor, ServerBanDto,
+    MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
 };
 use rim_services::moderation::service::ModerationService;
-use rim_services::moderation::{MAX_SLOW_MODE_SECONDS, MAX_TIMEOUT_DAYS};
+use rim_services::moderation::{
+    FRANKED_CONTENT_RETENTION_DAYS, MAX_SLOW_MODE_SECONDS, MAX_TIMEOUT_DAYS,
+};
 use rim_services::server_member::dto::ServerMemberDto;
 use rim_services::{ServiceError, ServiceResult};
 
@@ -64,6 +69,8 @@ pub(crate) mod audit_ids {
     pub(crate) const RESOLVE_REPORT: &str = "admin.resolve_report";
     pub(crate) const SET_MEMBER_ROLE: &str = "admin.set_member_role";
     pub(crate) const DELETE_MESSAGE: &str = "admin.delete_message";
+    /// A moderator opened a verified report's content (initiator `e2ee`).
+    pub(crate) const REPORT_VIEWED: &str = "e2ee.report_viewed";
 }
 
 /// `initiator` column value of moderation audit rows.
@@ -209,7 +216,31 @@ pub struct ModerationRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
+    pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
     pub moderation_repo: Arc<dyn ModerationRepository>,
+}
+
+/// The `blobSha256` values (unpadded base64url) of a verified content's `attachments`. The
+/// server never validated the content's shape, so anything unexpected yields nothing.
+pub(crate) fn content_blob_hashes(content: &[u8]) -> Vec<Vec<u8>> {
+    #[derive(serde::Deserialize)]
+    struct Content {
+        #[serde(default)]
+        attachments: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        #[serde(rename = "blobSha256")]
+        blob_sha256: String,
+    }
+    let Ok(content) = serde_json::from_slice::<Content>(content) else {
+        return Vec::new();
+    };
+    content
+        .attachments
+        .into_iter()
+        .filter_map(|e| URL_SAFE_NO_PAD.decode(e.blob_sha256).ok())
+        .collect()
 }
 
 pub struct DefaultModerationService {
@@ -410,7 +441,9 @@ impl DefaultModerationService {
     }
 
     /// Reports with the message details the moderator may see: the body and author only when
-    /// the moderator can read the conversation (public channel, or conversation member).
+    /// the moderator can read the conversation (public channel, or conversation member); the
+    /// author, send time and franking details of a verified franked report in any case. The
+    /// verified content itself is left out.
     async fn reports_with_messages(
         &self,
         moderator: UserId,
@@ -442,17 +475,17 @@ impl DefaultModerationService {
                 readable.insert(*id);
             }
         }
-        let readable_message_ids: Vec<_> = reports
+        let shown_message_ids: Vec<_> = reports
             .iter()
-            .filter(|r| readable.contains(&r.conversation_id))
+            .filter(|r| readable.contains(&r.conversation_id) || r.franked.is_some())
             .map(|r| r.message_id)
             .collect();
-        let messages = if readable_message_ids.is_empty() {
+        let messages = if shown_message_ids.is_empty() {
             HashMap::new()
         } else {
             self.repos
                 .message_repo
-                .get_by_ids(&readable_message_ids)
+                .get_by_ids(&shown_message_ids)
                 .await?
         };
 
@@ -461,21 +494,46 @@ impl DefaultModerationService {
             .map(|report| {
                 let is_readable = readable.contains(&report.conversation_id);
                 let message = messages.get(&report.message_id).cloned();
+                let franked = report.franked.clone();
+                let resolved_at = report.resolved_at;
                 let mut dto = MessageReportDto::without_message(report);
-                if is_readable {
-                    dto.message_readable = true;
+                if is_readable || franked.is_some() {
+                    dto.message_readable = is_readable;
                     if let Some(message) = message {
                         dto.message_author_id = Some(message.sent_by);
-                        dto.message_text = if message.is_deleted {
+                        dto.message_sent_at = Some(message.sent_at);
+                        dto.message_text = if message.is_deleted || !is_readable {
                             None
                         } else {
                             message.text
                         };
                     }
                 }
+                if let Some(franked) = franked {
+                    dto.franking_verified_at = Some(franked.verified_at);
+                    dto.franked_sender_device_id = franked.sender_device_id;
+                    dto.franked_content_expires_at = resolved_at
+                        .map(|at| at + chrono::Duration::days(FRANKED_CONTENT_RETENTION_DAYS));
+                }
                 dto
             })
             .collect())
+    }
+
+    /// The report, which must belong to a workspace where `actor` is Owner or Moderator.
+    async fn moderated_report(
+        &self,
+        actor: UserId,
+        report_id: rim_core::moderation::model::MessageReportId,
+    ) -> ServiceResult<MessageReport> {
+        let report = self
+            .repos
+            .moderation_repo
+            .get_report(report_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        self.actor_moderator(report.server_id, actor).await?;
+        Ok(report)
     }
 }
 
@@ -837,7 +895,7 @@ impl ModerationService for DefaultModerationService {
                 message_id: cmd.message_id,
                 reporter_user_id: cmd.actor.user_id,
                 reason: reason.to_string(),
-                franked_content: None,
+                franked: None,
             })
             .await
         {
@@ -937,6 +995,93 @@ impl ModerationService for DefaultModerationService {
             .reports_with_messages(cmd.actor.user_id, vec![resolved])
             .await?;
         items.pop().ok_or(ServiceError::NotFound)
+    }
+
+    async fn get_report(&self, query: GetReportQuery) -> ServiceResult<MessageReportDto> {
+        self.actor_moderator(query.server_id, query.actor.user_id)
+            .await?;
+        let report = self
+            .repos
+            .moderation_repo
+            .get_report(query.report_id)
+            .await?
+            .filter(|r| r.server_id == query.server_id)
+            .ok_or(ServiceError::NotFound)?;
+        let content = report.franked.as_ref().and_then(|f| f.content.clone());
+        let (conversation_id, message_id) = (report.conversation_id, report.message_id);
+        let mut dto = self
+            .reports_with_messages(query.actor.user_id, vec![report])
+            .await?
+            .pop()
+            .ok_or(ServiceError::NotFound)?;
+        if content.is_some() {
+            // Ids only: the content is never copied into the audit log.
+            record_audit_action(
+                self.audit_log_service.as_ref(),
+                ModerationAuditEntry {
+                    actor: query.actor.user_id,
+                    server_id: query.server_id,
+                    command_id: audit_ids::REPORT_VIEWED,
+                    args: serde_json::json!({
+                        "report_id": query.report_id.to_string(),
+                        "conversation_id": conversation_id.to_string(),
+                        "message_id": message_id.to_string(),
+                    }),
+                    dangerous: false,
+                    typed_verb: TypedVerb::Read,
+                },
+                crate::e2ee::AUDIT_INITIATOR,
+            )
+            .await;
+        }
+        dto.franked_content = content;
+        Ok(dto)
+    }
+
+    async fn authorize_report_attachment(
+        &self,
+        query: AuthorizeReportAttachmentQuery,
+    ) -> ServiceResult<ReportAttachmentDto> {
+        let not_found = |e: ServiceError| match e {
+            ServiceError::PermissionDenied => ServiceError::NotFound,
+            e => e,
+        };
+        let report = self
+            .moderated_report(query.actor_user_id, query.report_id)
+            .await
+            .map_err(not_found)?;
+        let franked = report.franked.ok_or(ServiceError::NotFound)?;
+        let stored = |a: &rim_core::message_attachment::model::MessageAttachment| {
+            a.blob_sha256.as_deref() == Some(query.blob_sha256.as_slice())
+                && !a.storage_url.starts_with("pending://")
+        };
+        let own = self
+            .repos
+            .message_attachment_repo
+            .get_attachments_for_message(report.message_id)
+            .await?
+            .into_iter()
+            .find(stored);
+        let attachment = match own {
+            Some(attachment) => Some(attachment),
+            // A blob the verified content names, stored under another message (a forward
+            // that reuses the blob, or an attachment row since removed from this message).
+            None if franked
+                .content
+                .as_deref()
+                .is_some_and(|c| content_blob_hashes(c).contains(&query.blob_sha256)) =>
+            {
+                self.repos
+                    .message_attachment_repo
+                    .find_stored_by_blob_sha256(report.server_id, query.blob_sha256.clone())
+                    .await?
+            }
+            None => None,
+        };
+        let attachment = attachment.ok_or(ServiceError::NotFound)?;
+        Ok(ReportAttachmentDto {
+            storage_key: attachment.storage_url,
+        })
     }
 
     async fn active_timeout(

@@ -102,6 +102,25 @@ pub struct ListReportsQuery {
     pub cursor: Option<ReportPageCursor>,
 }
 
+/// Owner/Moderator; the report must belong to `server_id`. Reveals a verified report's
+/// content and records that the moderator viewed it.
+#[derive(Debug, Clone)]
+pub struct GetReportQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub report_id: MessageReportId,
+}
+
+/// Owner/Moderator of the report's workspace; the blob must be an attachment of the reported
+/// message or be listed in the report's verified content.
+#[derive(Debug, Clone)]
+pub struct AuthorizeReportAttachmentQuery {
+    pub actor_user_id: UserId,
+    pub report_id: MessageReportId,
+    /// SHA-256 of the encrypted blob.
+    pub blob_sha256: Vec<u8>,
+}
+
 /// How a moderator closes a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportOutcome {
