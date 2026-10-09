@@ -57,9 +57,10 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     // Password reset is used signed out, from the emailed link.
     "requestPasswordReset",
     "resetPassword",
-    // Key login is used before there is a session.
+    // Key login and key-only signup are used before there is a session.
     "keyLoginChallenge",
     "loginWithKey",
+    "signupWithKey",
     // The new device sends its sealed offer before it has a session. It acts only on the link
     // id, a capability a cross-site page does not have.
     "sendDeviceLinkOffer",
@@ -428,6 +429,7 @@ mod tests {
         for query in [
             "mutation { keyLoginChallenge { nonce } }",
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
+            r#"mutation { signupWithKey(input: { username: "u", keyLog: [], device: { payload: "p", signature: "s" }, proof: { payload: "p", signature: "s" } }) { userId } }"#,
             r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
             r#"mutation { requestPasswordReset(username: "u") }"#,
             r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,

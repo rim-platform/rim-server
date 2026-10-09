@@ -42,6 +42,14 @@ pub trait KeyIdentityRepository: Send + Sync {
         entries: Vec<NewKeyLogEntry>,
     ) -> RepoResult<()>;
 
+    /// Store the key log of a user created with its key identity already set (key-only
+    /// signup, through `NewUser::key_identity`), in the same transaction as the user row.
+    ///
+    /// # Errors
+    /// `Conflict` when the user already has log entries.
+    async fn insert_key_log(&self, user_id: UserId, entries: Vec<NewKeyLogEntry>)
+    -> RepoResult<()>;
+
     /// Append a rotation and make `identity_key` current.
     ///
     /// # Errors

@@ -176,6 +176,26 @@ pub struct EnrollIdentityKeyInput {
     pub proof: SignedStatementInput,
 }
 
+/// Input for `signupWithKey`: an account created from a key identity alone, with no password
+/// and no email. The tokens follow the same rules as `signupWithInvite`: exactly one in
+/// invite-only mode, none in open mode.
+#[derive(InputObject, Clone, Debug)]
+pub struct SignupWithKeyInput {
+    pub username: String,
+    /// Optional display name (1–80 chars when present). Falls back to `username` when absent
+    /// or blank after trim.
+    pub display_name: Option<String>,
+    /// The whole key log, inception first.
+    pub key_log: Vec<SignedStatementInput>,
+    /// Certificate of the device signing up; the new session belongs to it.
+    pub device: SignedStatementInput,
+    /// A `login` statement signed by that device over a fresh `keyLoginChallenge`.
+    pub proof: SignedStatementInput,
+    pub bootstrap_token: Option<String>,
+    pub instance_invite_token: Option<String>,
+    pub workspace_invite_token: Option<String>,
+}
+
 #[derive(InputObject, Clone, Debug)]
 pub struct RotateIdentityKeyInput {
     pub entry: SignedStatementInput,

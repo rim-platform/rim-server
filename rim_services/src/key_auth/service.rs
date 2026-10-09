@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use mockall::automock;
 
 use crate::ServiceResult;
-use crate::auth::dto::LoginResultDto;
+use crate::auth::dto::{LoginResultDto, SignupResultDto};
 use crate::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
     IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-    RotateIdentityKeyCmd,
+    RotateIdentityKeyCmd, SignupWithKeyCmd,
 };
 use crate::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
@@ -43,6 +43,21 @@ pub trait KeyAuthService: Send + Sync {
     /// - `Validation` when the log or the certificate does not verify.
     /// - `Conflict` when the account already has a key, or another account here has this one.
     async fn enroll(&self, cmd: EnrollIdentityKeyCmd) -> ServiceResult<KeyIdentityDto>;
+
+    /// Create an account from a key identity alone, with no password and no email, and sign it
+    /// in on the device that signed up. The identity is verified as for [`Self::enroll`]; the
+    /// registration token (or, in open mode, the per-IP signup limit) is handled as for the
+    /// password signups.
+    ///
+    /// # Errors
+    /// - `Validation` when the log, certificate or proof does not verify, the proof names
+    ///   another server or a used challenge, the username or display name is invalid, or the
+    ///   token does not match the registration mode.
+    /// - `Conflict` when the username is taken or another account here has this principal.
+    /// - `InvalidToken`, `ExpiredToken`, `NotFound` or `PermissionDenied` for a token refused
+    ///   the way its password signup refuses it.
+    /// - `RateLimited` in open mode when the caller's IP signs up too often.
+    async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto>;
 
     /// Add a device certified by the current identity key.
     ///

@@ -7,30 +7,45 @@ mod tests {
     use chrono::{DateTime, Duration, Utc};
     use uuid::Uuid;
 
+    use rim_auth::session_token::hash_token;
+    use rim_core::auth::model::{BootstrapToken, BootstrapTokenId, Invite, InviteId};
     use rim_core::auth::model::{NewSession, Session, SessionId};
     use rim_core::auth::repository::SessionRepository;
+    use rim_core::auth::repository::{
+        MockBootstrapTokenRepository, MockInstanceInviteRepository, MockInviteRepository,
+    };
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::key_identity::model::{
         DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, KeyLogEntryType,
         NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
     };
     use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
+    use rim_core::moderation::repository::MockModerationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
-    use rim_core::user::model::{User, UserId};
+    use rim_core::server::model::ServerId;
+    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::repository::MockServerMemberRepository;
+    use rim_core::user::model::{NewUser, User, UserId};
     use rim_core::user::repository::MockUserRepository;
     use rim_identity::testing::{
         SigningKey, TestIdentity, device_login, device_self_revoke, signing_key,
     };
     use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
+    use rim_services::auth::command::SignupToken;
+    use rim_services::auth::dto::RegistrationMode;
+    use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::key_auth::command::{
         AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
         IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-        RotateIdentityKeyCmd, SignedPayload,
+        RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
     };
     use rim_services::key_auth::service::KeyAuthService;
     use rim_services::{Actor, ServiceError};
 
     use crate::key_auth::{DefaultKeyAuthService, KeyAuthRepos};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
+    use crate::signup::SignupRepos;
 
     const AUDIENCE: &str = "rim.example.com";
     const IP: &str = "203.0.113.7";
@@ -50,9 +65,21 @@ mod tests {
         identity_keys: HashMap<UserId, String>,
         /// `device_key.key_hash` per stored device, in the same order as `devices`.
         device_hashes: Vec<Vec<u8>>,
+        /// Users created through `UserRepository::create_user` (signups), as inserted.
+        created: HashMap<UserId, NewUser>,
     }
 
     type Shared = Arc<Mutex<State>>;
+
+    /// Keeps every event broadcast, so a test can check what was announced.
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<WorkspaceEvent>>);
+
+    impl Broadcaster for Recording {
+        fn broadcast(&self, event: WorkspaceEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
 
     fn conflict() -> RepoError {
         RepoError::new(RepoErrorKind::Conflict)
@@ -117,6 +144,20 @@ mod tests {
             }
             s.principals.insert(user_id, principal_id.to_string());
             s.identity_keys.insert(user_id, identity_key.to_string());
+            let entries = entries.into_iter().map(|e| log_entry(user_id, e)).collect();
+            s.log.insert(user_id, entries);
+            Ok(())
+        }
+
+        async fn insert_key_log(
+            &self,
+            user_id: UserId,
+            entries: Vec<NewKeyLogEntry>,
+        ) -> RepoResult<()> {
+            let mut s = self.0.lock().unwrap();
+            if s.log.contains_key(&user_id) {
+                return Err(conflict());
+            }
             let entries = entries.into_iter().map(|e| log_entry(user_id, e)).collect();
             s.log.insert(user_id, entries);
             Ok(())
@@ -403,12 +444,30 @@ mod tests {
         svc: DefaultKeyAuthService,
     }
 
-    fn user_row(id: UserId, principal_id: Option<String>) -> User {
+    fn user_row(s: &State, id: UserId) -> User {
         let now = Utc::now();
+        let principal_id = s.principals.get(&id).cloned();
+        if let Some(new) = s.created.get(&id) {
+            return User {
+                id,
+                username: new.username.clone(),
+                password_hash: new.password.clone(),
+                created_at: now,
+                updated_at: now,
+                last_login_at: None,
+                display_name: new.display_name.clone(),
+                avatar_url: None,
+                status_text: None,
+                bio: None,
+                email: new.email.clone(),
+                timezone: None,
+                principal_id,
+            };
+        }
         User {
             id,
             username: format!("user-{id}"),
-            password_hash: "hash".to_string(),
+            password_hash: Some("hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -416,37 +475,112 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            email: format!("{id}@example.com"),
+            email: Some(format!("{id}@example.com")),
             timezone: None,
             principal_id,
         }
     }
 
-    fn harness_with_limits(challenge_limit: u32, failure_limit: u32) -> Harness {
-        let state: Shared = Arc::default();
+    /// Token and workspace repositories that refuse every call: a test that reaches one by
+    /// mistake fails loudly.
+    fn no_signup_repos() -> SignupRepos {
+        SignupRepos {
+            bootstrap_token_repo: Arc::new(MockBootstrapTokenRepository::new()),
+            instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
+            invite_repo: Arc::new(MockInviteRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            moderation_repo: Arc::new(MockModerationRepository::new()),
+        }
+    }
+
+    /// The user store behind the harness: lookups by id, username and email, and inserts that
+    /// mirror the unique username and principal id indexes.
+    fn user_repo(state: &Shared) -> MockUserRepository {
         let mut user_repo = MockUserRepository::new();
-        let users = Arc::clone(&state);
+        let users = Arc::clone(state);
         user_repo.expect_get_by_id().returning(move |id| {
             let s = users.lock().unwrap();
-            Ok(s.users
-                .contains(&id)
-                .then(|| user_row(id, s.principals.get(&id).cloned())))
+            Ok(s.users.contains(&id).then(|| user_row(&s, id)))
         });
+        let users = Arc::clone(state);
+        user_repo.expect_find_by_username().returning(move |name| {
+            let s = users.lock().unwrap();
+            Ok(s.created
+                .iter()
+                .find(|(_, u)| u.username == name)
+                .map(|(id, _)| user_row(&s, *id)))
+        });
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        let users = Arc::clone(state);
+        user_repo
+            .expect_create_user()
+            .returning(move |new: NewUser| {
+                let mut s = users.lock().unwrap();
+                let taken = s.created.values().any(|u| u.username == new.username)
+                    || new
+                        .key_identity
+                        .as_ref()
+                        .is_some_and(|k| s.principals.values().any(|p| *p == k.principal_id));
+                if taken {
+                    return Err(conflict());
+                }
+                let id = UserId::new();
+                s.users.insert(id);
+                if let Some(k) = &new.key_identity {
+                    s.principals.insert(id, k.principal_id.clone());
+                    s.identity_keys.insert(id, k.identity_key.clone());
+                }
+                s.created.insert(id, new);
+                Ok(user_row(&s, id))
+            });
+        user_repo
+    }
+
+    /// Everything a harness can vary.
+    struct Limits {
+        challenge: u32,
+        failure: u32,
+        signup: u32,
+    }
+
+    fn harness_with_limits(challenge_limit: u32, failure_limit: u32) -> Harness {
+        harness_with(
+            Limits {
+                challenge: challenge_limit,
+                failure: failure_limit,
+                signup: 100,
+            },
+            no_signup_repos(),
+            Arc::new(Recording::default()),
+        )
+    }
+
+    fn harness_with(
+        limits: Limits,
+        signup: SignupRepos,
+        broadcaster: Arc<dyn Broadcaster>,
+    ) -> Harness {
+        let state: Shared = Arc::default();
         let repos = KeyAuthRepos {
-            user_repo: Arc::new(user_repo),
+            user_repo: Arc::new(user_repo(&state)),
             session_repo: Arc::new(FakeSessions(Arc::clone(&state))),
             key_identity_repo: Arc::new(FakeKeys(Arc::clone(&state))),
             key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
+            signup,
         };
         let svc = DefaultKeyAuthService::new(
             repos,
             None,
             Duration::days(30),
             vec![" RIM.example.com ".to_string()],
+            Observers::new(broadcaster),
+            RegistrationRateLimiter::new(3600, limits.signup),
         )
         .with_rate_limiters(
-            RegistrationRateLimiter::new(3600, challenge_limit),
-            RegistrationRateLimiter::new(3600, failure_limit),
+            RegistrationRateLimiter::new(3600, limits.challenge),
+            RegistrationRateLimiter::new(3600, limits.failure),
         );
         Harness { state, svc }
     }
@@ -1555,5 +1689,498 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+    }
+
+    // ── Key-only signup ───────────────────────────────────────────────────────────────────
+
+    /// What a device presents to sign up: a new identity, its first device, and a proof over a
+    /// fresh challenge.
+    struct Presented {
+        id: TestIdentity,
+        state: KeyState,
+        device_id: Uuid,
+        device: SigningKey,
+        key_log: Vec<SignedPayload>,
+        cert: SignedPayload,
+        proof: SignedPayload,
+    }
+
+    impl Harness {
+        async fn present(&self, seed: u8) -> Presented {
+            let id = TestIdentity::with_version(seed, StatementVersion::V2);
+            let inception = id.inception();
+            let state = KeyState::from_inception(&inception).unwrap();
+            let device_id = Uuid::now_v7();
+            let device = signing_key(seed.wrapping_add(50));
+            let cert = payload(id.device_cert(&state, device_id, &device, "Laptop"));
+            let proof = self.proof(&device, &state, device_id).await;
+            Presented {
+                key_log: vec![payload(inception)],
+                id,
+                state,
+                device_id,
+                device,
+                cert,
+                proof,
+            }
+        }
+
+        fn user_count(&self) -> usize {
+            self.state.lock().unwrap().users.len()
+        }
+    }
+
+    fn signup_cmd(
+        p: &Presented,
+        username: &str,
+        mode: RegistrationMode,
+        token: Option<SignupToken>,
+    ) -> SignupWithKeyCmd {
+        SignupWithKeyCmd {
+            username: username.to_string(),
+            display_name: None,
+            key_log: p.key_log.clone(),
+            device: p.cert.clone(),
+            proof: p.proof.clone(),
+            registration_mode: mode,
+            token,
+            remote_ip: IP.to_string(),
+        }
+    }
+
+    fn open_cmd(p: &Presented, username: &str) -> SignupWithKeyCmd {
+        signup_cmd(p, username, RegistrationMode::Open, None)
+    }
+
+    fn signup_harness(signup: SignupRepos, broadcaster: Arc<dyn Broadcaster>) -> Harness {
+        harness_with(
+            Limits {
+                challenge: 100,
+                failure: 100,
+                signup: 100,
+            },
+            signup,
+            broadcaster,
+        )
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_in_open_mode_creates_a_key_only_account_on_the_device() {
+        let h = harness();
+        let p = h.present(1).await;
+        let res = h.svc.signup_with_key(open_cmd(&p, "ada")).await.unwrap();
+        assert_eq!(res.server_id, None);
+        assert!(!res.session_token.is_empty() && !res.csrf_token.is_empty());
+
+        {
+            let s = h.state.lock().unwrap();
+            let created = &s.created[&res.user_id];
+            assert_eq!(created.password, None);
+            assert_eq!(created.email, None);
+            assert_eq!(created.display_name.as_deref(), Some("ada"));
+            let key = created.key_identity.as_ref().expect("key identity");
+            assert_eq!(key.principal_id, p.state.principal_id);
+            assert_eq!(key.identity_key, p.state.identity_key.to_string());
+            assert_eq!(s.log[&res.user_id].len(), 1);
+            let device = s
+                .devices
+                .iter()
+                .find(|d| d.user_id == res.user_id)
+                .expect("device stored");
+            assert_eq!(device.device_id, p.device_id);
+            assert!(device.last_used_at.is_some());
+        }
+        // The new session belongs to the device that signed up.
+        let device_key_id = h.state.lock().unwrap().devices[0].id;
+        assert_eq!(
+            h.session_device(res.session.session_id),
+            Some(device_key_id)
+        );
+
+        // The device signs in again with a fresh challenge.
+        let enrolled = Enrolled {
+            user_id: res.user_id,
+            session: res.session.session_id,
+            id: p.id,
+            state: p.state,
+            device_id: p.device_id,
+            device: p.device,
+        };
+        h.login(&enrolled, enrolled.device_id, &enrolled.device, AUDIENCE)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_normalizes_the_display_name() {
+        let h = harness();
+        let p = h.present(1).await;
+        let res = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                display_name: Some("  Ada Lovelace  ".to_string()),
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .unwrap();
+        let s = h.state.lock().unwrap();
+        assert_eq!(
+            s.created[&res.user_id].display_name.as_deref(),
+            Some("Ada Lovelace")
+        );
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_requires_a_token_in_invite_only_mode() {
+        let h = harness();
+        let p = h.present(1).await;
+        let err = h
+            .svc
+            .signup_with_key(signup_cmd(&p, "ada", RegistrationMode::InviteOnly, None))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("exactly one token")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_token_in_open_mode() {
+        let h = harness();
+        let p = h.present(1).await;
+        let err = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "ada",
+                RegistrationMode::Open,
+                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_proof_by_another_key() {
+        let h = harness();
+        let p = h.present(1).await;
+        // Signed by a key that is not the certified device's.
+        let proof = h.proof(&signing_key(99), &p.state, p.device_id).await;
+        let err = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                proof,
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_proof_for_another_server() {
+        let h = harness();
+        let p = h.present(1).await;
+        let proof = h
+            .proof_for(&p.device, &p.state, p.device_id, "evil.example.com")
+            .await;
+        let err = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                proof,
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("audience")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_used_challenge() {
+        let h = harness();
+        let p = h.present(1).await;
+        h.svc.signup_with_key(open_cmd(&p, "ada")).await.unwrap();
+        // The same proof again, for another username: its challenge is spent.
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&p, "ada2"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("challenge")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_principal_another_account_holds() {
+        let h = harness();
+        let p = h.present(1).await;
+        h.svc.signup_with_key(open_cmd(&p, "ada")).await.unwrap();
+
+        // The same identity again, from a new device over a new challenge.
+        let device = signing_key(77);
+        let device_id = Uuid::now_v7();
+        let again = Presented {
+            cert: payload(p.id.device_cert(&p.state, device_id, &device, "Phone")),
+            proof: h.proof(&device, &p.state, device_id).await,
+            device_id,
+            device,
+            ..p
+        };
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&again, "ada_again"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+        assert_eq!(h.user_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_principal_enrolled_on_a_password_account() {
+        let h = harness();
+        let e = h.enroll_with(1, StatementVersion::V2).await;
+        let device = signing_key(77);
+        let device_id = Uuid::now_v7();
+        let again = Presented {
+            key_log: vec![payload(e.id.inception())],
+            cert: payload(e.id.device_cert(&e.state, device_id, &device, "Phone")),
+            proof: h.proof(&device, &e.state, device_id).await,
+            id: e.id,
+            state: e.state,
+            device_id,
+            device,
+        };
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&again, "ada_again"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_taken_username() {
+        let h = harness();
+        let first = h.present(1).await;
+        h.svc
+            .signup_with_key(open_cmd(&first, "ada"))
+            .await
+            .unwrap();
+        let second = h.present(2).await;
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&second, "ada"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Conflict(m) if m.contains("username")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_an_invalid_username() {
+        let h = harness();
+        let p = h.present(1).await;
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&p, "a b"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_in_open_mode_is_rate_limited_per_ip() {
+        let h = harness_with(
+            Limits {
+                challenge: 100,
+                failure: 100,
+                signup: 1,
+            },
+            no_signup_repos(),
+            Arc::new(Recording::default()),
+        );
+        let first = h.present(1).await;
+        h.svc
+            .signup_with_key(open_cmd(&first, "ada"))
+            .await
+            .unwrap();
+        let second = h.present(2).await;
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&second, "grace"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
+        assert_eq!(h.user_count(), 1);
+    }
+
+    fn bootstrap_token(expires_in: Duration) -> BootstrapToken {
+        BootstrapToken {
+            id: BootstrapTokenId::new(),
+            email: "admin@example.com".to_string(),
+            token_hash: hash_token("rim_boot"),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + expires_in,
+            used_at: None,
+            consumed_by_user_id: None,
+            revoked_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_with_a_bootstrap_token_consumes_it_and_joins_nothing() {
+        let token = bootstrap_token(Duration::minutes(15));
+        let token_id = token.id;
+        let mut bootstrap = MockBootstrapTokenRepository::new();
+        bootstrap
+            .expect_get_by_token_hash()
+            .withf(|hash| hash == hash_token("rim_boot"))
+            .returning(move |_| Ok(Some(token.clone())));
+        bootstrap
+            .expect_try_mark_used()
+            .withf(move |id, _| *id == token_id)
+            .times(1)
+            .returning(|_, _| Ok(true));
+        let signup = SignupRepos {
+            bootstrap_token_repo: Arc::new(bootstrap),
+            ..no_signup_repos()
+        };
+        let events = Arc::new(Recording::default());
+        let h = signup_harness(signup, Arc::clone(&events) as Arc<dyn Broadcaster>);
+        let p = h.present(1).await;
+
+        let res = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "admin",
+                RegistrationMode::InviteOnly,
+                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.server_id, None);
+        assert!(events.0.lock().unwrap().is_empty());
+        let s = h.state.lock().unwrap();
+        assert_eq!(s.created[&res.user_id].password, None);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_with_an_expired_bootstrap_token_creates_nothing() {
+        let token = bootstrap_token(Duration::minutes(-1));
+        let mut bootstrap = MockBootstrapTokenRepository::new();
+        bootstrap
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(token.clone())));
+        bootstrap.expect_try_mark_used().never();
+        let signup = SignupRepos {
+            bootstrap_token_repo: Arc::new(bootstrap),
+            ..no_signup_repos()
+        };
+        let h = signup_harness(signup, Arc::new(Recording::default()));
+        let p = h.present(1).await;
+
+        let err = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "admin",
+                RegistrationMode::InviteOnly,
+                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::ExpiredToken), "{err:?}");
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_with_a_workspace_invite_joins_and_announces() {
+        let server_id = ServerId::new();
+        let invite = Invite {
+            id: InviteId::new(),
+            server_id,
+            created_by_user_id: UserId::new(),
+            token_hash: hash_token("rim_inv"),
+            created_at: Utc::now(),
+            expires_at: None,
+            max_uses: 1,
+            use_count: 0,
+            revoked_at: None,
+            role: ServerMemberRole::Member,
+        };
+        let invite_id = invite.id;
+        let mut invites = MockInviteRepository::new();
+        invites
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(invite.clone())));
+        invites
+            .expect_try_consume()
+            .withf(move |id| *id == invite_id)
+            .times(1)
+            .returning(|_| Ok(true));
+        let mut moderation = MockModerationRepository::new();
+        moderation
+            .expect_get_active_ban()
+            .returning(|_, _, _| Box::pin(async { Ok(None) }));
+        let mut members = MockServerMemberRepository::new();
+        members
+            .expect_add_member()
+            .times(1)
+            .returning(|server_id, user_id, role| {
+                Ok(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role: role,
+                    joined_at: Utc::now(),
+                })
+            });
+        let mut conversations = MockConversationRepository::new();
+        conversations
+            .expect_list_public_channel_ids()
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        let signup = SignupRepos {
+            invite_repo: Arc::new(invites),
+            moderation_repo: Arc::new(moderation),
+            server_member_repo: Arc::new(members),
+            conversation_repo: Arc::new(conversations),
+            ..no_signup_repos()
+        };
+        let events = Arc::new(Recording::default());
+        let h = signup_harness(signup, Arc::clone(&events) as Arc<dyn Broadcaster>);
+        let p = h.present(1).await;
+
+        let res = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "ada",
+                RegistrationMode::InviteOnly,
+                Some(SignupToken::WorkspaceInvite("rim_inv".to_string())),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.server_id, Some(server_id));
+        let events = events.0.lock().unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [WorkspaceEvent::MemberJoined { workspace_id, user_id, username }]
+                if *workspace_id == server_id && *user_id == res.user_id && username == "ada"
+        ));
     }
 }

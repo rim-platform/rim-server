@@ -34,6 +34,33 @@ fn sdl_export_is_nonempty_and_has_core_types() {
     );
 }
 
+/// Key-only signup's contract with the frontend codegen: the mutation, its input, and the
+/// payload it shares with `signupWithInvite`.
+#[test]
+fn sdl_declares_signup_with_key() {
+    let sdl = export_sdl(
+        test_service_provider(),
+        InMemoryBroadcaster::new(16),
+        test_presence_manager(),
+        test_typing_tracker(),
+        test_observers(),
+    );
+    assert!(sdl.contains("signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!"));
+    assert!(sdl.contains("input SignupWithKeyInput {"));
+    for field in [
+        "username: String!",
+        "displayName: String",
+        "keyLog: [SignedStatementInput!]!",
+        "device: SignedStatementInput!",
+        "proof: SignedStatementInput!",
+        "bootstrapToken: String",
+        "instanceInviteToken: String",
+        "workspaceInviteToken: String",
+    ] {
+        assert!(sdl.contains(field), "{field}");
+    }
+}
+
 /// The SDL with every `"""` description removed and whitespace collapsed to single spaces.
 fn compact_sdl_without_descriptions(sdl: &str) -> String {
     let without: String = sdl

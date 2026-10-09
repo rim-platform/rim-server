@@ -1,6 +1,8 @@
 use rim_core::auth::model::SessionId;
 
 use crate::Actor;
+use crate::auth::command::SignupToken;
+use crate::auth::dto::RegistrationMode;
 
 /// A signed statement as the client sent it: the exact JSON text that was signed, and its
 /// signature (`ed25519:<base64url>` in version 2 statements, bare base64url in version 1).
@@ -36,6 +38,25 @@ pub struct EnrollIdentityKeyCmd {
     /// A `login` statement signed by that device over a fresh challenge from this server, so
     /// a log and certificate copied from another server cannot be enrolled here.
     pub proof: SignedPayload,
+}
+
+/// Create an account from a key identity alone: no password, no email.
+#[derive(Debug, Clone)]
+pub struct SignupWithKeyCmd {
+    pub username: String,
+    /// Raw input; normalized as for password signups, falling back to `username`.
+    pub display_name: Option<String>,
+    /// The whole key log, inception first.
+    pub key_log: Vec<SignedPayload>,
+    /// Certificate of the device signing up; the new session is bound to it.
+    pub device: SignedPayload,
+    /// A `login` statement signed by that device over a fresh challenge from this server.
+    pub proof: SignedPayload,
+    /// The deployment's mode: invite-only requires `token`, open refuses one.
+    pub registration_mode: RegistrationMode,
+    pub token: Option<SignupToken>,
+    /// Client IP for the open-mode signup rate limit (`"unknown"` when unavailable).
+    pub remote_ip: String,
 }
 
 #[derive(Debug, Clone)]

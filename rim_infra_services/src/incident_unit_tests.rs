@@ -709,7 +709,7 @@ mod tests {
             Ok(vec![rim_core::user::model::User {
                 id: owner_id,
                 username: "owner".to_string(),
-                password_hash: "hash".to_string(),
+                password_hash: Some("hash".to_string()),
                 created_at: now,
                 updated_at: now,
                 last_login_at: None,
@@ -717,7 +717,7 @@ mod tests {
                 avatar_url: None,
                 status_text: None,
                 bio: None,
-                email: "owner@example.com".to_string(),
+                email: Some("owner@example.com".to_string()),
                 timezone: None,
                 principal_id: None,
             }])

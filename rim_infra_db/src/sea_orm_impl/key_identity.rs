@@ -90,6 +90,14 @@ impl KeyIdentityRepository for SeaOrmKeyIdentityRepository {
         if res.rows_affected != 1 {
             return Err(RepoError::new(RepoErrorKind::Conflict));
         }
+        self.insert_key_log(user_id, entries).await
+    }
+
+    async fn insert_key_log(
+        &self,
+        user_id: UserId,
+        entries: Vec<NewKeyLogEntry>,
+    ) -> RepoResult<()> {
         let models = entries
             .into_iter()
             .map(|entry| new_log_entry_model(user_id, entry))
