@@ -40,12 +40,24 @@ pub fn generate_ingest_token() -> String {
 /// Generate a key-login challenge nonce: 32 random bytes, base64url-nopad, no prefix. It is
 /// public (the client signs it), so it is stored as is rather than hashed.
 pub fn generate_challenge_nonce() -> String {
-    let mut bytes = [0u8; 32];
+    random_b64url::<32>("challenge nonce")
+}
+
+/// Generate a device link id: 16 random bytes, base64url-nopad (22 characters), no prefix.
+/// It is a bearer capability, so only its SHA-256 is ever persisted.
+pub fn generate_link_id() -> String {
+    random_b64url::<16>("device link id")
+}
+
+/// `N` bytes from the OS random generator, base64url-nopad. `what` names the value in the log
+/// line written before panicking when the entropy source fails.
+fn random_b64url<const N: usize>(what: &str) -> String {
+    let mut bytes = [0u8; N];
     if let Err(e) = fill(&mut bytes) {
         tracing::error!(
             target = "audit",
             error = %e,
-            "fatal: OS entropy source failed; cannot generate challenge nonce"
+            "fatal: OS entropy source failed; cannot generate {what}"
         );
         panic!("getrandom failed: {e}");
     }
@@ -91,6 +103,14 @@ mod tests {
             "expected at least 43 chars after prefix (256-bit base64url), got {}",
             after_prefix.len()
         );
+    }
+
+    #[test]
+    fn link_id_is_16_random_bytes_of_unpadded_base64url() {
+        let id = generate_link_id();
+        assert_eq!(id.len(), 22);
+        assert_eq!(URL_SAFE_NO_PAD.decode(&id).map(|b| b.len()), Ok(16));
+        assert_ne!(id, generate_link_id());
     }
 
     #[test]

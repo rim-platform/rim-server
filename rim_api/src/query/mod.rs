@@ -26,6 +26,7 @@ pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
+pub(crate) mod device_link;
 pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -116,4 +117,5 @@ pub(crate) struct QueryGroup6(
 pub(crate) struct QueryGroup7(
     notification::NotificationQueries,
     key_identity::KeyIdentityQueries,
+    device_link::DeviceLinkQueries,
 );

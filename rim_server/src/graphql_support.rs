@@ -61,6 +61,9 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     "keyLoginChallenge",
     "loginWithKey",
     "signupWithKey",
+    // The new device sends its sealed offer before it has a session. It acts only on the link
+    // id, a capability a cross-site page does not have.
+    "sendDeviceLinkOffer",
 ];
 
 /// Mutation fields exempt from CSRF validation only when the request carries no session cookie.
@@ -69,7 +72,10 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
 /// rotation, though, is accepted only on the strength of the caller's session, so a request that
 /// carries one needs the CSRF header like any other mutation; otherwise a forged same-site
 /// request could ride the session.
-const CSRF_EXEMPT_WITHOUT_SESSION: &[&str] = &["rotateIdentityKey"];
+///
+/// `cancelDeviceLink` is how a new device without a session abandons a link. With a session
+/// cookie it may act as the link's user, so it needs the header then.
+const CSRF_EXEMPT_WITHOUT_SESSION: &[&str] = &["rotateIdentityKey", "cancelDeviceLink"];
 
 /// Enforce CSRF for a batch request. Checks once at the HTTP level whether any
 /// request in the batch contains non-exempt mutations.
@@ -471,6 +477,45 @@ mod tests {
                 request_needs_csrf(&async_graphql::Request::new(query), false),
                 "{query}"
             );
+        }
+    }
+
+    #[test]
+    fn device_link_offer_skips_csrf_with_or_without_a_session() {
+        let offer = async_graphql::Request::new(
+            r#"mutation { sendDeviceLinkOffer(linkId: "l", offer: { nonce: "n", ciphertext: "c" }) }"#,
+        );
+        assert!(!request_needs_csrf(&offer, false));
+        assert!(!request_needs_csrf(&offer, true));
+    }
+
+    #[test]
+    fn device_link_cancel_skips_csrf_only_without_a_session() {
+        let cancel = async_graphql::Request::new(r#"mutation { cancelDeviceLink(linkId: "l") }"#);
+        assert!(!request_needs_csrf(&cancel, false));
+        assert!(request_needs_csrf(&cancel, true));
+
+        let batch = async_graphql::BatchRequest::Single(cancel);
+        let signed_in = TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
+            .to_http_request();
+        assert!(enforce_csrf_for_batch(&signed_in, &batch).is_err());
+        let signed_out = TestRequest::default().to_http_request();
+        assert!(enforce_csrf_for_batch(&signed_out, &batch).is_ok());
+    }
+
+    #[test]
+    fn other_device_link_mutations_need_csrf() {
+        for query in [
+            "mutation { startDeviceLink { linkId } }",
+            r#"mutation { sendDeviceLinkAnswer(linkId: "l", answer: { nonce: "n", ciphertext: "c" }) { state } }"#,
+            r#"mutation { completeDeviceLink(linkId: "l") }"#,
+            // An exempt mutation does not carry a non-exempt one past the check.
+            r#"mutation { sendDeviceLinkOffer(linkId: "l", offer: { nonce: "n", ciphertext: "c" }) completeDeviceLink(linkId: "l") }"#,
+        ] {
+            let request = async_graphql::Request::new(query);
+            assert!(request_needs_csrf(&request, false), "{query}");
+            assert!(request_needs_csrf(&request, true), "{query}");
         }
     }
 

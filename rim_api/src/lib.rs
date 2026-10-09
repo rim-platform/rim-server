@@ -120,6 +120,7 @@ fn wire_common_schema_data(
         .data(service_provider.pipeline_service())
         .data(service_provider.oncall_service())
         .data(service_provider.escalation_policy_service())
+        .data(service_provider.device_link_service())
         .data(presence_manager)
         .data(typing_tracker)
         .data(observers)

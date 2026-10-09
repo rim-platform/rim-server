@@ -1,7 +1,8 @@
 //! Key identity statements (Stage 3, Track 7.2): the formats a person's devices sign and the
 //! checks a server runs on them. Normative description: `docs/specs/key-identity-v1.md`.
 //!
-//! This crate is pure: no I/O, no database, no clock. It verifies one statement at a time
+//! No database, network or clock: the only I/O is the OS random generator, which
+//! [`device_link`] draws link secrets and nonces from. It verifies one statement at a time
 //! against the state of a key log, and leaves storage, freshness and authorization to the
 //! caller (`rim_infra_services::key_auth`).
 //!
@@ -10,8 +11,11 @@
 //! - [`verify_device_cert`], [`UnverifiedRevocation`]: device keys certified and revoked.
 //! - [`verify_profile_card`]: the signed card with display name, relays and devices.
 //! - [`UnverifiedLogin`]: the proof a device signs over a server's login challenge.
+//! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
+//!   and tests use it; the server only relays the sealed bytes.
 
 mod device;
+pub mod device_link;
 mod encoding;
 mod error;
 mod key_log;
