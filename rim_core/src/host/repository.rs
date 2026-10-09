@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use mockall::automock;
 
 use crate::conversation::model::ConversationId;
-use crate::host::model::{NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember, SeqDecision, UserKind};
+use crate::host::model::{
+    NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember, SeqDecision, UserKind,
+};
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
@@ -53,13 +55,19 @@ pub trait HostRepository: Send + Sync {
 
     async fn home_relay(&self, user_id: UserId) -> RepoResult<Option<String>>;
 
+    /// The active pinned peer at an origin.
+    async fn peer_at_origin(&self, origin: &str) -> RepoResult<Option<String>>;
+
     /// The remote members of a space.
     async fn remote_members(&self, server_id: ServerId) -> RepoResult<Vec<RemoteMember>>;
 
     /// Mark a remote user's device active for encryption (as if it had just uploaded key
     /// packages) or not.
-    async fn set_device_mls_active(&self, device_key_id: DeviceKeyId, active: bool)
-    -> RepoResult<()>;
+    async fn set_device_mls_active(
+        &self,
+        device_key_id: DeviceKeyId,
+        active: bool,
+    ) -> RepoResult<()>;
 
     /// Whether a user shares a workspace (not the direct space) with the user holding a
     /// principal.
@@ -75,8 +83,12 @@ pub trait HostRepository: Send + Sync {
     /// Take the next `seq` of a stream: 1 for its first event.
     async fn next_stream_seq(&self, workspace_id: ServerId, stream: &str) -> RepoResult<i64>;
 
-    async fn insert_outbox(&self, peer_server_id: &str, item: &str, size_bytes: i32)
-    -> RepoResult<i64>;
+    async fn insert_outbox(
+        &self,
+        peer_server_id: &str,
+        item: &str,
+        size_bytes: i32,
+    ) -> RepoResult<i64>;
 
     /// Relays with outbox rows above what they acknowledged, whose next attempt is due.
     async fn outbox_peers_due(&self, now: DateTime<Utc>) -> RepoResult<Vec<String>>;

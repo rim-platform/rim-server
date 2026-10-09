@@ -21,8 +21,7 @@ pub trait RelayRepository: Send + Sync {
     async fn received_through(&self, peer_server_id: &str) -> RepoResult<i64>;
 
     /// Raise the highest outbox id received from a host; a lower value changes nothing.
-    async fn advance_received_through(&self, peer_server_id: &str, through: i64)
-    -> RepoResult<()>;
+    async fn advance_received_through(&self, peer_server_id: &str, through: i64) -> RepoResult<()>;
 
     /// Hosts this relay has received from.
     async fn inbound_peers(&self) -> RepoResult<Vec<String>>;
@@ -75,8 +74,7 @@ pub trait RelayRepository: Send + Sync {
     /// `Conflict` when the user has a request for that conversation already.
     async fn insert_request(&self, request: NewDmRequest) -> RepoResult<DmRequest>;
 
-    async fn get_request(&self, user_id: UserId, id: DmRequestId)
-    -> RepoResult<Option<DmRequest>>;
+    async fn get_request(&self, user_id: UserId, id: DmRequestId) -> RepoResult<Option<DmRequest>>;
 
     /// A user's requests, newest first.
     async fn list_requests(
@@ -88,8 +86,11 @@ pub trait RelayRepository: Send + Sync {
     async fn count_pending_requests(&self, user_id: UserId) -> RepoResult<i64>;
 
     /// Requests from a principal created since `since`, for every local user.
-    async fn count_requests_from(&self, principal_id: &str, since: DateTime<Utc>)
-    -> RepoResult<i64>;
+    async fn count_requests_from(
+        &self,
+        principal_id: &str,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64>;
 
     /// Move a pending request to `status`, expiring at `expires_at`. Returns `None` when the
     /// request is not pending.

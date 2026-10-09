@@ -1,6 +1,7 @@
 mod broadcast;
 mod observers;
 mod types;
+pub mod visibility;
 
 pub use broadcast::{Broadcaster, NoopBroadcaster};
 pub use observers::{EventObserver, Observers};

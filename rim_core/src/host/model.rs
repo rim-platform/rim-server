@@ -73,5 +73,7 @@ pub struct PeerDelivery {
 pub enum SeqDecision {
     Accepted,
     /// Seen within the window, or below it; the client moves its counter above `highest`.
-    Replay { highest: i64 },
+    Replay {
+        highest: i64,
+    },
 }

@@ -271,6 +271,17 @@ impl HostRepository for SeaOrmHostRepository {
             .and_then(|r| r.value))
     }
 
+    async fn peer_at_origin(&self, origin: &str) -> RepoResult<Option<String>> {
+        Ok(self
+            .one::<TextRow>(
+                "SELECT server_id AS value FROM peer_server \
+                 WHERE origin = $1 AND status = 'active' ORDER BY fetched_at DESC LIMIT 1",
+                vec![origin.into()],
+            )
+            .await?
+            .map(|r| r.value))
+    }
+
     async fn remote_members(&self, server_id: ServerId) -> RepoResult<Vec<RemoteMember>> {
         self.all::<RemoteMemberRow>(
             r#"SELECT u.id AS user_id, u.principal_id, sm.member_role::text AS role, u.home_relay,
@@ -469,7 +480,11 @@ impl HostRepository for SeaOrmHostRepository {
              VALUES ($1, $2, $3) \
              ON CONFLICT (peer_server_id) DO UPDATE SET \
                  failures = EXCLUDED.failures, next_attempt_at = EXCLUDED.next_attempt_at",
-            vec![peer_server_id.into(), failures.into(), next_attempt_at.into()],
+            vec![
+                peer_server_id.into(),
+                failures.into(),
+                next_attempt_at.into(),
+            ],
         )
         .await?;
         Ok(())
@@ -548,9 +563,7 @@ impl HostRepository for SeaOrmHostRepository {
             })
             .await
             .map_err(|e| match e {
-                TransactionError::Connection(e) | TransactionError::Transaction(e) => {
-                    map_db_err(e)
-                }
+                TransactionError::Connection(e) | TransactionError::Transaction(e) => map_db_err(e),
             })
     }
 

@@ -10,6 +10,7 @@ pub mod device_link;
 pub mod e2ee;
 pub mod escalation;
 pub mod events;
+pub mod host;
 pub mod incident;
 pub mod ingest_token;
 pub mod key_auth;
@@ -31,6 +32,7 @@ pub mod pipeline;
 pub mod presence;
 pub mod provider;
 pub mod read_state;
+pub mod relay;
 pub mod s2s;
 pub mod server;
 pub mod server_member;
@@ -165,6 +167,10 @@ pub enum ServiceError {
     MlsCommitRequired {
         reason: crate::e2ee::MlsCommitRequiredReason,
     },
+
+    /// Another server this request needed could not be reached or gave no verified answer.
+    #[error("server {host_server_id} is unavailable")]
+    UpstreamUnavailable { host_server_id: String },
 
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),

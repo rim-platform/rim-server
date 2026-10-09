@@ -60,6 +60,13 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("feature", Value::from(feature.as_str()));
             })
         }
+        // A peer server this request needed could not be reached.
+        ServiceError::UpstreamUnavailable { host_server_id } => {
+            Error::new(format!("server {host_server_id} is unavailable")).extend_with(|_, e| {
+                e.set("code", Value::from("UPSTREAM_UNAVAILABLE"));
+                e.set("hostServerId", Value::from(host_server_id.as_str()));
+            })
+        }
         // Track 1.1: writes into an archived (read-only) conversation.
         ServiceError::ConversationArchived => {
             Error::new("conversation is archived").extend_with(|_, e| {
