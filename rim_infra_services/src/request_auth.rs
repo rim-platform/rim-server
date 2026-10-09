@@ -59,6 +59,7 @@ mod tests {
     use async_trait::async_trait;
     use rim_core::auth::model::{NewSession, Session, SessionId};
     use rim_core::auth::repository::SessionRepository;
+    use rim_core::key_identity::model::DeviceKeyId;
     use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
     use rim_core::user::model::UserId;
     use rim_services::ServiceError;
@@ -74,6 +75,8 @@ mod tests {
             async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
             async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;
             async fn revoke_all_for_user(&self, user_id: UserId) -> RepoResult<u64>;
+            async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()>;
+            async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64>;
         }
     }
 

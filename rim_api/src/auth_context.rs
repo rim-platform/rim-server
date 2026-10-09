@@ -77,6 +77,13 @@ fn unauthenticated_error() -> Error {
     })
 }
 
+/// The signed-in user, or `None` for an anonymous request.
+pub(crate) fn optional_actor(ctx: &Context<'_>) -> Option<rim_core::user::model::UserId> {
+    ctx.data::<AuthActorCtx>()
+        .ok()
+        .and_then(AuthActorCtx::actor)
+}
+
 pub fn require_actor(ctx: &Context<'_>) -> Result<rim_core::user::model::UserId, Error> {
     ctx.data::<AuthActorCtx>()
         .map_err(|_| {

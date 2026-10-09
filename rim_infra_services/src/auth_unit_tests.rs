@@ -130,6 +130,7 @@ mod tests {
             bio: None,
             email: format!("{}@local.invalid", username.to_lowercase()),
             timezone: None,
+            principal_id: None,
         }
     }
 
@@ -725,6 +726,7 @@ mod tests {
                 bio: None,
                 email: "taken@local.invalid".to_string(),
                 timezone: None,
+                principal_id: None,
             }))
         });
         user_repo.expect_create_user().never();
@@ -864,6 +866,7 @@ mod tests {
                     bio: None,
                     email: new.email,
                     timezone: None,
+                    principal_id: None,
                 })
             });
 
@@ -2355,6 +2358,7 @@ mod tests {
                     bio: None,
                     email: new.email.clone(),
                     timezone: None,
+                    principal_id: None,
                 })
             });
 
@@ -2542,6 +2546,7 @@ mod tests {
                     bio: None,
                     email: new.email.clone(),
                     timezone: None,
+                    principal_id: None,
                 })
             });
 
@@ -2617,6 +2622,7 @@ mod tests {
                     bio: None,
                     email: new.email.clone(),
                     timezone: None,
+                    principal_id: None,
                 })
             });
 

@@ -166,6 +166,13 @@ impl PasswordResetService for DefaultPasswordResetService {
             return Ok(());
         };
 
+        // A password no longer signs in to an account with a key, so no link is sent; the
+        // answer is the same as for an unknown user.
+        if user.principal_id.is_some() {
+            info!(user_id = %user.id, "password reset requested for a key account; ignored");
+            return Ok(());
+        }
+
         let raw_token = Self::generate_reset_token();
         let token_hash = hash_token(&raw_token);
         let expires_at = now + Duration::hours(1);
@@ -216,6 +223,18 @@ impl PasswordResetService for DefaultPasswordResetService {
         }
 
         if record.expires_at < Utc::now() {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        // A link sent before the account enrolled a key must not reset anything: the password
+        // no longer signs in, and the reset would end every session.
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(record.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if user.principal_id.is_some() {
             return Err(ServiceError::PermissionDenied);
         }
 
@@ -271,17 +290,8 @@ impl PasswordResetService for DefaultPasswordResetService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        // The reset is committed, so a failure here only leaves the old sources exempt.
         if let Some(sources) = &self.known_login_sources {
-            match self.repos.user_repo.get_by_id(record.user_id).await {
-                Ok(Some(user)) => sources.forget(&user.username),
-                Ok(None) => {}
-                Err(e) => warn!(
-                    error = %e,
-                    user_id = %record.user_id,
-                    "could not forget login sources after password reset"
-                ),
-            }
+            sources.forget(&user.username);
         }
 
         info!(
@@ -320,6 +330,7 @@ mod tests {
             bio: None,
             email: email.to_string(),
             timezone: None,
+            principal_id: None,
         }
     }
 
@@ -714,6 +725,9 @@ mod tests {
         token_repo.expect_invalidate_unused_for_user().never();
 
         let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(make_user(id, "alice", "alice@example.com"))));
         user_repo.expect_update_password().never();
 
         let mut session_repo = MockSessionRepository::new();
@@ -727,6 +741,65 @@ mod tests {
             None,
         );
 
+        let err = svc
+            .reset_password(ResetPasswordCmd {
+                token: "rim_rst_valid".to_string(),
+                new_password: "new-password-123".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn request_reset_for_a_key_account_sends_nothing() {
+        let user_id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(move |_| {
+            Ok(Some(User {
+                principal_id: Some("rimp1_key".to_string()),
+                ..make_user(user_id, "alice", "alice@example.com")
+            }))
+        });
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo.expect_create().never();
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().never();
+
+        let svc = build_service(user_repo, token_repo, email_sender, None);
+        assert!(svc.request_reset(reset_cmd("alice")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reset_password_for_a_key_account_is_refused() {
+        let user_id = UserId::new();
+        let record = token_record(user_id);
+
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(record.clone())));
+        token_repo.expect_try_mark_used().never();
+
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_get_by_id().returning(move |id| {
+            Ok(Some(User {
+                principal_id: Some("rimp1_key".to_string()),
+                ..make_user(id, "alice", "alice@example.com")
+            }))
+        });
+        user_repo.expect_update_password().never();
+
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_revoke_all_for_user().never();
+
+        let svc = build_service_with_sessions(
+            user_repo,
+            token_repo,
+            session_repo,
+            crate::email::MockEmailSender::new(),
+            None,
+        );
         let err = svc
             .reset_password(ResetPasswordCmd {
                 token: "rim_rst_valid".to_string(),

@@ -38,6 +38,7 @@ impl DefaultUserService {
             avatar_url: user.avatar_url,
             status_text: user.status_text,
             bio: user.bio,
+            principal_id: user.principal_id,
         }
     }
 }

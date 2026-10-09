@@ -13,6 +13,7 @@ pub mod events;
 pub mod incident;
 pub mod ingest_token;
 pub mod integration;
+pub mod key_auth;
 pub mod keybind;
 pub mod link_preview;
 pub mod macro_def;

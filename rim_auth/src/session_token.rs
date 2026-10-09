@@ -37,6 +37,21 @@ pub fn generate_ingest_token() -> String {
     format!("rim_ingest_{token}")
 }
 
+/// Generate a key-login challenge nonce: 32 random bytes, base64url-nopad, no prefix. It is
+/// public (the client signs it), so it is stored as is rather than hashed.
+pub fn generate_challenge_nonce() -> String {
+    let mut bytes = [0u8; 32];
+    if let Err(e) = fill(&mut bytes) {
+        tracing::error!(
+            target = "audit",
+            error = %e,
+            "fatal: OS entropy source failed; cannot generate challenge nonce"
+        );
+        panic!("getrandom failed: {e}");
+    }
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 pub fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());

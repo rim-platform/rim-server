@@ -16,6 +16,7 @@ impl From<user::Model> for User {
             bio: m.bio,
             email: m.email,
             timezone: m.timezone,
+            principal_id: m.principal_id,
         }
     }
 }

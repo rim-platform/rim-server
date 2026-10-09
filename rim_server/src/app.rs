@@ -121,6 +121,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let escalation_scheduler =
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
 
+    let key_login_audiences = config.key_login_audiences();
+    tracing::info!(
+        audiences = ?key_login_audiences,
+        "key login accepts proofs naming these audiences (RIM_KEY_LOGIN_AUDIENCES)"
+    );
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
         raw_db,
@@ -133,6 +138,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         config.public_base_url(),
         Arc::clone(&escalation_scheduler)
             as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
+        key_login_audiences,
     ));
 
     // Boot recovery (§6) — extracted into `rim_infra_services::escalation::recover_active_escalation_runs`

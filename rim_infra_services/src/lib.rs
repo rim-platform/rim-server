@@ -22,6 +22,7 @@ pub mod file_storage;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod integration;
+pub(crate) mod key_auth;
 pub(crate) mod keybind;
 pub(crate) mod link_preview;
 pub(crate) mod login_sources;
@@ -100,6 +101,9 @@ mod incident_unit_tests;
 
 #[cfg(test)]
 mod oncall_unit_tests;
+
+#[cfg(test)]
+mod key_auth_unit_tests;
 
 #[cfg(test)]
 mod escalation_policy_unit_tests;

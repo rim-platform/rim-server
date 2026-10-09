@@ -18,6 +18,7 @@ use rim_core::incident::repository::{
     IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
 };
 use rim_core::ingest_token::repository::IngestTokenRepository;
+use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::macro_def::repository::MacroRepository;
@@ -89,6 +90,8 @@ pub struct AppRepos {
     pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
     pub moderation_repo: Arc<dyn ModerationRepository>,
     pub notification_repo: Arc<dyn NotificationRepository>,
+    pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
+    pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
 }
 
 #[derive(Clone)]
@@ -327,6 +330,15 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
+        }
+    }
+
+    pub fn for_key_auth(&self) -> crate::key_auth::KeyAuthRepos {
+        crate::key_auth::KeyAuthRepos {
+            user_repo: Arc::clone(&self.user_repo),
+            session_repo: Arc::clone(&self.session_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            key_challenge_repo: Arc::clone(&self.key_challenge_repo),
         }
     }
 
@@ -688,6 +700,12 @@ impl AppRepos {
             )),
             notification_repo: Arc::new(
                 sea_orm_impl::notification::SeaOrmNotificationRepository::new(handle.clone()),
+            ),
+            key_identity_repo: Arc::new(
+                sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository::new(handle.clone()),
+            ),
+            key_challenge_repo: Arc::new(
+                sea_orm_impl::key_identity::SeaOrmKeyChallengeRepository::new(handle.clone()),
             ),
         }
     }
