@@ -66,9 +66,10 @@ The relay is assumed hostile, as MLS assumes of its delivery service.
 | Forge messages as Alice | Every write carries Alice's device signature, which the host verifies against her key log. The relay's server signature means only "this came through relay R", never "Alice said this". Keeping the two meanings apart is the most important rule | Nothing while her device keys are safe |
 | Read content | MLS (Stage 4) for DMs and private groups: the relay sees ciphertext | Plaintext channels, which stay plaintext by the 2026-10-08 decision, are readable by the relay as they are by the host (see Consequences) |
 | Feed Alice a fake workspace state (members, roles) | The host signs its events with its well-known key; the app checks that signature against the key pinned from the invite | A relay can withhold events, see the next row |
-| Replay old messages | Per-sender sequence numbers and single-use ids checked by the host, plus MLS epochs | Nothing |
+| Replay old messages | Per-sender sequence numbers and single-use ids checked by the host, plus MLS epochs; the app checks the host's per-channel sequence numbers on the events it receives | Nothing |
 | Drop, delay or reorder messages | Cannot be prevented, only detected: host sequence numbers per channel, and MLS gap counters, let the app show "messages missing" | Alice switches relay or falls back to a direct connection; the same residual risk Signal users accept with Signal's server |
 | Abuse the delegation | It names Alice's device, the relay's key, one workspace and an expiry; it dies when Alice revokes that device or signs a new delegation | Misuse within its scope until it expires or is revoked |
+| Hide Alice's device revocation from a host | Alice's app sends each revocation to every host she belongs to and waits for the host's signed acknowledgement; if none comes back through the relay, the app sends it over a direct connection | The revoked device keeps its delegation's access until the revocation lands or the delegation expires, so delegations are short-lived |
 | Replay Alice's invite acceptance elsewhere | Alice signs the host's challenge with the host named as audience | Nothing |
 | Flood a host with subscriptions from fake relays | Rate limits per relay key and per delegation; a host may keep an allow-list of relays | A host that turns the allow-list on refuses users of unlisted relays |
 
@@ -87,7 +88,8 @@ The relay is assumed hostile, as MLS assumes of its delivery service.
   server-to-server API stays a signed HTTP API.
 - **Two hops per channel message**, app to relay to host and back.
 - **Metadata shifts rather than worsens.** The relay learns which workspaces Alice is in and
-  when she is active. The host no longer sees her IP address.
+  when she is active. The host no longer sees her IP address, except when she falls back to a
+  direct connection.
 - **Availability.** Alice's relay must be up for her to read channels. The direct connection
   fallback and switching relays (a profile card update) cover a relay outage.
 - **Ordering with Stage 4.** Stage 5 already ships after Stage 4, so DMs and private groups
@@ -99,7 +101,8 @@ The relay is assumed hostile, as MLS assumes of its delivery service.
   algorithm-agile Stage 3 encodings and move to hybrid Ed25519 + ML-DSA-44 signatures with the
   rest of the server-to-server API.
 - **Wire formats are not fixed here.** The invite token, delegation and event-signature
-  formats are specified in the Stage 5 server-to-server spec.
+  formats, and how a pinned host key rotates, are specified in the Stage 5 server-to-server
+  spec.
 
 ## Rejected alternatives
 
