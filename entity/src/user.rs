@@ -19,6 +19,14 @@ pub struct Model {
     pub email: String,
     #[sea_orm(column_type = "String(StringLen::N(64))", nullable)]
     pub timezone: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub kind: String,
+    #[sea_orm(column_type = "Text", nullable, unique)]
+    pub principal_id: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub identity_key: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub home_relay: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

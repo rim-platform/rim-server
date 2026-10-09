@@ -8,6 +8,10 @@ pub struct User {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
+    /// Key-based principal id (`rimp1_...`) once the account enrolled a key; null before. Plugins
+    /// see this id, and the host maps a provisional `rimp0_` id to it once
+    /// (`docs/specs/key-identity-v1.md`).
+    pub principal_id: Option<String>,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -19,6 +23,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             avatar_url: value.avatar_url,
             status_text: value.status_text,
             bio: value.bio,
+            principal_id: value.principal_id,
         }
     }
 }

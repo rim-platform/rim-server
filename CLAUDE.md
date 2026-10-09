@@ -102,6 +102,7 @@ Cross-cutting contracts that define boundaries between layers:
 | `entity` | Generated SeaORM entities — do not edit manually |
 | `migration` | SeaORM migrations + CLI |
 | `rim_auth` | Cryptographic primitives (Argon2, SHA2, base64) |
+| `rim_identity` | Key identity statements (Ed25519 key log, device certificates, profile cards, login proofs); verification only, no I/O. Contract: `docs/specs/key-identity-v1.md` |
 | `rim_logging` | Structured tracing initialization (JSON output) |
 
 ## Conventions

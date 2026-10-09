@@ -21,6 +21,9 @@ pub struct User {
     /// only — see `docs/oncall.md`: rotation handoff math lives on the on-call **schedule's**
     /// timezone, never the user's.
     pub timezone: Option<String>,
+    /// Key-based principal id (`rimp1_...`) once the account enrolled a key; `None` before.
+    /// An account with a principal id signs in with a device key, not its password.
+    pub principal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

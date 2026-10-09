@@ -228,8 +228,9 @@ both encryption and relays depend on them.
 0. **Identity shape in the plugin SDK** (S, Stage 1, with 2.1): plugins see users as
    `{ principalId, displayName }`, never a local UUID or `name@domain`; `principalId` is
    opaque and stable across key changes; mentions are `<@principalId>`; chat methods go
-   through one client message service. Ids minted before Stage 3 are provisional, and the host
-   sends `rim.principal.migrated` when Stage 3 replaces them.
+   through one client message service. Ids minted before Stage 3 are provisional (`rimp0_`),
+   and the host sends `rim.principal.changed` plus an old-to-new mapping notification when
+   Stage 3 replaces them (`docs/specs/plugin-protocol-v1.md`, `docs/specs/key-identity-v1.md`).
 1. **Local history and drive archive** (L, Stage 2): an encrypted local message store, local
    search marked "on this device", and an encrypted archive written to a folder, Google Drive
    or Dropbox. Each device writes its own archive segments, so two devices never overwrite one
@@ -245,6 +246,10 @@ both encryption and relays depend on them.
    existing `user` row with a kind of local or remote, so none of the dozens of tables that
    reference the user id move. Bots, ingest tokens and the CLI keep host-local credentials and
    host-scoped ids. The web app becomes a linked device of the desktop app.
+   _Server foundation in progress:_ the `rim_identity` crate, key columns and tables,
+   enrollment, device add and revoke, identity rotation and recovery, profile cards and
+   challenge login (`docs/specs/key-identity-v1.md`). Still to come: key-only signup, QR
+   linking, the recovery phrase and the client.
 3. **E2EE v1 with MLS** (XL, Stage 4): OpenMLS on the Tauri side for DMs and private groups;
    channels stay plaintext. Every server feature that reads text gets a client replacement in
    encrypted conversations; plugins read messages only through the client message service under
@@ -400,7 +405,8 @@ Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in
 - **Scope.** Two XL pillars on one small team; Stages 4 and 5 are each XL. Every stage ships
   alone, and the plugin pillar reaches its showcase first.
 - **Freezing the SDK too early or too late.** v1 carries only what is implemented plus what a
-  panel plugin needs; pre-Stage 3 ids are provisional and migrate via `rim.principal.migrated`.
+  panel plugin needs; pre-Stage 3 ids are provisional and migrate once via
+  `rim.principal.changed` plus a mapping notification.
 - **Plugins and encrypted messages.** A local plugin runs with the user's rights; decryption
   for plugins only through the client message service, per plugin and per grant, shown in the
   consent prompt.

@@ -26,6 +26,7 @@ mod tests {
             bio: None,
             email: "u@local.invalid".to_string(),
             timezone: None,
+            principal_id: None,
         }
     }
 

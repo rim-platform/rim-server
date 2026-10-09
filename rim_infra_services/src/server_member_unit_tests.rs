@@ -294,6 +294,7 @@ mod tests {
                     bio: None,
                     email: "x@example.com".to_string(),
                     timezone: None,
+                    principal_id: None,
                 })
                 .collect())
         });

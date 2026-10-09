@@ -16,6 +16,7 @@ pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod invite;
+pub(crate) mod key_identity;
 pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
@@ -67,6 +68,10 @@ pub use ingest_token::{CreateIngestTokenResultGql, IngestTokenGql};
 pub use invite::{
     CreateInstanceInvitePayloadGql, InstanceInviteGql, Invite, InviteTokenPreviewGql,
     InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql, WorkspaceInvitePreviewGql,
+};
+pub use key_identity::{
+    DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLogEntry, KeyLogEntryKind,
+    KeyLoginChallenge, ProfileCard, RotateIdentityKeyInput, SignedStatement, SignedStatementInput,
 };
 pub use keybind::{
     DefaultKeybind, Keybind, KeybindContext, KeybindLayers, KeybindScope, KeybindSource,

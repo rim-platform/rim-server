@@ -30,6 +30,7 @@ pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod invite;
+pub(crate) mod key_identity;
 pub(crate) mod keybind;
 pub(crate) mod macro_def;
 pub(crate) mod message;
@@ -112,4 +113,7 @@ pub(crate) struct QueryGroup6(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct QueryGroup7(notification::NotificationQueries);
+pub(crate) struct QueryGroup7(
+    notification::NotificationQueries,
+    key_identity::KeyIdentityQueries,
+);

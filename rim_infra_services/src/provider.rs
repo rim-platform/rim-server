@@ -18,6 +18,7 @@ use rim_services::events::Observers;
 use rim_services::incident::service::IncidentService;
 use rim_services::ingest_token::service::IngestTokenService;
 use rim_services::integration::service::IntegrationService;
+use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::macro_def::service::MacroService;
@@ -62,6 +63,7 @@ pub struct DefaultAppServiceProvider {
     incident_service: Arc<dyn IncidentService>,
     ingest_token_service: Arc<dyn IngestTokenService>,
     integration_service: Arc<dyn IntegrationService>,
+    key_auth_service: Arc<dyn KeyAuthService>,
     keybind_service: Arc<dyn KeybindService>,
     link_preview_service: Arc<dyn LinkPreviewService>,
     macro_service: Arc<dyn MacroService>,
@@ -106,6 +108,7 @@ impl DefaultAppServiceProvider {
         email_sender: Arc<dyn EmailSender>,
         public_base_url: Option<String>,
         escalation_scheduler: Arc<dyn EscalationScheduler>,
+        key_login_audiences: Vec<String>,
     ) -> Self {
         let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         // Shared so a password reset can forget the sources login exempts from its backstop.
@@ -122,6 +125,13 @@ impl DefaultAppServiceProvider {
             )
             .with_known_login_sources(known_login_sources.clone()),
         );
+        let key_auth_service: Arc<dyn KeyAuthService> =
+            Arc::new(crate::key_auth::DefaultKeyAuthService::new(
+                repos.for_key_auth(),
+                Some(db.clone()),
+                session_ttl,
+                key_login_audiences,
+            ));
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
         );
@@ -367,6 +377,7 @@ impl DefaultAppServiceProvider {
             incident_service,
             ingest_token_service,
             integration_service,
+            key_auth_service,
             keybind_service,
             link_preview_service,
             macro_service,
@@ -439,6 +450,10 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn integration_service(&self) -> Arc<dyn IntegrationService> {
         Arc::clone(&self.integration_service)
     }
+    fn key_auth_service(&self) -> Arc<dyn KeyAuthService> {
+        Arc::clone(&self.key_auth_service)
+    }
+
     fn keybind_service(&self) -> Arc<dyn KeybindService> {
         Arc::clone(&self.keybind_service)
     }

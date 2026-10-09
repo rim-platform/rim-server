@@ -124,6 +124,7 @@ mod tests {
             bio: None,
             email: "u@example.com".to_string(),
             timezone: None,
+            principal_id: None,
         }
     }
 

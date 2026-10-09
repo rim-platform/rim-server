@@ -211,6 +211,7 @@ fn user_dto(id: UserId, username: &str) -> UserDto {
         avatar_url: Some(format!("https://example/{username}.png")),
         status_text: None,
         bio: None,
+        principal_id: None,
     }
 }
 

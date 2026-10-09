@@ -719,6 +719,7 @@ mod tests {
                 bio: None,
                 email: "owner@example.com".to_string(),
                 timezone: None,
+                principal_id: None,
             }])
         });
 

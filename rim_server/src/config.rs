@@ -99,6 +99,11 @@ pub struct RIMConfig {
     /// Default: 900 (15 minutes); values below 60 are raised to 60. Controlled by
     /// `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS`.
     pub notification_digest_interval_secs: Option<u64>,
+
+    /// Comma-separated `host[:port]` values a key login proof may name as its audience
+    /// (`docs/specs/key-identity-v1.md`). Controlled by `RIM_KEY_LOGIN_AUDIENCES`; see
+    /// [`RIMConfig::key_login_audiences`] for the defaults.
+    pub key_login_audiences: Option<String>,
 }
 
 /// The registration mode resolved from environment at boot.
@@ -153,6 +158,7 @@ impl fmt::Debug for RIMConfig {
                 "notification_digest_interval_secs",
                 &self.notification_digest_interval_secs(),
             )
+            .field("key_login_audiences", &self.key_login_audiences())
             .finish()
     }
 }
@@ -189,6 +195,7 @@ impl Default for RIMConfig {
             public_base_url: None,
             escalation_timer_resolution_secs: None,
             notification_digest_interval_secs: None,
+            key_login_audiences: None,
         }
     }
 }
@@ -364,6 +371,48 @@ impl RIMConfig {
 }
 
 impl RIMConfig {
+    /// The audiences a key login proof may name: this server's `host[:port]` as clients reach
+    /// it. A proof naming another server is refused, so a server that receives a proof cannot
+    /// replay it elsewhere.
+    ///
+    /// `RIM_KEY_LOGIN_AUDIENCES` when set; otherwise the host of `RIM_PUBLIC_BASE_URL`;
+    /// otherwise `localhost:PORT` and `127.0.0.1:PORT` for local development. Lowercased.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let audiences = config.key_login_audiences();
+    /// ```
+    pub fn key_login_audiences(&self) -> Vec<String> {
+        let configured: Vec<String> = self
+            .key_login_audiences
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(|a| a.trim().to_ascii_lowercase())
+            .filter(|a| !a.is_empty())
+            .collect();
+        if !configured.is_empty() {
+            return configured;
+        }
+        if let Some(authority) = self.public_base_url.as_deref().and_then(url_authority) {
+            return vec![authority];
+        }
+        vec![
+            format!("localhost:{}", self.server_port),
+            format!("127.0.0.1:{}", self.server_port),
+        ]
+    }
+}
+
+/// The `host[:port]` of an absolute URL such as `https://rim.example.com/app`, lowercased.
+fn url_authority(url: &str) -> Option<String> {
+    let (_, rest) = url.trim().split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next()?;
+    (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
+}
+
+impl RIMConfig {
     #[allow(clippy::missing_errors_doc)]
     pub fn load() -> Result<Self, ConfigError> {
         let c = Config::builder()
@@ -480,6 +529,41 @@ mod tests {
         let debug_output = format!("{config:?}");
         assert!(!debug_output.contains("super-secret-password"));
         assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn key_login_audiences_parses_the_configured_list() {
+        let config = RIMConfig {
+            key_login_audiences: Some(" Rim.Example.com , relay.rim.chat:8443,, ".to_string()),
+            public_base_url: Some("https://other.example.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.key_login_audiences(),
+            vec!["rim.example.com", "relay.rim.chat:8443"]
+        );
+    }
+
+    #[test]
+    fn key_login_audiences_falls_back_to_public_base_url_host() {
+        let config = RIMConfig {
+            public_base_url: Some("https://user@RIM.example.com:8443/app?x=1".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.key_login_audiences(), vec!["rim.example.com:8443"]);
+    }
+
+    #[test]
+    fn key_login_audiences_defaults_to_localhost_on_the_server_port() {
+        let config = RIMConfig {
+            server_port: 9000,
+            key_login_audiences: Some(" ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.key_login_audiences(),
+            vec!["localhost:9000", "127.0.0.1:9000"]
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod incident_phase;
 pub mod ingest_token;
 pub mod instance_invite;
 pub mod invite;
+pub mod key_identity;
 pub mod keybind;
 pub mod link_preview;
 pub mod macro_def;
