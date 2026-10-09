@@ -10,11 +10,13 @@ use rim_core::user::model::UserId;
 use crate::ServiceResult;
 use crate::conversation::dto::ConversationDto;
 use crate::moderation::command::{
-    BanMemberCmd, ClearTimeoutCmd, KickMemberCmd, ListBansQuery, ListReportsQuery,
-    ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd,
-    UnbanMemberCmd,
+    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
+    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd,
+    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
-use crate::moderation::dto::{MemberTimeoutDto, MessageReportDto, ReportPageCursor, ServerBanDto};
+use crate::moderation::dto::{
+    MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
+};
 use crate::server_member::dto::ServerMemberDto;
 
 /// Roles and moderation (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`). Every
@@ -52,6 +54,17 @@ pub trait ModerationService: Send + Sync {
     ) -> ServiceResult<Page<MessageReportDto, ReportPageCursor>>;
 
     async fn resolve_report(&self, cmd: ResolveReportCmd) -> ServiceResult<MessageReportDto>;
+
+    /// One report with its verified content, if any. Records `e2ee.report_viewed` when the
+    /// content is returned.
+    async fn get_report(&self, query: GetReportQuery) -> ServiceResult<MessageReportDto>;
+
+    /// The stored blob of a reported encrypted attachment. `NotFound` for every refusal, so a
+    /// caller learns nothing about reports it may not see.
+    async fn authorize_report_attachment(
+        &self,
+        query: AuthorizeReportAttachmentQuery,
+    ) -> ServiceResult<ReportAttachmentDto>;
 
     /// Internal gate (no actor): the end of `user_id`'s timeout in `server_id` while one is in
     /// force. Used by the command service to refuse Mutating commands.

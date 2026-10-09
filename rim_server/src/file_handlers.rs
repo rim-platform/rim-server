@@ -1,11 +1,16 @@
 use std::sync::Arc;
 
 use actix_multipart::Multipart;
+use actix_web::http::header;
 use actix_web::{HttpRequest, HttpResponse, web};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rim_core::storage::StorageBackend;
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
+use rim_services::moderation::service::ModerationService;
 use rim_services::storage::service::StorageService;
 
 use crate::graphql_support::{extract_actor_and_session_id, validate_csrf_header};
@@ -425,17 +430,9 @@ pub async fn handle_attachment_download(
         }
     };
 
-    // Fetch the file from storage.
-    let data = match storage_backend.get(&storage_key).await {
+    let data = match read_stored_file(storage_backend.get_ref().as_ref(), &storage_key).await {
         Ok(d) => d,
-        Err(rim_core::storage::StorageError::NotFound(_)) => {
-            return HttpResponse::NotFound().json(serde_json::json!({"error": "file not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "file download failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "download failed"}));
-        }
+        Err(resp) => return resp,
     };
 
     // An encrypted blob is served as opaque bytes; the client checks its hash and decrypts it.
@@ -453,6 +450,73 @@ pub async fn handle_attachment_download(
         .insert_header((
             "Content-Disposition",
             format!("attachment; filename=\"{}\"", safe_name),
+        ))
+        .body(data)
+}
+
+/// A stored file's bytes, or the 404/500 response.
+async fn read_stored_file(
+    storage_backend: &dyn StorageBackend,
+    storage_key: &str,
+) -> Result<Vec<u8>, HttpResponse> {
+    match storage_backend.get(storage_key).await {
+        Ok(d) => Ok(d),
+        Err(rim_core::storage::StorageError::NotFound(_)) => {
+            Err(HttpResponse::NotFound().json(serde_json::json!({"error": "file not found"})))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "file download failed");
+            Err(HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "download failed"})))
+        }
+    }
+}
+
+/// GET /api/reports/{report_id}/attachments/{blob_sha256}
+///
+/// Serves the encrypted blob of an attachment of a reported encrypted message to an
+/// Owner/Moderator of the report's workspace, who decrypts it with the secret from the
+/// report's verified content. `blob_sha256` is unpadded base64url. Every refusal is a bare 404.
+pub async fn handle_report_attachment_download(
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    moderation_service: web::Data<Arc<dyn ModerationService>>,
+    storage_backend: web::Data<Arc<dyn StorageBackend>>,
+) -> HttpResponse {
+    let user_id = match require_auth(&req).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let (report_id, blob_sha256) = path.into_inner();
+    let Ok(report_id) = report_id.parse::<uuid::Uuid>() else {
+        return HttpResponse::NotFound().finish();
+    };
+    let Ok(blob_sha256) = URL_SAFE_NO_PAD.decode(blob_sha256) else {
+        return HttpResponse::NotFound().finish();
+    };
+    let attachment = match moderation_service
+        .authorize_report_attachment(AuthorizeReportAttachmentQuery {
+            actor_user_id: user_id,
+            report_id: report_id.into(),
+            blob_sha256,
+        })
+        .await
+    {
+        Ok(attachment) => attachment,
+        Err(rim_services::ServiceError::NotFound) => return HttpResponse::NotFound().finish(),
+        Err(e) => return map_service_error_to_response(e),
+    };
+    let data =
+        match read_stored_file(storage_backend.get_ref().as_ref(), &attachment.storage_key).await {
+            Ok(d) => d,
+            Err(resp) => return resp,
+        };
+    HttpResponse::Ok()
+        .content_type(ENCRYPTED_BLOB_MIME)
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .insert_header((
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{ENCRYPTED_BLOB_FILENAME}\""),
         ))
         .body(data)
 }
@@ -504,6 +568,164 @@ pub async fn handle_avatar_upload(
         Err(e) => {
             tracing::error!(error = %e, "avatar upload failed");
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "upload failed"}))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::App;
+    use actix_web::cookie::Cookie;
+    use actix_web::test as actix_test;
+    use rim_core::auth::model::SessionId;
+    use rim_core::moderation::model::MessageReportId;
+    use rim_core::storage::{StorageError, StoredFile};
+    use rim_core::user::model::UserId;
+    use rim_services::auth::dto::RequestAuthResultDto;
+    use rim_services::auth::service::MockRequestAuthenticator;
+    use rim_services::moderation::dto::ReportAttachmentDto;
+    use rim_services::moderation::service::MockModerationService;
+
+    use crate::graphql_support::COOKIE_SESSION;
+
+    const SESSION: &str = "rim_sess_test";
+    const BLOB: &[u8] = b"opaque blob";
+    /// Unpadded base64url of 32 bytes of 0x07.
+    const BLOB_SHA256: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+
+    /// Storage holding one file, `uploads/blob`.
+    struct OneFile;
+
+    #[async_trait::async_trait]
+    impl StorageBackend for OneFile {
+        async fn put(&self, _: &str, _: &[u8], _: &str) -> Result<StoredFile, StorageError> {
+            Err(StorageError::NotFound("read only".to_string()))
+        }
+
+        async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+            if key == "uploads/blob" {
+                Ok(BLOB.to_vec())
+            } else {
+                Err(StorageError::NotFound(key.to_string()))
+            }
+        }
+
+        async fn delete(&self, _: &str) -> Result<(), StorageError> {
+            Ok(())
+        }
+    }
+
+    /// An authenticator that knows one session, of `user_id`.
+    fn authenticator(user_id: UserId) -> MockRequestAuthenticator {
+        let mut auth = MockRequestAuthenticator::new();
+        auth.expect_authenticate_session_token()
+            .returning(move |token| {
+                let known = token == Some(SESSION);
+                Box::pin(async move {
+                    Ok(if known {
+                        RequestAuthResultDto {
+                            user_id: Some(user_id),
+                            session_id: Some(SessionId::new()),
+                            device_key_id: None,
+                        }
+                    } else {
+                        RequestAuthResultDto::default()
+                    })
+                })
+            });
+        auth
+    }
+
+    macro_rules! test_app {
+        ($auth:expr, $service:expr) => {
+            actix_test::init_service(
+                App::new()
+                    .service(
+                        web::resource("/api/reports/{report_id}/attachments/{blob_sha256}")
+                            .route(web::get().to(handle_report_attachment_download)),
+                    )
+                    .app_data(web::Data::new(
+                        Arc::new($auth) as Arc<dyn RequestAuthenticator>
+                    ))
+                    .app_data(web::Data::new(
+                        Arc::new($service) as Arc<dyn ModerationService>
+                    ))
+                    .app_data(web::Data::new(Arc::new(OneFile) as Arc<dyn StorageBackend>)),
+            )
+            .await
+        };
+    }
+
+    fn get(path: &str, signed_in: bool) -> actix_test::TestRequest {
+        let req = actix_test::TestRequest::get().uri(path);
+        if signed_in {
+            req.cookie(Cookie::new(COOKIE_SESSION, SESSION))
+        } else {
+            req
+        }
+    }
+
+    #[actix_web::test]
+    async fn a_reported_blob_is_served_opaque() {
+        let user_id = UserId::new();
+        let report_id = MessageReportId::new();
+        let mut service = MockModerationService::new();
+        service
+            .expect_authorize_report_attachment()
+            .withf(move |q| {
+                q.actor_user_id == user_id && q.report_id == report_id && q.blob_sha256 == [7; 32]
+            })
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(ReportAttachmentDto {
+                        storage_key: "uploads/blob".to_string(),
+                    })
+                })
+            });
+        let app = test_app!(authenticator(user_id), service);
+
+        let path = format!("/api/reports/{report_id}/attachments/{BLOB_SHA256}");
+        let resp = actix_test::call_service(&app, get(&path, true).to_request()).await;
+        assert_eq!(resp.status(), 200);
+        let headers = resp.headers();
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).expect("header"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            headers.get(header::X_CONTENT_TYPE_OPTIONS).expect("header"),
+            "nosniff"
+        );
+        assert_eq!(
+            headers.get(header::CONTENT_DISPOSITION).expect("header"),
+            "attachment; filename=\"encrypted.bin\""
+        );
+        assert_eq!(actix_test::read_body(resp).await, BLOB);
+    }
+
+    #[actix_web::test]
+    async fn every_refusal_is_a_bare_404_and_no_session_a_401() {
+        let report_id = MessageReportId::new();
+        let mut service = MockModerationService::new();
+        service
+            .expect_authorize_report_attachment()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(rim_services::ServiceError::NotFound) }));
+        let app = test_app!(authenticator(UserId::new()), service);
+
+        let path = format!("/api/reports/{report_id}/attachments/{BLOB_SHA256}");
+        let resp = actix_test::call_service(&app, get(&path, false).to_request()).await;
+        assert_eq!(resp.status(), 401);
+        let resp = actix_test::call_service(&app, get(&path, true).to_request()).await;
+        assert_eq!(resp.status(), 404);
+        assert!(actix_test::read_body(resp).await.is_empty());
+        for path in [
+            format!("/api/reports/not-a-uuid/attachments/{BLOB_SHA256}"),
+            format!("/api/reports/{report_id}/attachments/not%2Bbase64"),
+        ] {
+            let resp = actix_test::call_service(&app, get(&path, true).to_request()).await;
+            assert_eq!(resp.status(), 404, "{path}");
         }
     }
 }

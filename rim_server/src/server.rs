@@ -3,6 +3,7 @@ use crate::app::build_app_runtime;
 use crate::config::RIMConfig;
 use crate::file_handlers::{
     handle_attachment_download, handle_avatar_upload, handle_file_download, handle_file_upload,
+    handle_report_attachment_download,
 };
 use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
@@ -59,6 +60,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
     let message_attachment_service = runtime.message_attachment_service;
+    let moderation_service = runtime.moderation_service;
     let ingest_token_service = runtime.ingest_token_service;
     let incident_service = runtime.incident_service;
     let workspace_feature_service = runtime.workspace_feature_service;
@@ -108,6 +110,10 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
                     .route(web::get().to(handle_attachment_download)),
             )
             .service(
+                web::resource("/api/reports/{report_id}/attachments/{blob_sha256}")
+                    .route(web::get().to(handle_report_attachment_download)),
+            )
+            .service(
                 web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
             )
             .service(
@@ -144,6 +150,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
+            .app_data(web::Data::new(Arc::clone(&moderation_service)))
             .app_data(web::Data::new(Arc::clone(&ingest_token_service)))
             .app_data(web::Data::new(Arc::clone(&incident_service)))
             .app_data(web::Data::new(Arc::clone(&workspace_feature_service)))

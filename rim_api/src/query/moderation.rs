@@ -1,13 +1,15 @@
 use async_graphql::*;
 use rim_services::Actor;
-use rim_services::moderation::command::{ListBansQuery, ListReportsQuery};
+use rim_services::moderation::command::{GetReportQuery, ListBansQuery, ListReportsQuery};
 use rim_services::moderation::service::ModerationService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
-use crate::types::{MessageReportCursorInput, MessageReportPage, MessageReportStatus, ServerBan};
+use crate::types::{
+    MessageReport, MessageReportCursorInput, MessageReportPage, MessageReportStatus, ServerBan,
+};
 
 #[derive(Default)]
 pub(crate) struct ModerationQueries;
@@ -60,5 +62,27 @@ impl ModerationQueries {
             .await
             .map_err(map_service_error)?;
         Ok(MessageReportPage::from_page(page))
+    }
+
+    /// One report of the workspace. Owner/Moderator only. For a verified report of an
+    /// encrypted message it includes `frankedContent`, and records that the moderator viewed
+    /// it (`e2ee.report_viewed`).
+    async fn message_report(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        report_id: ID,
+    ) -> Result<MessageReport> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ModerationService>>()?;
+        let report = svc
+            .get_report(GetReportQuery {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+                report_id: parse_uuid_id(&report_id)?,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(report.into())
     }
 }

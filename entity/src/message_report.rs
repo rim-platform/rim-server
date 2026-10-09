@@ -23,6 +23,7 @@ pub struct Model {
     #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
     pub franked_content: Option<Vec<u8>>,
     pub franking_verified_at: Option<DateTimeWithTimeZone>,
+    pub franked_sender_device_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

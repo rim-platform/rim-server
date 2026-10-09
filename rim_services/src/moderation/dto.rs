@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
@@ -73,7 +74,19 @@ pub struct MessageReportDto {
     pub message_readable: bool,
     /// `None` when unreadable or when the message was deleted.
     pub message_text: Option<String>,
+    /// Shown when the conversation is readable, and for a verified franked report.
     pub message_author_id: Option<UserId>,
+    pub message_sent_at: Option<DateTime<Utc>>,
+    /// Set for a verified franked report of an encrypted message.
+    pub franking_verified_at: Option<DateTime<Utc>>,
+    /// The sender's client device id the receipt covered.
+    pub franked_sender_device_id: Option<Uuid>,
+    /// The verified content bytes. Filled only when one moderator opens one report
+    /// ([`crate::moderation::service::ModerationService::get_report`]); `None` in lists and
+    /// once retention cleared it.
+    pub franked_content: Option<Vec<u8>>,
+    /// When retention clears the content: 90 days after the report was resolved or dismissed.
+    pub franked_content_expires_at: Option<DateTime<Utc>>,
 }
 
 impl MessageReportDto {
@@ -93,8 +106,19 @@ impl MessageReportDto {
             message_readable: false,
             message_text: None,
             message_author_id: None,
+            message_sent_at: None,
+            franking_verified_at: None,
+            franked_sender_device_id: None,
+            franked_content: None,
+            franked_content_expires_at: None,
         }
     }
+}
+
+/// Where a reported encrypted attachment's blob is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportAttachmentDto {
+    pub storage_key: String,
 }
 
 /// `(created_at, id)` cursor for [`crate::moderation::service::ModerationService::list_reports`].

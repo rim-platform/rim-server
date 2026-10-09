@@ -544,6 +544,19 @@ A report proves one message's content to the moderators without the server havin
    device, conversation and time, and the line "Verified: this is the exact message <sender>'s
    device sent. Other messages in the conversation are not shown and are not verified." A verified
    report lets a moderator delete that message even outside the conversation.
+   - The report stores the sender's device id the receipt covered
+     (`message_report.franked_sender_device_id`). `messageReports` shows every moderator a
+     verified report's `messageAuthorId`, `messageSentAt`, `frankingVerifiedAt`,
+     `frankedSenderDeviceId` and `frankedContentExpiresAt`, never its content;
+     `messageReport(serverId, reportId)` (Owner/Moderator) adds `frankedContent` and records
+     `e2ee.report_viewed`.
+   - `GET /api/reports/{reportId}/attachments/{blobSha256}` (session; Owner/Moderator of the
+     report's workspace) serves the blob of an attachment of the reported message, or a stored
+     blob of the workspace that the verified content names, as `application/octet-stream`
+     named `encrypted.bin` with `X-Content-Type-Options: nosniff`; anything else is a bare
+     `404`.
+   - `deleteMessage` by an Owner/Moderator who cannot read the conversation succeeds when the
+     message has a verified report.
 
 **Limits.** A report proves one message, not its context: what it replied to, what came before, or
 whether the reporter provoked it (a reporter may report several messages, each proven alone). The
@@ -724,7 +737,8 @@ The change-feed function also sets `edited_at` when `mls_ciphertext` changes to 
 `OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
 the previous function and trigger, then drops the new columns, indexes and tables; it refuses to
 run while an encrypted message exists (rolling back would leave rows with neither text nor
-ciphertext). Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
+ciphertext). A second migration, `add_report_sender_device`, adds
+`message_report.franked_sender_device_id uuid NULL`. Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
 once fulfilled or after 7 days, `franked_content` 90 days after the report is resolved.
 
 Code: an `e2ee` module in `rim_core` (repository traits), `rim_services` (`E2eeService`, DTOs, an
@@ -765,6 +779,10 @@ type MlsWelcome { id: ID!  serverId: ID!  conversationId: ID!  incarnation: Int!
 type PrincipalDevice { deviceId: ID!  name: String!  certificate: SignedStatement!  revokedAt: DateTime  revocation: SignedStatement
                       mlsActive: Boolean! }  # not revoked, a key package uploaded in the last 60 days
 type PrincipalDevices { principalId: String!  devices: [PrincipalDevice!]! }
+type MessageReport {                                                   # additive
+  messageSentAt: DateTime  frankingVerifiedAt: DateTime  frankedSenderDeviceId: ID
+  frankedContent: String  frankedContentExpiresAt: DateTime            # content: messageReport only
+}
 
 input CreateConversationInput { encrypted: Boolean }                   # additive; default false
 input SendMessageInput { forwardedFromMessageId: ID }                  # additive
@@ -793,6 +811,7 @@ type Query {
   myMlsWelcomes: [MlsWelcome!]!                                         # session device, unacknowledged
   mlsCommits(serverId: ID!, conversationId: ID!, incarnation: Int!, afterEpoch: Int, limit: Int): MlsCommitPage!
   principalDevices(principalIds: [String!]!): [PrincipalDevices!]!     # principals sharing a workspace with the caller
+  messageReport(serverId: ID!, reportId: ID!): MessageReport!           # Owner/Moderator
 }
 type Mutation {
   uploadMlsKeyPackages(keyPackages: [String!]!): MlsKeyPackageStatus!
@@ -859,7 +878,8 @@ removes devices. `MlsWelcomeAvailable` goes to
 
 Rate limiters are the in-memory per-node ones, as for device linking; correctness never depends
 on them. Audit (`command_audit_log`, ids only): `e2ee.enable` (incarnation 1 accepted),
-`e2ee.reincarnate`, `e2ee.report` (franked report accepted), `admin.delete_message` as today.
+`e2ee.reincarnate`, `e2ee.report` (franked report accepted), `e2ee.report_viewed` (a moderator
+opened a verified report's content), `admin.delete_message` as today.
 Logs carry conversation ids, epochs and device row ids, never bytes.
 
 ## Threat model

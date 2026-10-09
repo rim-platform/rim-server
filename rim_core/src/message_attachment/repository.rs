@@ -65,6 +65,14 @@ pub trait MessageAttachmentRepository: Send + Sync {
         max_file_size: i64,
     ) -> RepoResult<AttachmentUsage>;
 
+    /// A stored (not pending) encrypted attachment of a conversation of `server_id` whose blob
+    /// has this SHA-256, if any.
+    async fn find_stored_by_blob_sha256(
+        &self,
+        server_id: ServerId,
+        blob_sha256: Vec<u8>,
+    ) -> RepoResult<Option<MessageAttachment>>;
+
     /// Find all attachment IDs with the given metadata status strings
     /// whose UUID v7 id encodes a timestamp older than `before`.
     /// Used by the stale-attachment cleanup job.

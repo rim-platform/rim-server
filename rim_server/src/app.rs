@@ -27,6 +27,7 @@ pub struct AppRuntime {
     pub storage_service: Arc<dyn StorageService>,
     pub message_attachment_service:
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
+    pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
     pub ingest_token_service: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
     pub incident_service: Arc<dyn rim_services::incident::service::IncidentService>,
     pub workspace_feature_service:
@@ -331,6 +332,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     }
 
     let message_attachment_service = service_provider.message_attachment_service();
+    let moderation_service = service_provider.moderation_service();
     let ingest_token_service = service_provider.ingest_token_service();
     let incident_service = service_provider.incident_service();
     let workspace_feature_service = service_provider.workspace_feature_service();
@@ -391,6 +393,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         storage_backend,
         storage_service,
         message_attachment_service,
+        moderation_service,
         ingest_token_service,
         incident_service,
         workspace_feature_service,

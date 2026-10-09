@@ -30,6 +30,8 @@ actix-multipart = "0.7"
 serde_json = "1"
 mime_guess = "2"
 sha2 = "0.10.9"
+base64 = "0.22.1"
 
 [dev-dependencies]
 rim_services = { path = "../rim_services", features = ["mocks"] }
+async-trait = "0.1.89"

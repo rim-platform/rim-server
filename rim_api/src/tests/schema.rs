@@ -164,3 +164,25 @@ fn workspace_plugin_sdl_has_the_registry_api() {
         assert!(compact.contains(definition), "SDL lacks `{definition}`");
     }
 }
+
+/// Verified reports of encrypted messages: the franking fields and the single-report query.
+#[test]
+fn message_report_sdl_has_the_franked_report_fields() {
+    let sdl = export_sdl(
+        test_service_provider(),
+        InMemoryBroadcaster::new(16),
+        test_presence_manager(),
+        test_typing_tracker(),
+        test_observers(),
+    );
+    let compact = compact_without_descriptions(&sdl);
+    for definition in [
+        "messageReadable: Boolean! messageText: String messageAuthorId: ID \
+         messageSentAt: DateTime frankingVerifiedAt: DateTime frankedSenderDeviceId: ID \
+         frankedContent: String frankedContentExpiresAt: DateTime }",
+        "messageReport(serverId: ID!, reportId: ID!): MessageReport!",
+        "reportEncryptedMessage(input: ReportEncryptedMessageInput!): Boolean!",
+    ] {
+        assert!(compact.contains(definition), "SDL lacks `{definition}`");
+    }
+}

@@ -1540,3 +1540,268 @@ async fn encrypted_attachments_are_checked_by_hash() {
     );
     assert_eq!(exec_err_code(&f.schema, with_hash).await, "VALIDATION");
 }
+
+const REPORTS: &str = r#"
+query Reports($serverId: ID!) {
+  messageReports(serverId: $serverId, dir: AFTER, limit: 20) {
+    items { id messageId status resolvedAt messageReadable messageText messageAuthorId messageSentAt
+            frankingVerifiedAt frankedSenderDeviceId frankedContent frankedContentExpiresAt }
+  }
+}"#;
+const REPORT_ONE: &str = r#"
+query Report($serverId: ID!, $reportId: ID!) {
+  messageReport(serverId: $serverId, reportId: $reportId) {
+    id messageAuthorId messageSentAt frankingVerifiedAt frankedSenderDeviceId frankedContent
+  }
+}"#;
+const RESOLVE: &str = r#"
+mutation Resolve($serverId: ID!, $reportId: ID!) {
+  resolveReport(serverId: $serverId, reportId: $reportId, outcome: RESOLVED) {
+    resolvedAt frankedContent frankedContentExpiresAt
+  }
+}"#;
+
+/// A moderator outside an encrypted DM reads a verified report, downloads its attachment
+/// through the report and deletes the message; a member can do none of it.
+#[tokio::test]
+async fn a_moderator_outside_the_dm_reads_downloads_and_deletes_a_reported_message() {
+    let mut f = fixture().await;
+    let conv = f.encrypted_dm().await;
+    let server_id = f.server_id();
+    let carol = f.ctx.create_user("carol").await;
+    f.ctx
+        .add_member(&f.server, &carol, ServerMemberRole::Moderator)
+        .await;
+    let carol = Caller {
+        user_id: carol.id,
+        session_id: f.ctx.create_session(&carol).await,
+    };
+
+    // Alice sends a message naming the appendix A.3 attachment, then uploads its blob.
+    let blob_sha256 = "EHFcZ6hUOIdDi32ptdrCXM2PTHQwKF46-0Ls56yQrac";
+    let blob: Vec<u8> = (0..34)
+        .map(|i| {
+            u8::from_str_radix(
+                &"096d52fa9b833e37ef33d387fc5ecab34eabb410807b85e90c862a44614c7c9cb163"
+                    [i * 2..i * 2 + 2],
+                16,
+            )
+            .expect("hex")
+        })
+        .collect();
+    let id = Uuid::now_v7();
+    let mut sent_content: Value =
+        serde_json::from_slice(&content(id, 0, "look", &[])).expect("json");
+    sent_content["attachments"] = json!([{
+        "blobSha256": blob_sha256, "secret": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+        "name": "hello.txt", "mime": "text/plain", "size": 18,
+    }]);
+    let sent_content = sent_content.to_string().into_bytes();
+    let fk = [0x60u8; 32];
+    let envelope = f.alice.encrypt(id, &sent_content, fk, &[]);
+    let sent = exec_ok(
+        &f.schema,
+        f.alice.request(
+            &format!("mutation Send($input: SendEncryptedMessageInput!) {{ sendEncryptedMessage(input: $input) {{ {MESSAGE_FIELDS} }} }}"),
+            json!({ "input": {
+                "serverId": server_id, "conversationId": conv, "messageId": id, "envelope": envelope,
+            } }),
+        ),
+    )
+    .await["sendEncryptedMessage"]
+        .clone();
+    let ticket = exec_ok(
+        &f.schema,
+        f.alice.request(
+            CREATE_ATTACHMENT,
+            json!({ "input": {
+                "serverId": server_id, "conversationId": conv, "messageId": id,
+                "filename": "encrypted", "contentType": "application/octet-stream",
+                "sizeBytes": 34, "blobSha256": blob_sha256,
+            } }),
+        ),
+    )
+    .await["createAttachment"]
+        .clone();
+    let attachment_id: Uuid = ticket["attachmentId"]
+        .as_str()
+        .expect("id")
+        .parse()
+        .expect("uuid");
+    let stored = f
+        .provider
+        .message_attachment_service()
+        .complete_upload(
+            rim_services::message_attachment::command::CompleteUploadCmd {
+                actor_user_id: f.alice.user.id,
+                attachment_id: attachment_id.into(),
+                upload_token: ticket["uploadToken"].as_str().expect("token").to_string(),
+                uploaded_filename: "encrypted".to_string(),
+                content_type: "application/octet-stream".to_string(),
+                data: blob,
+            },
+        )
+        .await
+        .expect("upload")
+        .storage_key
+        .expect("stored");
+
+    // Bob reports it: a tampered report is refused, the exact one verified.
+    let tampered = report(
+        &server_id,
+        &conv,
+        id,
+        b"{}",
+        &fk,
+        &sent["encryption"],
+        &f.alice,
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(REPORT, tampered)).await,
+        "VALIDATION"
+    );
+    let valid = report(
+        &server_id,
+        &conv,
+        id,
+        &sent_content,
+        &fk,
+        &sent["encryption"],
+        &f.alice,
+    );
+    exec_ok(&f.schema, f.bob.request(REPORT, valid)).await;
+
+    // The queue shows the verified report without its content.
+    let items = exec_ok(
+        &f.schema,
+        carol.request(REPORTS, json!({ "serverId": server_id })),
+    )
+    .await["messageReports"]["items"]
+        .clone();
+    assert_eq!(items.as_array().map(Vec::len), Some(1));
+    let listed = &items[0];
+    assert_eq!(listed["messageId"], json!(id.to_string()));
+    assert_eq!(listed["messageReadable"], json!(false));
+    assert_eq!(listed["messageText"], Value::Null);
+    assert_eq!(
+        listed["messageAuthorId"],
+        json!(f.alice.user.id.to_string())
+    );
+    assert!(listed["messageSentAt"].is_string());
+    assert!(listed["frankingVerifiedAt"].is_string());
+    assert_eq!(
+        listed["frankedSenderDeviceId"],
+        json!(f.alice.device_id.to_string())
+    );
+    assert_eq!(listed["frankedContent"], Value::Null);
+    assert_eq!(listed["frankedContentExpiresAt"], Value::Null);
+    let report_id = listed["id"].as_str().expect("id").to_string();
+
+    // A member may not read it; the moderator reads the exact content, and that is audited.
+    let one = json!({ "serverId": server_id, "reportId": report_id });
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(REPORT_ONE, one.clone())).await,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.bob.request(REPORTS, json!({ "serverId": server_id }))
+        )
+        .await,
+        "FORBIDDEN"
+    );
+    let opened =
+        exec_ok(&f.schema, carol.request(REPORT_ONE, one.clone())).await["messageReport"].clone();
+    assert_eq!(opened["frankedContent"], json!(b64(&sent_content)));
+    assert_eq!(
+        opened["frankedSenderDeviceId"],
+        json!(f.alice.device_id.to_string())
+    );
+    let viewed = f
+        .ctx
+        .conn
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT count(*) AS n FROM command_audit_log \
+             WHERE command_id = 'e2ee.report_viewed' AND actor_user_id = $1 \
+               AND args_redacted->>'report_id' = $2",
+            [Uuid::from(carol.user_id).into(), report_id.clone().into()],
+        ))
+        .await
+        .expect("query")
+        .expect("row")
+        .try_get::<i64>("", "n")
+        .expect("count");
+    assert_eq!(viewed, 1);
+
+    // The blob comes through the report to the moderator only, and only by its hash.
+    let moderation = f.provider.moderation_service();
+    let ask = |actor: rim_core::user::model::UserId, hash: &str| {
+        rim_services::moderation::command::AuthorizeReportAttachmentQuery {
+            actor_user_id: actor,
+            report_id: report_id.parse::<Uuid>().expect("uuid").into(),
+            blob_sha256: unb64(hash),
+        }
+    };
+    let served = moderation
+        .authorize_report_attachment(ask(carol.user_id, blob_sha256))
+        .await
+        .expect("served");
+    assert_eq!(served.storage_key, stored);
+    for (actor, hash) in [
+        (f.bob.user.id, blob_sha256),
+        (carol.user_id, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+    ] {
+        let err = moderation
+            .authorize_report_attachment(ask(actor, hash))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, rim_services::ServiceError::NotFound),
+            "{err:?}"
+        );
+    }
+
+    // Outside the DM the moderator deletes only the reported message.
+    let other = Uuid::now_v7();
+    let (request, _, _) = f.send_request(Who::Alice, &conv, other, "unreported", &[]);
+    exec_ok(&f.schema, request).await;
+    let delete = |message_id: Uuid| {
+        carol.request(
+            DELETE,
+            json!({ "input": { "serverId": server_id, "conversationId": conv, "messageId": message_id } }),
+        )
+    };
+    assert_eq!(exec_err_code(&f.schema, delete(other)).await, "FORBIDDEN");
+    exec_ok(&f.schema, delete(id)).await;
+    let feed = f.changes(Who::Bob, &conv, None).await;
+    let deleted = feed["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .find(|c| c["message"]["id"] == json!(id.to_string()))
+        .expect("the reported message")
+        .clone();
+    assert_eq!(deleted["kind"], json!("DELETED"));
+    assert_eq!(deleted["message"]["encryption"]["ciphertext"], Value::Null);
+
+    // Resolving starts the content's 90 days; until then it stays readable.
+    let resolved =
+        exec_ok(&f.schema, carol.request(RESOLVE, one.clone())).await["resolveReport"].clone();
+    assert_eq!(resolved["frankedContent"], Value::Null);
+    let resolved_at: chrono::DateTime<chrono::Utc> = resolved["resolvedAt"]
+        .as_str()
+        .expect("resolvedAt")
+        .parse()
+        .expect("time");
+    let expires_at: chrono::DateTime<chrono::Utc> = resolved["frankedContentExpiresAt"]
+        .as_str()
+        .expect("expiresAt")
+        .parse()
+        .expect("time");
+    assert_eq!(expires_at - resolved_at, chrono::Duration::days(90));
+    let reopened =
+        exec_ok(&f.schema, carol.request(REPORT_ONE, one)).await["messageReport"].clone();
+    assert_eq!(reopened["frankedContent"], json!(b64(&sent_content)));
+}
