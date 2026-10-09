@@ -180,9 +180,11 @@ When it is unset, the host of `RIM_PUBLIC_BASE_URL` is used; when that is unset 
 `localhost:PORT` and `127.0.0.1:PORT` (development only). The server logs the list at start-up.
 A host behind a proxy on a public name must set one of the two variables.
 
-`keyLoginChallenge`, `loginWithKey` and `rotateIdentityKey` are exempt from the CSRF header
-check, because they are used without a session. Each of them only acts on a fresh signature, which
-a forged cross-site request cannot produce.
+`keyLoginChallenge` and `loginWithKey` are exempt from the CSRF header check, because they are
+used without a session; both only act on a fresh signature, which a forged cross-site request
+cannot produce. `rotateIdentityKey` is exempt only when the request carries **no session
+cookie** (recovery, signed out). With a session cookie it needs the CSRF header like any other
+mutation, because an identity rotation is accepted on the strength of that session.
 
 ### Devices
 
