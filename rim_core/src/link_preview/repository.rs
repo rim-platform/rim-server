@@ -13,8 +13,6 @@ use crate::repository::error::RepoResult;
 pub trait LinkPreviewRepository: Send + Sync {
     async fn create(&self, preview: NewLinkPreview) -> RepoResult<LinkPreview>;
 
-    async fn get_for_message(&self, message_id: MessageId) -> RepoResult<Vec<LinkPreview>>;
-
     async fn get_for_messages(
         &self,
         message_ids: &[MessageId],
