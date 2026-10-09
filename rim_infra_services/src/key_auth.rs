@@ -125,6 +125,7 @@ fn new_device(user_id: UserId, cert: &DeviceCert, statement: &SignedPayload) -> 
         user_id,
         device_id: cert.device_id,
         public_key: cert.device_key.to_string(),
+        key_hash: cert.device_key.key_hash().to_vec(),
         name: cert.name.clone(),
         cert_payload: statement.payload.clone(),
         cert_signature: statement.signature.clone(),

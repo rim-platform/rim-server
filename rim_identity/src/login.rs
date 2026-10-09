@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::encoding::PublicKey;
 use crate::error::IdentityResult;
-use crate::statement::{Purpose, SignedStatement, check_header, parse, verify};
+use crate::statement::{Purpose, SignedStatement, StatementVersion, check_header, parse, verify};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -39,6 +39,7 @@ pub struct UnverifiedLogin {
     pub principal_id: String,
     pub device_id: Uuid,
     proof: LoginProof,
+    version: StatementVersion,
     statement: SignedStatement,
 }
 
@@ -46,7 +47,7 @@ impl UnverifiedLogin {
     /// Parse a login proof without checking its signature.
     pub fn read(statement: &SignedStatement) -> IdentityResult<Self> {
         let raw: RawLoginProof = parse(Purpose::Login, &statement.payload)?;
-        check_header(raw.v, &raw.kind, "login")?;
+        let version = check_header(raw.v, &raw.kind, "login")?;
         Ok(Self {
             principal_id: raw.principal_id.clone(),
             device_id: raw.device_id,
@@ -57,13 +58,14 @@ impl UnverifiedLogin {
                 principal_id: raw.principal_id,
                 device_id: raw.device_id,
             },
+            version,
             statement: statement.clone(),
         })
     }
 
     /// Check the signature by the device key.
     pub fn verify(self, device_key: &PublicKey) -> IdentityResult<LoginProof> {
-        verify(Purpose::Login, device_key, &self.statement)?;
+        verify(Purpose::Login, self.version, device_key, &self.statement)?;
         Ok(self.proof)
     }
 }
@@ -73,6 +75,7 @@ mod tests {
     use super::*;
     use crate::error::IdentityError;
     use crate::key_log::KeyState;
+    use crate::statement::StatementVersion::{V1, V2};
     use crate::statement::sign;
     use crate::testing::{TestIdentity, login_payload, signing_key};
 
@@ -83,13 +86,14 @@ mod tests {
         let device = signing_key(20);
         let challenge = Uuid::from_u128(9);
         let payload = login_payload(
+            V1,
             &state,
             Uuid::from_u128(1),
             challenge,
             "n0nce",
             "localhost:8080",
         );
-        let stmt = sign(Purpose::Login, &device, payload);
+        let stmt = sign(Purpose::Login, V1, &device, payload);
 
         let unverified = UnverifiedLogin::read(&stmt).expect("read");
         assert_eq!(unverified.principal_id, state.principal_id);
@@ -110,6 +114,7 @@ mod tests {
     fn login_proof_rejects_other_statement_types() {
         let stmt = sign(
             Purpose::Login,
+            V1,
             &signing_key(20),
             r#"{"v":1,"type":"device","challengeId":"00000000-0000-0000-0000-000000000009","nonce":"n","audience":"a","principalId":"p","deviceId":"00000000-0000-0000-0000-000000000001"}"#,
         );
@@ -117,5 +122,26 @@ mod tests {
             UnverifiedLogin::read(&stmt),
             Err(IdentityError::WrongType { expected: "login" })
         );
+    }
+
+    #[test]
+    fn version_2_login_proof_verifies_with_tagged_signature() {
+        let id = TestIdentity::with_version(1, V2);
+        let state = KeyState::from_inception(&id.inception()).expect("inception");
+        let device = signing_key(20);
+        let stmt = crate::testing::device_login(
+            &device,
+            &state,
+            Uuid::from_u128(1),
+            Uuid::from_u128(9),
+            "n",
+            "localhost:8080",
+        );
+        assert!(stmt.payload.starts_with(r#"{"v":2,"#));
+        assert!(stmt.signature.starts_with("ed25519:"));
+        UnverifiedLogin::read(&stmt)
+            .expect("read")
+            .verify(&PublicKey::from(&device))
+            .expect("verify");
     }
 }

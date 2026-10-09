@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::encoding::PublicKey;
 use crate::error::{IdentityError, IdentityResult};
 use crate::key_log::KeyState;
-use crate::statement::{Purpose, SignedStatement, check_header, check_label, parse, verify};
+use crate::statement::{
+    Purpose, SignedStatement, StatementVersion, check_header, check_label, parse, verify,
+};
 
 /// Longest device name, in characters.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
@@ -43,7 +45,7 @@ pub struct DeviceCert {
 /// identity and recovery keys.
 pub fn verify_device_cert(state: &KeyState, cert: &SignedStatement) -> IdentityResult<DeviceCert> {
     let raw: RawDeviceCert = parse(Purpose::Device, &cert.payload)?;
-    check_header(raw.v, &raw.kind, "device")?;
+    let version = check_header(raw.v, &raw.kind, "device")?;
     if raw.principal_id != state.principal_id {
         return Err(IdentityError::PrincipalMismatch);
     }
@@ -53,14 +55,14 @@ pub fn verify_device_cert(state: &KeyState, cert: &SignedStatement) -> IdentityR
             got: raw.key_seq,
         });
     }
-    let device_key = PublicKey::parse(&raw.device_key, "deviceKey")?;
+    let device_key = PublicKey::parse_for(version, &raw.device_key, "deviceKey")?;
     if device_key == state.identity_key || device_key == state.recovery_key {
         return Err(IdentityError::Invalid(
             "deviceKey must differ from the identity and recovery keys".to_string(),
         ));
     }
     let name = check_label(&raw.name, "name", MAX_DEVICE_NAME_CHARS)?;
-    verify(Purpose::Device, &state.identity_key, cert)?;
+    verify(Purpose::Device, version, &state.identity_key, cert)?;
     Ok(DeviceCert {
         principal_id: raw.principal_id,
         device_id: raw.device_id,
@@ -102,6 +104,7 @@ pub struct UnverifiedRevocation {
     pub principal_id: String,
     pub device_id: Uuid,
     pub signer: RevocationSigner,
+    version: StatementVersion,
     statement: SignedStatement,
 }
 
@@ -117,11 +120,12 @@ impl UnverifiedRevocation {
     /// Parse a revocation without checking its signature.
     pub fn read(revocation: &SignedStatement) -> IdentityResult<Self> {
         let raw: RawDeviceRevocation = parse(Purpose::DeviceRevoke, &revocation.payload)?;
-        check_header(raw.v, &raw.kind, "device-revoke")?;
+        let version = check_header(raw.v, &raw.kind, "device-revoke")?;
         Ok(Self {
             principal_id: raw.principal_id,
             device_id: raw.device_id,
             signer: raw.signer,
+            version,
             statement: revocation.clone(),
         })
     }
@@ -140,7 +144,7 @@ impl UnverifiedRevocation {
             RevocationSigner::Identity => &state.identity_key,
             RevocationSigner::Device => device_key,
         };
-        verify(Purpose::DeviceRevoke, key, &self.statement)?;
+        verify(Purpose::DeviceRevoke, self.version, key, &self.statement)?;
         Ok(DeviceRevocation {
             principal_id: self.principal_id,
             device_id: self.device_id,
@@ -152,6 +156,7 @@ impl UnverifiedRevocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::statement::StatementVersion::{V1, V2};
     use crate::statement::sign;
     use crate::testing::{TestIdentity, device_cert_payload, revocation_payload, signing_key};
 
@@ -178,8 +183,8 @@ mod tests {
     fn cert_signed_by_device_itself_fails() {
         let (_, state) = setup();
         let device = signing_key(20);
-        let payload = device_cert_payload(&state, Uuid::from_u128(1), &device, "Laptop");
-        let cert = sign(Purpose::Device, &device, payload);
+        let payload = device_cert_payload(V1, &state, Uuid::from_u128(1), &device, "Laptop");
+        let cert = sign(Purpose::Device, V1, &device, payload);
         assert_eq!(
             verify_device_cert(&state, &cert),
             Err(IdentityError::BadSignature)
@@ -238,8 +243,8 @@ mod tests {
         assert_eq!(read.signer, RevocationSigner::Identity);
         assert!(read.verify(&state, &device_key).is_ok());
 
-        let payload = revocation_payload(&state, device_id, RevocationSigner::Device);
-        let by_device = sign(Purpose::DeviceRevoke, &device, payload);
+        let payload = revocation_payload(V1, &state, device_id, RevocationSigner::Device);
+        let by_device = sign(Purpose::DeviceRevoke, V1, &device, payload);
         let verified = UnverifiedRevocation::read(&by_device)
             .expect("read")
             .verify(&state, &device_key)
@@ -250,11 +255,41 @@ mod tests {
     #[test]
     fn revocation_claiming_device_signer_but_signed_by_other_device_fails() {
         let (_, state) = setup();
-        let payload = revocation_payload(&state, Uuid::from_u128(1), RevocationSigner::Device);
-        let forged = sign(Purpose::DeviceRevoke, &signing_key(21), payload);
+        let payload = revocation_payload(V1, &state, Uuid::from_u128(1), RevocationSigner::Device);
+        let forged = sign(Purpose::DeviceRevoke, V1, &signing_key(21), payload);
         let result = UnverifiedRevocation::read(&forged)
             .expect("read")
             .verify(&state, &PublicKey::from(&signing_key(20)));
         assert_eq!(result, Err(IdentityError::BadSignature));
+    }
+
+    #[test]
+    fn version_2_cert_and_revocation_verify_under_a_version_1_log() {
+        let (mut id, state) = setup();
+        id.version = V2;
+        let device = signing_key(20);
+        let cert = id.device_cert(&state, Uuid::from_u128(1), &device, "Laptop");
+        assert!(cert.payload.contains(r#""deviceKey":"ed25519:"#));
+        let verified = verify_device_cert(&state, &cert).expect("v2 cert");
+        assert_eq!(verified.device_key, PublicKey::from(&device));
+
+        let revocation = id.revoke_device(&state, Uuid::from_u128(1));
+        assert!(revocation.signature.starts_with("ed25519:"));
+        UnverifiedRevocation::read(&revocation)
+            .expect("read")
+            .verify(&state, &verified.device_key)
+            .expect("v2 revocation");
+    }
+
+    #[test]
+    fn version_2_cert_with_bare_signature_fails() {
+        let (_, state) = setup();
+        let id = TestIdentity::with_version(1, V2);
+        let payload = device_cert_payload(V2, &state, Uuid::from_u128(1), &signing_key(20), "x");
+        let cert = sign(Purpose::Device, V1, &id.identity, payload);
+        assert_eq!(
+            verify_device_cert(&state, &cert),
+            Err(IdentityError::BadEncoding("signature"))
+        );
     }
 }

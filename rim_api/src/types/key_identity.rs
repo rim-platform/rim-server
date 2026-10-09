@@ -9,7 +9,7 @@ use rim_services::key_auth::dto::{
 };
 
 /// A signed statement as the client sends it: the exact JSON text that was signed, and its
-/// unpadded base64url Ed25519 signature.
+/// signature (`ed25519:<base64url>` in version 2 statements, bare base64url in version 1).
 #[derive(InputObject, Clone, Debug)]
 pub struct SignedStatementInput {
     pub payload: String,
@@ -91,6 +91,7 @@ impl From<KeyLogEntryDto> for KeyLogEntry {
 pub struct DeviceKey {
     /// The client-chosen device id from the certificate.
     pub device_id: ID,
+    /// The device key in tagged form, `<algorithm>:<base64url>` (today always `ed25519:…`).
     pub public_key: String,
     pub name: String,
     /// Key log seq whose identity key signed the certificate.

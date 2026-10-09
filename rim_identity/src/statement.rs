@@ -1,13 +1,44 @@
-use ed25519_dalek::{Signature, Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::de::DeserializeOwned;
 
-use crate::encoding::{PublicKey, b64, b64_fixed};
+use crate::encoding::{PublicKey, Signature};
 use crate::error::{IdentityError, IdentityResult};
 
-/// The statement format version this crate reads and writes.
-pub const STATEMENT_VERSION: u32 = 1;
+/// The statement format versions this crate reads (the payload's `"v"` field).
+///
+/// The two versions differ only in how keys and signatures are spelled: version 1 writes an
+/// Ed25519 key or signature as bare unpadded base64url, version 2 tags every key and signature
+/// with its algorithm (`ed25519:<base64url>`), so later algorithms fit without a new format.
+/// Field names, contexts and every rule are the same. Clients write version 2; version 1 stays
+/// accepted so statements signed before version 2 existed keep verifying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StatementVersion {
+    V1,
+    V2,
+}
 
-/// A JSON statement and its Ed25519 signature, both as sent on the wire.
+impl StatementVersion {
+    /// The version clients should write.
+    pub const LATEST: Self = Self::V2;
+
+    /// The value of the `"v"` field.
+    pub fn number(self) -> u32 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
+
+    pub(crate) fn from_number(v: u32) -> IdentityResult<Self> {
+        match v {
+            1 => Ok(Self::V1),
+            2 => Ok(Self::V2),
+            _ => Err(IdentityError::UnsupportedVersion(v)),
+        }
+    }
+}
+
+/// A JSON statement and its signature, both as sent on the wire.
 ///
 /// `payload` is the exact UTF-8 text that was signed. Verifiers check the signature over these
 /// bytes and only then parse them; nothing is ever re-serialized, so there is no canonical JSON
@@ -15,7 +46,8 @@ pub const STATEMENT_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedStatement {
     pub payload: String,
-    /// Unpadded base64url of the 64-byte signature.
+    /// The signature, spelled as the payload's version requires: bare unpadded base64url of the
+    /// 64-byte Ed25519 signature in version 1, `<algorithm>:<base64url>` in version 2.
     pub signature: String,
 }
 
@@ -43,10 +75,14 @@ impl Purpose {
     }
 
     /// Largest payload accepted, in bytes.
+    ///
+    /// Sized for hybrid Ed25519 + ML-DSA keys, whose tagged text is about 1.8 KB for ML-DSA-44
+    /// and 3.5 KB for ML-DSA-87: a key log rotation names two keys, and a profile card lists up
+    /// to 32 device keys. Version 1 statements share the caps.
     pub fn max_payload_len(self) -> usize {
         match self {
-            Self::ProfileCard => 16 * 1024,
-            _ => 4 * 1024,
+            Self::ProfileCard => 128 * 1024,
+            _ => 16 * 1024,
         }
     }
 }
@@ -59,28 +95,33 @@ fn signed_message(purpose: Purpose, payload: &str) -> Vec<u8> {
     message
 }
 
-/// Sign `payload` for `purpose`. Clients and tests use this; the server only verifies.
-pub fn sign(purpose: Purpose, key: &SigningKey, payload: impl Into<String>) -> SignedStatement {
+/// Sign `payload` for `purpose` with an Ed25519 key, spelling the signature as `version`
+/// requires; `version` must match the payload's `"v"` field. Clients and tests use this; the
+/// server only verifies.
+pub fn sign(
+    purpose: Purpose,
+    version: StatementVersion,
+    key: &SigningKey,
+    payload: impl Into<String>,
+) -> SignedStatement {
     let payload = payload.into();
-    let signature = key.sign(&signed_message(purpose, &payload));
+    let signature = Signature::Ed25519(key.sign(&signed_message(purpose, &payload)));
     SignedStatement {
         payload,
-        signature: b64(&signature.to_bytes()),
+        signature: signature.encode_for(version),
     }
 }
 
-/// Check `statement`'s signature by `key`, with the strict checks that reject malleable
-/// signatures and small-order keys.
+/// Check `statement`'s signature by `key`. `version` is the payload's, read by
+/// [`check_header`]; it decides how the signature is spelled.
 pub(crate) fn verify(
     purpose: Purpose,
+    version: StatementVersion,
     key: &PublicKey,
     statement: &SignedStatement,
 ) -> IdentityResult<()> {
-    let bytes = b64_fixed::<64>(&statement.signature, "signature")?;
-    let signature = Signature::from_bytes(&bytes);
-    key.verifying_key()
-        .verify_strict(&signed_message(purpose, &statement.payload), &signature)
-        .map_err(|_| IdentityError::BadSignature)
+    let signature = Signature::decode_for(version, &statement.signature, key)?;
+    key.verify(&signed_message(purpose, &statement.payload), &signature)
 }
 
 /// Parse a payload after a size check. Structs passed here deny unknown fields, and serde
@@ -93,15 +134,17 @@ pub(crate) fn parse<T: DeserializeOwned>(purpose: Purpose, payload: &str) -> Ide
     serde_json::from_str(payload).map_err(|e| IdentityError::Malformed(e.to_string()))
 }
 
-/// Check the `v` and `type` fields every statement starts with.
-pub(crate) fn check_header(v: u32, kind: &str, expected: &'static str) -> IdentityResult<()> {
-    if v != STATEMENT_VERSION {
-        return Err(IdentityError::UnsupportedVersion(v));
-    }
+/// Check the `v` and `type` fields every statement starts with, and return the version.
+pub(crate) fn check_header(
+    v: u32,
+    kind: &str,
+    expected: &'static str,
+) -> IdentityResult<StatementVersion> {
+    let version = StatementVersion::from_number(v)?;
     if kind != expected {
         return Err(IdentityError::WrongType { expected });
     }
-    Ok(())
+    Ok(version)
 }
 
 /// Validate a short human-readable label: trimmed, non-empty, at most `max` characters, no
@@ -124,6 +167,10 @@ pub(crate) fn check_label(value: &str, field: &str, max: usize) -> IdentityResul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoding::b64;
+
+    const V1: StatementVersion = StatementVersion::V1;
+    const V2: StatementVersion = StatementVersion::V2;
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[3; 32])
@@ -131,46 +178,114 @@ mod tests {
 
     #[test]
     fn signature_verifies_only_for_its_purpose() {
-        let stmt = sign(Purpose::Device, &key(), "{}");
-        let public = PublicKey::from(&key());
-        assert_eq!(verify(Purpose::Device, &public, &stmt), Ok(()));
-        assert_eq!(
-            verify(Purpose::Login, &public, &stmt),
-            Err(IdentityError::BadSignature)
-        );
+        for version in [V1, V2] {
+            let stmt = sign(Purpose::Device, version, &key(), "{}");
+            let public = PublicKey::from(&key());
+            assert_eq!(verify(Purpose::Device, version, &public, &stmt), Ok(()));
+            assert_eq!(
+                verify(Purpose::Login, version, &public, &stmt),
+                Err(IdentityError::BadSignature)
+            );
+        }
     }
 
     #[test]
     fn tampered_payload_fails() {
-        let mut stmt = sign(Purpose::Login, &key(), r#"{"a":1}"#);
+        let mut stmt = sign(Purpose::Login, V1, &key(), r#"{"a":1}"#);
         stmt.payload = r#"{"a":2}"#.to_string();
         assert_eq!(
-            verify(Purpose::Login, &PublicKey::from(&key()), &stmt),
+            verify(Purpose::Login, V1, &PublicKey::from(&key()), &stmt),
             Err(IdentityError::BadSignature)
         );
     }
 
     #[test]
     fn signature_with_padding_or_wrong_length_is_bad_encoding() {
-        let mut stmt = sign(Purpose::Login, &key(), "{}");
+        let mut stmt = sign(Purpose::Login, V1, &key(), "{}");
         stmt.signature.push('=');
         assert_eq!(
-            verify(Purpose::Login, &PublicKey::from(&key()), &stmt),
+            verify(Purpose::Login, V1, &PublicKey::from(&key()), &stmt),
             Err(IdentityError::BadEncoding("signature"))
         );
         stmt.signature = b64(&[0; 63]);
         assert_eq!(
-            verify(Purpose::Login, &PublicKey::from(&key()), &stmt),
+            verify(Purpose::Login, V1, &PublicKey::from(&key()), &stmt),
             Err(IdentityError::BadEncoding("signature"))
         );
     }
 
     #[test]
+    fn version_2_signature_is_tagged_and_version_1_is_bare() {
+        let v1 = sign(Purpose::Login, V1, &key(), "{}");
+        let v2 = sign(Purpose::Login, V2, &key(), "{}");
+        assert_eq!(v2.signature, format!("ed25519:{}", v1.signature));
+        let public = PublicKey::from(&key());
+
+        // Each version accepts only its own spelling.
+        assert_eq!(
+            verify(Purpose::Login, V1, &public, &v2),
+            Err(IdentityError::BadEncoding("signature"))
+        );
+        assert_eq!(
+            verify(Purpose::Login, V2, &public, &v1),
+            Err(IdentityError::BadEncoding("signature"))
+        );
+    }
+
+    #[test]
+    fn version_2_signature_with_unknown_or_malformed_tag_is_refused() {
+        let v2 = sign(Purpose::Login, V2, &key(), "{}");
+        let body = v2.signature.strip_prefix("ed25519:").expect("tagged");
+        let public = PublicKey::from(&key());
+        let with_tag = |tag: &str| SignedStatement {
+            payload: v2.payload.clone(),
+            signature: format!("{tag}:{body}"),
+        };
+        assert_eq!(
+            verify(Purpose::Login, V2, &public, &with_tag("ed25519-mldsa44")),
+            Err(IdentityError::UnsupportedAlgorithm(
+                "signature",
+                "ed25519-mldsa44".to_string()
+            ))
+        );
+        for tag in ["", "Ed25519", "ed 25519", &"a".repeat(33)] {
+            assert_eq!(
+                verify(Purpose::Login, V2, &public, &with_tag(tag)),
+                Err(IdentityError::BadEncoding("signature")),
+                "{tag:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_rejects_oversized_payload() {
-        let big = format!("\"{}\"", "a".repeat(4 * 1024));
+        let big = format!("\"{}\"", "a".repeat(16 * 1024));
         assert_eq!(
             parse::<String>(Purpose::Login, &big),
-            Err(IdentityError::TooLarge { max: 4096 })
+            Err(IdentityError::TooLarge { max: 16 * 1024 })
+        );
+        let card = format!("\"{}\"", "a".repeat(128 * 1024));
+        assert_eq!(
+            parse::<String>(Purpose::ProfileCard, &card),
+            Err(IdentityError::TooLarge { max: 128 * 1024 })
+        );
+    }
+
+    #[test]
+    fn check_header_reads_both_versions_and_refuses_others() {
+        assert_eq!(check_header(1, "login", "login"), Ok(V1));
+        assert_eq!(check_header(2, "login", "login"), Ok(V2));
+        assert_eq!(
+            check_header(3, "login", "login"),
+            Err(IdentityError::UnsupportedVersion(3))
+        );
+        assert_eq!(
+            check_header(0, "login", "login"),
+            Err(IdentityError::UnsupportedVersion(0))
+        );
+        assert_eq!(
+            check_header(2, "device", "login"),
+            Err(IdentityError::WrongType { expected: "login" })
         );
     }
 

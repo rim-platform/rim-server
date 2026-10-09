@@ -62,7 +62,7 @@ pub struct DeviceKey {
     pub user_id: UserId,
     /// Client-chosen id, unique per user, never reused after revocation.
     pub device_id: Uuid,
-    /// Unpadded base64url Ed25519 public key.
+    /// The public key in its tagged text form, `<algorithm>:<base64url>` (`ed25519:…`).
     pub public_key: String,
     pub name: String,
     pub cert_payload: String,
@@ -82,7 +82,11 @@ pub struct DeviceKey {
 pub struct NewDeviceKey {
     pub user_id: UserId,
     pub device_id: Uuid,
+    /// Tagged text form, as on [`DeviceKey::public_key`].
     pub public_key: String,
+    /// SHA-256 of `public_key`'s text (32 bytes): the per-user uniqueness key, so the index
+    /// stays small whatever the key size.
+    pub key_hash: Vec<u8>,
     pub name: String,
     pub cert_payload: String,
     pub cert_signature: String,
