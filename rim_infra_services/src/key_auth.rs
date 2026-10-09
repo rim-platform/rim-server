@@ -69,6 +69,17 @@ pub struct KeyAuthRepos {
     pub signup: SignupRepos,
 }
 
+/// An audience as compared: a server id (`rims1_…`) as it is, since base64url is
+/// case-sensitive; a `host[:port]` lowercased. Host names cannot contain `_`, so the prefix is
+/// unambiguous.
+fn normalize_audience(audience: &str) -> String {
+    if rim_s2s::is_server_id(audience) {
+        audience.to_string()
+    } else {
+        audience.to_ascii_lowercase()
+    }
+}
+
 pub struct DefaultKeyAuthService {
     repos: KeyAuthRepos,
     /// When set, every write runs in one transaction with the user row locked.
@@ -209,7 +220,7 @@ impl DefaultKeyAuthService {
             session_ttl,
             accepted_audiences: accepted_audiences
                 .into_iter()
-                .map(|a| a.trim().to_ascii_lowercase())
+                .map(|a| normalize_audience(a.trim()))
                 .filter(|a| !a.is_empty())
                 .collect(),
             challenge_rate_limiter: RegistrationRateLimiter::new(300, 60),
@@ -283,10 +294,11 @@ impl DefaultKeyAuthService {
         })
     }
 
-    /// Whether a proof's `audience` names this server.
+    /// Whether a proof's `audience` names this server: one of its `host[:port]` values,
+    /// compared case-insensitively, or its server id, compared exactly.
     fn audience_accepted(&self, audience: &str) -> bool {
-        let audience = audience.to_ascii_lowercase();
-        self.accepted_audiences.contains(&audience)
+        self.accepted_audiences
+            .contains(&normalize_audience(audience))
     }
 
     /// Count an attempt against the caller's failure budget; `RateLimited` once over the limit.
