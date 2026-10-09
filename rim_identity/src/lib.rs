@@ -10,8 +10,12 @@
 //! - [`verify_device_cert`], [`UnverifiedRevocation`]: device keys certified and revoked.
 //! - [`verify_profile_card`]: the signed card with display name, relays and devices.
 //! - [`UnverifiedLogin`]: the proof a device signs over a server's login challenge.
+//! - [`device_link`]: the sealed channel a new device gets its certificate through
+//!   (`docs/specs/device-linking-v1.md`). Clients and tests use it; the server only relays the
+//!   sealed bytes.
 
 mod device;
+pub mod device_link;
 mod encoding;
 mod error;
 mod key_log;
