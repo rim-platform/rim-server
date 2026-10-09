@@ -8,7 +8,7 @@ mod tests {
     use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
-    use rim_core::e2ee::model::{E2eeDevice, FrankingKey, MlsDevice, MlsGroup, MlsGroupDevice};
+    use rim_core::e2ee::model::{E2eeDevice, MlsDevice, MlsGroup, MlsGroupDevice};
     use rim_core::e2ee::repository::E2eeRepository;
     use rim_core::key_identity::model::DeviceKeyId;
     use rim_core::message::model::MessageId;
@@ -36,6 +36,7 @@ mod tests {
     use crate::e2ee::franking::{ReceiptFields, receipt, sent_at_us};
     use crate::e2ee::openmls_wire::OpenMlsWire;
     use crate::e2ee_test_support::{EMPTY_COMMIT, FakeE2ee, FakeWire, SUITE, b64, frame};
+    use crate::franking_keys::{FrankingKey, FrankingKeys, SharedFrankingKeys};
     use crate::message::DefaultMessageService;
 
     struct RecordingBroadcaster(Mutex<Vec<WorkspaceEvent>>);
@@ -148,10 +149,6 @@ mod tests {
                 for leaf in [alice.leaf(), bob.leaf()] {
                     state.group_devices.push((conv.id, 2, leaf));
                 }
-                state.franking.push(FrankingKey {
-                    id: 4,
-                    secret: vec![0x80; 32],
-                });
             }
             let events = Arc::new(RecordingBroadcaster(Mutex::new(Vec::new())));
             let mentions: Mentions = Arc::new(Mutex::new(Vec::new()));
@@ -251,6 +248,10 @@ mod tests {
             .with_e2ee(
                 Arc::clone(repo) as Arc<dyn E2eeRepository>,
                 Arc::new(FakeWire(OpenMlsWire::new())),
+                SharedFrankingKeys::fixed(
+                    FrankingKeys::new(vec![FrankingKey::new(4, [0x80; 32], Utc::now())])
+                        .expect("keys"),
+                ),
             )
         }
 

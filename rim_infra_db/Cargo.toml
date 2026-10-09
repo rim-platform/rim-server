@@ -13,6 +13,7 @@ chrono = "0.4.42"
 sqlx-core = "0.8.6"
 tracing = "0.1.41"
 serde_json = "1.0.145"
+zeroize = "1.8"
 
 [features]
 db-tests = []

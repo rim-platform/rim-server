@@ -4783,6 +4783,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4818,6 +4819,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4853,6 +4855,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4860,6 +4863,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

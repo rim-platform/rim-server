@@ -295,15 +295,22 @@ impl From<ReaddRow> for MlsReaddRequest {
 struct FrankingKeyRow {
     id: i32,
     secret: Vec<u8>,
+    created_at: DateTimeWithTimeZone,
 }
 
 impl From<FrankingKeyRow> for FrankingKey {
     fn from(row: FrankingKeyRow) -> Self {
         Self {
             id: row.id,
-            secret: row.secret,
+            secret: zeroize::Zeroizing::new(row.secret),
+            created_at: row.created_at.into(),
         }
     }
+}
+
+#[derive(FromQueryResult)]
+struct MaxKeyIdRow {
+    max_id: Option<i32>,
 }
 
 pub struct SeaOrmE2eeRepository {
@@ -1302,30 +1309,24 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         self.message(id).await
     }
 
-    async fn current_franking_key(&self, secret: Vec<u8>) -> RepoResult<FrankingKey> {
-        self.execute(
-            "INSERT INTO franking_key (id, secret) VALUES (1, $1) ON CONFLICT (id) DO NOTHING",
-            vec![secret.into()],
-        )
-        .await?;
-        let row: Option<FrankingKeyRow> = self
-            .one(
-                "SELECT id, secret FROM franking_key ORDER BY id DESC LIMIT 1",
+    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
+        let rows: Vec<FrankingKeyRow> = self
+            .all(
+                "SELECT id, secret, created_at FROM franking_key ORDER BY id",
                 vec![],
             )
             .await?;
-        row.map(Into::into)
-            .ok_or_else(|| internal("franking key missing after insert"))
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn get_franking_key(&self, id: i32) -> RepoResult<Option<FrankingKey>> {
-        let row: Option<FrankingKeyRow> = self
+    async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>> {
+        let row: Option<MaxKeyIdRow> = self
             .one(
-                "SELECT id, secret FROM franking_key WHERE id = $1",
-                vec![id.into()],
+                "SELECT max(franking_key_id) AS max_id FROM message WHERE encrypted",
+                vec![],
             )
             .await?;
-        Ok(row.map(Into::into))
+        Ok(row.and_then(|r| r.max_id))
     }
 
     async fn purge(&self, retention: MlsRetention) -> RepoResult<MlsPurged> {

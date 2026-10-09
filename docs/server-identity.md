@@ -63,6 +63,37 @@ rotation up and keep signing with the old key until they get it.
   rewritten: a restored backup, a stolen key, or an attack). Check with the peer's operator first,
   out of band; its next request pins it afresh.
 
+## The franking key file
+
+Reports of encrypted messages are checked with the server's **franking keys**
+(`docs/specs/e2ee-mls-v1.md`, "Franking"). They live in their own file, next to the server key
+and with the same rules:
+
+| What | Where |
+|---|---|
+| Franking keys | `RIM_FRANKING_KEY_FILE`, default `<RIM_DATA_DIR>/franking-key.json` |
+
+The file is `{"v":1,"keys":[{"id":1,"key":"<base64url>","createdAt":"…"}]}`, mode `0600`; the
+server refuses to start when the group or others can read it. The first start creates it with
+one key. A server upgraded from a version that kept the key in the database moves it into the
+file at that start and logs a warning; run a rotation then, so the key the database and its
+backups hold stops signing. The server refuses to start when the file is missing but messages
+carry receipts under a key it no longer has: restore the file from a backup.
+
+```sh
+rim_server franking-key show      # the keys, which one signs, until when the others verify
+rim_server franking-key rotate    # a new signing key; the previous ones verify for 30 days
+```
+
+Rotate on a schedule or when the file may have leaked. A report of a message signed under a
+replaced key must arrive within 30 days of the rotation; the rotation after that removes the old
+key. A running server picks the new file up within a minute. With several nodes, every node needs
+the same file: copy it to each node after a rotation.
+
+Back the file up with the database. Whoever reads it can make receipts, but a report must also
+match the content commitment stored with the message, so the file alone does not let anyone have
+a forged report verified.
+
 ## Key login audiences
 
 A device's login proof names the server it is meant for (`host[:port]`), so a proof sent to one

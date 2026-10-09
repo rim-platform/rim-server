@@ -19,6 +19,8 @@ pub mod email;
 // above.
 pub mod escalation;
 pub mod file_storage;
+/// Public for `rim_server`, which loads the key file at boot and runs `franking-key rotate`.
+pub mod franking_keys;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod key_auth;
@@ -50,6 +52,7 @@ pub mod registration_rate_limiter;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;
+pub(crate) mod secret_file;
 pub(crate) mod server;
 pub(crate) mod server_member;
 pub(crate) mod signup;

@@ -80,7 +80,8 @@ otherwise per-IP limits on login, signup and password-reset requests see every c
 proxy's address. Attachments count against a per-workspace quota,
 `RIM_MAX_WORKSPACE_STORAGE_BYTES` (default 1 GiB), reserved when an upload is declared. The
 first start creates the server key in `RIM_DATA_DIR` (`RIM_SERVER_KEY_FILE`) and a recovery key
-to move offline; server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
+to move offline, and the franking key file for encrypted-message reports
+(`RIM_FRANKING_KEY_FILE`); server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
 `RIM_PUBLIC_BASE_URL` is an `https` URL (`docs/server-identity.md`).
 
 ## Development

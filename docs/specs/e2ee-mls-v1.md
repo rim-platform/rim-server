@@ -579,17 +579,28 @@ A report proves one message's content to the moderators without the server havin
    `r = HMAC-SHA256(K, "rim.e2ee.franking-receipt.v1\0" || message id || conversation id ||
    sender user id || sender device id || sent_at_us || c)` (ids as 16 raw UUID bytes, the device id
    being the client device id, `sent_at_us` the row's `sent_at` in microseconds as a big-endian
-   i64), where `K` is the server's franking key `franking_key_id` (32 random bytes in
-   `franking_key`, created on first use). `r` and `sentAtUs` are delivered in `Message.encryption`.
+   i64), where `K` is the server's current franking key and `franking_key_id` its id ("Franking
+   keys" below). `r` and `sentAtUs` are delivered in `Message.encryption`.
 3. **Receiver**: recomputes `c` and refuses the message as invalid on a mismatch, so every message a
    member can see is reportable. `fk` must be exactly 32 bytes (HMAC's key padding would otherwise
    let two keys collide). It keeps `fk`, `r` and `sentAtUs` with the plaintext.
 4. **Report** (`reportEncryptedMessage`): the reporter sends the content bytes, `fk`, the receipt,
-   its key id, the sender ids and `sentAtUs`. The server recomputes `c` from the content and `fk`,
-   recomputes `r` with its key, and compares in constant time. It needs no message row, so a message
-   the sender deleted stays reportable. A valid report stores the content in `message_report`
-   (`franked_content`, `franking_verified_at`); an invalid one is refused (`VALIDATION`, `the report
-   does not match the message`). The usual report rules hold (one per reporter and message).
+   its key id, the sender ids and `sentAtUs`. The server recomputes `c` from the content and `fk`
+   and checks, comparing secrets and MACs in constant time:
+   - `c` equals the message row's `franking_commitment`, `sentAtUs` its `sent_at`, the sender user
+     its author and the sender device the row's sender device (while the row still names one);
+   - `r` recomputed with key `receiptKeyId` equals the receipt, and that key still verifies
+     ("Franking keys").
+
+   The row check means a holder of `K` (a stolen key file or backup) cannot have the server
+   verify content the sender never sent: the receipt alone proves only that `K` signed it. An
+   edit replaces the row's commitment, so only the current version of a message is reportable.
+   A message the sender deleted keeps its row with the franking columns (`is_deleted`,
+   `mls_ciphertext` nulled), and no retention job deletes message rows, so it stays reportable;
+   the report references the row and goes with it only when its conversation or workspace is
+   deleted. A valid report stores the content in `message_report` (`franked_content`,
+   `franking_verified_at`); an invalid one is refused (`VALIDATION`, `the report does not match
+   the message`). The usual report rules hold (one per reporter and message).
 5. **Moderator view** (S4-5): the body as plain text with mentions resolved, the attachment names and
    sizes (a moderator's client downloads a reported attachment by its `blobSha256` through a
    report-scoped route and decrypts it with the secret from the verified content), sender,
@@ -609,6 +620,30 @@ A report proves one message's content to the moderators without the server havin
      `404`.
    - `deleteMessage` by an Owner/Moderator who cannot read the conversation succeeds when the
      message has a verified report.
+
+**Franking keys.** `K` lives in the franking key file, `RIM_FRANKING_KEY_FILE` (default
+`<RIM_DATA_DIR>/franking-key.json`, mode `0600`; the server refuses a file the group or others
+can read):
+
+```json
+{"v":1,"keys":[{"id":1,"key":"<base64url, 32 bytes>","createdAt":"2026-10-10T00:00:00Z"}]}
+```
+
+- The key with the highest id is current: it signs every new receipt and its id is the
+  message's `franking_key_id`. Keys are held in memory in zeroizing buffers.
+- At first boot without the file the server creates it with one random key, id 1. A server
+  that kept its key in the `franking_key` table moves those rows into the file instead, so
+  receipts it signed keep verifying; it refuses to start when messages carry a
+  `franking_key_id` that neither the file nor the table holds (a lost file: restore it). After
+  that the table is unused and the server never reads or writes it; `message.franking_key_id`
+  no longer references it (migration `drop_message_franking_key_fk`).
+- `rim_server franking-key rotate` adds a key with the next id, which becomes current. A key a
+  newer one replaced still verifies receipts for **30 days** after its replacement was created;
+  a report of a message signed under it must arrive in that window. The rotation also drops
+  keys past their window from the file. `rim_server franking-key show` lists the keys. A
+  running server reads the file again every minute, and at once (at most every ten seconds)
+  when a report names a key id above the ones it holds. After moving keys out of the table, rotate once so the key the
+  database (and its backups) holds stops signing.
 
 **Limits.** A report proves one message, not its context: what it replied to, what came before, or
 whether the reporter provoked it (a reporter may report several messages, each proven alone). The
@@ -819,7 +854,8 @@ The change-feed function also sets `edited_at` when `mls_ciphertext` changes to 
 `OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
 the previous function and trigger, then drops the new columns, indexes and tables; it refuses to
 run while an encrypted message exists (rolling back would leave rows with neither text nor
-ciphertext). A second migration, `add_report_sender_device`, adds
+ciphertext). The `franking_key` table above is no longer used ("Franking keys"). A second
+migration, `add_report_sender_device`, adds
 `message_report.franked_sender_device_id uuid NULL`. A third, `add_mls_readd_nonce`, adds the
 nonces of accepted re-add requests:
 
@@ -832,6 +868,10 @@ CREATE TABLE mls_readd_nonce (
     FOREIGN KEY (conversation_id, incarnation) REFERENCES mls_group ON DELETE CASCADE);
 CREATE INDEX idx_mls_readd_nonce_created_at ON mls_readd_nonce (created_at);
 ```
+
+A fourth, `drop_message_franking_key_fk`, drops `message.franking_key_id`'s reference to
+`franking_key`: key ids come from the franking key file. Its `down` restores the reference as
+`NOT VALID`, since rows may name keys the table never held.
 
 Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
 once fulfilled or after 7 days, re-add nonces 1 day (longer than a request stays fresh),

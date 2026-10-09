@@ -82,7 +82,8 @@ const S2S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// Largest server-to-server response read: the forward path's cap.
 const S2S_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
-/// How often expired request nonces are deleted and a CLI key rotation is picked up.
+/// How often expired request nonces are deleted and a CLI key rotation (server key or franking
+/// keys) is picked up.
 const S2S_CLEANUP_INTERVAL_SECS: u64 = 60;
 
 fn io_error(context: &str) -> impl FnOnce(String) -> std::io::Error + '_ {
@@ -302,6 +303,22 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
 
     let s2s = build_s2s(config, &db).await?;
+    let franking_key_file = config.franking_key_file();
+    let franking_keys = rim_infra_services::franking_keys::load_or_create(
+        &franking_key_file,
+        repos.e2ee_repo.as_ref(),
+    )
+    .await
+    .map_err(|e| io_error("franking key")(format!("{e:#}")))?;
+    tracing::info!(
+        path = %franking_key_file.display(),
+        current = franking_keys.current().id,
+        "franking keys loaded"
+    );
+    let franking_keys = rim_infra_services::franking_keys::SharedFrankingKeys::from_file(
+        franking_keys,
+        franking_key_file,
+    );
     key_login_audiences.push(s2s.state.identity.current().server_id().to_string());
     tracing::info!(
         audiences = ?key_login_audiences,
@@ -319,6 +336,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::clone(&escalation_scheduler)
             as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
         key_login_audiences,
+        franking_keys.clone(),
     ));
 
     // Boot recovery (§6) — extracted into `rim_infra_services::escalation::recover_active_escalation_runs`
@@ -509,10 +527,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
-    // Background task: delete expired server-to-server nonces and pick up a key rotation made
-    // by the CLI, every minute.
+    // Background task: delete expired server-to-server nonces and pick up a server key or
+    // franking key rotation made by the CLI, every minute.
     {
         let s2s = s2s.clone();
+        let franking_keys = franking_keys.clone();
         let mut shutdown_rx5 = shutdown_tx.subscribe();
         tokio::spawn(async move {
             let mut tick =
@@ -528,6 +547,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                         }
                         if let Err(e) = s2s.reload_identity().await {
                             tracing::error!(error = %format!("{e:#}"), "could not pick up the rotated server key");
+                        }
+                        match franking_keys.reload() {
+                            Ok(true) => tracing::info!(
+                                current = franking_keys.keys().current().id,
+                                "picked up the rotated franking keys"
+                            ),
+                            Ok(false) => {}
+                            Err(e) => tracing::error!(error = %format!("{e:#}"), "could not read the franking key file"),
                         }
                     }
                     _ = shutdown_rx5.changed() => break,

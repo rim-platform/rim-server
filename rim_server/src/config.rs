@@ -106,6 +106,10 @@ pub struct RIMConfig {
     /// `RIM_SERVER_KEY_FILE`.
     pub server_key_file: Option<String>,
 
+    /// Path of the franking key file. Default `<RIM_DATA_DIR>/franking-key.json`. Controlled by
+    /// `RIM_FRANKING_KEY_FILE`.
+    pub franking_key_file: Option<String>,
+
     /// Comma-separated server ids allowed on host endpoints; empty allows any relay.
     /// Controlled by `RIM_HOST_ALLOWED_RELAYS`.
     pub host_allowed_relays: Option<String>,
@@ -222,6 +226,7 @@ impl fmt::Debug for RIMConfig {
             .field("key_login_audiences", &self.key_login_audiences())
             .field("role", &self.role)
             .field("server_key_file", &self.server_key_file)
+            .field("franking_key_file", &self.franking_key_file)
             .field("host_allowed_relays", &self.host_allowed_relays)
             .field("s2s_denied_peers", &self.s2s_denied_peers)
             .field("s2s_peer_rate_per_min", &self.s2s_peer_rate_per_min())
@@ -266,6 +271,7 @@ impl Default for RIMConfig {
             key_login_audiences: None,
             role: None,
             server_key_file: None,
+            franking_key_file: None,
             host_allowed_relays: None,
             s2s_denied_peers: None,
             s2s_peer_rate_per_min: None,
@@ -530,6 +536,16 @@ impl RIMConfig {
                 .filter(|p| !p.is_empty())
                 .map(std::path::PathBuf::from),
         )
+    }
+
+    /// The franking key file: `RIM_FRANKING_KEY_FILE`, or `<RIM_DATA_DIR>/franking-key.json`.
+    pub fn franking_key_file(&self) -> std::path::PathBuf {
+        self.franking_key_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("franking-key.json"))
     }
 
     pub fn s2s_allow_http(&self) -> bool {
@@ -891,6 +907,26 @@ mod tests {
             }
             .public_origin(),
             "http://localhost:9000"
+        );
+    }
+
+    #[test]
+    fn franking_key_file_defaults_to_the_data_dir() {
+        let config = RIMConfig {
+            data_dir: "/var/lib/rim".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.franking_key_file(),
+            std::path::PathBuf::from("/var/lib/rim/franking-key.json")
+        );
+        let config = RIMConfig {
+            franking_key_file: Some(" /secrets/franking.json ".to_string()),
+            ..config
+        };
+        assert_eq!(
+            config.franking_key_file(),
+            std::path::PathBuf::from("/secrets/franking.json")
         );
     }
 

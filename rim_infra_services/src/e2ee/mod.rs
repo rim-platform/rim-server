@@ -19,6 +19,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
+use subtle::ConstantTimeEq;
 use tracing::{info, instrument};
 
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
@@ -64,6 +65,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::e2ee::aad::{CommitAad, parse_commit};
 use crate::e2ee::franking::{FRANKING_LEN, ReceiptFields, commitment, verify_receipt};
+use crate::franking_keys::SharedFrankingKeys;
 use crate::moderation::{ModerationAuditEntry, record_audit_action};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
@@ -332,6 +334,9 @@ pub struct DefaultE2eeService {
     one_time_claim_rate_limiter: RegistrationRateLimiter,
     /// Re-add requests per device and conversation.
     readd_rate_limiter: RegistrationRateLimiter,
+    /// Verifies franking receipts. `None` in unit tests that are not about reports; the
+    /// composition root always wires it.
+    franking_keys: Option<SharedFrankingKeys>,
 }
 
 /// Why an incarnation's first Commit is allowed over an existing group.
@@ -382,7 +387,13 @@ impl DefaultE2eeService {
             claim_rate_limiter: RegistrationRateLimiter::new(3600, 600),
             one_time_claim_rate_limiter: RegistrationRateLimiter::new(86_400, 100),
             readd_rate_limiter: RegistrationRateLimiter::new(86_400, 3),
+            franking_keys: None,
         }
+    }
+
+    pub fn with_franking_keys(mut self, franking_keys: SharedFrankingKeys) -> Self {
+        self.franking_keys = Some(franking_keys);
+        self
     }
 
     pub fn with_audit_log_service(mut self, audit_log_service: Arc<dyn AuditLogService>) -> Self {
@@ -1862,11 +1873,11 @@ impl E2eeService for DefaultE2eeService {
         })?;
         let mismatch =
             || ServiceError::Validation("the report does not match the message".to_string());
-        let server_key = self
-            .repos
-            .e2ee_repo
-            .get_franking_key(cmd.receipt_key_id)
-            .await?
+        let franking_keys = self.franking_keys.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("franking keys are not configured"))
+        })?;
+        let server_key = franking_keys
+            .verifying(cmd.receipt_key_id, Utc::now())
             .ok_or_else(mismatch)?;
         let fields = ReceiptFields {
             message_id: message.id.into(),
@@ -1876,8 +1887,27 @@ impl E2eeService for DefaultE2eeService {
             sent_at_us,
         };
         let c = commitment(&franking_key, &content);
+        // The receipt alone proves only that someone holding the franking key signed it, so the
+        // report must also name what the message row recorded when it was sent or last edited.
+        let stored = message
+            .encryption
+            .as_ref()
+            .map(|e| e.franking_commitment.as_slice())
+            .unwrap_or_default();
+        let sender_device = match message
+            .encryption
+            .as_ref()
+            .and_then(|e| e.sender_device_key_id)
+        {
+            Some(id) => self.repos.e2ee_repo.get_device(id).await?,
+            None => None,
+        };
+        let row_matches = bool::from(stored.ct_eq(&c[..]))
+            && sent_at_us == crate::e2ee::franking::sent_at_us(message.sent_at)
+            && sender_device.is_none_or(|d| d.device_id == cmd.sender_device_id);
         if cmd.sender_user_id != message.sent_by
-            || !verify_receipt(&server_key.secret, &fields, &c, &receipt)
+            || !verify_receipt(server_key.as_ref(), &fields, &c, &receipt)
+            || !row_matches
         {
             return Err(mismatch());
         }

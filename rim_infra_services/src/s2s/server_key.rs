@@ -7,7 +7,6 @@
 //! the next start recognises.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
@@ -24,6 +23,8 @@ use rim_s2s::{
     sign_inception, sign_rotation, timestamp, verify_descriptor,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::secret_file::{check_private, write_secret};
 
 /// Prefix of the recovery key file's single line.
 const RECOVERY_PREFIX: &str = "rim-server-recovery:1:";
@@ -98,43 +99,6 @@ fn to_record(statement: &SignedStatement) -> SignedRecord {
         payload: statement.payload.clone(),
         signature: statement.signature.clone(),
     }
-}
-
-/// Write `contents` to a new file readable only by its owner. Fails when the file exists.
-fn write_secret(path: &Path, contents: &str) -> anyhow::Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("cannot create {}", path.display()))?;
-    file.write_all(contents.as_bytes())
-        .and_then(|()| file.sync_all())
-        .with_context(|| format!("cannot write {}", path.display()))
-}
-
-/// Refuse a secret file that the group or others can read.
-fn check_private(path: &Path) -> anyhow::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(path)
-            .with_context(|| format!("cannot read {}", path.display()))?
-            .permissions()
-            .mode();
-        if mode & 0o077 != 0 {
-            bail!(
-                "{} is readable by group or others (mode {:o}); run chmod 600 on it",
-                path.display(),
-                mode & 0o777
-            );
-        }
-    }
-    Ok(())
 }
 
 fn key_file_text(signer: &ServerSigner) -> String {
