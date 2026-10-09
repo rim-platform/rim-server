@@ -260,7 +260,7 @@ Actix's request types.
 | `RIM_ROLE` | Client API | S2S endpoints |
 |---|---|---|
 | `both` (default) | Everything | All |
-| `relay` | All but `createServer` (`FORBIDDEN`); existing workspaces keep working for local users | Discovery, `ping`, `principals`, `identity`, `key-packages/claim`, `deliver`, `presence`, and host endpoints for its direct space only |
+| `relay` | All but `createServer` (`FORBIDDEN`); existing workspaces keep working for local users | Discovery, `ping`, `principals`, `identity`, `key-packages/claim`, `deliver`, `presence`, and host endpoints (`identity`, `outbox`, `forward`) for its direct space only |
 | `host` | All but `/api/remote/…`, contacts, DM requests and remote spaces; local users DM inside workspaces | Discovery, `ping` and host endpoints; `deliver` answers `503` |
 
 | Variable | Default | Meaning |
@@ -292,7 +292,7 @@ delegation):
 | `username` | `r_` + the first 30 characters after `rimp1_`. From S5-1 on local signups refuse the `r_` prefix, so nobody squats a principal's name; existing local names are left alone |
 | `display_name` | The card's `displayName`, updated with each newer card |
 | `password_hash`, `email` | Null (allowed: `principal_id` is set) |
-| `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins; null for local users |
+| `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity; null for local users |
 
 Key log, devices (with certificates and revocations) and card live in the existing
 `key_log_entry`, `device_key` and `profile_card` tables, as for an enrolled local user. A key-only
@@ -345,7 +345,9 @@ payload text) and `Rim-Device-Signature` (the tagged signature over
 | `bodySha256` | base64url(SHA-256(exact body bytes)); the empty body's hash for `GET` |
 
 The host accepts a `seq` it has not accepted from this device in the last 10 minutes and that is
-above `highestSeq − 300,000,000` (5 minutes in µs), then raises `highestSeq`. Otherwise
+above `highestSeq − 300,000,000` (5 minutes in µs), then raises `highestSeq`. An accepted `seq` is
+remembered for 10 minutes and, after that, until it falls below the window: forgetting it at 10
+minutes would let a relay replay a device's latest request once the device went quiet. Otherwise
 `409 {"error":"replay","highestSeq":"<decimal>"}`; the client moves its counter above it and signs
 once more. The window tolerates the relay reordering concurrent requests and needs no server clock.
 Rejected: a strict `+1` counter (a crash between signing and persisting locks the device out;
@@ -426,8 +428,13 @@ POST /s2s/v1/deliver
   `deviceId` targets one device (`MlsWelcomeAvailable`).
 - The relay stores items before answering and ignores ids at or below its `received_through` for
   the peer, so redelivery is idempotent. It refuses items for non-local principals
-  (`unknown_principal`) and workspace items without an active subscription (`not_subscribed`); the
-  host then skips that (relay, principal) for 24 hours.
+  (`unknown_principal`), items of a conversation it holds no invite or request for and workspace
+  items without an active subscription (`not_subscribed`), invites from a principal the recipient
+  blocked (`blocked`) or past the request limits (`limited`), a device-targeted item for an unknown
+  device (`unknown_device`), and envelopes that do not verify under the delivering host's key or
+  name another host (`invalid_envelope`). A refusal for one recipient carries `principalId`. The
+  host skips a (relay, principal) for 24 hours after `unknown_principal` only; the other refusals
+  are about one conversation or item.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days; a relay down longer
   gets nothing and its clients catch up from the change feed. A relay may pull what it missed:
   `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
@@ -446,7 +453,9 @@ cursor per device (`relay_device_cursor`): each device's queue is its user's ite
   and the archive.
 - **Retention**: an item goes once every non-revoked device of its user acked it, and after
   `RIM_RELAY_RETENTION_DAYS` (30) regardless. Over the per-user byte cap the oldest go first and a
-  `QueueOverflow` item names the affected spaces. Plaintext channel events are readable by the relay
+  `QueueOverflow` notice names the affected spaces. The notice is pushed to the devices online and
+  not queued (a queued item is a host-signed envelope); a device offline then sees the gap in the
+  streams' `seq`. Plaintext channel events are readable by the relay
   while queued, as the relay decision accepts.
 
 ### What the client checks
@@ -467,7 +476,10 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
 
 - **Publishing.** `relays[]` is the person's own list, preferred first. The app signs a card
   (version + 1) and calls `publishProfileCard` on each listed relay it has an account on; each relay
-  pushes it to every host that holds the person as remote (`POST /s2s/v1/identity`).
+  pushes it to every host that holds the person as remote (`POST /s2s/v1/identity`): the hosts it
+  queued items or filed requests from for the person, and in S5-4 those holding their
+  subscriptions. Device additions and revocations are pushed the same way. The answer is
+  `{"applied":true|false}`.
 - **Identity endpoint** (relays, for local users): `GET /s2s/v1/principals/<principalId>` →
   `{"principalId","keyLog":[…],"devices":[{"deviceId","certificate","revocation","mlsActive"}],"card"}`,
   `404` for others. `POST /s2s/v1/identity` takes the same JSON; the receiver applies it only for
@@ -514,16 +526,22 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    this way, those on R_A included. The app creates a conversation with anyone on another relay
    only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
-   `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"}}`
+   `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"},"cipherSuite":79}`
+   (`cipherSuite` optional, the preferred suite when absent; `conversation.host` must be the
+   calling peer)
    → `{"keyPackages":[{"deviceId","keyPackage","keyPackageRef","lastResort"}]}`, by today's claim
    rules. A claimer who is not Bob's contact, was never accepted by him, and shares no workspace R_B
    holds a subscription for, is a **stranger**: last-resort packages only, 20 claims per claimer
    principal per day. R_A stores the packages as claimed `mls_key_package` rows of Bob's device rows,
    so `submitMlsCommit`'s claim check runs unchanged.
-3. **Invite.** With the Commit that adds a remote member, R_A emits `DmInvite` on the member's `u:`
-   stream, `{"type":"DmInvite","workspace_id","conversation_id","from_principal_id","from_card","member_principal_ids"}`
-   (`from_card` is the creator's card as `{"payload","signature"}`; its relays tell Bob's app
-   where to pin R_A from), then `MlsWelcomeAvailable` per added device. That is how R_B and Bob's devices learn of it.
+3. **Invite.** When a remote member is added to a conversation of the direct space (at creation or
+   by `addConversationMembers`), R_A emits `DmInvite` on the member's `u:` stream,
+   `{"type":"DmInvite","workspace_id","conversation_id","from_principal_id","from_card","member_principal_ids"}`,
+   before the conversation's own events. `from_*` name the conversation's creator; `from_card` is
+   their published card as `{"payload","signature"}` (a conversation with remote members needs one),
+   and its relays tell Bob's app where to pin R_A from. The Commit that adds the member's devices
+   then emits `MlsWelcomeAvailable` per added device. That is how R_B and Bob's devices learn of it;
+   a plaintext conversation has an invite and no Commit.
 4. **Traffic.** Bob's devices fetch Welcomes and Commits, read the change feed, send, edit, react
    and mark read through `/api/remote/<R_A>/api`; R_A runs them as Bob's device, and its events reach
    Bob's devices through R_B's queue. The envelopes are exactly the `message.encryption` R_A stores.
@@ -548,12 +566,16 @@ R_B files a `DmInvite` from a principal outside Bob's contacts and never accepte
 request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it,
 the `DmInvite` first (later ones dropped until accepted; the app reads them from the host). The
 app verifies the held `DmInvite` like any relay item to bind the conversation's space to its home
-before it reads or leaves it. Only `DmRequestReceived` is pushed.
+before it reads or leaves it; ignoring or blocking keeps it with the request until the row
+expires. Only `DmRequestReceived` is pushed. An invite from a contact or a principal accepted
+before is recorded as a row accepted at once (`decided_at = created_at`), not listed by
+`dmRequests` and not counted by the limits, so every conversation R_B delivers for has a row and
+items of any other conversation are refused.
 
 | Action | Effect |
 |---|---|
 | `acceptDmRequest(id)` | Held items released; later items flow; the sender becomes a contact |
-| `ignoreDmRequest(id)` | Held items deleted; later items of that conversation dropped; row expires in 30 days |
+| `ignoreDmRequest(id)` | Held items deleted but the `DmInvite`; later items of that conversation dropped; row expires in 30 days |
 | `blockPrincipal(principalId)` | Pending requests from it ignored; its `DmInvite`s refused (`blocked`) and its claims refused; the app leaves the conversation through the home |
 | Nothing | Expires after 30 days |
 
@@ -563,7 +585,8 @@ in four groups of four, the same on every device, and may process the Welcome to
 messages before deciding. It accepts on its own when the sender shares a workspace
 with the person (checked on host-signed member lists): workspace members are never strangers.
 Limits: 100 pending per recipient, 20 per sender principal per day per relay;
-`reportDmRequest(id, reason)` reports abuse.
+`reportDmRequest(id, reason)` reports abuse: until `relay_abuse_report` exists (S5-6) it is the
+audit event `relay.dm_request_reported`, and a pending request is ignored.
 
 ## Remote workspace members (7.4b)
 
@@ -884,7 +907,7 @@ type Conversation { predecessor: ConversationPredecessor }                      
 input RemoteMemberInput { principalId: String!  relayUrls: [String!]! }
 input PredecessorInput { hostServerId: String!  conversationId: ID! }
 input CreateConversationInput { remoteMembers: [RemoteMemberInput!]  predecessor: PredecessorInput }   # additive fields
-input SignupWithKeyInput { proofOfWork: String }   # additive field
+input SignupWithKeyInput { proofOfWork: String }   # additive field (S5-6)
 input JoinRemoteWorkspaceInput { hostServerId: String!  hostOrigin: String!  inviteToken: String
                                  proof: SignedStatementInput!  delegation: SignedStatementInput! }
 
