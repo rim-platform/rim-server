@@ -181,7 +181,7 @@ whole offer (id, key, name, platform). Both screens show it; the person compares
 | `startDeviceLink` | Session; account has a key identity | → `open` | Each call is a new link; the user's previous live link is cancelled |
 | `sendDeviceLinkOffer` | Anyone with the link id | `open` → `offered` | Same bytes while `offered`: success. Other bytes: refused |
 | `deviceLink` | Session of the link's user | none | Returns state, expiry, and the offer while `offered` or `answered` |
-| `sendDeviceLinkAnswer` | Session of the link's user | `offered` → `answered`; expiry set to now + 10 min | Same bytes while `answered`: success |
+| `sendDeviceLinkAnswer` | Session of the link's user | `offered` → `answered`; expiry set to now + 10 min | Same bytes while `answered`: success, expiry not moved again |
 | `deviceLinkAnswer` | Anyone with the link id | none | `null` while `open` or `offered`; the answer while `answered` |
 | `completeDeviceLink` | Session of the link's user | `answered` → `consumed` | `true` again while `consumed` |
 | `cancelDeviceLink` | Anyone with the link id | `open`, `offered`, `answered` → `cancelled` | See errors |
@@ -211,7 +211,9 @@ classified (same bytes repeated, wrong state, expired, unknown) by one read.
 | `cancelDeviceLink` by the link's user | Already `consumed` | `CONFLICT` |
 
 `cancelDeviceLink` with a session of the link's user follows the session rules, and answers
-`true` for a link already cancelled or expired; any other caller follows the anonymous rules.
+`true` for a link already cancelled or expired (an expired link keeps its state and still reads
+`EXPIRED`); any other caller, including a session of another account, follows the anonymous
+rules.
 `deviceLink` reports an expired live link as `EXPIRED` until the row is cleaned up, then
 `NOT_FOUND`.
 
@@ -239,7 +241,7 @@ inspects them, and has no key that could.
 | Live links | 1; starting a new one cancels the previous | user |
 | `sendDeviceLinkOffer` + anonymous `cancelDeviceLink` | 30 per 15 minutes | IP |
 | `deviceLinkAnswer` | 300 per 5 minutes (a poll every 2 s is 150) | IP |
-| Anonymous refusals (`UNAUTHENTICATED`) | 20 per 15 minutes, a slot reserved up front and refunded on success, as for key login | IP |
+| Anonymous refusals (`UNAUTHENTICATED`) | 20 per 15 minutes, a slot reserved up front and refunded unless the call ends in `UNAUTHENTICATED` (so successes, `VALIDATION` and internal errors do not count), as for key login | IP |
 
 The refusal limiter is separate from key login's, so a botched link does not lock the same
 network out of `loginWithKey`. Limiters are the in-memory `RegistrationRateLimiter`, per node;
