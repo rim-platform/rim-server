@@ -475,9 +475,9 @@ Decision 1 (go on the first PRs) was answered "go" on 2026-10-08.
 | 15 | Mobile: PWA after Stage 3, or native later? | PWA / native | PWA |
 
 Still open from the decentralization design, none blocking before Stage 5: whether relays
-delete messages once the drive has them, Matrix interop, and whether losing phrase, drive and devices together is an acceptable
-total loss (the plan assumes yes). A host accepts any relay by default, with an optional
-allow-list (decided 2026-10-09). The 2026-10-04 open decisions not listed above are
+delete messages once the drive has them, Matrix interop, and whether losing phrase, drive and
+devices together is an acceptable total loss (the plan assumes yes). A host accepts any relay
+by default, with an optional allow-list (decided 2026-10-09). The 2026-10-04 open decisions not listed above are
 settled: the master plan adopts sandboxed iframes for web plugins and DMs plus private groups
 for E2EE v1, Jakub confirmed the decentralization model (see the decision record), and the
 four-role ladder shipped in 1.2.
