@@ -10,6 +10,8 @@ pub struct Model {
     pub name: String,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
+    #[sea_orm(column_type = "Text")]
+    pub kind: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
