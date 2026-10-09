@@ -14,8 +14,3 @@ members = [
     "rim_infra_services",
 ]
 
-# `openmls` names `openmls_sqlite_storage` as an optional dependency, whose `rusqlite` links a
-# `libsqlite3-sys` that conflicts with SeaORM's optional SQLite driver in the lock file. The
-# server never enables it, so an empty crate stands in.
-[patch.crates-io]
-openmls_sqlite_storage = { path = "vendor/openmls_sqlite_storage" }

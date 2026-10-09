@@ -174,6 +174,18 @@ impl Signer for MlsSigner {
     }
 }
 
+/// Leaf capabilities naming the suite explicitly: OpenMLS's defaults list it only when its own
+/// post-quantum feature is on.
+fn capabilities() -> Capabilities {
+    Capabilities::new(
+        None,
+        Some(&[SUITE]),
+        Some(&[ExtensionType::LastResort]),
+        None,
+        Some(&[CredentialType::Basic]),
+    )
+}
+
 fn join_config() -> MlsGroupJoinConfig {
     MlsGroupJoinConfig::builder()
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
@@ -224,16 +236,9 @@ impl Member {
     /// A key package as uploaded: an `MLSMessage`, unpadded base64url. Its private keys stay in
     /// this device's provider.
     fn key_package(&self, last_resort: bool) -> String {
-        let capabilities = Capabilities::new(
-            None,
-            Some(&[SUITE]),
-            Some(&[ExtensionType::LastResort]),
-            None,
-            Some(&[CredentialType::Basic]),
-        );
         let mut builder = KeyPackage::builder()
-            .key_package_lifetime(Lifetime::new(30 * 86_400))
-            .leaf_node_capabilities(capabilities);
+            .key_package_lifetime(Lifetime::new(90 * 86_400))
+            .leaf_node_capabilities(capabilities());
         if last_resort {
             builder = builder.mark_as_last_resort();
         }
@@ -574,6 +579,7 @@ impl Fixture {
         let conversation_id: Uuid = conv.parse().expect("uuid");
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(SUITE)
+            .capabilities(capabilities())
             .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
             .use_ratchet_tree_extension(true)
             .padding_size(256)
