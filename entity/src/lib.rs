@@ -21,6 +21,7 @@ mod conversation_read_state_mapper;
 pub mod custom_emoji;
 mod custom_emoji_mapper;
 pub mod device_key;
+pub mod device_link;
 pub mod escalation_policy;
 mod escalation_policy_mapper;
 pub mod escalation_run;

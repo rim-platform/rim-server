@@ -7,6 +7,7 @@ pub mod conversation_escalation_policy;
 pub mod conversation_member;
 pub mod conversation_read_state;
 pub mod custom_emoji;
+pub mod device_link;
 pub mod escalation_policy;
 pub mod escalation_run;
 pub mod escalation_step;

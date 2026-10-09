@@ -107,6 +107,7 @@ TRUNCATE TABLE
   conversation_read_state,
   custom_emoji,
   device_key,
+  device_link,
   escalation_policy,
   escalation_run,
   escalation_step,
