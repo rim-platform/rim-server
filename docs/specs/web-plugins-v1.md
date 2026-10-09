@@ -256,7 +256,8 @@ changes.
 | `rim.log` | none | As v1; the host keeps at most 120 lines a minute per plugin and drops the rest, with one warning |
 | `rim.ui.update_panel` | `ui.panel` | As for a local process (routed, not frozen): `panel_id`, `state`, optional `patch`; 1 MiB per plugin |
 | `rim.storage.get`, `rim.storage.set` | none | New, not frozen; below |
-| `rim.chat.*`, `rim.events.subscribe` | `chat.*`, `events.read` | `CAPABILITY_DENIED`, as v1 section 17 |
+| `rim.chat.*` | `chat.*` | The client message service, as for a local process (routed, not frozen; `e2ee-mls-v1.md`, "Plugins and the client message service"). Reads need a local message store; until the web app's service reads the browser's encrypted store, it answers them `INTERNAL_ERROR` with `data.reason: "noCache"` |
+| `rim.events.subscribe` | `events.read` | `CAPABILITY_DENIED`, as v1 section 17 |
 | `rim.process.*`, `rim.fs.*`, `rim.network.*` | `local.process`, `fs.*`, `network` | `CAPABILITY_DENIED`: this kind can never hold them |
 
 **Storage.** An opaque origin has no `localStorage`, IndexedDB or cookies, so the host keeps a
@@ -304,7 +305,8 @@ panels when the plugin stops). Focus and Escape work as for other panels.
 | `plugin.<pluginId>.<verb>`, `ui.panel` | Prompted | As on the desktop |
 | `ui.notify` | Prompted | Panel notifications show the plugin's name, as today |
 | `network.fetch` | Prompted (new) | Lists the origins; this kind only; enforced by the policy |
-| `chat.read`, `chat.write`, `events.read` | Refused at install | As on the desktop: not in v1, nothing serves them. Once frozen, prompted for both kinds alike |
+| `chat.read`, `chat.write`, `chat.read.encrypted`, `chat.write.encrypted` | Prompted | As on the desktop, one line each; an encrypted one without its plain one is refused at install |
+| `events.read` | Refused at install | As on the desktop: nothing serves it |
 | `local.process`, `fs.read`, `fs.write` | Refused, always | `WebSandboxed plugins cannot run programs or read files; use DesktopLocalProcess` |
 | `network` | Refused, always | Names host-brokered requests for local processes |
 
