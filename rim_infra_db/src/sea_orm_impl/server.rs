@@ -10,6 +10,9 @@ use sea_orm::{ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, Rela
 use crate::DbHandle;
 use crate::error::map_db_err;
 
+/// `server.kind` of a workspace; the relay's direct space is never listed or found by name.
+const WORKSPACE_KIND: &str = "workspace";
+
 pub struct SeaOrmServerRepository {
     db: DbHandle,
 }
@@ -48,6 +51,7 @@ impl ServerRepository for SeaOrmServerRepository {
     async fn find_by_name(&self, name: &str) -> RepoResult<Option<Server>> {
         let res = server::Entity::find()
             .filter(server::Column::Name.eq(name.to_owned()))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -59,6 +63,7 @@ impl ServerRepository for SeaOrmServerRepository {
         let servers = server::Entity::find()
             .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
             .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
             .all(&self.db)
             .await
             .map_err(map_db_err)?;
