@@ -721,6 +721,11 @@ The chat read and send calls are deliberately **not in v1**: they will go throug
 single message service, so that a plugin sees exactly what the user sees, before their shapes are
 frozen.
 
+The client message service now serves them as `rim.chat.list_messages`, `rim.chat.get_message`,
+`rim.chat.search_messages` and `rim.chat.post_message`, still routed and not frozen, with the
+capabilities `chat.read`, `chat.write`, `chat.read.encrypted` and `chat.write.encrypted`: see
+`e2ee-mls-v1.md`, "Plugins and the client message service".
+
 ### Not implemented
 
 Earlier RIM documents listed methods that the host has never implemented. They do not exist:
