@@ -10,6 +10,7 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
+use rim_core::device_link::repository::DeviceLinkRepository;
 use rim_core::escalation::repository::{
     ConversationEscalationPolicyRepository, EscalationPolicyRepository, EscalationRunRepository,
     EscalationStepRepository,
@@ -92,6 +93,7 @@ pub struct AppRepos {
     pub notification_repo: Arc<dyn NotificationRepository>,
     pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
     pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
+    pub device_link_repo: Arc<dyn DeviceLinkRepository>,
 }
 
 #[derive(Clone)]
@@ -339,6 +341,13 @@ impl AppRepos {
             session_repo: Arc::clone(&self.session_repo),
             key_identity_repo: Arc::clone(&self.key_identity_repo),
             key_challenge_repo: Arc::clone(&self.key_challenge_repo),
+        }
+    }
+
+    pub fn for_device_link(&self) -> crate::device_link::DeviceLinkRepos {
+        crate::device_link::DeviceLinkRepos {
+            user_repo: Arc::clone(&self.user_repo),
+            device_link_repo: Arc::clone(&self.device_link_repo),
         }
     }
 
@@ -706,6 +715,9 @@ impl AppRepos {
             ),
             key_challenge_repo: Arc::new(
                 sea_orm_impl::key_identity::SeaOrmKeyChallengeRepository::new(handle.clone()),
+            ),
+            device_link_repo: Arc::new(
+                sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(handle.clone()),
             ),
         }
     }

@@ -9,6 +9,7 @@ use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
+use rim_services::device_link::service::DeviceLinkService;
 use rim_services::escalation::scheduler::EscalationScheduler;
 use rim_services::escalation::service::EscalationPolicyService;
 use rim_services::events::EventObserver;
@@ -80,6 +81,7 @@ pub struct DefaultAppServiceProvider {
     workspace_state_service: Arc<dyn WorkspaceStateService>,
     pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
+    device_link_service: Arc<dyn DeviceLinkService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -346,6 +348,12 @@ impl DefaultAppServiceProvider {
                 pipeline_broadcaster_clone,
             ));
 
+        let device_link_service: Arc<dyn DeviceLinkService> =
+            Arc::new(crate::device_link::DefaultDeviceLinkService::new(
+                repos.for_device_link(),
+                Some(db.clone()),
+            ));
+
         Self {
             audit_log_service,
             auth_service,
@@ -381,6 +389,7 @@ impl DefaultAppServiceProvider {
             workspace_state_service,
             pipeline_service,
             request_authenticator,
+            device_link_service,
         }
     }
 }
@@ -488,5 +497,8 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator> {
         Arc::clone(&self.request_authenticator)
+    }
+    fn device_link_service(&self) -> Arc<dyn DeviceLinkService> {
+        Arc::clone(&self.device_link_service)
     }
 }

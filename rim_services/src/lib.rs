@@ -6,6 +6,7 @@ pub mod channel_lens;
 pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
+pub mod device_link;
 pub mod escalation;
 pub mod events;
 pub mod incident;

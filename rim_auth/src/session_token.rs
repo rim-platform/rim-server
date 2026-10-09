@@ -52,6 +52,22 @@ pub fn generate_challenge_nonce() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Generate a device link id: 16 random bytes, base64url-nopad (22 characters), no prefix.
+/// It is a bearer capability, so only its SHA-256 is ever persisted
+/// (`docs/specs/device-linking-v1.md`).
+pub fn generate_link_id() -> String {
+    let mut bytes = [0u8; 16];
+    if let Err(e) = fill(&mut bytes) {
+        tracing::error!(
+            target = "audit",
+            error = %e,
+            "fatal: OS entropy source failed; cannot generate device link id"
+        );
+        panic!("getrandom failed: {e}");
+    }
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 pub fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
@@ -91,6 +107,14 @@ mod tests {
             "expected at least 43 chars after prefix (256-bit base64url), got {}",
             after_prefix.len()
         );
+    }
+
+    #[test]
+    fn link_id_is_16_random_bytes_of_unpadded_base64url() {
+        let id = generate_link_id();
+        assert_eq!(id.len(), 22);
+        assert_eq!(URL_SAFE_NO_PAD.decode(&id).map(|b| b.len()), Ok(16));
+        assert_ne!(id, generate_link_id());
     }
 
     #[test]

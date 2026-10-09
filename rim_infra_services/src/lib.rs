@@ -8,6 +8,7 @@ pub(crate) mod channel_lens;
 pub mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
+pub(crate) mod device_link;
 // pub(crate) promoted to pub: EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig are
 // constructed directly by the composition root (rim_server/src/app.rs) — mirrors the
 // DefaultAuthService precedent above (Track B3, 2026-07-10).
@@ -106,6 +107,9 @@ mod escalation_policy_unit_tests;
 
 #[cfg(test)]
 mod command_tests;
+
+#[cfg(test)]
+mod device_link_unit_tests;
 
 pub use alert_rate_limiter::AlertRateLimiter;
 pub use auth::DefaultAuthService;
