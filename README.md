@@ -34,7 +34,7 @@ Tauri v2 desktop client lives in the separate `rim-ui` repository.
 
 | Crate | Role |
 |---|---|
-| `rim_server` | Actix Web bootstrap, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, alert webhooks) |
+| `rim_server` | Actix Web bootstrap, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, alert webhooks, server-to-server) |
 | `rim_api` | async-graphql schema, resolvers, auth context |
 | `rim_core` | Domain models, repository traits, strongly-typed IDs |
 | `rim_services` | Service traits, `*Cmd`/`*Query`/`*Dto` types, `ServiceError` |
@@ -44,6 +44,8 @@ Tauri v2 desktop client lives in the separate `rim-ui` repository.
 | `migration` | SeaORM migrations + CLI |
 | `rim_auth` | Password hashing, session/CSRF tokens |
 | `rim_logging` | Structured tracing setup |
+| `rim_identity` | Key identity statements: key logs, device certificates, profile cards, login proofs |
+| `rim_s2s` | Server identity and the signed server-to-server transport (RFC 9421 profile) |
 
 Layering rules and the two documented exceptions are in `CLAUDE.md` and `docs/architecture.md`.
 
@@ -74,7 +76,10 @@ without it, emails are logged (recipient and subject only) instead of sent. Behi
 proxy, set `RIM_TRUST_FORWARDED_HEADERS=true` (and make the proxy the only entry point);
 otherwise per-IP limits on login, signup and password-reset requests see every client as the
 proxy's address. Attachments count against a per-workspace quota,
-`RIM_MAX_WORKSPACE_STORAGE_BYTES` (default 1 GiB), reserved when an upload is declared.
+`RIM_MAX_WORKSPACE_STORAGE_BYTES` (default 1 GiB), reserved when an upload is declared. The
+first start creates the server key in `RIM_DATA_DIR` (`RIM_SERVER_KEY_FILE`) and a recovery key
+to move offline; server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
+`RIM_PUBLIC_BASE_URL` is an `https` URL (`docs/server-identity.md`).
 
 ## Development
 
@@ -111,5 +116,5 @@ Dated records (point-in-time, may be stale): `docs/specs/`, `docs/design/`, `doc
 
 ## License
 
-Apache License 2.0, see `LICENSE`. The license does not cover the RIM name or logo; see
-`TRADEMARK.md`. To contribute, see `CONTRIBUTING.md` (commits need a DCO sign-off).
+Apache License 2.0, see `LICENSE` and `NOTICE`. The license does not cover the RIM name, so
+forks should use a different name. To contribute, see `CONTRIBUTING.md`.

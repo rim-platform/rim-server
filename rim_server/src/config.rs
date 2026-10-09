@@ -98,7 +98,79 @@ pub struct RIMConfig {
     /// (`docs/specs/key-identity-v1.md`). Controlled by `RIM_KEY_LOGIN_AUDIENCES`; see
     /// [`RIMConfig::key_login_audiences`] for the defaults.
     pub key_login_audiences: Option<String>,
+
+    /// `relay`, `host` or `both` (default). Controlled by `RIM_ROLE`.
+    pub role: Option<String>,
+
+    /// Path of the server key file. Default `<RIM_DATA_DIR>/server-key.json`. Controlled by
+    /// `RIM_SERVER_KEY_FILE`.
+    pub server_key_file: Option<String>,
+
+    /// Comma-separated server ids allowed on host endpoints; empty allows any relay.
+    /// Controlled by `RIM_HOST_ALLOWED_RELAYS`.
+    pub host_allowed_relays: Option<String>,
+
+    /// Comma-separated server ids refused on every server-to-server endpoint. Controlled by
+    /// `RIM_S2S_DENIED_PEERS`.
+    pub s2s_denied_peers: Option<String>,
+
+    /// Server-to-server requests accepted per peer per minute, per node. Default 600.
+    /// Controlled by `RIM_S2S_PEER_RATE_PER_MIN`.
+    pub s2s_peer_rate_per_min: Option<u32>,
+
+    /// Largest server-to-server request body. Default 8 MiB. Controlled by
+    /// `RIM_S2S_MAX_BODY_BYTES`.
+    pub s2s_max_body_bytes: Option<usize>,
+
+    /// Allow peers on loopback, private, link-local and unique-local addresses (development
+    /// and tests only). Controlled by `RIM_S2S_ALLOW_PRIVATE_ADDRESSES`.
+    pub s2s_allow_private_addresses: Option<bool>,
+
+    /// Allow server-to-server traffic over plain `http` (development and tests only).
+    /// Controlled by `RIM_S2S_ALLOW_HTTP`.
+    pub s2s_allow_http: Option<bool>,
 }
+
+/// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerRole {
+    /// The server of its users' apps, with a direct space for their DMs.
+    Relay,
+    /// The authority for its workspaces.
+    Host,
+    /// Both: a single server is its users' relay and hosts its workspaces.
+    Both,
+}
+
+impl ServerRole {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "relay" => Some(Self::Relay),
+            "host" => Some(Self::Host),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    /// The roles the descriptor lists, in its order.
+    pub fn roles(self) -> Vec<rim_s2s::Role> {
+        match self {
+            Self::Relay => vec![rim_s2s::Role::Relay],
+            Self::Host => vec![rim_s2s::Role::Host],
+            Self::Both => vec![rim_s2s::Role::Host, rim_s2s::Role::Relay],
+        }
+    }
+
+    pub fn runs(self, role: rim_s2s::Role) -> bool {
+        self.roles().contains(&role)
+    }
+}
+
+/// Default of `RIM_S2S_PEER_RATE_PER_MIN`.
+const DEFAULT_S2S_PEER_RATE_PER_MIN: u32 = 600;
+
+/// Default of `RIM_S2S_MAX_BODY_BYTES`: 8 MiB.
+pub const DEFAULT_S2S_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// The registration mode resolved from environment at boot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +220,17 @@ impl fmt::Debug for RIMConfig {
                 &self.notification_digest_interval_secs(),
             )
             .field("key_login_audiences", &self.key_login_audiences())
+            .field("role", &self.role)
+            .field("server_key_file", &self.server_key_file)
+            .field("host_allowed_relays", &self.host_allowed_relays)
+            .field("s2s_denied_peers", &self.s2s_denied_peers)
+            .field("s2s_peer_rate_per_min", &self.s2s_peer_rate_per_min())
+            .field("s2s_max_body_bytes", &self.s2s_max_body_bytes())
+            .field(
+                "s2s_allow_private_addresses",
+                &self.s2s_allow_private_addresses(),
+            )
+            .field("s2s_allow_http", &self.s2s_allow_http())
             .finish()
     }
 }
@@ -181,6 +264,14 @@ impl Default for RIMConfig {
             escalation_timer_resolution_secs: None,
             notification_digest_interval_secs: None,
             key_login_audiences: None,
+            role: None,
+            server_key_file: None,
+            host_allowed_relays: None,
+            s2s_denied_peers: None,
+            s2s_peer_rate_per_min: None,
+            s2s_max_body_bytes: None,
+            s2s_allow_private_addresses: None,
+            s2s_allow_http: None,
         }
     }
 }
@@ -389,6 +480,116 @@ impl RIMConfig {
     }
 }
 
+impl RIMConfig {
+    /// `RIM_ROLE`, `both` when unset.
+    ///
+    /// # Errors
+    /// A message naming the value when it is not `relay`, `host` or `both`.
+    pub fn server_role(&self) -> Result<ServerRole, String> {
+        match self
+            .role
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            None => Ok(ServerRole::Both),
+            Some(role) => ServerRole::parse(role)
+                .ok_or_else(|| format!("RIM_ROLE={role} is not relay, host or both")),
+        }
+    }
+
+    /// The server key file: `RIM_SERVER_KEY_FILE`, or `<RIM_DATA_DIR>/server-key.json`.
+    pub fn key_files(&self) -> rim_infra_services::s2s::server_key::KeyFiles {
+        rim_infra_services::s2s::server_key::KeyFiles::new(
+            &self.data_dir,
+            self.server_key_file
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(std::path::PathBuf::from),
+        )
+    }
+
+    pub fn s2s_allow_http(&self) -> bool {
+        self.s2s_allow_http.unwrap_or(false)
+    }
+
+    pub fn s2s_allow_private_addresses(&self) -> bool {
+        self.s2s_allow_private_addresses.unwrap_or(false)
+    }
+
+    pub fn s2s_peer_rate_per_min(&self) -> u32 {
+        self.s2s_peer_rate_per_min
+            .unwrap_or(DEFAULT_S2S_PEER_RATE_PER_MIN)
+    }
+
+    pub fn s2s_max_body_bytes(&self) -> usize {
+        self.s2s_max_body_bytes
+            .unwrap_or(DEFAULT_S2S_MAX_BODY_BYTES)
+    }
+
+    /// The origin of `RIM_PUBLIC_BASE_URL` when server-to-server traffic is on: the URL is
+    /// `https`, or `http` with `RIM_S2S_ALLOW_HTTP`. `None` turns the traffic off.
+    pub fn s2s_origin(&self) -> Option<String> {
+        let url = url::Url::parse(self.public_base_url.as_deref()?.trim()).ok()?;
+        match url.scheme() {
+            "https" => {}
+            "http" if self.s2s_allow_http() => {}
+            _ => return None,
+        }
+        url.host()?;
+        Some(url.origin().ascii_serialization())
+    }
+
+    /// The origin clients reach this server at: that of `RIM_PUBLIC_BASE_URL` (any scheme), or
+    /// `http://localhost:PORT` when unset.
+    pub fn public_origin(&self) -> String {
+        self.public_base_url
+            .as_deref()
+            .and_then(|u| url::Url::parse(u.trim()).ok())
+            .filter(|u| u.host().is_some())
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_else(|| format!("http://localhost:{}", self.server_port))
+    }
+
+    /// `RIM_S2S_DENIED_PEERS` as server ids.
+    ///
+    /// # Errors
+    /// A message naming the first entry that is not a server id.
+    pub fn s2s_denied_peers(&self) -> Result<Vec<String>, String> {
+        server_id_list("RIM_S2S_DENIED_PEERS", self.s2s_denied_peers.as_deref())
+    }
+
+    /// `RIM_HOST_ALLOWED_RELAYS` as server ids; empty allows any relay.
+    ///
+    /// # Errors
+    /// A message naming the first entry that is not a server id.
+    pub fn host_allowed_relays(&self) -> Result<Vec<String>, String> {
+        server_id_list(
+            "RIM_HOST_ALLOWED_RELAYS",
+            self.host_allowed_relays.as_deref(),
+        )
+    }
+}
+
+/// A comma-separated list of server ids; refuses anything else so a typo does not silently
+/// allow or deny the wrong server.
+fn server_id_list(name: &str, value: Option<&str>) -> Result<Vec<String>, String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            if rim_s2s::is_server_id(id) {
+                Ok(id.to_string())
+            } else {
+                Err(format!("{name}: {id} is not a server id"))
+            }
+        })
+        .collect()
+}
+
 /// The `host[:port]` of an absolute URL such as `https://rim.example.com/app`, lowercased.
 fn url_authority(url: &str) -> Option<String> {
     let (_, rest) = url.trim().split_once("://")?;
@@ -411,6 +612,11 @@ impl RIMConfig {
             .set_default("alert_max_body_bytes", 262_144_i64)?
             .set_default("escalation_timer_resolution_secs", 5_i64)?
             .set_default("notification_digest_interval_secs", 900_i64)?
+            .set_default(
+                "s2s_peer_rate_per_min",
+                i64::from(DEFAULT_S2S_PEER_RATE_PER_MIN),
+            )?
+            .set_default("s2s_max_body_bytes", DEFAULT_S2S_MAX_BODY_BYTES as i64)?
             .add_source(Environment::with_prefix("RIM"))
             .add_source(Environment::default());
         c.build()?.try_deserialize()
@@ -565,6 +771,99 @@ mod tests {
         assert_eq!(
             config.public_base_url(),
             Some("https://rim.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn role_defaults_to_both_and_refuses_unknown_values() {
+        assert_eq!(RIMConfig::default().server_role(), Ok(ServerRole::Both));
+        for (value, role) in [
+            ("relay", ServerRole::Relay),
+            (" Host ", ServerRole::Host),
+            ("both", ServerRole::Both),
+        ] {
+            let config = RIMConfig {
+                role: Some(value.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(config.server_role(), Ok(role));
+        }
+        let config = RIMConfig {
+            role: Some("hub".to_string()),
+            ..Default::default()
+        };
+        assert!(config.server_role().is_err());
+        assert_eq!(
+            ServerRole::Both.roles(),
+            vec![rim_s2s::Role::Host, rim_s2s::Role::Relay]
+        );
+    }
+
+    #[test]
+    fn s2s_is_on_only_for_https_or_allowed_http() {
+        assert_eq!(RIMConfig::default().s2s_origin(), None);
+        let https = RIMConfig {
+            public_base_url: Some("https://RIM.example.com/app".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            https.s2s_origin().as_deref(),
+            Some("https://rim.example.com")
+        );
+        let http = RIMConfig {
+            public_base_url: Some("http://127.0.0.1:8098".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(http.s2s_origin(), None);
+        assert_eq!(http.public_origin(), "http://127.0.0.1:8098");
+        let allowed = RIMConfig {
+            s2s_allow_http: Some(true),
+            ..http
+        };
+        assert_eq!(
+            allowed.s2s_origin().as_deref(),
+            Some("http://127.0.0.1:8098")
+        );
+        assert_eq!(
+            RIMConfig {
+                server_port: 9000,
+                ..Default::default()
+            }
+            .public_origin(),
+            "http://localhost:9000"
+        );
+    }
+
+    #[test]
+    fn peer_lists_accept_only_server_ids() {
+        let id = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
+        let config = RIMConfig {
+            s2s_denied_peers: Some(format!(" {id} ,, ")),
+            host_allowed_relays: Some("relay.example".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.s2s_denied_peers(), Ok(vec![id.to_string()]));
+        assert!(config.host_allowed_relays().is_err());
+        assert_eq!(RIMConfig::default().host_allowed_relays(), Ok(vec![]));
+    }
+
+    #[test]
+    fn key_file_defaults_to_the_data_dir() {
+        let config = RIMConfig {
+            data_dir: "/var/lib/rim".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.key_files().key_file,
+            std::path::PathBuf::from("/var/lib/rim/server-key.json")
+        );
+        let config = RIMConfig {
+            server_key_file: Some("/secrets/key.json".to_string()),
+            ..config
+        };
+        assert_eq!(
+            config.key_files().key_file,
+            std::path::PathBuf::from("/secrets/key.json")
         );
     }
 
