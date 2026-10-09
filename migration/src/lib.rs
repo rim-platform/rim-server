@@ -82,6 +82,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261009_054837_add_key_identity::Migration),
             Box::new(m20261009_075648_key_identity_algorithm_agility::Migration),
             Box::new(m20261009_105834_key_only_signup::Migration),
+            Box::new(m20261009_112441_add_device_link::Migration),
         ]
     }
 }
@@ -151,3 +152,4 @@ mod m20261008_211159_add_message_change_feed;
 mod m20261009_054837_add_key_identity;
 mod m20261009_075648_key_identity_algorithm_agility;
 mod m20261009_105834_key_only_signup;
+mod m20261009_112441_add_device_link;

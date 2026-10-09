@@ -7,6 +7,7 @@ use crate::channel_lens::service::ChannelLensService;
 use crate::command::service::CommandService;
 use crate::conversation::service::ConversationService;
 use crate::custom_emoji::service::CustomEmojiService;
+use crate::device_link::service::DeviceLinkService;
 use crate::escalation::service::EscalationPolicyService;
 use crate::incident::service::IncidentService;
 use crate::ingest_token::service::IngestTokenService;
@@ -67,4 +68,5 @@ pub trait AppServiceProvider: Send + Sync {
     fn workspace_state_service(&self) -> Arc<dyn WorkspaceStateService>;
     fn pipeline_service(&self) -> Arc<dyn PipelineService>;
     fn request_authenticator(&self) -> Arc<dyn RequestAuthenticator>;
+    fn device_link_service(&self) -> Arc<dyn DeviceLinkService>;
 }

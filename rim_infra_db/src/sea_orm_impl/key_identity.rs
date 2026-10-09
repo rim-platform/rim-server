@@ -16,6 +16,7 @@ use sea_orm::{
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::user_lock::lock_user_row;
 
 fn to_i32(value: u32) -> RepoResult<i32> {
     i32::try_from(value).map_err(|_| RepoError::new(RepoErrorKind::InvalidData))
@@ -48,17 +49,7 @@ impl SeaOrmKeyIdentityRepository {
 #[async_trait]
 impl KeyIdentityRepository for SeaOrmKeyIdentityRepository {
     async fn lock_user(&self, user_id: UserId) -> RepoResult<bool> {
-        let id: Uuid = user_id.into();
-        let row = self
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                r#"SELECT id FROM "user" WHERE id = $1 FOR UPDATE"#,
-                [id.into()],
-            ))
-            .await
-            .map_err(map_db_err)?;
-        Ok(row.is_some())
+        lock_user_row(&self.db, user_id).await
     }
 
     async fn find_user_by_principal_id(&self, principal_id: &str) -> RepoResult<Option<UserId>> {

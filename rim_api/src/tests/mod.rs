@@ -810,6 +810,13 @@ impl AppServiceProvider for TestAppServiceProvider {
     fn oncall_service(&self) -> Arc<dyn rim_services::oncall::service::OnCallService> {
         Arc::clone(&self.oncall)
     }
+
+    fn device_link_service(
+        &self,
+    ) -> Arc<dyn rim_services::device_link::service::DeviceLinkService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::device_link::service::MockDeviceLinkService::new())
+    }
 }
 
 fn schema_with_mocks(

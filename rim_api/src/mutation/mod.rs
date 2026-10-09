@@ -25,6 +25,7 @@ pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
+pub(crate) mod device_link;
 pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -110,4 +111,7 @@ pub(crate) struct MutationGroup6(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup7(key_identity::KeyIdentityMutations);
+pub(crate) struct MutationGroup7(
+    key_identity::KeyIdentityMutations,
+    device_link::DeviceLinkMutations,
+);
