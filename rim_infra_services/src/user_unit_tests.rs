@@ -4,7 +4,7 @@ mod tests {
 
     use rim_core::user::model::{UpdateProfilePatch, User, UserId};
     use rim_core::user::repository::MockUserRepository;
-    use rim_services::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
+    use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
     use rim_services::user::service::UserService;
     use rim_services::{Actor, ServiceError};
 
@@ -47,29 +47,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
-    }
-
-    #[tokio::test]
-    async fn get_user_returns_user() {
-        let id = UserId::new();
-        let u = user(id);
-        let mut user_repo = MockUserRepository::new();
-        user_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(u.clone())));
-
-        let svc = DefaultUserService::new(UserRepos {
-            user_repo: Arc::new(user_repo),
-        });
-
-        let dto = svc
-            .get_user(GetUserQuery {
-                actor: Actor::new(UserId::new()),
-                user_id: id,
-            })
-            .await
-            .unwrap();
-        assert_eq!(dto.id, id);
     }
 
     #[tokio::test]

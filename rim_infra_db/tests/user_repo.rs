@@ -60,7 +60,7 @@ async fn create_user_duplicate_username_is_conflict() {
 }
 
 #[tokio::test]
-async fn find_by_username_and_delete_by_username() {
+async fn find_by_username() {
     let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmUserRepository::new(ctx.db.clone());
@@ -79,12 +79,4 @@ async fn find_by_username_and_delete_by_username() {
 
     let found = repo.find_by_username("u_test_find").await.unwrap().unwrap();
     assert_eq!(found.id, created.id);
-
-    repo.delete_by_username("u_test_find").await.unwrap();
-    assert!(
-        repo.find_by_username("u_test_find")
-            .await
-            .unwrap()
-            .is_none()
-    );
 }

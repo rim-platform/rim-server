@@ -28,7 +28,6 @@ use crate::read_state::service::ReadStateService;
 use crate::server::service::ServerService;
 use crate::server_member::service::ServerMemberService;
 use crate::skill_profile::service::SkillProfileService;
-use crate::storage::service::StorageService;
 use crate::user::service::UserService;
 use crate::workspace_feature::service::WorkspaceFeatureService;
 use crate::workspace_state::service::WorkspaceStateService;
@@ -60,7 +59,6 @@ pub trait AppServiceProvider: Send + Sync {
     fn server_service(&self) -> Arc<dyn ServerService>;
     fn server_member_service(&self) -> Arc<dyn ServerMemberService>;
     fn skill_profile_service(&self) -> Arc<dyn SkillProfileService>;
-    fn storage_service(&self) -> Arc<dyn StorageService>;
     fn thread_service(&self) -> Arc<dyn ThreadService>;
     fn user_service(&self) -> Arc<dyn UserService>;
     fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService>;

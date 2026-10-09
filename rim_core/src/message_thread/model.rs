@@ -19,8 +19,3 @@ impl MessageThread {
         self.first_message_id.is_some()
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewMessageThread {
-    pub conversation_id: ConversationId,
-}

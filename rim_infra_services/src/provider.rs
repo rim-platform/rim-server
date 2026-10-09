@@ -74,7 +74,6 @@ pub struct DefaultAppServiceProvider {
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
     skill_profile_service: Arc<dyn SkillProfileService>,
-    storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
     workspace_feature_service: Arc<dyn WorkspaceFeatureService>,
@@ -376,7 +375,6 @@ impl DefaultAppServiceProvider {
             server_service,
             server_member_service,
             skill_profile_service,
-            storage_service,
             thread_service,
             user_service,
             workspace_feature_service,
@@ -466,9 +464,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn skill_profile_service(&self) -> Arc<dyn SkillProfileService> {
         Arc::clone(&self.skill_profile_service)
-    }
-    fn storage_service(&self) -> Arc<dyn StorageService> {
-        Arc::clone(&self.storage_service)
     }
     fn thread_service(&self) -> Arc<dyn ThreadService> {
         Arc::clone(&self.thread_service)

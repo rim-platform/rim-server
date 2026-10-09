@@ -129,11 +129,9 @@ async fn timeline_listing_excludes_thread_messages() {
         .create_conversation(server.id, ConversationType::Group)
         .await;
     let user = ctx.create_user("msg-user-3").await;
-    let thread = ctx.create_thread(conv.id).await;
-
     let root = ctx.create_message(conv.id, user.id, "root").await;
-    thread_repo
-        .set_first_message(thread.id, root.id)
+    let thread = thread_repo
+        .create_thread_for_root(conv.id, root.id)
         .await
         .unwrap();
 

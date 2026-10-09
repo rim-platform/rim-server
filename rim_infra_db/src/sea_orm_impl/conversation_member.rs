@@ -71,18 +71,6 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
         Ok(())
     }
 
-    async fn get_members_for_conversation(
-        &self,
-        conversation_id: ConversationId,
-    ) -> RepoResult<Vec<ConversationMember>> {
-        let members = conversation_member::Entity::find()
-            .filter(conversation_member::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(members.into_iter().map(Into::into).collect())
-    }
-
     async fn is_member(
         &self,
         conversation_id: ConversationId,

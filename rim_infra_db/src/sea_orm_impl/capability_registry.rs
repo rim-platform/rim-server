@@ -2,9 +2,9 @@
 //! introduced in Phase 1 §3.3 (closes Black Widow C1).
 //!
 //! The registry is the source of truth for "does this capability key exist
-//! at all?" — `is_registered` is the runtime gate's hot path. The remaining
-//! methods (`upsert`, `retire_for_plugin`, `get`) cover startup seeding +
-//! Phase 5 plugin lifecycle.
+//! at all?" — `get` is the runtime gate's hot path (a row with `retired_at` set
+//! counts as unregistered). The remaining methods (`upsert_if_missing`, `upsert`,
+//! `retire_for_plugin`) cover startup seeding + Phase 5 plugin lifecycle.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -31,19 +31,6 @@ impl SeaOrmCapabilityRegistryRepository {
 
 #[async_trait]
 impl CapabilityRegistryRepository for SeaOrmCapabilityRegistryRepository {
-    async fn is_registered(&self, capability_key: &str) -> RepoResult<bool> {
-        // Hot-path gate query — primary-key lookup with active-row filter.
-        // SeaORM rewrites this to `SELECT 1 FROM capability_registry WHERE
-        // capability_key = $1 AND retired_at IS NULL LIMIT 1`. PK index
-        // covers it; cost is constant.
-        let row = capability_registry::Entity::find_by_id(capability_key.to_string())
-            .filter(capability_registry::Column::RetiredAt.is_null())
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(row.is_some())
-    }
-
     async fn upsert_if_missing(
         &self,
         capability_key: &str,

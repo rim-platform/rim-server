@@ -189,13 +189,5 @@ impl From<RepoError> for ServiceError {
     }
 }
 
-#[deprecated(
-    since = "0.0.0",
-    note = "use `?` with From<RepoError> for ServiceError instead"
-)]
-pub fn map_repo_error(err: RepoError) -> ServiceError {
-    ServiceError::from(err)
-}
-
 #[cfg(test)]
 mod tests;

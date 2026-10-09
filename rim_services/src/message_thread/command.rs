@@ -7,14 +7,6 @@ use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
 
 #[derive(Debug, Clone, Copy)]
-pub struct CreateThreadCmd {
-    pub actor: Actor,
-    pub server_id: ServerId,
-    pub conversation_id: ConversationId,
-    pub root_message_id: MessageId,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct GetThreadQuery {
     pub actor: Actor,
     pub server_id: ServerId,

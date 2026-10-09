@@ -97,20 +97,6 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
             .collect())
     }
 
-    async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread> {
-        let now: DateTimeWithTimeZone = chrono::Utc::now().into();
-        let active = message_thread::ActiveModel {
-            id: Set(MessageThreadId::new().into()),
-            conversation_id: Set(conversation_id.into()),
-            first_message_id: Set(None),
-            created_at: Set(now),
-            last_message_at: Set(now),
-        };
-
-        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
-        Ok(inserted.into())
-    }
-
     async fn create_thread_for_root(
         &self,
         conversation_id: ConversationId,
@@ -142,31 +128,6 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
             })?;
 
         Ok(inserted.into())
-    }
-
-    async fn set_first_message(
-        &self,
-        thread_id: MessageThreadId,
-        message_id: MessageId,
-    ) -> RepoResult<()> {
-        let thread = message_thread::Entity::find_by_id(thread_id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        let Some(thread) = thread else {
-            return Err(RepoError::new(RepoErrorKind::NotFound));
-        };
-
-        if thread.first_message_id.is_some() {
-            return Err(RepoError::new(RepoErrorKind::Conflict));
-        }
-
-        let mut active: message_thread::ActiveModel = thread.into();
-        active.first_message_id = Set(Some(message_id.into()));
-        active.update(&self.db).await.map_err(map_db_err)?;
-
-        Ok(())
     }
 
     async fn touch_last_message_at(
