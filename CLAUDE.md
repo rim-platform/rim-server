@@ -112,8 +112,12 @@ Cross-cutting contracts that define boundaries between layers:
 - **Timestamps**: `chrono::DateTime<chrono::Utc>`
 - **Error handling**: `?` propagation, `ServiceResult<T>`/`ServiceError` at service boundaries, `anyhow::Result` in infra layers. No `unwrap`/`expect` in library code.
 - **Async traits**: use `async_trait`, must be `Send + Sync`
+- **Comments**: say what the item is and what it does, briefly. No history, no "implements
+  section N of the spec", no references to docs, plans, stages or PR numbers.
+- **Commit messages**: a plain imperative first line (≤ 72 chars) and a body that says why. No
+  trailers of any kind (no `Co-Authored-By`).
 - **rim_core purity**: keep free of transport/Actix/GraphQL concerns
-- **Module visibility default**: new modules declare as `pub(crate) mod foo;` by default. Promotion to `pub mod foo;` requires a documented external consumer (named in a comment or PR description). This keeps the public surface area of each crate minimal — Rust's compiler-enforced privacy is one of the cheapest tools we have for preventing layer leaks like F7. (Established by Fury during P7-RFAC-10 GREEN review.)
+- **Module visibility default**: new modules declare as `pub(crate) mod foo;` by default. Promotion to `pub mod foo;` requires a documented external consumer (named in a comment or PR description). This keeps the public surface area of each crate minimal — Rust's compiler-enforced privacy is one of the cheapest tools we have for preventing layer leaks like F7.
 - **Mockable async traits**: put `#[async_trait]` *above* `#[cfg_attr(any(test, feature = "mocks"), automock)]`, consistently — this is what the large majority of mockable traits in `rim_core`/`rim_services` already do. Mixed order is a compile footgun: `automock` generates a different mock shape depending on whether it sees the trait before or after `async_trait` desugars it. With `async_trait` above (the chosen order), the generated `Mock*` type's `.returning(...)` closures must return a boxed future (`Box::pin(async move { ... })`); a handful of pre-existing traits (e.g. `UserRepository`, `ServerMemberRepository`, `PasswordResetTokenRepository`) have the reverse order and their mocks instead expect `.returning(...)` closures to return a plain `Result<T, E>` directly. Check the actual generated `Mock*` type (or an existing test using it) before assuming which shape applies — don't guess from the trait name alone.
 
 ## Local Dev Environment
@@ -150,11 +154,14 @@ The frontend uses this to generate TypeScript types via `@graphql-codegen`.
 - The SDL endpoint in `rim_server/src/server.rs` serves it at `/api/sdl`
 - **Always verify enum value names** in the SDL match what the frontend expects
 
-## Code Review (MANDATORY)
+## Code Review
 
-Every code change (fix, feature, refactor) MUST be reviewed by the Hawkeye agent (code-reviewer) before being reported as done. No exceptions.
+Every code change is reviewed by the session that coordinates the work, not by a separate
+review agent: it reads the whole diff, fixes what it finds, checks the implementer's gate
+output (fmt, clippy, tests, the feature-gated suites), and only then opens and merges the PR.
+Subagents implement and run the gates; they never spawn reviewers.
 
-Review covers: layered architecture compliance, pattern consistency, cross-repo GraphQL schema match, error handling, import ordering, copy-paste detection. BLOCK findings must be fixed before shipping.
+Review covers: layered architecture compliance, pattern consistency, cross-repo GraphQL schema match, error handling, import ordering, copy-paste detection.
 
 ## CI
 
