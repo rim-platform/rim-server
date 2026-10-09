@@ -545,6 +545,19 @@ pub fn parse_request(
     })
 }
 
+/// The `nonce` parameter of the profile's signature, read without checking anything else, so
+/// a refusal can still echo it in `Rim-Request-Nonce`.
+pub fn request_nonce(signature_input: &str) -> Option<String> {
+    let inputs: Dictionary = Parser::new(signature_input).parse().ok()?;
+    let Some(ListEntry::InnerList(list)) = inputs.get(SIGNATURE_LABEL) else {
+        return None;
+    };
+    list.params
+        .get("nonce")?
+        .as_string()
+        .map(|s| s.as_str().to_string())
+}
+
 /// The request a response answers, as both sides know it.
 #[derive(Debug, Clone, Copy)]
 pub struct RequestBinding<'a> {
@@ -1127,6 +1140,20 @@ mod tests {
             parse_response(&incoming, &binding, NOW + 301).unwrap_err(),
             SignatureRefusal::Clock
         );
+    }
+
+    #[test]
+    fn request_nonce_is_read_leniently() {
+        let f = fixture();
+        let out = post(&f, b"{}");
+        let h = sign_request(&f.signer, &out).expect("sign");
+        assert_eq!(request_nonce(&h.signature_input), Some(f.nonce.clone()));
+        assert_eq!(
+            request_nonce(r#"sig1=();nonce="x";extra=1"#),
+            Some("x".into())
+        );
+        assert_eq!(request_nonce("sig2=();nonce=\"x\""), None);
+        assert_eq!(request_nonce("garbage("), None);
     }
 
     #[test]

@@ -4891,6 +4891,7 @@ dependencies = [
  "actix-cors",
  "actix-multipart",
  "actix-web",
+ "anyhow",
  "async-graphql",
  "async-graphql-actix-web",
  "async-graphql-parser",
@@ -4903,9 +4904,11 @@ dependencies = [
  "rim_api",
  "rim_auth",
  "rim_core",
+ "rim_identity",
  "rim_infra_db",
  "rim_infra_services",
  "rim_logging",
+ "rim_s2s",
  "rim_services",
  "sea-orm",
  "serde",
@@ -4913,6 +4916,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

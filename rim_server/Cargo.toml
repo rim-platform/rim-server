@@ -30,6 +30,10 @@ actix-multipart = "0.7"
 serde_json = "1"
 mime_guess = "2"
 sha2 = "0.10.9"
+rim_s2s = { path = "../rim_s2s" }
+rim_identity = { path = "../rim_identity" }
+url = "2.5"
+anyhow = "1.0.99"
 
 [dev-dependencies]
 rim_services = { path = "../rim_services", features = ["mocks"] }
