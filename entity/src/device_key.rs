@@ -32,6 +32,7 @@ pub struct Model {
         unique_key = "uq_device_key_user_key_hash"
     )]
     pub key_hash: Vec<u8>,
+    pub last_key_package_upload_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

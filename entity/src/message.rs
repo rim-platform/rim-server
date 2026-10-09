@@ -18,6 +18,17 @@ pub struct Model {
     pub has_attachments: bool,
     pub version: i64,
     pub edited_at: Option<DateTimeWithTimeZone>,
+    pub encrypted: bool,
+    #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
+    pub mls_ciphertext: Option<Vec<u8>>,
+    pub mls_incarnation: Option<i32>,
+    pub mls_epoch: Option<i64>,
+    pub sender_device_key_id: Option<Uuid>,
+    #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
+    pub franking_commitment: Option<Vec<u8>>,
+    #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
+    pub franking_receipt: Option<Vec<u8>>,
+    pub franking_key_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

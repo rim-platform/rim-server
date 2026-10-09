@@ -18,6 +18,7 @@ pub struct Model {
     pub archived_at: Option<DateTimeWithTimeZone>,
     pub created_by: Option<Uuid>,
     pub slow_mode_seconds: i32,
+    pub encrypted_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -49,6 +49,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -60,6 +61,7 @@ mod tests {
             sent_by: author,
             text: Some("t".to_string()),
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,
@@ -121,6 +123,7 @@ mod tests {
                         sent_by,
                         text: None,
                         has_attachments: false,
+                        encryption: None,
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
                     })
@@ -525,6 +528,7 @@ mod tests {
             sent_by: actor_id,
             text: Some("reply".to_string()),
             has_attachments: false,
+            encryption: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
             is_deleted: false,
@@ -1029,6 +1033,7 @@ mod tests {
                     sent_by: msg.sent_by,
                     text: msg.text,
                     has_attachments: false,
+                    encryption: None,
                     parent_message_id: None,
                     forwarded_from_message_id: None,
                     is_deleted: false,

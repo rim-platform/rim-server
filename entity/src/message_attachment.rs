@@ -13,6 +13,8 @@ pub struct Model {
     pub file_name: String,
     pub mime_type: String,
     pub metadata: Option<Json>,
+    #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
+    pub blob_sha256: Option<Vec<u8>>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

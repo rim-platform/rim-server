@@ -25,6 +25,7 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -60,6 +61,7 @@ async fn remove_member_success_and_not_found() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -88,6 +90,7 @@ async fn add_member_conflicts_on_duplicate_conversation_membership() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -115,6 +118,7 @@ async fn list_member_ids_for_conversations_batch() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -126,6 +130,7 @@ async fn list_member_ids_for_conversations_batch() {
             title: None,
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();

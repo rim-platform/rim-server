@@ -81,6 +81,7 @@ async fn boot_recovery_arms_active_run_with_past_deadline_and_ignores_cancelled_
             title: Some("active".to_string()),
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();
@@ -91,6 +92,7 @@ async fn boot_recovery_arms_active_run_with_past_deadline_and_ignores_cancelled_
             title: Some("cancelled".to_string()),
             is_private: false,
             created_by: None,
+            encrypted: false,
         })
         .await
         .unwrap();

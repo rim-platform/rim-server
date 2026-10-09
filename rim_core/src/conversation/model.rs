@@ -84,6 +84,9 @@ pub struct Conversation {
     /// Slow mode (Track 1.2): minimum seconds between two messages of the same non-moderator
     /// member in this conversation. `0` means off. Only channels can have it set.
     pub slow_mode_seconds: i32,
+    /// When the conversation became end-to-end encrypted; never cleared once set. Only DMs and
+    /// groups are encrypted.
+    pub encrypted_at: Option<DateTime<Utc>>,
 }
 
 impl Conversation {
@@ -95,6 +98,10 @@ impl Conversation {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
     }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.encrypted_at.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,4 +111,6 @@ pub struct NewConversation {
     pub title: Option<String>,
     pub is_private: bool,
     pub created_by: Option<UserId>,
+    /// Created encrypted: `encrypted_at` is set to the creation time.
+    pub encrypted: bool,
 }

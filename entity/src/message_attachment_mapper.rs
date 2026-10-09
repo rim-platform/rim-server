@@ -7,6 +7,7 @@ impl From<message_attachment::Model> for MessageAttachment {
             id: m.id.into(),
             message_id: m.message_id.into(),
             metadata: m.metadata,
+            blob_sha256: m.blob_sha256,
             file_name: m.file_name,
             file_size: m.file_size,
             mime_type: m.mime_type,

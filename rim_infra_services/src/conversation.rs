@@ -346,6 +346,7 @@ impl ConversationService for DefaultConversationService {
                     title,
                     is_private: cmd.is_private,
                     created_by: Some(cmd.actor.user_id),
+                    encrypted: false,
                 },
                 &member_ids,
             )

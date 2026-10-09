@@ -429,6 +429,7 @@ mod tests {
                         title: None,
                         is_private: false,
                         created_by: None,
+                        encrypted: false,
                     })
                     .await
                     .unwrap_err()
@@ -789,6 +790,7 @@ mod tests {
                 archived_at: None,
                 created_by: None,
                 slow_mode_seconds: 0,
+                encrypted_at: None,
             }),
         };
 
@@ -965,6 +967,7 @@ mod tests {
             archived_at: archived.then(chrono::Utc::now),
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         };
         let server_member_repo = FakeServerMemberRepo {
             is_member: true,
@@ -1032,6 +1035,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         };
         assert!(ensure_not_archived(&conversation).is_ok());
         conversation.archived_at = Some(chrono::Utc::now());
@@ -1073,6 +1077,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         };
         let server_member_repo = guest_repo();
         let conversation_repo = FakeConversationRepo {
@@ -1135,6 +1140,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         };
         let conversation_repo = FakeConversationRepo {
             conv: Some(conversation.clone()),
