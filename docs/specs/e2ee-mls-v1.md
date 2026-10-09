@@ -282,7 +282,17 @@ past the server's Commit retention, signs a **re-add request** with its device k
 state, sends the request, and only then uploads fresh key packages: a re-add is served from a
 package uploaded after the request, never from one of the lost state. The server accepts a
 request only from a device that is still a group device of the incarnation it names, which must
-be the current one (an older one is `STALE_EPOCH`), with `lastEpoch` at most the group's epoch.
+be the current one (an older one is `STALE_EPOCH`), and only when it is fresh:
+
+- `issuedAt` is within 10 minutes of the server's clock, either way (`VALIDATION`);
+- `lastEpoch`, when not `null`, is at most the group's epoch and at least the epoch the device was
+  last added at (`mls_group_device.added_epoch`): state the device holds was reached by joining at
+  that epoch or later, so a request made before its latest add is refused (`VALIDATION`);
+- its `nonce` was not used before by that device in that incarnation. The server records every
+  accepted nonce in `mls_readd_nonce` in the same statement that stores the request, and answers
+  a reused one with `CONFLICT` (`this re-add request was already sent`). A device signs a new
+  request, with a new nonce, for every attempt.
+
 Protections against a server forcing re-adds:
 
 | Rule | Stops |
@@ -290,6 +300,7 @@ Protections against a server forcing re-adds:
 | The request is signed by the device key; committers verify it against the device's certificate before acting | A server fabricating requests |
 | A re-add uses a **one-time** key package claimed now, never a last-resort package | Forcing reuse of an old last-resort init key that may have leaked |
 | A committer honors at most one request per device and conversation per 24 hours, and the server accepts at most 3 per day | Churn and key package draining |
+| The server accepts a request only while it is fresh and only once (`issuedAt`, `lastEpoch`, `nonce` above) | Replaying a stored request later in the same incarnation, which would force a Remove and Add and, after 10 minutes without a Commit, open the recovery path to a new incarnation |
 | The re-added leaf is verified like any other | Substituting another key |
 
 While waiting, the conversation shows "This device can't read new messages until another device
@@ -809,8 +820,22 @@ The change-feed function also sets `edited_at` when `mls_ciphertext` changes to 
 the previous function and trigger, then drops the new columns, indexes and tables; it refuses to
 run while an encrypted message exists (rolling back would leave rows with neither text nor
 ciphertext). A second migration, `add_report_sender_device`, adds
-`message_report.franked_sender_device_id uuid NULL`. Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
-once fulfilled or after 7 days, `franked_content` 90 days after the report is resolved.
+`message_report.franked_sender_device_id uuid NULL`. A third, `add_mls_readd_nonce`, adds the
+nonces of accepted re-add requests:
+
+```sql
+CREATE TABLE mls_readd_nonce (
+    conversation_id uuid NOT NULL, incarnation integer NOT NULL,
+    device_key_id uuid NOT NULL REFERENCES device_key (id) ON DELETE CASCADE,
+    nonce bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, incarnation, device_key_id, nonce),
+    FOREIGN KEY (conversation_id, incarnation) REFERENCES mls_group ON DELETE CASCADE);
+CREATE INDEX idx_mls_readd_nonce_created_at ON mls_readd_nonce (created_at);
+```
+
+Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
+once fulfilled or after 7 days, re-add nonces 1 day (longer than a request stays fresh),
+`franked_content` 90 days after the report is resolved.
 
 Code: an `e2ee` module in `rim_core` (repository traits), `rim_services` (`E2eeService`, DTOs, an
 `MlsWire` trait for decoding and key package validation), `rim_infra_services` (the service and the
@@ -913,7 +938,7 @@ type Mutation {
 | `MLS_COMMIT_REQUIRED` (new) | A message while removals are pending, or into an encrypted conversation without a group | `reason`: `pendingRemovals` or `noGroup` |
 | `FORBIDDEN` | Session without a device; device not in the group; claim or commit by a non-member | — |
 | `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text |
-| `CONFLICT` | Message id reused with other bytes; second report | — |
+| `CONFLICT` | Message id reused with other bytes; second report; a re-add request sent again | — |
 | `TIMED_OUT`, `NOT_FOUND`, `RATE_LIMITED` | As for the plaintext equivalents | as today |
 
 ### Events

@@ -262,6 +262,8 @@ pub trait E2eeRepository: Send + Sync {
 
     // ── Re-add requests ──────────────────────────────────────────────────
 
+    /// Record the request and its nonce together; `Conflict` when the device already used the
+    /// nonce in this incarnation.
     async fn insert_readd_request(
         &self,
         request: NewMlsReaddRequest,

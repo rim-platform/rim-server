@@ -937,6 +937,7 @@ async fn readd_requests_and_retention() {
             device_key_id: f.bob.device,
             payload: "{}".to_string(),
             signature: "sig".to_string(),
+            nonce: vec![1; 16],
         })
         .await
         .unwrap();
@@ -1004,6 +1005,7 @@ async fn readd_requests_and_retention() {
             commits: Duration::days(90),
             claimed_key_packages: Duration::days(7),
             readd_requests: Duration::days(7),
+            readd_nonces: Duration::days(1),
             franked_content: Duration::days(90),
         })
         .await
@@ -1026,6 +1028,72 @@ async fn readd_requests_and_retention() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn finding_9_a_readd_nonce_is_accepted_once_per_device_and_incarnation() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let request = |device: DeviceKeyId, nonce: u8| NewMlsReaddRequest {
+        conversation_id: f.conv.id,
+        incarnation: 1,
+        device_key_id: device,
+        payload: "{}".to_string(),
+        signature: "sig".to_string(),
+        nonce: vec![nonce; 16],
+    };
+    f.repo
+        .insert_readd_request(request(f.bob.device, 1))
+        .await
+        .expect("first");
+    // Fulfilled requests are deleted; their nonces are not.
+    f.repo
+        .fulfill_readd_requests(f.conv.id, 1, &[f.bob.device], 2)
+        .await
+        .unwrap();
+    let retention = MlsRetention {
+        commits: Duration::days(90),
+        claimed_key_packages: Duration::days(7),
+        readd_requests: Duration::days(7),
+        readd_nonces: Duration::days(1),
+        franked_content: Duration::days(90),
+    };
+    let purged = f.repo.purge(retention).await.unwrap();
+    assert_eq!((purged.readd_requests, purged.readd_nonces), (1, 0));
+    let err = f
+        .repo
+        .insert_readd_request(request(f.bob.device, 1))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), RepoErrorKind::Conflict);
+    let open = f
+        .repo
+        .open_readd_requests(f.conv.id, 1, Utc::now() - Duration::days(7))
+        .await
+        .unwrap();
+    assert!(open.is_empty(), "a refused request stores nothing");
+
+    // Another nonce, or the same nonce from another device, is a new request.
+    f.repo
+        .insert_readd_request(request(f.bob.device, 2))
+        .await
+        .expect("new nonce");
+    f.repo
+        .insert_readd_request(request(f.alice.device, 1))
+        .await
+        .expect("other device");
+
+    // Nonces go after their retention.
+    f.ctx
+        .db
+        .execute_unprepared(
+            "UPDATE mls_readd_nonce SET created_at = now() - interval '2 days' \
+             WHERE nonce = decode(repeat('01', 16), 'hex')",
+        )
+        .await
+        .unwrap();
+    let purged = f.repo.purge(retention).await.unwrap();
+    assert_eq!(purged.readd_nonces, 2);
 }
 
 /// A franked report as the e2ee service stores it.
@@ -1085,6 +1153,7 @@ async fn verified_report_content_is_cleared_90_days_after_resolution() {
             commits: Duration::days(90),
             claimed_key_packages: Duration::days(7),
             readd_requests: Duration::days(7),
+            readd_nonces: Duration::days(1),
             franked_content: Duration::days(90),
         })
         .await
@@ -1300,7 +1369,8 @@ async fn migration_down_is_refused_while_an_encrypted_message_exists() {
         ))
         .await
         .unwrap();
-    Migrator::down(&conn, Some(steps))
+    // The refused call already rolled back every later migration.
+    Migrator::down(&conn, Some(1))
         .await
         .expect("roll back add_e2ee_mls");
     // The previous change feed trigger is back: a text edit still stamps edited_at.

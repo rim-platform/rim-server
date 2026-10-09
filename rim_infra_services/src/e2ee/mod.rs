@@ -76,6 +76,10 @@ use crate::util::{
 const CLAIM_VALIDITY: Duration = Duration::hours(1);
 /// How long a re-add request stays open.
 const READD_REQUEST_TTL: Duration = Duration::days(7);
+/// How far a re-add request's `issuedAt` may be from the server's clock.
+const READD_FRESHNESS: Duration = Duration::minutes(10);
+/// How long a re-add request's nonce is kept; longer than a request stays fresh.
+const READD_NONCE_TTL: Duration = Duration::days(1);
 /// How long a device that asked to be re-added waits before it may start a new incarnation.
 const RECOVERY_WAIT: Duration = Duration::minutes(10);
 /// How long only the creator's devices may create the group of a conversation created
@@ -1616,6 +1620,11 @@ impl E2eeService for DefaultE2eeService {
         };
         let request = rim_identity::verify_mls_readd(&device_key, &statement)
             .map_err(|e| ServiceError::Validation(e.to_string()))?;
+        if (request.issued_at - Utc::now()).abs() > READD_FRESHNESS {
+            return Err(ServiceError::Validation(
+                "issuedAt must be within 10 minutes of the server's clock".to_string(),
+            ));
+        }
         if Some(&request.principal_id) != device.principal_id.as_ref()
             || request.device_id != device.device_id
         {
@@ -1645,33 +1654,41 @@ impl E2eeService for DefaultE2eeService {
                 "incarnation {incarnation} does not exist"
             )));
         }
-        if request
-            .last_epoch
-            .is_some_and(|e| i64::try_from(e).map_or(true, |e| e > group.epoch))
-        {
-            return Err(ServiceError::Validation(
-                "lastEpoch is past the group's epoch".to_string(),
-            ));
-        }
         let devices = self
             .repos
             .e2ee_repo
             .group_devices(conversation.id, group.incarnation)
             .await?;
-        if !devices
+        let Some(member) = devices
             .iter()
-            .any(|d| d.device.device_key_id == device.device_key_id)
-        {
+            .find(|d| d.device.device_key_id == device.device_key_id)
+        else {
             return Err(ServiceError::Validation(
                 "this device is not in the group".to_string(),
             ));
+        };
+        // A device holding state reached at least the epoch it was last added at, so a request
+        // made before its latest add is refused.
+        if let Some(last_epoch) = request.last_epoch {
+            let last_epoch = i64::try_from(last_epoch).unwrap_or(i64::MAX);
+            if last_epoch > group.epoch {
+                return Err(ServiceError::Validation(
+                    "lastEpoch is past the group's epoch".to_string(),
+                ));
+            }
+            if last_epoch < member.added_epoch {
+                return Err(ServiceError::Validation(
+                    "lastEpoch is before the epoch this device was added at".to_string(),
+                ));
+            }
         }
         Self::limit(
             &self.readd_rate_limiter,
             &format!("{}:{}", device.device_key_id, conversation.id),
             READD_KEY,
         )?;
-        self.repos
+        match self
+            .repos
             .e2ee_repo
             .insert_readd_request(NewMlsReaddRequest {
                 conversation_id: conversation.id,
@@ -1679,8 +1696,18 @@ impl E2eeService for DefaultE2eeService {
                 device_key_id: device.device_key_id,
                 payload: cmd.payload,
                 signature: cmd.signature,
+                nonce: request.nonce.to_vec(),
             })
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == RepoErrorKind::Conflict => {
+                return Err(ServiceError::Conflict(
+                    "this re-add request was already sent".to_string(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        }
         info!(device_key_id = %device.device_key_id, conversation_id = %conversation.id, incarnation = group.incarnation, "MLS re-add requested");
         self.emit_membership_changed(&conversation).await;
         Ok(())
@@ -1915,6 +1942,7 @@ impl E2eeService for DefaultE2eeService {
                 commits: Duration::days(90),
                 claimed_key_packages: Duration::days(7),
                 readd_requests: READD_REQUEST_TTL,
+                readd_nonces: READD_NONCE_TTL,
                 franked_content: Duration::days(90),
             })
             .await?)

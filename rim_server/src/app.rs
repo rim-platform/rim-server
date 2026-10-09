@@ -493,6 +493,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                                 welcomes = purged.welcomes,
                                 key_packages = purged.key_packages,
                                 readd_requests = purged.readd_requests,
+                                readd_nonces = purged.readd_nonces,
                                 franked_contents = purged.franked_contents,
                                 "purged MLS rows past retention"
                             ),
