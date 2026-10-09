@@ -40,6 +40,7 @@ use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use rim_services::workspace_feature::service::WorkspaceFeatureService;
+use rim_services::workspace_plugin::service::{PluginBundleService, WorkspacePluginService};
 use rim_services::workspace_state::service::WorkspaceStateService;
 use sea_orm::DatabaseConnection;
 
@@ -82,6 +83,8 @@ pub struct DefaultAppServiceProvider {
     pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
     device_link_service: Arc<dyn DeviceLinkService>,
+    workspace_plugin_service: Arc<dyn WorkspacePluginService>,
+    plugin_bundle_service: Arc<dyn PluginBundleService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -182,6 +185,7 @@ impl DefaultAppServiceProvider {
         let server_observers = observers.clone();
         let read_state_observers = observers.clone();
         let incident_observers = observers.clone();
+        let workspace_plugin_observers = observers.clone();
         let ws_state_broadcaster = Arc::clone(observers.broadcaster());
         let pipeline_broadcaster_clone = Arc::clone(observers.broadcaster());
         let message_reaction_service: Arc<dyn MessageReactionService> =
@@ -360,6 +364,18 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
             ));
 
+        let workspace_plugin_service: Arc<dyn WorkspacePluginService> =
+            Arc::new(crate::workspace_plugin::DefaultWorkspacePluginService::new(
+                repos.for_workspace_plugin(),
+                Some(db.clone()),
+                workspace_plugin_observers,
+            ));
+        let plugin_bundle_service: Arc<dyn PluginBundleService> =
+            Arc::new(crate::plugin_bundle::DefaultPluginBundleService::new(
+                repos.for_plugin_bundle(),
+                Arc::clone(&storage_service),
+            ));
+
         Self {
             audit_log_service,
             auth_service,
@@ -396,6 +412,8 @@ impl DefaultAppServiceProvider {
             pipeline_service,
             request_authenticator,
             device_link_service,
+            workspace_plugin_service,
+            plugin_bundle_service,
         }
     }
 }
@@ -506,5 +524,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn device_link_service(&self) -> Arc<dyn DeviceLinkService> {
         Arc::clone(&self.device_link_service)
+    }
+    fn workspace_plugin_service(&self) -> Arc<dyn WorkspacePluginService> {
+        Arc::clone(&self.workspace_plugin_service)
+    }
+    fn plugin_bundle_service(&self) -> Arc<dyn PluginBundleService> {
+        Arc::clone(&self.plugin_bundle_service)
     }
 }

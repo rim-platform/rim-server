@@ -94,6 +94,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::new(rim_infra_services::storage::DefaultStorageService::new(
             Arc::clone(&storage_backend),
             Arc::clone(&repos.message_attachment_repo),
+            Arc::clone(&repos.workspace_plugin_repo),
             max_workspace_bytes,
         ));
 

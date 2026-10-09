@@ -238,8 +238,11 @@ fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) 
                 .is_some_and(|uid| uid.to_string() == user_id),
         },
 
-        // Pipeline events are visible to all workspace members.
-        WorkspaceEvent::PipelineFired { .. } | WorkspaceEvent::PipelineSuspended { .. } => true,
+        // Pipeline and plugin registry events are visible to all workspace members, guests
+        // included.
+        WorkspaceEvent::PipelineFired { .. }
+        | WorkspaceEvent::PipelineSuspended { .. }
+        | WorkspaceEvent::WorkspacePluginChanged { .. } => true,
     }
 }
 
@@ -819,5 +822,23 @@ mod tests {
         assert_eq!(json["reason"], "mention");
         assert_eq!(json["quiet"], true);
         assert_eq!(json["user_id"], recipient.to_string());
+    }
+
+    #[test]
+    fn workspace_plugin_changed_reaches_members_and_guests() {
+        let event = WorkspaceEvent::WorkspacePluginChanged {
+            workspace_id: ServerId::new(),
+            plugin_id: "dev.example.hello-web".to_string(),
+            change: rim_services::events::WorkspacePluginChange::Updated,
+        };
+        let anyone = UserId::new().to_string();
+        assert!(user_can_see_event_as(&event, &anyone, false));
+        assert!(user_can_see_event_as(&event, &anyone, true));
+
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "WorkspacePluginChanged");
+        assert_eq!(json["plugin_id"], "dev.example.hello-web");
+        assert_eq!(json["change"], "updated");
+        assert_eq!(json.as_object().expect("object").len(), 4);
     }
 }
