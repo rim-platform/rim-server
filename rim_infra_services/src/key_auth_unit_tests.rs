@@ -22,9 +22,9 @@ mod tests {
     };
     use rim_identity::{KeyState, SignedStatement};
     use rim_services::key_auth::command::{
-        AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
-        LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
-        SignedPayload,
+        AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
+        IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
+        RotateIdentityKeyCmd, SignedPayload,
     };
     use rim_services::key_auth::service::KeyAuthService;
     use rim_services::{Actor, ServiceError};
@@ -663,6 +663,31 @@ mod tests {
             .unwrap();
         assert_eq!(dto.principal_id, None);
         assert!(dto.key_log.is_empty() && dto.devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn key_log_is_public_by_principal_id() {
+        let h = harness();
+        let e = h.enroll(1).await;
+
+        let log = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: e.state.principal_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].seq, 0);
+
+        let unknown = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: "rimp1_unknown".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(unknown.is_empty());
     }
 
     #[tokio::test]

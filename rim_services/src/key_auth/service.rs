@@ -5,10 +5,13 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::auth::dto::LoginResultDto;
 use crate::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
-    LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
+    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
+    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
+    RotateIdentityKeyCmd,
 };
-use crate::key_auth::dto::{DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, ProfileCardDto};
+use crate::key_auth::dto::{
+    DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
+};
 
 /// Key identity and challenge login (Stage 3, `docs/specs/key-identity-v1.md`).
 ///
@@ -82,4 +85,9 @@ pub trait KeyAuthService: Send + Sync {
         &self,
         query: GetMyKeyIdentityQuery,
     ) -> ServiceResult<KeyIdentityDto>;
+
+    /// The key log of the principal with this id, oldest first; empty when no account here has
+    /// it. Works without a session: the log is public (every server the person uses holds it),
+    /// and a person who lost every device needs its head to sign a recovery rotation.
+    async fn get_key_log(&self, query: GetKeyLogQuery) -> ServiceResult<Vec<KeyLogEntryDto>>;
 }
