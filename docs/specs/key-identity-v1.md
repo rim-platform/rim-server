@@ -299,8 +299,9 @@ identity alone: no password, no email.
 
 **Accepted audiences** come from `RIM_KEY_LOGIN_AUDIENCES` (comma-separated `host[:port]`).
 When it is unset, the host of `RIM_PUBLIC_BASE_URL` is used; when that is unset too,
-`localhost:PORT` and `127.0.0.1:PORT` (development only). The server logs the list at start-up.
-A host behind a proxy on a public name must set one of the two variables.
+`localhost:PORT` and `127.0.0.1:PORT`, but only when `RIM_SERVER_HOST` is `localhost` or a
+loopback address: a server bound to any other address (`0.0.0.0` included) with neither variable
+set refuses to start, with a message naming both. The server logs the list at start-up.
 
 `keyLoginChallenge`, `loginWithKey` and `signupWithKey` are exempt from the CSRF header check,
 because they are used without a session; `loginWithKey` and `signupWithKey` only act on a fresh

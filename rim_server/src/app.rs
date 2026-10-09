@@ -212,6 +212,10 @@ async fn build_s2s(config: &RIMConfig, db: &DbHandle) -> std::io::Result<S2sRunt
 }
 
 pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime> {
+    // Checked first, so a misconfigured server stops before it touches the database or disk.
+    let mut key_login_audiences = config
+        .key_login_audiences()
+        .map_err(std::io::Error::other)?;
     let db = Database::connect(&config.database_url)
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -298,7 +302,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
 
     let s2s = build_s2s(config, &db).await?;
-    let mut key_login_audiences = config.key_login_audiences();
     key_login_audiences.push(s2s.state.identity.current().server_id().to_string());
     tracing::info!(
         audiences = ?key_login_audiences,

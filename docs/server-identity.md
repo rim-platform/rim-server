@@ -63,6 +63,25 @@ rotation up and keep signing with the old key until they get it.
   rewritten: a restored backup, a stolen key, or an attack). Check with the peer's operator first,
   out of band; its next request pins it afresh.
 
+## Key login audiences
+
+A device's login proof names the server it is meant for (`host[:port]`), so a proof sent to one
+server cannot be replayed at another. The server accepts the names in `RIM_KEY_LOGIN_AUDIENCES`
+(comma-separated), else the host of `RIM_PUBLIC_BASE_URL`, plus its own server id. With neither
+variable set it falls back to `localhost:PORT` and `127.0.0.1:PORT`, and only when
+`RIM_SERVER_HOST` is `localhost` or a loopback address. A server bound to any other address,
+`0.0.0.0` (the default and the Docker image's) included, refuses to start until one of the two
+variables is set:
+
+```text
+RIM_SERVER_HOST=0.0.0.0 accepts connections from other machines: set RIM_KEY_LOGIN_AUDIENCES or
+RIM_PUBLIC_BASE_URL to the host[:port] clients reach this server at (the localhost default is
+only for loopback binds)
+```
+
+For local development bind `RIM_SERVER_HOST=127.0.0.1`, or set
+`RIM_KEY_LOGIN_AUDIENCES=localhost:8080,127.0.0.1:8080`.
+
 ## The discovery document
 
 `GET /.well-known/rim-server` answers, to anyone and cacheable for five minutes, the key log and
