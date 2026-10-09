@@ -1,14 +1,6 @@
-use crate::server::start_server;
 use rim_logging::{LoggingHandle, init_tracing_json};
-
-mod alert_handlers;
-mod app;
-mod bootstrap_cmd;
-pub(crate) mod config;
-mod file_handlers;
-mod graphql_support;
-mod plugin_bundle_handlers;
-mod server;
+use rim_server::server::start_server;
+use rim_server::{bootstrap_cmd, config, server_key_cmd};
 
 fn initialize() -> Option<LoggingHandle> {
     // Avoid panicking if logger is already initialized (tests, embedding, etc.).
@@ -30,11 +22,15 @@ async fn main() {
     let _logging_handle = initialize();
 
     let mut args = std::env::args().skip(1);
-    if let Some(subcmd) = args.next()
-        && subcmd == "bootstrap-user"
-    {
-        let exit_code = bootstrap_cmd::run(args).await;
-        std::process::exit(exit_code);
+    if let Some(subcmd) = args.next() {
+        let exit_code = match subcmd.as_str() {
+            "bootstrap-user" => Some(bootstrap_cmd::run(args).await),
+            "server-key" | "peer" => Some(server_key_cmd::run(&subcmd, args).await),
+            _ => None,
+        };
+        if let Some(code) = exit_code {
+            std::process::exit(code);
+        }
     }
 
     let config = match config::load_config() {

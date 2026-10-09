@@ -1,5 +1,5 @@
 use crate::alert_handlers::{ingest_alertmanager, ingest_generic, ingest_grafana};
-use crate::app::build_app_runtime;
+use crate::app::{S2sRuntime, build_app_runtime};
 use crate::config::RIMConfig;
 use crate::file_handlers::{
     handle_attachment_download, handle_avatar_upload, handle_file_download, handle_file_upload,
@@ -35,7 +35,31 @@ struct HandlerConfig {
     force_secure_cookies: bool,
 }
 
+/// A server listening and ready to run, with the handles its tests and the CLI need.
+pub struct RunningServer {
+    /// The HTTP server; await it to run until shutdown.
+    pub server: actix_web::dev::Server,
+    /// Server identity and server-to-server traffic.
+    pub s2s: S2sRuntime,
+    /// Keeps the background tasks running while the server is alive.
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
+}
+
+/// Bind `RIM_SERVER_HOST:RIM_SERVER_PORT` and run until shutdown.
 pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
+    let listener = std::net::TcpListener::bind((config.server_host.as_str(), config.server_port))?;
+    let running = serve(config, listener).await?;
+    let result = running.server.await;
+    drop(running.shutdown_tx);
+    result
+}
+
+/// Build the application and serve it on `listener`. The returned server runs once awaited
+/// or spawned.
+pub async fn serve(
+    config: &RIMConfig,
+    listener: std::net::TcpListener,
+) -> std::io::Result<RunningServer> {
     info!("Starting RIM server...");
 
     tracing::debug!(
@@ -45,7 +69,6 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
         graphiql = %config.enable_graphiql,
         "Configuration loaded"
     );
-    let bind_host = format!("{}:{}", config.server_host, config.server_port);
     let enable_graphiql = config.enable_graphiql;
     let cors_allowed_origin = config.cors_allowed_origin.clone();
     let handler_config = HandlerConfig {
@@ -68,8 +91,11 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let alert_rate_limiter = runtime.alert_rate_limiter;
     let alert_max_body_bytes =
         crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
+    let s2s_runtime = runtime.s2s;
+    let s2s_state = s2s_runtime.state.clone();
+    let shutdown_tx = runtime.shutdown_tx;
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let schema = schema.clone();
         let handler_cfg = handler_config.clone();
 
@@ -95,7 +121,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             }
         };
 
-        let mut app = App::new()
+        let mut api = web::scope("")
             .wrap(cors)
             .service(
                 web::resource("/api")
@@ -142,10 +168,20 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             );
 
         if enable_graphiql {
-            app = app.service(index_graphiql);
+            api = api.service(index_graphiql);
         }
 
-        app.app_data(web::Data::new(schema))
+        // Server-to-server routes sit outside CORS: peers send no `Origin`, and the discovery
+        // document is readable from any origin.
+        App::new()
+            .service(
+                web::resource("/.well-known/rim-server")
+                    .route(web::get().to(crate::s2s::discovery::handle)),
+            )
+            .service(web::resource("/s2s/v1/{tail:.*}").to(crate::s2s::handle))
+            .service(api)
+            .app_data(web::Data::new(s2s_state.clone()))
+            .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
@@ -159,9 +195,13 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(alert_max_body_bytes))
             .app_data(web::Data::new(handler_cfg))
     })
-    .bind(bind_host)?
-    .run()
-    .await
+    .listen(listener)?
+    .run();
+    Ok(RunningServer {
+        server,
+        s2s: s2s_runtime,
+        shutdown_tx,
+    })
 }
 
 /// GET /api/sdl — export the GraphQL schema in SDL format for codegen tooling.

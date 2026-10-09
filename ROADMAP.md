@@ -282,7 +282,8 @@ both encryption and relays depend on them.
    allow-list. A direct connection to a host is the fallback when the relay is unreachable.
    Stage 5 ships after Stage 4, so DMs and private groups are ciphertext on relays; plaintext
    channels are readable by the relay while queued. See
-   `docs/decisions/relay-proxied-workspaces-2026-10-09.md`.
+   `docs/decisions/relay-proxied-workspaces-2026-10-09.md`; the contract is
+   `docs/specs/server-to-server-v1.md`.
 
 ### Architecture guardrails (apply from today)
 

@@ -48,6 +48,8 @@ mod tests {
     use crate::signup::SignupRepos;
 
     const AUDIENCE: &str = "rim.example.com";
+    /// This server's id, also accepted as an audience.
+    const SERVER_ID: &str = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
     const IP: &str = "203.0.113.7";
 
     // ── In-memory store ───────────────────────────────────────────────────────────────────
@@ -593,7 +595,7 @@ mod tests {
             repos,
             None,
             Duration::days(30),
-            vec![" RIM.example.com ".to_string()],
+            vec![" RIM.example.com ".to_string(), SERVER_ID.to_string()],
             Observers::new(broadcaster),
             RegistrationRateLimiter::new(3600, limits.signup),
         )
@@ -1043,6 +1045,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn key_login_audience_may_be_the_server_id_compared_exactly() {
+        let h = harness();
+        let e = h.enroll(1).await;
+        assert!(h.login(&e, e.device_id, &e.device, SERVER_ID).await.is_ok());
+        for other in [
+            SERVER_ID.to_ascii_lowercase(),
+            SERVER_ID.to_ascii_uppercase(),
+            "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c".to_string(),
+        ] {
+            let err = h
+                .login(&e, e.device_id, &e.device, &other)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ServiceError::Unauthenticated),
+                "{other}: {err:?}"
+            );
+        }
     }
 
     #[tokio::test]

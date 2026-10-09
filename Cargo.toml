@@ -5,6 +5,7 @@ members = [
     "rim_auth",
     "rim_core",
     "rim_identity",
+    "rim_s2s",
     "rim_infra_db",
     "entity",
     "rim_logging",

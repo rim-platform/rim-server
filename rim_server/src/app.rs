@@ -12,12 +12,24 @@ use rim_services::typing::TypingService;
 use sea_orm::Database;
 use tokio::sync::watch;
 
-use crate::config::RIMConfig;
+use crate::config::{RIMConfig, ServerRole};
+use crate::s2s::{S2sSettings, S2sState};
 
+use rim_core::s2s::repository::{PeerServerRepository, ServerIdentityRepository};
 use rim_infra_db::DbHandle;
+use rim_infra_db::sea_orm_impl::s2s::{
+    SeaOrmPeerServerRepository, SeaOrmS2sNonceRepository, SeaOrmServerIdentityRepository,
+};
+use rim_infra_services::s2s::server_key::{self, DescriptorSettings, KeyFiles};
+use rim_infra_services::s2s::{
+    DefaultPeerService, DefaultS2sClient, DefaultS2sNonceService, HttpDiscoveryFetcher,
+    S2sClientConfig,
+};
 use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
+use rim_s2s::{Endpoints, Limits, Registration, RegistrationMode, SharedIdentity};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::provider::AppServiceProvider;
+use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
 #[allow(dead_code)] // shutdown_tx is held to keep the watch channel open
 pub struct AppRuntime {
@@ -36,7 +48,167 @@ pub struct AppRuntime {
         Arc<dyn rim_services::workspace_plugin::service::PluginBundleService>,
     pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
     pub alert_max_body_bytes: usize,
+    pub s2s: S2sRuntime,
     pub shutdown_tx: watch::Sender<bool>,
+}
+
+/// Server identity and server-to-server traffic as wired at boot.
+#[derive(Clone)]
+pub struct S2sRuntime {
+    pub state: S2sState,
+    pub client: Arc<dyn S2sClient>,
+    pub key_files: KeyFiles,
+    pub identity_repo: Arc<dyn ServerIdentityRepository>,
+    pub descriptor_settings: DescriptorSettings,
+}
+
+impl S2sRuntime {
+    /// Pick up a key rotation or recovery made by the CLI. Returns whether the identity
+    /// changed.
+    pub async fn reload_identity(&self) -> anyhow::Result<bool> {
+        server_key::reload_if_rotated(
+            self.identity_repo.as_ref(),
+            &self.key_files,
+            &self.state.identity,
+            &self.descriptor_settings,
+        )
+        .await
+    }
+}
+
+/// How long an outgoing server-to-server request may take.
+const S2S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Largest server-to-server response read: the forward path's cap.
+const S2S_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// How often expired request nonces are deleted and a CLI key rotation is picked up.
+const S2S_CLEANUP_INTERVAL_SECS: u64 = 60;
+
+fn io_error(context: &str) -> impl FnOnce(String) -> std::io::Error + '_ {
+    move |e| std::io::Error::other(format!("{context}: {e}"))
+}
+
+/// What the descriptor says besides the key, from the configuration.
+fn descriptor_settings(
+    config: &RIMConfig,
+    role: ServerRole,
+    s2s_origin: Option<&str>,
+) -> DescriptorSettings {
+    let origin = config.public_origin();
+    let websocket = match origin.split_once("://") {
+        Some(("https", rest)) => format!("wss://{rest}"),
+        Some((_, rest)) => format!("ws://{rest}"),
+        None => origin.clone(),
+    };
+    DescriptorSettings {
+        roles: role.roles(),
+        endpoints: Endpoints {
+            graphql: format!("{origin}/api"),
+            websocket: format!("{websocket}/api/ws"),
+            s2s: s2s_origin.map(|o| format!("{o}/s2s/v1")),
+        },
+        limits: Limits {
+            max_body_bytes: config.s2s_max_body_bytes() as u64,
+            clock_skew_seconds: 300,
+            max_deliver_items: 256,
+        },
+        registration: Registration {
+            mode: match config.registration_mode() {
+                crate::config::RegistrationMode::Open => RegistrationMode::Open,
+                crate::config::RegistrationMode::InviteOnly => RegistrationMode::Invite,
+            },
+            pow_bits: None,
+        },
+        mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
+    }
+}
+
+/// Load or create the server key, sign the descriptor, and wire peers, nonces and the client.
+async fn build_s2s(config: &RIMConfig, db: &DbHandle) -> std::io::Result<S2sRuntime> {
+    let role = config.server_role().map_err(io_error("RIM_ROLE"))?;
+    let denied_peers = config
+        .s2s_denied_peers()
+        .map_err(io_error("RIM_S2S_DENIED_PEERS"))?;
+    let allowed_relays = config
+        .host_allowed_relays()
+        .map_err(io_error("RIM_HOST_ALLOWED_RELAYS"))?;
+    let s2s_origin = config.s2s_origin();
+    let key_files = config.key_files();
+    let identity_repo: Arc<dyn ServerIdentityRepository> =
+        Arc::new(SeaOrmServerIdentityRepository::new(db.clone()));
+    let loaded = server_key::load_or_create(identity_repo.as_ref(), &key_files)
+        .await
+        .map_err(|e| io_error("server key")(format!("{e:#}")))?;
+    let settings = descriptor_settings(config, role, s2s_origin.as_deref());
+    let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
+        .await
+        .map_err(|e| io_error("server descriptor")(format!("{e:#}")))?;
+    tracing::info!(
+        server_id = %identity.server_id(),
+        key_seq = identity.state.seq,
+        role = ?role,
+        s2s = s2s_origin.is_some(),
+        "server identity loaded"
+    );
+    if s2s_origin.is_none() {
+        tracing::info!(
+            "server-to-server traffic is off: set RIM_PUBLIC_BASE_URL to an https URL to turn              it on"
+        );
+    }
+    let identity = SharedIdentity::new(identity);
+
+    let allow_http = config.s2s_allow_http();
+    let allow_private = config.s2s_allow_private_addresses();
+    let peer_repo: Arc<dyn PeerServerRepository> =
+        Arc::new(SeaOrmPeerServerRepository::new(db.clone()));
+    let fetcher = HttpDiscoveryFetcher::new(allow_private)
+        .map_err(|e| io_error("discovery client")(e.to_string()))?;
+    let peers: Arc<dyn PeerService> = Arc::new(DefaultPeerService::new(
+        Arc::clone(&peer_repo),
+        Arc::new(fetcher),
+        allow_http,
+    ));
+    let nonces: Arc<dyn S2sNonceService> = Arc::new(DefaultS2sNonceService::new(
+        Arc::new(SeaOrmS2sNonceRepository::new(db.clone())),
+        peer_repo,
+    ));
+    let client: Arc<dyn S2sClient> = Arc::new(
+        DefaultS2sClient::new(
+            identity.clone(),
+            Arc::clone(&peers),
+            S2sClientConfig {
+                own_origin: s2s_origin.clone(),
+                allow_http,
+                allow_private,
+                timeout: S2S_REQUEST_TIMEOUT,
+                max_response_bytes: S2S_MAX_RESPONSE_BYTES,
+            },
+        )
+        .map_err(|e| io_error("server-to-server client")(e.to_string()))?,
+    );
+    Ok(S2sRuntime {
+        state: S2sState {
+            identity,
+            peers,
+            nonces,
+            rate_limiter: Arc::new(rim_infra_services::AlertRateLimiter::new(
+                60,
+                config.s2s_peer_rate_per_min(),
+            )),
+            settings: Arc::new(S2sSettings {
+                role,
+                origin: s2s_origin,
+                denied_peers: denied_peers.into_iter().collect(),
+                allowed_relays: allowed_relays.into_iter().collect(),
+                max_body_bytes: config.s2s_max_body_bytes(),
+            }),
+        },
+        client,
+        key_files,
+        identity_repo,
+        descriptor_settings: settings,
+    })
 }
 
 pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime> {
@@ -125,7 +297,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let escalation_scheduler =
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
 
-    let key_login_audiences = config.key_login_audiences();
+    let s2s = build_s2s(config, &db).await?;
+    let mut key_login_audiences = config.key_login_audiences();
+    key_login_audiences.push(s2s.state.identity.current().server_id().to_string());
     tracing::info!(
         audiences = ?key_login_audiences,
         "key login accepts proofs naming these audiences (RIM_KEY_LOGIN_AUDIENCES)"
@@ -331,6 +505,33 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
+    // Background task: delete expired server-to-server nonces and pick up a key rotation made
+    // by the CLI, every minute.
+    {
+        let s2s = s2s.clone();
+        let mut shutdown_rx5 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(S2S_CLEANUP_INTERVAL_SECS));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        match s2s.state.nonces.purge_expired().await {
+                            Ok(deleted) if deleted > 0 => tracing::debug!(deleted, "purged expired server-to-server nonces"),
+                            Ok(_) => {}
+                            Err(e) => tracing::error!(error = %e, "server-to-server nonce purge failed"),
+                        }
+                        if let Err(e) = s2s.reload_identity().await {
+                            tracing::error!(error = %format!("{e:#}"), "could not pick up the rotated server key");
+                        }
+                    }
+                    _ = shutdown_rx5.changed() => break,
+                }
+            }
+        });
+    }
+
     let message_attachment_service = service_provider.message_attachment_service();
     let moderation_service = service_provider.moderation_service();
     let ingest_token_service = service_provider.ingest_token_service();
@@ -400,6 +601,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         plugin_bundle_service,
         alert_rate_limiter,
         alert_max_body_bytes,
+        s2s,
         shutdown_tx,
     })
 }

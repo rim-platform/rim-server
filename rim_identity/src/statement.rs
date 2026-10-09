@@ -96,11 +96,7 @@ impl Purpose {
 }
 
 fn signed_message(purpose: Purpose, payload: &str) -> Vec<u8> {
-    let context = purpose.context();
-    let mut message = Vec::with_capacity(context.len() + payload.len());
-    message.extend_from_slice(context);
-    message.extend_from_slice(payload.as_bytes());
-    message
+    context_message(purpose.context(), payload)
 }
 
 /// Sign `payload` for `purpose` with an Ed25519 key, spelling the signature as `version`
@@ -118,6 +114,39 @@ pub fn sign(
         payload,
         signature: signature.encode_for(version),
     }
+}
+
+/// Sign `payload` as a version 2 statement under `context`, for statement kinds defined outside
+/// this crate (server-signed statements). The signature is tagged with the key's algorithm.
+pub fn sign_with_context(
+    context: &[u8],
+    key: &SigningKey,
+    payload: impl Into<String>,
+) -> SignedStatement {
+    let payload = payload.into();
+    let signature = Signature::Ed25519(key.sign(&context_message(context, &payload)));
+    SignedStatement {
+        payload,
+        signature: signature.encode_for(StatementVersion::V2),
+    }
+}
+
+/// Check a version 2 statement's signature over `context || payload` by `key`. The signature's
+/// algorithm tag must be the key's.
+pub fn verify_with_context(
+    context: &[u8],
+    key: &PublicKey,
+    statement: &SignedStatement,
+) -> IdentityResult<()> {
+    let signature = Signature::decode_for(StatementVersion::V2, &statement.signature, key)?;
+    key.verify(&context_message(context, &statement.payload), &signature)
+}
+
+fn context_message(context: &[u8], payload: &str) -> Vec<u8> {
+    let mut message = Vec::with_capacity(context.len() + payload.len());
+    message.extend_from_slice(context);
+    message.extend_from_slice(payload.as_bytes());
+    message
 }
 
 /// Check `statement`'s signature by `key`. `version` is the payload's, read by
@@ -195,6 +224,29 @@ mod tests {
                 Err(IdentityError::BadSignature)
             );
         }
+    }
+
+    #[test]
+    fn context_signature_is_tagged_and_bound_to_its_context() {
+        let stmt = sign_with_context(b"rim.test.v1\0", &key(), "{}");
+        assert!(stmt.signature.starts_with("ed25519:"));
+        let public = PublicKey::from(&key());
+        assert_eq!(
+            verify_with_context(b"rim.test.v1\0", &public, &stmt),
+            Ok(())
+        );
+        assert_eq!(
+            verify_with_context(b"rim.other.v1\0", &public, &stmt),
+            Err(IdentityError::BadSignature)
+        );
+        assert_eq!(
+            verify_with_context(
+                Purpose::Login.context(),
+                &public,
+                &sign(Purpose::Login, V2, &key(), "{}")
+            ),
+            Ok(())
+        );
     }
 
     #[test]
