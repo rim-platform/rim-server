@@ -213,6 +213,28 @@ impl TestCtx {
         build_test_provider(&self.conn).0
     }
 
+    /// Build the schema and the provider it runs on, recording every event the services emit.
+    pub fn build_recording(
+        &self,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+    ) -> (
+        rim_api::AppSchema,
+        std::sync::Arc<dyn AppServiceProvider>,
+        std::sync::Arc<RecordingBroadcaster>,
+    ) {
+        let events = std::sync::Arc::new(RecordingBroadcaster::default());
+        let (provider, observers) = build_test_provider_with(
+            &self.conn,
+            std::sync::Arc::clone(&events) as std::sync::Arc<dyn rim_services::events::Broadcaster>,
+        );
+        let schema = schema_for(
+            std::sync::Arc::clone(&provider),
+            observers,
+            registration_mode,
+        );
+        (schema, provider, events)
+    }
+
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
     /// and the test database.
     ///
@@ -229,19 +251,26 @@ impl TestCtx {
 /// Build a full [`AppSchema`][rim_api::AppSchema] backed by the given
 /// database connection and real service implementations.
 ///
-/// The storage backend is pointed at a temporary in-memory directory that is
-/// never actually written during tests (no file-upload paths are exercised by
-/// the registration resolver tests).
+/// Files are stored under a fixed temporary directory; only the plugin bundle
+/// tests write there.
 pub async fn build_test_schema(
     conn: &DatabaseConnection,
+    registration_mode: rim_services::auth::dto::RegistrationMode,
+) -> rim_api::AppSchema {
+    let (service_provider, observers) = build_test_provider(conn);
+    schema_for(service_provider, observers, registration_mode)
+}
+
+/// The schema over `service_provider`, wired with the observers it was built with.
+fn schema_for(
+    service_provider: std::sync::Arc<dyn AppServiceProvider>,
+    observers: Observers,
     registration_mode: rim_services::auth::dto::RegistrationMode,
 ) -> rim_api::AppSchema {
     use std::sync::Arc;
 
     use rim_api::RegistrationContext;
     use rim_services::auth::dto::{PreviewInviteRateLimiterToken, SignupRateLimiterToken};
-
-    let (service_provider, observers) = build_test_provider(conn);
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
         Arc::new(observers.clone()),
@@ -265,9 +294,34 @@ pub async fn build_test_schema(
     )
 }
 
+/// Every event emitted through it, in order.
+#[derive(Default)]
+pub struct RecordingBroadcaster(std::sync::Mutex<Vec<rim_services::events::WorkspaceEvent>>);
+
+#[allow(dead_code)]
+impl RecordingBroadcaster {
+    pub fn events(&self) -> Vec<rim_services::events::WorkspaceEvent> {
+        self.0.lock().expect("lock").clone()
+    }
+}
+
+impl rim_services::events::Broadcaster for RecordingBroadcaster {
+    fn broadcast(&self, event: rim_services::events::WorkspaceEvent) {
+        self.0.lock().expect("lock").push(event);
+    }
+}
+
 /// Build the real service provider (and the observers it was wired with) over `conn`.
 pub fn build_test_provider(
     conn: &DatabaseConnection,
+) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
+    build_test_provider_with(conn, std::sync::Arc::new(NoopBroadcaster))
+}
+
+/// Build the real service provider over `conn`, emitting events through `broadcaster`.
+pub fn build_test_provider_with(
+    conn: &DatabaseConnection,
+    broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
 ) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
     use std::sync::Arc;
 
@@ -445,7 +499,7 @@ pub fn build_test_provider(
         ),
     };
 
-    // No-op storage backend — file upload is not exercised here.
+    // Local storage in a fixed temporary directory; plugin bundle tests write to it.
     let tmp_dir = PathBuf::from("/tmp/rim_api_e2e_test_storage");
     std::fs::create_dir_all(&tmp_dir).ok();
     let storage_backend = Arc::new(rim_infra_services::file_storage::LocalFileStorage::new(
@@ -458,8 +512,7 @@ pub fn build_test_provider(
         1_073_741_824,
     ));
 
-    let broadcaster_inner = Arc::new(NoopBroadcaster);
-    let observers = Observers::new(broadcaster_inner as Arc<dyn rim_services::events::Broadcaster>);
+    let observers = Observers::new(broadcaster);
 
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,

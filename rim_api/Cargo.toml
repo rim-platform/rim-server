@@ -29,4 +29,5 @@ rim_auth = { path = "../rim_auth" }
 rim_identity = { path = "../rim_identity", features = ["testing"] }
 rim_infra_db = { path = "../rim_infra_db" }
 rim_infra_services = { path = "../rim_infra_services" }
+sha2 = "0.10.9"
 entity = { path = "../entity" }
