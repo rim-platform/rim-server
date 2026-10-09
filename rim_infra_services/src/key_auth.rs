@@ -52,6 +52,9 @@ const FAILURE_KEY: &str = "key_auth_failure";
 /// user row is locked, so the bound keeps one request's work small.
 const MAX_KEY_LOG_LEN: usize = 256;
 
+/// Longest `principalId` the public key log query looks up (a real one is 49 characters).
+const MAX_PRINCIPAL_ID_LEN: usize = 64;
+
 #[derive(Clone)]
 pub struct KeyAuthRepos {
     pub user_repo: Arc<dyn UserRepository>,
@@ -720,6 +723,10 @@ impl KeyAuthService for DefaultKeyAuthService {
 
     #[instrument(name = "key_auth.get_key_log", skip_all)]
     async fn get_key_log(&self, query: GetKeyLogQuery) -> ServiceResult<Vec<KeyLogEntryDto>> {
+        // A principal id is 49 characters; anything much longer is not one, and is not looked up.
+        if query.principal_id.len() > MAX_PRINCIPAL_ID_LEN {
+            return Ok(Vec::new());
+        }
         let Some(user_id) = self
             .repos
             .key_identity_repo

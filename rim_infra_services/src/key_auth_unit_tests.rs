@@ -688,6 +688,15 @@ mod tests {
             .await
             .unwrap();
         assert!(unknown.is_empty());
+        // Too long to be a principal id: not looked up at all.
+        let oversized = h
+            .svc
+            .get_key_log(GetKeyLogQuery {
+                principal_id: format!("{}{}", e.state.principal_id, "x".repeat(64)),
+            })
+            .await
+            .unwrap();
+        assert!(oversized.is_empty());
     }
 
     #[tokio::test]

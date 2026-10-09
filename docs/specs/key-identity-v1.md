@@ -260,8 +260,10 @@ Malformed or unverifiable statements fail with code `VALIDATION` and a short rea
 
 `keyLog` needs no session. The log is public (every server a person uses holds it), and a person
 who lost every device needs its head (`seq` and the hash of the last payload) to sign a recovery
-rotation. It answers `[]` for a principal no account here has, which tells no more than the
-anonymous rotation's errors do.
+rotation. It answers `[]` for a principal no account here has (and for anything longer than 64
+characters, which is not a principal id). It is not rate-limited: unlike the anonymous rotation,
+it checks no secret, and principal ids are 256-bit hashes that cannot be guessed, so answering
+whether one is enrolled here tells nothing a holder of the id does not already know.
 
 ## Plugin principal ids: `rimp0_` to `rimp1_`
 
@@ -310,9 +312,22 @@ offers recovery must read.
   sign-in screen, which offers "Sign in with this device" for every account this device holds a
   key for on this server. A `FORBIDDEN` answer says the device was revoked; the
   sign-in screen then offers to remove that device's keys from this computer.
+- **Statement version.** The app writes version 2 (tagged keys and signatures) and reads both.
+  Keys and signatures are opaque text outside the one module that signs and verifies, so a hybrid
+  algorithm is added there alone. A version 1 log (an identity enrolled by an older client) is
+  extended in version 2 by its next rotation.
 - **Identity rotation** keeps the recovery key and every device. The new identity key is stored as
-  pending before `rotateIdentityKey` is sent and promoted when the server accepts it; on the next
-  use a pending key that the server's head names is promoted, one it does not is dropped.
+  pending, with the `seq` its rotation creates, before `rotateIdentityKey` is sent. A verified log
+  whose head names it promotes it; a log that already holds that `seq` with another key drops it;
+  a log that ends before it (a stale copy, or the rotation still in flight) leaves it pending, and
+  a retry signs the same pending key again, so a rotation whose answer was lost never loses the
+  key it put on the server.
+- **Profile card.** Lists this server's URL as the one relay and the account's active devices. A
+  device is listed only if its certificate verifies against the replayed log at its `keySeq`, so
+  a server cannot add a key of its own to the card the identity key signs.
+- **Enrollment in flight.** While `enrollIdentityKey` has not answered, the server saying "not
+  enrolled" proves nothing, so nothing removes keys on that basis (closing Settings mid-way keeps
+  them; a later check removes them if the enrollment never landed).
 
 ### Recovery kit, v1
 
@@ -337,6 +352,11 @@ with `"signer": "recovery"` that keeps the same recovery key and names a new ide
 certificate for a new device at the new `seq`. It stores the new keys, sends `rotateIdentityKey`
 without a session, and signs in with the new device key. Every other device and session of the
 account is signed out by the server.
+
+Whether a recovery landed is read from the key log, not from the error: when `rotateIdentityKey`
+fails, the app fetches `keyLog` again. If the log ends at its rotation it signs in; if the log
+answers without it, the attempt's keys are removed and any keys this device held for the account
+before the attempt are put back; with no answer the keys stay for the next try.
 
 ## Deferred
 
