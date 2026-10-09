@@ -7,6 +7,7 @@ mod bootstrap_cmd;
 pub(crate) mod config;
 mod file_handlers;
 mod graphql_support;
+mod plugin_bundle_handlers;
 mod server;
 
 fn initialize() -> Option<LoggingHandle> {

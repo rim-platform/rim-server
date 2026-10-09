@@ -43,6 +43,7 @@ pub(crate) mod profile;
 pub(crate) mod skill_profile;
 pub(crate) mod workspace;
 pub(crate) mod workspace_feature;
+pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
 #[derive(MergedObject, Default)]
@@ -114,4 +115,5 @@ pub(crate) struct MutationGroup6(
 pub(crate) struct MutationGroup7(
     key_identity::KeyIdentityMutations,
     device_link::DeviceLinkMutations,
+    workspace_plugin::WorkspacePluginMutations,
 );

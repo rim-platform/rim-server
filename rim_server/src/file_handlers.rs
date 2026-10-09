@@ -85,13 +85,15 @@ fn is_mime_allowed(content_type: &str, allowed: &[&str]) -> bool {
 }
 
 /// Enforce CSRF validation for REST endpoints. Returns 403 on failure.
-fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
+pub(crate) fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
     validate_csrf_header(req)
         .map_err(|msg| HttpResponse::Forbidden().json(serde_json::json!({"error": msg})))
 }
 
 /// Require an authenticated user from the session cookie. Returns user_id or 401.
-async fn require_auth(req: &HttpRequest) -> Result<rim_core::user::model::UserId, HttpResponse> {
+pub(crate) async fn require_auth(
+    req: &HttpRequest,
+) -> Result<rim_core::user::model::UserId, HttpResponse> {
     let authenticator = req
         .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
         .map(|d| Arc::clone(d.get_ref()));

@@ -99,3 +99,68 @@ fn device_link_sdl_matches_the_contract() {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
 }
+
+/// `sdl` without its descriptions, whitespace collapsed to single spaces.
+fn compact_without_descriptions(sdl: &str) -> String {
+    let mut kept = Vec::new();
+    let mut in_block = false;
+    for line in sdl.lines().map(str::trim) {
+        let opens_or_closes_block = line.starts_with("\"\"\"");
+        let one_line_block = opens_or_closes_block && line.len() >= 6 && line.ends_with("\"\"\"");
+        if in_block {
+            in_block = !opens_or_closes_block && !line.ends_with("\"\"\"");
+            continue;
+        }
+        if one_line_block || (line.starts_with('"') && !opens_or_closes_block) {
+            continue;
+        }
+        if opens_or_closes_block {
+            in_block = true;
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The workspace plugin registry API, field for field.
+#[test]
+fn workspace_plugin_sdl_has_the_registry_api() {
+    let sdl = export_sdl(
+        test_service_provider(),
+        InMemoryBroadcaster::new(16),
+        test_presence_manager(),
+        test_typing_tracker(),
+        test_observers(),
+    );
+    let compact = compact_without_descriptions(&sdl);
+    for definition in [
+        "enum PluginRuntimeKind { DESKTOP_LOCAL_PROCESS WEB_SANDBOXED }",
+        "enum WorkspacePluginStatus { RECOMMENDED REQUIRED }",
+        "enum PluginSourceKind { BUNDLE GIT }",
+        "enum PluginSignatureStatus { VALID PUBLISHER_RECOVERED }",
+        "type PluginSource { kind: PluginSourceKind! bundleUrl: String bundleSha256: String \
+         bundleSize: Int gitUrl: String gitCommit: String gitTreeSha256: String }",
+        "type WorkspacePlugin { id: ID! serverId: ID! pluginId: String! version: String! \
+         displayName: String! runtimeKind: PluginRuntimeKind! status: WorkspacePluginStatus! \
+         source: PluginSource! manifest: String! statement: SignedStatement! \
+         publisherPrincipalId: String! publisherName: String! publisherKeySeq: Int! \
+         publisherKeyLog: [SignedStatement!]! signatureStatus: PluginSignatureStatus! \
+         approvedBy: User approvedAt: DateTime! updatedAt: DateTime! }",
+        "input AddWorkspacePluginInput { serverId: ID! statement: SignedStatementInput! \
+         status: WorkspacePluginStatus! bundleUrl: String \
+         publisherKeyLog: [SignedStatementInput!] }",
+        "input UpdateWorkspacePluginInput { serverId: ID! pluginId: String! \
+         statement: SignedStatementInput status: WorkspacePluginStatus bundleUrl: String \
+         publisherKeyLog: [SignedStatementInput!] }",
+        "workspacePlugins(serverId: ID!): [WorkspacePlugin!]!",
+        "addWorkspacePlugin(input: AddWorkspacePluginInput!): WorkspacePlugin!",
+        "updateWorkspacePlugin(input: UpdateWorkspacePluginInput!): WorkspacePlugin!",
+        "removeWorkspacePlugin(serverId: ID!, pluginId: String!): Boolean!",
+    ] {
+        assert!(compact.contains(definition), "SDL lacks `{definition}`");
+    }
+}

@@ -8,6 +8,7 @@ use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf_for_batch, extract_actor_and_session_id,
     internal_graphql_error_response,
 };
+use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
 use rim_api::AppSchema;
@@ -62,6 +63,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let ingest_token_service = runtime.ingest_token_service;
     let incident_service = runtime.incident_service;
     let workspace_feature_service = runtime.workspace_feature_service;
+    let plugin_bundle_service = runtime.plugin_bundle_service;
     let alert_rate_limiter = runtime.alert_rate_limiter;
     let alert_max_body_bytes =
         crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
@@ -109,6 +111,14 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .service(
                 web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
             )
+            .service(
+                web::resource("/api/plugin-bundles/{server_id}")
+                    .route(web::post().to(handle_plugin_bundle_upload)),
+            )
+            .service(
+                web::resource("/api/plugin-bundles/{server_id}/{sha256}")
+                    .route(web::get().to(handle_plugin_bundle_download)),
+            )
             .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)))
             .service(
                 web::resource("/api/hooks/alerts/generic")
@@ -138,6 +148,7 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&ingest_token_service)))
             .app_data(web::Data::new(Arc::clone(&incident_service)))
             .app_data(web::Data::new(Arc::clone(&workspace_feature_service)))
+            .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))
             .app_data(web::Data::new(Arc::clone(&alert_rate_limiter)))
             .app_data(web::Data::new(alert_max_body_bytes))
             .app_data(web::Data::new(handler_cfg))

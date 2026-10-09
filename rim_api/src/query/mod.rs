@@ -46,6 +46,7 @@ pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod workspace;
 pub(crate) mod workspace_feature;
+pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
 #[derive(MergedObject, Default)]
@@ -118,4 +119,5 @@ pub(crate) struct QueryGroup7(
     notification::NotificationQueries,
     key_identity::KeyIdentityQueries,
     device_link::DeviceLinkQueries,
+    workspace_plugin::WorkspacePluginQueries,
 );
