@@ -1291,6 +1291,118 @@ mod tests {
         assert!(rows.is_empty());
     }
 
+    /// The author's message in a DM `actor` is not in, deleted by `actor` holding `role`, with
+    /// or without a verified franked report of it; returns the result and the audit rows.
+    async fn delete_outside_as(
+        role: rim_core::server_member::model::ServerMemberRole,
+        verified_report: bool,
+    ) -> (
+        Result<(), ServiceError>,
+        Vec<rim_services::audit::dto::AuditLogEntryDto>,
+    ) {
+        let server_id = ServerId::new();
+        let mut conv = conversation(server_id);
+        conv.conversation_type = rim_core::conversation::model::ConversationType::Direct;
+        conv.encrypted_at = Some(chrono::Utc::now());
+        let conv_id = conv.id;
+        let author = UserId::new();
+        let actor = UserId::new();
+        let msg = message(author, conv_id);
+        let msg_id = msg.id;
+
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(move |_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    role,
+                )))
+            });
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo.expect_get_by_id().returning(move |_| {
+            let c = conv.clone();
+            Box::pin(async move { Ok(Some(c)) })
+        });
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        let mut message_repo = MockMessageRepository::new();
+        message_repo.expect_get_by_id().returning(move |_| {
+            let m = msg.clone();
+            Box::pin(async move { Ok(Some(m)) })
+        });
+        message_repo
+            .expect_soft_delete_message()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let mut moderation_repo = rim_core::moderation::repository::MockModerationRepository::new();
+        moderation_repo
+            .expect_has_verified_report()
+            .withf(move |s, m| *s == server_id && *m == msg_id)
+            .returning(move |_, _| Box::pin(async move { Ok(verified_report) }));
+
+        let audit = Arc::new(RecordingAudit::default());
+        let svc = DefaultMessageService::new(
+            MessageRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                server_member_repo: Arc::new(server_member_repo),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            test_observers(),
+        )
+        .with_audit_log_service(
+            Arc::clone(&audit) as Arc<dyn rim_services::audit::service::AuditLogService>
+        )
+        .with_moderation_repo(Arc::new(moderation_repo));
+        let res = svc
+            .delete_message(DeleteMessageCmd {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id: conv_id,
+                message_id: msg_id,
+                hard: false,
+            })
+            .await;
+        let rows = audit.0.lock().expect("lock").clone();
+        (res, rows)
+    }
+
+    #[tokio::test]
+    async fn a_verified_report_lets_moderators_delete_outside_the_conversation() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        for role in [ServerMemberRole::Owner, ServerMemberRole::Moderator] {
+            let (res, rows) = delete_outside_as(role, true).await;
+            res.unwrap_or_else(|e| panic!("{role:?} delete: {e:?}"));
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].command_id, "admin.delete_message");
+
+            let (res, rows) = delete_outside_as(role, false).await;
+            assert!(
+                matches!(res, Err(ServiceError::PermissionDenied)),
+                "{role:?} without a report"
+            );
+            assert!(rows.is_empty());
+        }
+        for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+            let (res, rows) = delete_outside_as(role, true).await;
+            assert!(
+                matches!(res, Err(ServiceError::PermissionDenied)),
+                "{role:?}"
+            );
+            assert!(rows.is_empty());
+        }
+    }
+
     // ── Track 1.3: notifications after commit, best-effort ──
 
     /// A failing notification service never fails the send; it is called once, after the

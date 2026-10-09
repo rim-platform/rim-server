@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::conversation::model::ConversationId;
 use crate::message::model::MessageId;
@@ -110,6 +111,18 @@ pub struct MessageReport {
     pub resolved_by: Option<UserId>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Set for a franked report of an encrypted message, whose content the server verified.
+    pub franked: Option<FrankedReport>,
+}
+
+/// What a verified franked report holds besides the report itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrankedReport {
+    pub verified_at: DateTime<Utc>,
+    /// The exact content bytes the sender committed to; `None` once retention cleared them.
+    pub content: Option<Vec<u8>>,
+    /// The sender's client device id the receipt covered.
+    pub sender_device_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +133,14 @@ pub struct NewMessageReport {
     pub reporter_user_id: UserId,
     pub reason: String,
     /// The verified content of a franked report of an encrypted message.
-    pub franked_content: Option<Vec<u8>>,
+    pub franked: Option<NewFrankedReport>,
+}
+
+/// The verified content of a new franked report and the sender device its receipt covered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewFrankedReport {
+    pub content: Vec<u8>,
+    pub sender_device_id: Uuid,
 }
 
 #[cfg(test)]

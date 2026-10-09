@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
+use crate::message::model::MessageId;
 use crate::moderation::model::{
     MemberTimeout, MessageReport, MessageReportId, MessageReportStatus, NewMessageReport, ServerBan,
 };
@@ -71,6 +72,13 @@ pub trait ModerationRepository: Send + Sync {
     async fn create_report(&self, report: NewMessageReport) -> RepoResult<MessageReport>;
 
     async fn get_report(&self, id: MessageReportId) -> RepoResult<Option<MessageReport>>;
+
+    /// Whether `message_id` has a verified franked report in `server_id`.
+    async fn has_verified_report(
+        &self,
+        server_id: ServerId,
+        message_id: MessageId,
+    ) -> RepoResult<bool>;
 
     /// Reports of a workspace, optionally filtered by status, ordered `created_at ASC, id ASC`
     /// with the standard cursor semantics (`docs/pagination.md`).

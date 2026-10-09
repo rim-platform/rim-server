@@ -1,5 +1,5 @@
 use crate::{message_report, sea_orm_active_enums};
-use rim_core::moderation::model::{MessageReport, MessageReportStatus};
+use rim_core::moderation::model::{FrankedReport, MessageReport, MessageReportStatus};
 
 impl From<message_report::Model> for MessageReport {
     fn from(m: message_report::Model) -> Self {
@@ -14,6 +14,11 @@ impl From<message_report::Model> for MessageReport {
             resolved_by: m.resolved_by.map(Into::into),
             resolved_at: m.resolved_at.map(Into::into),
             created_at: m.created_at.into(),
+            franked: m.franking_verified_at.map(|verified_at| FrankedReport {
+                verified_at: verified_at.into(),
+                content: m.franked_content,
+                sender_device_id: m.franked_sender_device_id,
+            }),
         }
     }
 }

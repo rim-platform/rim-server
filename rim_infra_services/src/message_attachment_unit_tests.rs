@@ -79,6 +79,11 @@ mod tests {
                 pending_since: chrono::DateTime<chrono::Utc>,
                 max_file_size: i64,
             ) -> RepoResult<AttachmentUsage>;
+            async fn find_stored_by_blob_sha256(
+                &self,
+                server_id: ServerId,
+                blob_sha256: Vec<u8>,
+            ) -> RepoResult<Option<MessageAttachment>>;
             async fn find_ids_with_status_before(
                 &self,
                 statuses: Vec<String>,

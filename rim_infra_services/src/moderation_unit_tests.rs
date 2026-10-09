@@ -10,8 +10,10 @@ mod tests {
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId};
     use rim_core::message::repository::MockMessageRepository;
+    use rim_core::message_attachment::model::{MessageAttachment, MessageAttachmentId};
+    use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
     use rim_core::moderation::model::{
-        MemberTimeout, MessageReport, MessageReportId, MessageReportStatus,
+        FrankedReport, MemberTimeout, MessageReport, MessageReportId, MessageReportStatus,
     };
     use rim_core::moderation::repository::MockModerationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -24,8 +26,9 @@ mod tests {
     use rim_services::audit::service::AuditLogService;
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::moderation::command::{
-        BanMemberCmd, ClearTimeoutCmd, KickMemberCmd, ReportMessageCmd, ReportOutcome,
-        ResolveReportCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+        AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery,
+        KickMemberCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd, SetMemberRoleCmd,
+        SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
     };
     use rim_services::moderation::service::ModerationService;
     use rim_services::{Actor, ServiceError, ServiceResult};
@@ -152,6 +155,12 @@ mod tests {
         events: Arc<RecordingBroadcaster>,
         conversation: Option<Conversation>,
         message: Option<Message>,
+        /// Whether every moderator is a member of every conversation.
+        conversation_member: bool,
+        /// Attachments of the fixture's message.
+        attachments: Vec<MessageAttachment>,
+        /// Stored attachments anywhere in the workspace, found by blob hash.
+        workspace_attachments: Vec<MessageAttachment>,
     }
 
     impl Fx {
@@ -163,6 +172,9 @@ mod tests {
                 events: Arc::default(),
                 conversation: None,
                 message: None,
+                conversation_member: true,
+                attachments: Vec::new(),
+                workspace_attachments: Vec::new(),
             }
         }
 
@@ -238,9 +250,29 @@ mod tests {
             conversation_member_repo
                 .expect_list_member_ids()
                 .returning(|_| Box::pin(async { Ok(vec![]) }));
+            let is_member = self.conversation_member;
             conversation_member_repo
                 .expect_is_member()
-                .returning(|_, _| Box::pin(async { Ok(true) }));
+                .returning(move |_, _| Box::pin(async move { Ok(is_member) }));
+
+            let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+            let attachments = self.attachments.clone();
+            message_attachment_repo
+                .expect_get_attachments_for_message()
+                .returning(move |_| {
+                    let a = attachments.clone();
+                    Box::pin(async move { Ok(a) })
+                });
+            let stored = self.workspace_attachments.clone();
+            message_attachment_repo
+                .expect_find_stored_by_blob_sha256()
+                .returning(move |_, hash| {
+                    let found = stored
+                        .iter()
+                        .find(|a| a.blob_sha256.as_deref() == Some(hash.as_slice()))
+                        .cloned();
+                    Box::pin(async move { Ok(found) })
+                });
 
             let mut message_repo = MockMessageRepository::new();
             let message = self.message.clone();
@@ -270,6 +302,7 @@ mod tests {
                     conversation_repo: Arc::new(conversation_repo),
                     conversation_member_repo: Arc::new(conversation_member_repo),
                     message_repo: Arc::new(message_repo),
+                    message_attachment_repo: Arc::new(message_attachment_repo),
                     moderation_repo: Arc::new(moderation_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
@@ -686,6 +719,7 @@ mod tests {
             resolved_by: None,
             resolved_at: None,
             created_at: Utc::now(),
+            franked: None,
         }
     }
 
@@ -815,6 +849,278 @@ mod tests {
         assert_eq!(
             svc.active_timeout(server_id, member).await.expect("lookup"),
             Some(until)
+        );
+    }
+
+    // ── Franked reports ─────────────────────────────────────────────────
+
+    /// The verified content of appendix A.4, which names the A.3 attachment.
+    const FRANKED_CONTENT: &str = r#"{"v":1,"type":"message","id":"0199d1a0-0000-7000-8000-000000000002","rev":0,"threadRootId":null,"body":"hi <@rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo>","mentions":["rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo"],"mentionAll":false,"replyTo":null,"forwardedFrom":null,"attachments":[{"blobSha256":"EHFcZ6hUOIdDi32ptdrCXM2PTHQwKF46-0Ls56yQrac","secret":"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8","name":"hello.txt","mime":"text/plain","size":18}],"linkPreviews":[]}"#;
+
+    /// SHA-256 of the A.3 blob.
+    fn a3_blob_sha256() -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode("EHFcZ6hUOIdDi32ptdrCXM2PTHQwKF46-0Ls56yQrac")
+            .expect("base64url")
+    }
+
+    fn encrypted_dm(server_id: ServerId) -> Conversation {
+        Conversation {
+            conversation_type: ConversationType::Direct,
+            title: None,
+            encrypted_at: Some(Utc::now()),
+            ..channel(server_id)
+        }
+    }
+
+    fn franked_report_of(fx: &Fx, message: &Message, reporter: UserId) -> MessageReport {
+        MessageReport {
+            franked: Some(FrankedReport {
+                verified_at: Utc::now(),
+                content: Some(FRANKED_CONTENT.as_bytes().to_vec()),
+                sender_device_id: Some(uuid::Uuid::from_u128(1)),
+            }),
+            ..report_of(fx, message, reporter)
+        }
+    }
+
+    fn attachment(message: &Message, blob_sha256: Vec<u8>, storage_url: &str) -> MessageAttachment {
+        MessageAttachment {
+            id: MessageAttachmentId::new(),
+            storage_url: storage_url.to_string(),
+            message_id: message.id,
+            file_size: 34,
+            file_name: "encrypted".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            metadata: None,
+            blob_sha256: Some(blob_sha256),
+        }
+    }
+
+    /// A moderation repository that holds one report.
+    fn holding(report: &MessageReport) -> MockModerationRepository {
+        let mut repo = MockModerationRepository::new();
+        let stored = report.clone();
+        repo.expect_get_report().returning(move |id| {
+            let r = Some(stored.clone()).filter(|r| r.id == id);
+            Box::pin(async move { Ok(r) })
+        });
+        repo
+    }
+
+    #[tokio::test]
+    async fn a_moderator_outside_the_conversation_sees_a_verified_report() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = encrypted_dm(fx.server_id);
+        let mut message = message_in(conversation.id, author);
+        message.text = None;
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        let report = franked_report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+        let get = |actor, server_id| GetReportQuery {
+            actor: Actor::new(actor),
+            server_id,
+            report_id: report.id,
+        };
+
+        assert!(matches!(
+            svc.get_report(get(member, fx.server_id)).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        let other = ServerId::new();
+        assert!(matches!(
+            svc.get_report(get(moderator, other)).await,
+            Err(ServiceError::PermissionDenied | ServiceError::NotFound)
+        ));
+        assert!(fx.audited().is_empty());
+
+        let dto = svc
+            .get_report(get(moderator, fx.server_id))
+            .await
+            .expect("report");
+        assert!(!dto.message_readable);
+        assert_eq!(dto.message_text, None);
+        assert_eq!(dto.message_author_id, Some(author));
+        assert_eq!(dto.message_sent_at, Some(message.sent_at));
+        assert!(dto.franking_verified_at.is_some());
+        assert_eq!(dto.franked_sender_device_id, Some(uuid::Uuid::from_u128(1)));
+        assert_eq!(
+            dto.franked_content.as_deref(),
+            Some(FRANKED_CONTENT.as_bytes())
+        );
+        assert_eq!(dto.franked_content_expires_at, None, "open: kept");
+        assert_eq!(fx.audited(), [audit_ids::REPORT_VIEWED]);
+        let entry = fx.audit.0.lock().expect("lock")[0].clone();
+        assert_eq!(entry.initiator, "e2ee");
+        assert_eq!(
+            entry.args_redacted,
+            serde_json::json!({
+                "report_id": report.id.to_string(),
+                "conversation_id": message.conversation_id.to_string(),
+                "message_id": message.id.to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_leave_out_the_verified_content_and_resolution_starts_its_retention() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = encrypted_dm(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        let report = franked_report_of(&fx, &message, member);
+        let resolved_at = Utc::now();
+        let resolved = MessageReport {
+            status: MessageReportStatus::Resolved,
+            resolved_by: Some(moderator),
+            resolved_at: Some(resolved_at),
+            ..report.clone()
+        };
+        let mut repo = holding(&report);
+        repo.expect_resolve_report().returning(move |_, _, _, _| {
+            let r = resolved.clone();
+            Box::pin(async move { Ok(r) })
+        });
+        let svc = fx.service(repo);
+
+        let dto = svc
+            .resolve_report(ResolveReportCmd {
+                actor: Actor::new(moderator),
+                server_id: fx.server_id,
+                report_id: report.id,
+                outcome: ReportOutcome::Resolved,
+            })
+            .await
+            .expect("resolve");
+        assert_eq!(dto.franked_content, None);
+        assert_eq!(dto.message_author_id, Some(author));
+        assert!(dto.franking_verified_at.is_some());
+        assert_eq!(
+            dto.franked_content_expires_at,
+            Some(resolved_at + Duration::days(90))
+        );
+        assert_eq!(fx.audited(), [audit_ids::RESOLVE_REPORT]);
+    }
+
+    #[tokio::test]
+    async fn a_plaintext_report_is_not_audited_as_viewed() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = channel(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        let report = report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+
+        let dto = svc
+            .get_report(GetReportQuery {
+                actor: Actor::new(moderator),
+                server_id: fx.server_id,
+                report_id: report.id,
+            })
+            .await
+            .expect("report");
+        assert_eq!(dto.message_text.as_deref(), Some("bad words"));
+        assert_eq!(dto.franking_verified_at, None);
+        assert_eq!(dto.franked_content, None);
+        assert!(fx.audited().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reported_attachment_is_served_only_to_moderators_and_only_when_named() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = encrypted_dm(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        fx.attachments = vec![
+            attachment(&message, vec![7; 32], "uploads/own"),
+            attachment(&message, vec![8; 32], "pending://upload"),
+        ];
+        let elsewhere = message_in(message.conversation_id, author);
+        fx.workspace_attachments = vec![attachment(&elsewhere, a3_blob_sha256(), "uploads/a3")];
+        let report = franked_report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+        let ask = |actor, blob_sha256| AuthorizeReportAttachmentQuery {
+            actor_user_id: actor,
+            report_id: report.id,
+            blob_sha256,
+        };
+
+        let own = svc
+            .authorize_report_attachment(ask(moderator, vec![7; 32]))
+            .await
+            .expect("own attachment");
+        assert_eq!(own.storage_key, "uploads/own");
+        let named = svc
+            .authorize_report_attachment(ask(moderator, a3_blob_sha256()))
+            .await
+            .expect("named by the verified content");
+        assert_eq!(named.storage_key, "uploads/a3");
+        for (actor, blob) in [
+            (member, vec![7; 32]),
+            (author, a3_blob_sha256()),
+            (moderator, vec![8; 32]),
+            (moderator, vec![9; 32]),
+        ] {
+            assert!(matches!(
+                svc.authorize_report_attachment(ask(actor, blob)).await,
+                Err(ServiceError::NotFound)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plaintext_report_serves_no_attachment() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = channel(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.attachments = vec![attachment(&message, vec![7; 32], "uploads/own")];
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        let report = report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+        assert!(matches!(
+            svc.authorize_report_attachment(AuthorizeReportAttachmentQuery {
+                actor_user_id: moderator,
+                report_id: MessageReportId::new(),
+                blob_sha256: vec![7; 32],
+            })
+            .await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(matches!(
+            svc.authorize_report_attachment(AuthorizeReportAttachmentQuery {
+                actor_user_id: moderator,
+                report_id: report.id,
+                blob_sha256: vec![7; 32],
+            })
+            .await,
+            Err(ServiceError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn content_blob_hashes_reads_the_attachment_entries() {
+        assert_eq!(
+            crate::moderation::content_blob_hashes(FRANKED_CONTENT.as_bytes()),
+            vec![a3_blob_sha256()]
+        );
+        assert!(crate::moderation::content_blob_hashes(b"not json").is_empty());
+        assert!(
+            crate::moderation::content_blob_hashes(br#"{"attachments":[{"blobSha256":"!"}]}"#)
+                .is_empty()
         );
     }
 }

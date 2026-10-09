@@ -166,7 +166,8 @@ impl DefaultAppServiceProvider {
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
             .with_notification_service(Arc::clone(&notification_service))
-            .with_e2ee(Arc::clone(&repos.e2ee_repo), Arc::clone(&mls_wire)),
+            .with_e2ee(Arc::clone(&repos.e2ee_repo), Arc::clone(&mls_wire))
+            .with_moderation_repo(Arc::clone(&repos.moderation_repo)),
         );
         let e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService> = Arc::new(
             crate::e2ee::DefaultE2eeService::new(

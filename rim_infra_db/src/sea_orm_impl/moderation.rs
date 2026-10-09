@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::{message_report, server_ban, server_member_timeout};
+use rim_core::message::model::MessageId;
 use rim_core::moderation::model::{
     MemberTimeout, MessageReport, MessageReportId, MessageReportStatus, NewMessageReport, ServerBan,
 };
@@ -11,7 +12,9 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 use sea_orm::sea_query::{Alias, Expr, ExprTrait, OnConflict};
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -185,8 +188,9 @@ impl ModerationRepository for SeaOrmModerationRepository {
             message_id: Set(report.message_id.into()),
             reporter_user_id: Set(report.reporter_user_id.into()),
             reason: Set(report.reason),
-            franking_verified_at: Set(report.franked_content.as_ref().map(|_| Utc::now().into())),
-            franked_content: Set(report.franked_content),
+            franking_verified_at: Set(report.franked.as_ref().map(|_| Utc::now().into())),
+            franked_sender_device_id: Set(report.franked.as_ref().map(|f| f.sender_device_id)),
+            franked_content: Set(report.franked.map(|f| f.content)),
             status: Set(MessageReportStatus::Open.into()),
             resolved_by: Set(None),
             resolved_at: Set(None),
@@ -205,6 +209,21 @@ impl ModerationRepository for SeaOrmModerationRepository {
             .await
             .map_err(map_db_err)?;
         Ok(model.map(Into::into))
+    }
+
+    async fn has_verified_report(
+        &self,
+        server_id: ServerId,
+        message_id: MessageId,
+    ) -> RepoResult<bool> {
+        let count = message_report::Entity::find()
+            .filter(message_report::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(message_report::Column::MessageId.eq::<Uuid>(message_id.into()))
+            .filter(message_report::Column::FrankingVerifiedAt.is_not_null())
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(count > 0)
     }
 
     async fn list_reports(
