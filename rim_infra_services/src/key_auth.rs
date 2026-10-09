@@ -464,6 +464,7 @@ impl DefaultKeyAuthService {
     /// Turn a remote user into the local account a key-only signup creates: their stored log
     /// must be a prefix of the presented one, which extends it; the presented device is reused
     /// when it is stored already. Memberships stay.
+    #[allow(clippy::too_many_arguments)]
     async fn adopt_remote(
         repos: &KeyAuthRepos,
         user_id: UserId,

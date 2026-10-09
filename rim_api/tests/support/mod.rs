@@ -291,6 +291,7 @@ fn schema_for(
             preview_rate_limiter: Arc::new(PreviewInviteRateLimiterToken),
             signup_rate_limiter: Arc::new(SignupRateLimiterToken),
         },
+        None,
     )
 }
 

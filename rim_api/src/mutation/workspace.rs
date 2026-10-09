@@ -14,6 +14,7 @@ pub(crate) struct WorkspaceMutations;
 impl WorkspaceMutations {
     async fn create_server(&self, ctx: &Context<'_>, input: CreateServerInput) -> Result<Server> {
         let actor = require_actor(ctx)?;
+        crate::federation::ensure_may_create_workspace(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn ServerService>>()?;
         let server = svc

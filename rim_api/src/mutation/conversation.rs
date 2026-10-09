@@ -27,18 +27,29 @@ impl ConversationMutations {
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
 
+        let remote_ids = remote_member_ids(ctx, actor, server_id, &input).await?;
         let participants = if input.is_channel.unwrap_or(false) {
             rim_services::conversation::types::ConversationParticipants::Channel
-        } else if let Some(other_user_id) = input.other_user_id {
+        } else if let Some(other_user_id) = &input.other_user_id {
+            if !remote_ids.is_empty() {
+                return Err(Error::new(
+                    "a DM names otherUserId or one remote member, not both",
+                ));
+            }
             rim_services::conversation::types::ConversationParticipants::DirectMessage {
-                other_user_id: parse_uuid_id::<rim_core::user::model::UserId>(&other_user_id)?,
+                other_user_id: parse_uuid_id::<rim_core::user::model::UserId>(other_user_id)?,
+            }
+        } else if input.member_ids.is_none() && remote_ids.len() == 1 {
+            rim_services::conversation::types::ConversationParticipants::DirectMessage {
+                other_user_id: remote_ids[0],
             }
         } else {
-            let member_ids = input.member_ids.unwrap_or_default();
-            let mut ids = Vec::with_capacity(member_ids.len());
+            let member_ids = input.member_ids.clone().unwrap_or_default();
+            let mut ids = Vec::with_capacity(member_ids.len() + remote_ids.len());
             for id in member_ids {
                 ids.push(parse_uuid_id::<rim_core::user::model::UserId>(&id)?);
             }
+            ids.extend(remote_ids);
             rim_services::conversation::types::ConversationParticipants::Group { member_ids: ids }
         };
 
@@ -53,6 +64,18 @@ impl ConversationMutations {
             })
             .await
             .map_err(map_service_error)?;
+
+        if let Some(predecessor) = input.predecessor {
+            let federation = crate::federation::relay(ctx)?;
+            let predecessor_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+                &predecessor.conversation_id,
+            )?;
+            federation
+                .host
+                .set_predecessor(conv.id, predecessor.host_server_id, predecessor_id.into())
+                .await
+                .map_err(map_service_error)?;
+        }
 
         Ok(conv.into())
     }
@@ -341,6 +364,13 @@ pub struct CreateConversationInput {
     /// DMs and groups only: end-to-end encrypted from creation. Every member needs a device set
     /// up for encryption. Defaults to false.
     pub encrypted: Option<bool>,
+
+    /// People from other servers, in the direct space only. With no `otherUserId` or
+    /// `memberIds` and one remote member, the conversation is a DM with them.
+    pub remote_members: Option<Vec<crate::types::RemoteMemberInput>>,
+
+    /// The conversation this one succeeds, when its home is gone.
+    pub predecessor: Option<crate::types::PredecessorInput>,
 }
 
 #[derive(InputObject)]
@@ -373,4 +403,56 @@ struct MuteConversationInput {
 struct UnmuteConversationInput {
     server_id: ID,
     conversation_id: ID,
+}
+
+/// The users for a new conversation's remote members: each fetched from their relays and made
+/// a member of the direct space. Remote members need the direct space and a caller with a
+/// published profile card, which their relays show in the request inbox.
+async fn remote_member_ids(
+    ctx: &Context<'_>,
+    actor: rim_core::user::model::UserId,
+    server_id: rim_core::server::model::ServerId,
+    input: &CreateConversationInput,
+) -> Result<Vec<rim_core::user::model::UserId>> {
+    let members = match &input.remote_members {
+        Some(members) if !members.is_empty() => members,
+        _ => return Ok(Vec::new()),
+    };
+    let federation = crate::federation::relay(ctx)?;
+    if server_id != federation.host.direct_space_id() {
+        return Err(Error::new(
+            "people from other servers join conversations in the direct space",
+        ));
+    }
+    let key_auth =
+        ctx.data::<std::sync::Arc<dyn rim_services::key_auth::service::KeyAuthService>>()?;
+    let identity = key_auth
+        .get_my_key_identity(rim_services::key_auth::command::GetMyKeyIdentityQuery {
+            actor: Actor::new(actor),
+        })
+        .await
+        .map_err(map_service_error)?;
+    if identity.profile_card.is_none() {
+        return Err(Error::new(
+            "publish a profile card before starting a conversation with someone on another server",
+        ));
+    }
+    let mut ids = Vec::with_capacity(members.len());
+    for member in members {
+        let id = federation
+            .host
+            .ensure_remote_member(
+                Actor::new(actor),
+                rim_services::host::dto::RemoteMemberRef {
+                    principal_id: member.principal_id.clone(),
+                    relay_urls: member.relay_urls.clone(),
+                },
+            )
+            .await
+            .map_err(map_service_error)?;
+        if id != actor && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }

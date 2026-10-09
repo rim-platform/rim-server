@@ -120,4 +120,72 @@ impl Subscription {
             user_id: actor,
         })
     }
+
+    /// Host events queued for the session's device on this relay, above `after` (the device's
+    /// cursor when omitted), then live ones, as JSON strings:
+    /// `{"type":"RelayItem","id","hostServerId","workspaceId","envelope"}`, and the
+    /// `DmRequestReceived` and `QueueOverflow` notices.
+    async fn relay_stream(
+        &self,
+        ctx: &Context<'_>,
+        after: Option<ID>,
+    ) -> Result<impl futures_util::Stream<Item = String>> {
+        let caller = crate::auth_context::require_mls_caller(ctx)?;
+        if caller.device_key_id.is_none() {
+            return Err(
+                Error::new("this session is not bound to a device").extend_with(|_, e| {
+                    e.set("code", Value::from("FORBIDDEN"));
+                }),
+            );
+        }
+        let relay = Arc::clone(&crate::federation::relay(ctx)?.relay);
+        let mut after = after
+            .as_ref()
+            .map(crate::query::relay::parse_item_id)
+            .transpose()?;
+        let user_id = caller.actor.user_id;
+        let mut notices = relay.subscribe();
+        Ok(async_stream::stream! {
+            loop {
+                loop {
+                    let page = match relay.relay_items(caller, after, RELAY_STREAM_PAGE).await {
+                        Ok(page) => page,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "relay stream read failed");
+                            return;
+                        }
+                    };
+                    for item in &page.items {
+                        after = Some(item.id);
+                        yield item.stream_json();
+                    }
+                    if !page.has_more {
+                        break;
+                    }
+                }
+                loop {
+                    let notice = tokio::select! {
+                        notice = notices.recv() => notice,
+                        () = tokio::time::sleep(RELAY_STREAM_POLL) => break,
+                    };
+                    match notice {
+                        Ok(notice) if notice.user_id() == user_id => {
+                            if let Some(json) = notice.stream_json() {
+                                yield json;
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    }
+                }
+            }
+        })
+    }
 }
+
+/// Items read per page by `relayStream`.
+const RELAY_STREAM_PAGE: i64 = 200;
+/// How long `relayStream` waits for a notice before reading the queue again.
+const RELAY_STREAM_POLL: std::time::Duration = std::time::Duration::from_secs(30);
