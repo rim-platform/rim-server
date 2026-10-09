@@ -1,7 +1,7 @@
 # Track B2 — Alert Ingestion Webhooks (implementation spec)
 
 **Author:** iron-man · **Implementer:** hulk · **Requested by:** nick-fury
-**Priority:** second in Track B (after B1). **Prereq:** `track-b-dbtests-loud-skip-fix.md`.
+**Priority:** second in Track B (after B1). **Prereq:** `track-b-dbtests-loud-skip-fix.md` (done: db-tests panic without `DATABASE_URL`; spec deleted 2026-10-09).
 **Touches incidents** — note the pre-existing red: 2 `incident_repo` db-tests currently fail on
 `idx_incident_active_conversation` due to an unfinished April WIP refactor in `incident.rs`. That is
 **not** caused by this work; do not fold its fix in here, but be aware your create-or-update path

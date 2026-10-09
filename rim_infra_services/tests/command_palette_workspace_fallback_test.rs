@@ -1,4 +1,6 @@
-//! Palette-path integration tests — `command-context-workspace-fallback` spec §7.3.
+//! Palette-path integration tests from the `command-context-workspace-fallback` spec §7.3
+//! (`docs/specs/command-context-workspace-fallback-2026-04-30.md`, deleted once implemented;
+//! see git history).
 //!
 //! These tests lock the palette code path for the two commands that prompted
 //! the bug report (`chat.list_channels` and `chat.list_members`):

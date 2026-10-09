@@ -3,7 +3,7 @@
 _Spec by iron-man, 2026-07-13. Requested by nick-fury, ratified by Jakub (CEO).
 Implements ROADMAP Track C2 (coupled to Track D), pre-designed in
 `docs/specs/track-c1-oncall.md` §10.1 FLAG E ("C1 registers, C2 fuses").
-Context: `docs/next-steps-2026-07.md` §"Track C2 — the moat",
+Context: the 2026-07 handoff note (`docs/next-steps-2026-07.md`, since deleted) §"Track C2 — the moat",
 `docs/research/mattermost-playbooks-teardown-2026-07-10.md`._
 
 **What ships:** the four C1 lifecycle commands (`oncall.who`, `oncall.take_shift`,

@@ -43,7 +43,6 @@ The registration redesign + post-review hardening pass is complete and sealed. B
 - **Atomic revoke methods** — `revoke` in `SeaOrmBootstrapTokenRepository` and `SeaOrmInstanceInviteRepository` does read-then-update (two round-trips). Could be single atomic `UPDATE ... SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`. Mirror the C1 / M4 hardening pattern. Hulk flagged this during Workstream A. Concurrent-revoke test alongside.
 - **`list_active` pagination cap** — neither `bootstrap_token::list_active` nor `instance_invite::list_active` has a cursor or hard cap. Operator with thousands of active invites would get unbounded responses. Add cursor pagination per the project's `(timestamp, id)` convention.
 - **Frontend spec §10 title cosmetic** — "Open questions for Jakub" header with zero questions inside (vision flagged). Pure polish; if doing a future spec polish round, consider rename to "Resolved questions" or fold into a closing notes section. Sealed spec, so this would be a new ADR-style note rather than an in-place edit.
-- **Architecture working memo** — `docs/architecture/registration-redesign-hardening-2026-04-28.md` (the session's working memo) is still in present-tense ("Delete...", "Add..."). Not a sealed spec, so no rule against editing. Either flip to past-tense / DONE markers or leave as a working artifact.
 
 ## Resume prompt for next session
 

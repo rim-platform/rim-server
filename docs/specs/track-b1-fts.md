@@ -2,7 +2,7 @@
 
 **Author:** iron-man · **Implementer:** hulk · **Requested by:** nick-fury
 **Priority:** first in Track B — Track C (grounded AI recall) depends on real search.
-**Prereq:** `track-b-dbtests-loud-skip-fix.md` (db-tests must fail loudly before we trust FTS tests).
+**Prereq:** `track-b-dbtests-loud-skip-fix.md` (done: db-tests panic without `DATABASE_URL`; spec deleted 2026-10-09) (db-tests must fail loudly before we trust FTS tests).
 
 ## Goal
 Replace the LIKE/`ILIKE`-based message search with Postgres full-text search (tsvector + GIN),

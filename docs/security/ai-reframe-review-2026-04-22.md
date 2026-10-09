@@ -2,7 +2,7 @@
 
 **Reviewer:** Natasha Romanoff (Black Widow, CSO)
 **Date:** 2026-04-22
-**Scope:** Fury's `ai-agent-reframe-design-2026-04-22.md` + Ant-Man's `skill-macros-2026-04-22.md`, against Falcon's `ai-agent-audit-2026-04-22.md` and existing repo state.
+**Scope:** Fury's `ai-agent-reframe-design-2026-04-22.md` (v1; superseded by `docs/design/ai-agent-reframe-design-2026-04-22-v2.md`) + Ant-Man's `skill-macros-2026-04-22.md`, against Falcon's `ai-agent-audit-2026-04-22.md` and existing repo state. The v1 design and the audit were deleted 2026-10-09; see git history.
 **Reviewed against:** Threat model in Task #11 (prompt injection, plugin exposure, args injection, MCP, confirmation bypass, audit trail, Stronghold).
 
 > *"My job isn't to slow you down. My job is to make sure you don't get hacked. Tonight especially — Kuba isn't here to overrule a bad call, so I'm making the bad calls visible."*
