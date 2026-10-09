@@ -80,6 +80,8 @@ const UP_SQL: &[&str] = &[
         claimed_at timestamptz NULL,
         claimed_by_device_key_id uuid NULL REFERENCES device_key (id) ON DELETE SET NULL,
         claimed_for_conversation_id uuid NULL REFERENCES conversation (id) ON DELETE SET NULL,
+        claimed_for_incarnation integer NULL,
+        claim_count integer NOT NULL DEFAULT 0,
         CONSTRAINT uq_mls_key_package_ref UNIQUE (key_package_ref)
     )"#,
     "CREATE INDEX idx_mls_key_package_available \

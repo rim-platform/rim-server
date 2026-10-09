@@ -62,8 +62,8 @@ pub trait E2eeRepository: Send + Sync {
     ) -> RepoResult<Vec<UserId>>;
 
     /// The unrevoked devices of the conversation's current members that uploaded key packages
-    /// at or after `active_since`, with whether each has an unexpired key package of
-    /// `cipher_suite`.
+    /// at or after `active_since`, with whether each has a key package of `cipher_suite` that
+    /// can be handed out.
     async fn desired_devices(
         &self,
         conversation_id: ConversationId,
@@ -87,7 +87,7 @@ pub trait E2eeRepository: Send + Sync {
 
     // ── Key packages ─────────────────────────────────────────────────────
 
-    /// Unclaimed, unexpired one-time key packages of the device and suite.
+    /// Unclaimed one-time key packages of the device and suite that can be handed out.
     async fn count_available_key_packages(
         &self,
         device_key_id: DeviceKeyId,
@@ -115,24 +115,28 @@ pub trait E2eeRepository: Send + Sync {
         device_key_id: DeviceKeyId,
     ) -> RepoResult<Vec<MlsKeyPackageStatus>>;
 
-    /// Claim the device's oldest unclaimed, unexpired one-time key package of the suite
-    /// (`FOR UPDATE SKIP LOCKED`), recording who claimed it for which conversation.
+    /// Claim one of the device's unclaimed one-time key packages of the suite that can be
+    /// handed out (`FOR UPDATE SKIP LOCKED`), recording who claimed it for which conversation
+    /// and incarnation: the oldest, or with `uploaded_after` the newest uploaded after it.
     async fn claim_one_time_key_package(
         &self,
         device_key_id: DeviceKeyId,
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
+        uploaded_after: Option<DateTime<Utc>>,
     ) -> RepoResult<Option<ClaimedKeyPackage>>;
 
-    /// Hand out the device's unexpired last-resort key package of the suite, which stays,
-    /// recording this claim as its latest.
+    /// Hand out the device's last-resort key package of the suite if it can be handed out. It
+    /// stays, records this claim as its latest, and counts it.
     async fn claim_last_resort_key_package(
         &self,
         device_key_id: DeviceKeyId,
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
     ) -> RepoResult<Option<ClaimedKeyPackage>>;
 
     async fn find_key_packages_by_refs(&self, refs: &[Vec<u8>]) -> RepoResult<Vec<MlsKeyPackage>>;

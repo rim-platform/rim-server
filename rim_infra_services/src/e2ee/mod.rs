@@ -282,13 +282,17 @@ impl GroupState {
             .filter(|d| !self.is_desired(d.device.device_key_id))
     }
 
-    /// Desired leaves with an open re-add request.
-    pub(crate) fn readd_targets(&self) -> HashSet<DeviceKeyId> {
-        self.readd_requests
-            .iter()
-            .map(|r| r.device.device_key_id)
-            .filter(|id| self.is_device(*id) && self.is_desired(*id))
-            .collect()
+    /// Desired leaves with an open re-add request, with when they last asked.
+    pub(crate) fn readd_targets(&self) -> HashMap<DeviceKeyId, DateTime<Utc>> {
+        let mut targets = HashMap::new();
+        for request in &self.readd_requests {
+            let id = request.device.device_key_id;
+            if self.is_device(id) && self.is_desired(id) {
+                let latest = targets.entry(id).or_insert(request.created_at);
+                *latest = (*latest).max(request.created_at);
+            }
+        }
+        targets
     }
 
     fn has_desired_device(&self) -> bool {
@@ -322,14 +326,6 @@ pub struct DefaultE2eeService {
     one_time_claim_rate_limiter: RegistrationRateLimiter,
     /// Re-add requests per device and conversation.
     readd_rate_limiter: RegistrationRateLimiter,
-}
-
-/// What a claim may target.
-enum ClaimScope {
-    /// Pending adds and re-add targets of the current group, in its suite.
-    Group,
-    /// Any desired device but the caller's, in the preferred suite: a new group or incarnation.
-    NewIncarnation,
 }
 
 /// Why an incarnation's first Commit is allowed over an existing group.
@@ -489,6 +485,7 @@ impl DefaultE2eeService {
             cipher_suite: status.cipher_suite,
             available: status.available,
             last_resort_not_after: status.last_resort_not_after,
+            last_resort_claims: status.last_resort_claims,
             oldest_not_after: status.oldest_not_after,
         }
     }
@@ -558,16 +555,18 @@ impl DefaultE2eeService {
         }
     }
 
-    /// The key package a Commit adds a device with: claimed for this conversation by the
-    /// committer within the hour, of the device and the group's suite. Re-adds need a one-time
-    /// package.
+    /// The key package a Commit adds a device with: claimed for this conversation and
+    /// incarnation by the committer within the hour, of the device and the group's suite. A
+    /// re-add, asked for at `readd_since`, needs a one-time package uploaded after the request.
+    #[allow(clippy::too_many_arguments)]
     fn check_key_package(
         package: Option<&MlsKeyPackage>,
         device: DeviceKeyId,
         committer: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
         cipher_suite: i32,
-        readd: bool,
+        readd_since: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
     ) -> ServiceResult<()> {
         let refused =
@@ -579,8 +578,13 @@ impl DefaultE2eeService {
         if package.cipher_suite != cipher_suite {
             return Err(refused("is of another cipher suite"));
         }
-        if readd && package.last_resort {
-            return Err(refused("must be a one-time package for a re-add"));
+        if let Some(since) = readd_since {
+            if package.last_resort {
+                return Err(refused("must be a one-time package for a re-add"));
+            }
+            if package.created_at <= since {
+                return Err(refused("was uploaded before the device's re-add request"));
+            }
         }
         let claimed = package.claimed_by_device_key_id == Some(committer)
             && package.claimed_for_conversation_id == Some(conversation_id)
@@ -591,6 +595,9 @@ impl DefaultE2eeService {
             return Err(refused(
                 "was not claimed for this conversation by this device in the last hour",
             ));
+        }
+        if package.claimed_for_incarnation != Some(incarnation) {
+            return Err(refused("was claimed for another incarnation"));
         }
         Ok(())
     }
@@ -724,6 +731,7 @@ impl DefaultE2eeService {
 
         let mut newly_encrypted = false;
         let mut readded = Vec::new();
+        let mut readd_since = HashMap::new();
         let mut removed_ids = Vec::new();
         let mut added = Vec::with_capacity(summary.adds.len());
         for add in &summary.adds {
@@ -849,7 +857,7 @@ impl DefaultE2eeService {
                         "the committer cannot remove itself".to_string(),
                     ));
                 }
-                let readd = readd_targets.contains(&id) && added_ids.contains(&id);
+                let readd = readd_targets.contains_key(&id) && added_ids.contains(&id);
                 if state.is_desired(id) && !readd {
                     return Err(ServiceError::Validation(format!(
                         "device {} of {} is not waiting to be removed",
@@ -858,6 +866,7 @@ impl DefaultE2eeService {
                 }
                 if readd {
                     readded.push(id);
+                    readd_since.insert(id, readd_targets[&id]);
                 }
                 removed_ids.push(id);
             }
@@ -890,8 +899,9 @@ impl DefaultE2eeService {
                 device.device_key_id,
                 committer_id,
                 conversation_id,
+                incarnation,
                 cipher_suite,
-                readded.contains(&device.device_key_id),
+                readd_since.get(&device.device_key_id).copied(),
                 now,
             )?;
         }
@@ -1173,6 +1183,7 @@ impl E2eeService for DefaultE2eeService {
                 cipher_suite: PREFERRED_CIPHER_SUITE,
                 available: 0,
                 last_resort_not_after: None,
+                last_resort_claims: 0,
                 oldest_not_after: None,
             });
         Self::commit_scope(scope).await?;
@@ -1225,7 +1236,9 @@ impl E2eeService for DefaultE2eeService {
             ));
         }
         let now = Utc::now();
-        let (scope_kind, suite, desired, readd_targets) = match self
+        // Targets in the group's incarnation and suite, or, for a new group or incarnation, any
+        // desired device in the preferred suite.
+        let (incarnation, suite, desired, readd_targets) = match self
             .repos
             .e2ee_repo
             .current_group(conversation.id)
@@ -1237,12 +1250,7 @@ impl E2eeService for DefaultE2eeService {
                     .e2ee_repo
                     .desired_devices(conversation.id, active_since(now), PREFERRED_CIPHER_SUITE)
                     .await?;
-                (
-                    ClaimScope::NewIncarnation,
-                    PREFERRED_CIPHER_SUITE,
-                    desired,
-                    HashSet::new(),
-                )
+                (1, PREFERRED_CIPHER_SUITE, desired, HashMap::new())
             }
             Some(group) => {
                 let state = GroupState::load(self.repos.e2ee_repo.as_ref(), group, now).await?;
@@ -1254,27 +1262,30 @@ impl E2eeService for DefaultE2eeService {
                         "this device is not in the conversation's group".to_string(),
                     ));
                 }
-                let readd_targets = state.readd_targets();
-                match ground {
-                    Some(_) => (
-                        ClaimScope::NewIncarnation,
+                if ground.is_some() {
+                    (
+                        state.group.incarnation + 1,
                         PREFERRED_CIPHER_SUITE,
                         state.desired.clone(),
-                        HashSet::new(),
-                    ),
-                    None => {
-                        let suite = state.group.cipher_suite;
-                        let pending: Vec<MlsDesiredDevice> = state
-                            .desired
-                            .iter()
-                            .filter(|d| {
-                                !state.is_device(d.device.device_key_id)
-                                    || readd_targets.contains(&d.device.device_key_id)
-                            })
-                            .cloned()
-                            .collect();
-                        (ClaimScope::Group, suite, pending, readd_targets)
-                    }
+                        HashMap::new(),
+                    )
+                } else {
+                    let readd_targets = state.readd_targets();
+                    let pending: Vec<MlsDesiredDevice> = state
+                        .desired
+                        .iter()
+                        .filter(|d| {
+                            !state.is_device(d.device.device_key_id)
+                                || readd_targets.contains_key(&d.device.device_key_id)
+                        })
+                        .cloned()
+                        .collect();
+                    (
+                        state.group.incarnation,
+                        state.group.cipher_suite,
+                        pending,
+                        readd_targets,
+                    )
                 }
             }
         };
@@ -1304,39 +1315,71 @@ impl E2eeService for DefaultE2eeService {
         let (scope, repos) = self.begin().await?;
         let mut claimed = Vec::with_capacity(targets.len());
         for target in targets {
-            let readd = matches!(scope_kind, ClaimScope::Group)
-                && readd_targets.contains(&target.device_key_id);
-            let one_time_allowed = matches!(
-                self.one_time_claim_rate_limiter.check_and_record(
-                    &target.device_key_id.to_string(),
-                    ONE_TIME_CLAIM_KEY,
-                    now
-                ),
-                RateLimitDecision::Allowed
-            );
-            let mut package = None;
-            if one_time_allowed {
-                package = repos
-                    .e2ee_repo
-                    .claim_one_time_key_package(
-                        target.device_key_id,
-                        suite,
-                        device.device_key_id,
-                        conversation.id,
-                    )
-                    .await?;
-            }
-            if package.is_none() && !readd {
-                package = repos
-                    .e2ee_repo
-                    .claim_last_resort_key_package(
-                        target.device_key_id,
-                        suite,
-                        device.device_key_id,
-                        conversation.id,
-                    )
-                    .await?;
-            }
+            let target_key = target.device_key_id.to_string();
+            let package = match readd_targets.get(&target.device_key_id) {
+                // A re-add: a one-time package uploaded after the request, or nothing.
+                Some(since) => {
+                    Self::limit(
+                        &self.one_time_claim_rate_limiter,
+                        &target_key,
+                        ONE_TIME_CLAIM_KEY,
+                    )?;
+                    let package = repos
+                        .e2ee_repo
+                        .claim_one_time_key_package(
+                            target.device_key_id,
+                            suite,
+                            device.device_key_id,
+                            conversation.id,
+                            incarnation,
+                            Some(*since),
+                        )
+                        .await?;
+                    Some(package.ok_or_else(|| {
+                        ServiceError::Validation(
+                            "the device has not uploaded key packages since its re-add request"
+                                .to_string(),
+                        )
+                    })?)
+                }
+                None => {
+                    let one_time_allowed = matches!(
+                        self.one_time_claim_rate_limiter.check_and_record(
+                            &target_key,
+                            ONE_TIME_CLAIM_KEY,
+                            now
+                        ),
+                        RateLimitDecision::Allowed
+                    );
+                    let mut package = None;
+                    if one_time_allowed {
+                        package = repos
+                            .e2ee_repo
+                            .claim_one_time_key_package(
+                                target.device_key_id,
+                                suite,
+                                device.device_key_id,
+                                conversation.id,
+                                incarnation,
+                                None,
+                            )
+                            .await?;
+                    }
+                    if package.is_none() {
+                        package = repos
+                            .e2ee_repo
+                            .claim_last_resort_key_package(
+                                target.device_key_id,
+                                suite,
+                                device.device_key_id,
+                                conversation.id,
+                                incarnation,
+                            )
+                            .await?;
+                    }
+                    package
+                }
+            };
             if let Some(package) = package {
                 claimed.push(ClaimedKeyPackageDto {
                     user_id: target.user_id,
