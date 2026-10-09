@@ -85,6 +85,8 @@ const CREATOR_HEAD_START: Duration = Duration::seconds(60);
 const WELCOME_TTL: Duration = Duration::days(30);
 /// Furthest a key package may expire.
 const MAX_KEY_PACKAGE_LIFETIME: Duration = Duration::days(90);
+/// Slack on that limit for a client clock ahead of the server's.
+const KEY_PACKAGE_CLOCK_MARGIN: Duration = Duration::minutes(5);
 /// Most Welcomes one acknowledgement names.
 const MAX_ACKS: usize = 100;
 /// Most principals one `principalDevices` call names.
@@ -1110,7 +1112,9 @@ impl E2eeService for DefaultE2eeService {
                 .ok()
                 .and_then(|secs| DateTime::from_timestamp(secs, 0))
                 .ok_or_else(|| refused("its lifetime is out of range".to_string()))?;
-            if not_after <= now || not_after > now + MAX_KEY_PACKAGE_LIFETIME {
+            if not_after <= now
+                || not_after > now + MAX_KEY_PACKAGE_LIFETIME + KEY_PACKAGE_CLOCK_MARGIN
+            {
                 return Err(refused(
                     "it must expire in the future and within 90 days".to_string(),
                 ));

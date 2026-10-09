@@ -168,7 +168,8 @@ commits pending changes first, without waiting (the server refuses its message o
   suite is in the server's accepted list (`[0x004F]`); OpenMLS validation passes (signature, protocol
   version); the credential is a basic credential whose `mls-key` statement verifies under **the
   uploading session's device key** and names that session's principal and device; the leaf
-  signature key equals `mlsKey`; `not_after` is in the future and at most 90 days away; the
+  signature key equals `mlsKey`; `not_after` is in the future and at most 90 days and 5 minutes
+  away (the 5 minutes absorb a client clock ahead of the server's); the
   `KeyPackageRef` (OpenMLS `hash_ref`, 32 bytes for this suite) is new. A new last-resort package
   replaces the device's previous one in the same transaction.
 - **Claiming**: `claimMlsKeyPackages` takes `(principalId, deviceId)` pairs for one conversation
