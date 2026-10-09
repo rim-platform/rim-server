@@ -11,6 +11,10 @@ statement format version 2 tags every key and signature with its algorithm, payl
 hybrid post-quantum keys, and the server indexes device keys by a hash. Version 1 statements
 stay valid. See "Algorithms and statement versions"._
 
+_Updated 2026-10-09 by the key-only signup PR: `signupWithKey` creates an account from a key
+identity alone, with no password and no email, so `user.password_hash` and `user.email` are
+nullable. See "Key-only signup"._
+
 ## What this PR ships
 
 - **`rim_identity`**, a dependency-light crate that verifies every signed statement below. It
@@ -227,6 +231,37 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
    same timing as a wrong password), `requestPasswordReset` sends nothing, and an outstanding
    reset link is refused with `FORBIDDEN`.
 
+### Key-only signup
+
+`signupWithKey(input: { username, displayName, keyLog, device, proof, bootstrapToken,
+instanceInviteToken, workspaceInviteToken })`, no session needed, creates an account from a key
+identity alone: no password, no email.
+
+1. The registration mode applies as for `signupWithInvite`. In invite-only mode exactly one
+   token is required, checked and consumed as by the password signup of its kind: a bootstrap
+   token or an instance invite creates an account with no workspace (`serverId` null), a
+   workspace invite also joins its server. In open mode no token may be given, and the signup
+   counts against the same per-IP limit as an open password signup. A wrong number of tokens is
+   `VALIDATION`.
+2. The identity is verified as at enrollment (rules 1 and 2): the whole log, at most 256
+   entries, replays from the inception; the certificate is signed by the head identity key; the
+   proof is a `login` statement by that device over a fresh `keyLoginChallenge`, naming this
+   log's principal id, the certificate's device id and this server's audience. The challenge is
+   consumed. No other account here may hold the principal id (`CONFLICT`). The username follows
+   the password signup's rules and must be free (`CONFLICT`); `displayName` is trimmed, at most
+   80 characters, and defaults to the username.
+3. In one transaction the server creates the user with `password_hash` and `email` null and
+   `principal_id` and `identity_key` set, stores the log and the device, consumes the token (or
+   joins the server), and creates a session **bound to the device**, recording the device's
+   `lastUsedAt`. It answers `{ userId, serverId }` and sets the same session and CSRF cookies as
+   `signupWithInvite`. Of two signups racing for one principal, the unique index refuses the
+   second (`CONFLICT`).
+4. A key-only account has no password. `login` answers `UNAUTHENTICATED` with the same timing as
+   a wrong password, `requestPasswordReset` sends nothing, and `resetPassword` is `FORBIDDEN`, as
+   for an enrolled account.
+5. Nothing emails an account without an email address: notification digests, incident and
+   escalation emails skip it.
+
 ### Challenge login
 
 1. `keyLoginChallenge` (no session) returns `{ challengeId, nonce, expiresAt }`: 32 random bytes,
@@ -247,9 +282,9 @@ When it is unset, the host of `RIM_PUBLIC_BASE_URL` is used; when that is unset 
 `localhost:PORT` and `127.0.0.1:PORT` (development only). The server logs the list at start-up.
 A host behind a proxy on a public name must set one of the two variables.
 
-`keyLoginChallenge` and `loginWithKey` are exempt from the CSRF header check, because they are
-used without a session; both only act on a fresh signature, which a forged cross-site request
-cannot produce. `rotateIdentityKey` is exempt only when the request carries **no session
+`keyLoginChallenge`, `loginWithKey` and `signupWithKey` are exempt from the CSRF header check,
+because they are used without a session; `loginWithKey` and `signupWithKey` only act on a fresh
+signature, which a forged cross-site request cannot produce. `rotateIdentityKey` is exempt only when the request carries **no session
 cookie** (recovery, signed out). With a session cookie it needs the CSRF header like any other
 mutation, because an identity rotation is accepted on the strength of that session.
 
@@ -293,6 +328,7 @@ never interleave.
 |---|---|
 | `user.kind` | `local` (default) or `remote`; `remote` is reserved for Stage 5 |
 | `user.principal_id`, `user.identity_key` | Null until enrollment, set together; `principal_id` unique; `identity_key` is the current identity key in tagged form |
+| `user.password_hash`, `user.email` | Null for a key-only account. `CHECK (password_hash IS NOT NULL OR principal_id IS NOT NULL)`: a key-only account always has a principal. Migration `key_only_signup`'s `down` refuses to run while a row has either null |
 | `user.home_relay` | Reserved for Stage 5 |
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
 | `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
@@ -311,11 +347,22 @@ id move.
 ## GraphQL
 
 ```graphql
-type User { principalId: String … }            # null until the account enrolls a key
+type User { principalId: String … }            # null until the account enrolls a key; set at key-only signup
 type DeviceKey { publicKey: String … }         # tagged: "ed25519:…"
 
 input SignedStatementInput { payload: String!  signature: String! }
 type SignedStatement { payload: String!  signature: String! }
+
+input SignupWithKeyInput {
+  username: String!
+  displayName: String
+  keyLog: [SignedStatementInput!]!
+  device: SignedStatementInput!
+  proof: SignedStatementInput!
+  bootstrapToken: String
+  instanceInviteToken: String
+  workspaceInviteToken: String
+}
 
 type Query {
   myKeyIdentity: KeyIdentity!
@@ -325,6 +372,7 @@ type Mutation {
   keyLoginChallenge: KeyLoginChallenge!
   loginWithKey(proof: SignedStatementInput!): LoginPayload!
   enrollIdentityKey(input: EnrollIdentityKeyInput!): KeyIdentity!
+  signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!   # { userId, serverId }
   addDeviceKey(certificate: SignedStatementInput!): DeviceKey!
   revokeDeviceKey(revocation: SignedStatementInput!): DeviceKey!
   rotateIdentityKey(input: RotateIdentityKeyInput!): KeyIdentity!
@@ -437,7 +485,6 @@ before the attempt are put back; with no answer the keys stay for the next try.
 
 ## Deferred
 
-- `user.password_hash` and `user.email` stay NOT NULL; key-only signup comes in a later PR.
 - Usernames stay unique across the table; uniqueness among local users only, and rows of kind
   `remote`, come with Stage 5.
 - Password sessions that existed before enrollment are not ended automatically. The client can
