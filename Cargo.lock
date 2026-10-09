@@ -3702,7 +3702,6 @@ dependencies = [
  "actix-web",
  "async-graphql",
  "async-stream",
- "async-trait",
  "base64",
  "chrono",
  "entity",
@@ -3715,12 +3714,9 @@ dependencies = [
  "rim_infra_services",
  "rim_services",
  "sea-orm",
- "serde",
  "serde_json",
  "tokio",
- "tokio-stream",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -3793,11 +3789,9 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "async-trait",
- "base64",
  "chrono",
  "chrono-tz",
  "dashmap",
- "entity",
  "lettre",
  "migration",
  "mockall",
@@ -3823,10 +3817,7 @@ dependencies = [
 name = "rim_logging"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "dotenvy",
- "log",
- "tracing",
  "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
@@ -3842,14 +3833,11 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "async-graphql-parser",
- "async-trait",
  "chrono",
  "config",
  "dotenvy",
  "futures-util",
  "http 1.4.2",
- "log",
- "mime",
  "mime_guess",
  "rim_api",
  "rim_auth",
@@ -3862,7 +3850,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-stream",
  "tracing",
  "uuid",
 ]
@@ -5049,7 +5036,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

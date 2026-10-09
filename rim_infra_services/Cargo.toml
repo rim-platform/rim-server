@@ -22,7 +22,6 @@ sea-orm = "2.0.0-rc.20"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 scraper = "0.22"
 regex = "1"
-base64 = "0.22"
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1-rustls-tls", "smtp-transport", "builder", "pool"
 ] }
@@ -34,7 +33,6 @@ rim_identity = { path = "../rim_identity" }
 rim_infra_db = { path = "../rim_infra_db" }
 
 [dev-dependencies]
-serde_json = "1"
 mockall = "0.13"
 tempfile = "3"
 rim_core = { path = "../rim_core", features = ["mocks"] }
@@ -47,5 +45,4 @@ rim_identity = { path = "../rim_identity", features = ["testing"] }
 sea-orm = { version = "2.0.0-rc.20", features = ["runtime-tokio-rustls", "sqlx-postgres"] }
 migration = { path = "../migration" }
 rim_infra_db = { path = "../rim_infra_db" }
-entity = { path = "../entity" }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
