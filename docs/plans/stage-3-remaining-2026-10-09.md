@@ -14,7 +14,10 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-ui | #24 | Linux keyring service for secrets |
 | rim-ui | #26 | Desktop client: enroll (recovery kit v1), sign in with the device key, rotate, publish the card, recover from the kit |
 | rim-ui | #28 | S3-3: recovery kit v2, the 12-word recovery phrase |
-| rim-server | (this PR) | S3-2: `docs/specs/device-linking-v1.md` |
+| rim-server | #36 | S3-2: `docs/specs/device-linking-v1.md` |
+| rim-server | #37 | S3-1: key-only signup (`signupWithKey`, nullable password and email) |
+| rim-ui | #29 | S3-5: device linking on the desktop (old and new device) |
+| rim-ui | #30 | S3-6: key-only signup on the desktop join pages |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.
