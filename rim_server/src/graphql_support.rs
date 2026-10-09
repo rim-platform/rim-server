@@ -59,12 +59,18 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     // Password reset is used signed out, from the emailed link.
     "requestPasswordReset",
     "resetPassword",
-    // Key login is used before there is a session. Recovery (`rotateIdentityKey` signed by
-    // the recovery key) is too; any rotation needs a signature a forged request cannot make.
+    // Key login is used before there is a session.
     "keyLoginChallenge",
     "loginWithKey",
-    "rotateIdentityKey",
 ];
+
+/// Mutation fields exempt from CSRF validation only when the request carries no session cookie.
+///
+/// `rotateIdentityKey` is how a person who lost every device recovers, signed out. An identity
+/// rotation, though, is accepted only on the strength of the caller's session, so a request that
+/// carries one needs the CSRF header like any other mutation; otherwise a forged same-site
+/// request could ride the session.
+const CSRF_EXEMPT_WITHOUT_SESSION: &[&str] = &["rotateIdentityKey"];
 
 /// Enforce CSRF for a batch request. Checks once at the HTTP level whether any
 /// request in the batch contains non-exempt mutations.
@@ -73,7 +79,8 @@ pub fn enforce_csrf_for_batch(
     req: &HttpRequest,
     batch: &async_graphql::BatchRequest,
 ) -> Result<(), GraphQLResponse> {
-    let needs_csrf = batch.iter().any(request_needs_csrf);
+    let has_session = req.cookie(COOKIE_SESSION).is_some();
+    let needs_csrf = batch.iter().any(|gql| request_needs_csrf(gql, has_session));
     if needs_csrf {
         validate_csrf_tokens(req)
     } else {
@@ -82,8 +89,8 @@ pub fn enforce_csrf_for_batch(
 }
 
 /// Returns true if a single GraphQL request contains mutations that require
-/// CSRF validation.
-fn request_needs_csrf(gql: &async_graphql::Request) -> bool {
+/// CSRF validation. `has_session` says whether the request carries a session cookie.
+fn request_needs_csrf(gql: &async_graphql::Request, has_session: bool) -> bool {
     let doc = match async_graphql_parser::parse_query(gql.query.as_str()) {
         Ok(d) => d,
         Err(_) => {
@@ -115,6 +122,10 @@ fn request_needs_csrf(gql: &async_graphql::Request) -> bool {
         CSRF_EXEMPT_MUTATIONS
             .iter()
             .any(|a| a.eq_ignore_ascii_case(f))
+            || (!has_session
+                && CSRF_EXEMPT_WITHOUT_SESSION
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(f)))
     });
 
     !all_exempt
@@ -418,10 +429,36 @@ mod tests {
             r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,
         ] {
             assert!(
-                !request_needs_csrf(&async_graphql::Request::new(query)),
+                !request_needs_csrf(&async_graphql::Request::new(query), false),
                 "{query}"
             );
         }
+    }
+
+    #[test]
+    fn rotation_with_a_session_needs_csrf() {
+        let rotate = async_graphql::Request::new(
+            r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
+        );
+        assert!(request_needs_csrf(&rotate, true));
+        // Login stays exempt with a stale session cookie, so signing in again always works.
+        let login = async_graphql::Request::new(
+            r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
+        );
+        assert!(!request_needs_csrf(&login, true));
+    }
+
+    #[test]
+    fn batch_rotation_with_session_cookie_and_no_csrf_header_is_refused() {
+        let batch = async_graphql::BatchRequest::Single(async_graphql::Request::new(
+            r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
+        ));
+        let signed_in = TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
+            .to_http_request();
+        assert!(enforce_csrf_for_batch(&signed_in, &batch).is_err());
+        let signed_out = TestRequest::default().to_http_request();
+        assert!(enforce_csrf_for_batch(&signed_out, &batch).is_ok());
     }
 
     #[test]
@@ -431,7 +468,7 @@ mod tests {
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } addDeviceKey(certificate: { payload: "p", signature: "s" }) { name } }"#,
         ] {
             assert!(
-                request_needs_csrf(&async_graphql::Request::new(query)),
+                request_needs_csrf(&async_graphql::Request::new(query), false),
                 "{query}"
             );
         }
