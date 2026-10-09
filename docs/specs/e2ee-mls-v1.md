@@ -49,6 +49,12 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
   Commit of an existing plaintext DM or group is accepted ("Migration"). It is never cleared.
+- **Clients pin it.** A device that holds group state for a conversation, or ever sees its
+  `encryptedAt` or an encrypted entry in its feed, keeps the conversation encrypted on that
+  device for good, through leaving it and `NO_ACCESS` too. When the server answers
+  `encryptedAt: null` for a pinned conversation, the device shows "Encryption was reset by the
+  server" and stops sending there: it never sends plaintext into it (`sendMessage`,
+  `replyToMessage`, `editMessage`, `forwardMessage`, a plugin's post) and never upgrades it again.
 - In an encrypted conversation the server refuses plaintext writes (`sendMessage`,
   `replyToMessage`, `editMessage` on an encrypted row, `forwardMessage` into it: `VALIDATION`,
   `this conversation is encrypted`), and `createConversation(encrypted: true)` and
@@ -86,13 +92,19 @@ and duplicate fields refused), signed by the **device key** over
 A client accepts a leaf (in a Welcome's tree, an Add, or a re-added leaf) only when all hold:
 
 1. `identity` parses as above and the payload is a valid `mls-key` statement.
-2. `keyLog(principalId)` replays (`key-identity-v1.md`), and `principalDevices` lists `deviceId` with
-   a certificate that verifies against that log at its `keySeq` and has no revocation.
+2. `keyLog(principalId)` replays (`key-identity-v1.md`) and contains the head this device pinned
+   for the principal ("Key log head pinning" there), and `principalDevices` lists `deviceId` with
+   a certificate that verifies against that log at its `keySeq`, no recovery rotation following
+   that `keySeq`, and no revocation. A `revocation` counts when its signature verifies (by an
+   identity key of the log, or by the revoked device's own key); a device this device once saw
+   revoked (a verified revocation, or `revokedAt`) stays revoked on it whatever `principalDevices`
+   answers later. A revocation that does not verify keeps the device out of that check only.
 3. The `mls-key` signature verifies under that certificate's `deviceKey`, and its `principalId` and
    `deviceId` equal the certificate's.
 4. `mlsKey` equals the leaf's `signature_key`.
 5. The principal is a current member of the conversation (from the server's member list, mapped by
-   `User.principalId`), and no other leaf of the group has the same `(principalId, deviceId)`.
+   `User.principalId`; in a direct message, one of its two pinned principals, "Direct messages"),
+   and no other leaf of the group has the same `(principalId, deviceId)`.
 
 Clients cache verified `(principalId, deviceId, mlsKey)` triples and recheck the device list when a
 `MlsMembershipChanged` event arrives. The server checks rules 1, 3 and 4 at key package upload,
@@ -120,6 +132,18 @@ read, and the UI says that a device RIM cannot verify can read new messages.
 | Re-add request ("Lost state") | Remove + Add of that device in one Commit | Ranked |
 | Self-update (post-compromise security) | An empty Commit with an update path, at most every 7 days per device | The device itself, at a random time within a day of becoming due |
 
+**Direct messages.** A device pins a direct message to its two principals the first time it sees
+it with exactly two members, one of them its own. It never commits a pending add of any other
+principal and never counts one as a member when it verifies leaves; while the server lists one (as
+a member or a pending add), the conversation shows "The server tried to add <name> to this
+conversation" and the device stops sending there. A DM the server lists with more than two members
+before the device pinned it gets no group from that device.
+
+**Membership lines.** "<name> was added" and "<name> was removed" in the timeline come from the
+Commits the device processed (its own included), never from the server's member list: a principal
+whose first leaf a Commit added, or whose last leaf it removed, gets a line before the first
+message of the epoch that Commit made. An incarnation's first Commit adds no lines.
+
 **Ranking.** Pending changes come from `Conversation.mlsGroup`. Every group device not in pending
 removes sorts the ids of the group devices that are not pending removes (lowercase UUID text, ascending) and takes its position as its
 rank. It waits `min(rank, 8) × 15 s` plus 0 to 3 s of random jitter, refetches the group, and if a
@@ -132,7 +156,8 @@ commits pending changes first, without waiting (the server refuses its message o
 
 - **Per device**: 20 unclaimed one-time packages and one last-resort package (OpenMLS
   `mark_as_last_resort`), each with the `lifetime` extension `not_before = now − 1 h`,
-  `not_after = now + 90 days`. Capabilities: suite 0x004F, basic credentials. (OpenMLS checks an
+  `not_after = now + 90 days − 1 h` (so a server whose clock is up to an hour behind the device's
+  still accepts it). Capabilities: suite 0x004F, basic credentials. (OpenMLS checks an
   added package's lifetime when a device processes the Commit, so a package must outlive the
   Commit retention a catching-up device may need.)
 - **Rotation**: on start and every 12 hours while running, a device tops up to 20 when fewer than
@@ -222,6 +247,12 @@ otherwise).
 - The device joins (`StagedWelcome`), checks the group id, verifies every leaf ("Verifying a leaf"),
   fetches and processes the Commits created in its join epoch and later, then acknowledges. A Welcome
   it cannot open (the key package's private key is gone) leads to a re-add request.
+- **Replayed Welcomes.** A device refuses a Welcome when it holds state of the same group
+  (conversation and incarnation) at the Welcome's epoch or later, unless that state waits for a
+  re-add: a Welcome delivered again (Welcomes stay 30 days, and a last-resort key package's private
+  key stays) would roll the group back and let messages of that epoch decrypt again. The refused
+  Welcome is acknowledged. A Welcome that does not open while the device holds working state of
+  its incarnation does not lead to a re-add request either.
 - **A new device's history.** The feed returns the conversation's older rows too; their epochs are
   before the device's join epoch (or their incarnation is older), so they cannot be decrypted
   here. The client shows them as one collapsed line, "Earlier messages were sent before this device
@@ -339,8 +370,10 @@ already sees every message of the epoch it ended.
   message id.
 - **A Commit the client cannot process** (OpenMLS refuses it): the device stops at that epoch,
   sends a re-add request, and shows the waiting notice. A Commit that processes but whose
-  authenticated-data summary does not match its proposals is merged, and the client warns that
-  the committing device misbehaved and runs "A leaf that does not verify" for every leaf.
+  authenticated-data summary does not name exactly its Add and Remove proposals, or that carries
+  any other proposal (GroupContextExtensions, PSK, ReInit, …), is **not merged** either: the device
+  stops at that epoch and asks for a re-add the same way, and warns that the committing device
+  misbehaved.
 
 ### Replay and gaps
 
@@ -423,7 +456,8 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
   Commit with a re-add request outstanding; the committer is not removed. A Commit with adds
   carries a Welcome of the group's suite whose `new_member` refs are exactly the adds'; one
   without adds carries none. The receiver checks that the staged Commit's Add proposals have exactly these
-  `KeyPackageRef`s and its Remove proposals remove exactly these devices.
+  `KeyPackageRef`s and its Remove proposals remove exactly these devices, and that it has no other
+  proposal; a Commit that fails this is not merged ("Ordering").
 
 ### Edits, deletes and metadata
 
@@ -445,6 +479,11 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
 
 ### Clients: decrypt once, store, render
 
+- **Sender binding.** The row must name its author's principal (`author.principalId`) and the
+  sending device (`encryption.senderDeviceId`), and the decrypted MLS sender must be that principal
+  and that device; otherwise the message is "could not be verified", and so is a row without an
+  author principal. The timeline shows a decrypted message as its MLS sender's (device, principal,
+  then the workspace member with that principal), not as the row's author.
 - A message decrypts **once** per device (MLS deletes each key after use). `rim_mls` keeps OpenMLS
   state in the cache database, so decrypting an entry, storing its plaintext row and advancing the
   ratchet commit in one transaction. The timeline of an encrypted conversation reads from the
