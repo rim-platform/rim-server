@@ -1,5 +1,5 @@
 //! Resolver-level e2e test for device linking over a real database, with real sealed messages
-//! from `rim_identity::device_link` (`docs/specs/device-linking-v1.md`).
+//! from `rim_identity::device_link`.
 //!
 //! Run with:
 //! ```sh
@@ -174,7 +174,7 @@ async fn start(schema: &AppSchema, caller: &Caller) -> String {
         .to_string()
 }
 
-/// The whole flow of the spec: the old device starts a link and shows the code; the new device
+/// The whole flow: the old device starts a link and shows the code; the new device
 /// seals an offer; the old device opens it, certifies the key and answers; the new device
 /// verifies the certificate against the served key log, signs in with its own key and
 /// completes the link; the old device sees `CONSUMED`.

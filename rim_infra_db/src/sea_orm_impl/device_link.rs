@@ -12,10 +12,11 @@ use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, QueryResult, Statemen
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::user_lock::lock_user_row;
 
 /// Every column a read or transition returns. `expired` is computed by the database clock, the
 /// same clock the transitions compare against.
-const RETURNING: &str = "id, link_hash, user_id, state, offer_nonce, offer_ciphertext, \
+const LINK_COLUMNS: &str = "id, link_hash, user_id, state, offer_nonce, offer_ciphertext, \
      answer_nonce, answer_ciphertext, created_at, expires_at, offered_at, answered_at, \
      ended_at, expires_at <= now() AS expired";
 
@@ -23,7 +24,14 @@ const RETURNING: &str = "id, link_hash, user_id, state, offer_nonce, offer_ciphe
 const END_LINK: &str = "ended_at = now(), offer_nonce = NULL, offer_ciphertext = NULL, \
      answer_nonce = NULL, answer_ciphertext = NULL";
 
-const LIVE_STATES: &str = "('open', 'offered', 'answered')";
+/// `DeviceLinkState::LIVE` as an SQL list: `('open', 'offered', 'answered')`.
+fn live_states() -> String {
+    let states: Vec<String> = DeviceLinkState::LIVE
+        .iter()
+        .map(|s| format!("'{}'", s.as_str()))
+        .collect();
+    format!("({})", states.join(", "))
+}
 
 /// Seconds as `make_interval` takes them.
 fn seconds(duration: Duration) -> Value {
@@ -71,6 +79,7 @@ pub struct SeaOrmDeviceLinkRepository {
 }
 
 impl SeaOrmDeviceLinkRepository {
+    /// A repository on `db`, a pool connection or a transaction.
     pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
@@ -92,34 +101,31 @@ impl SeaOrmDeviceLinkRepository {
 #[async_trait]
 impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
     async fn lock_user(&self, user_id: UserId) -> RepoResult<bool> {
-        let id: Uuid = user_id.into();
-        let row = self
-            .db
-            .query_one_raw(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                r#"SELECT id FROM "user" WHERE id = $1 FOR UPDATE"#,
-                [id.into()],
-            ))
-            .await
-            .map_err(map_db_err)?;
-        Ok(row.is_some())
+        lock_user_row(&self.db, user_id).await
     }
 
-    async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<u64> {
+    async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<Vec<DeviceLinkId>> {
         let id: Uuid = user_id.into();
-        let res = self
+        let rows = self
             .db
-            .execute_raw(Statement::from_sql_and_values(
+            .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
                     "UPDATE device_link SET state = 'cancelled', {END_LINK} \
-                     WHERE user_id = $1 AND state IN {LIVE_STATES}"
+                     WHERE user_id = $1 AND state IN {} RETURNING id",
+                    live_states()
                 ),
                 [id.into()],
             ))
             .await
             .map_err(map_db_err)?;
-        Ok(res.rows_affected())
+        rows.iter()
+            .map(|row| {
+                row.try_get::<Uuid>("", "id")
+                    .map(DeviceLinkId::from)
+                    .map_err(map_db_err)
+            })
+            .collect()
     }
 
     async fn create(&self, link: NewDeviceLink) -> RepoResult<DeviceLink> {
@@ -129,7 +135,7 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
             &format!(
                 "INSERT INTO device_link (id, link_hash, user_id, expires_at) \
                  VALUES ($1, $2, $3, now() + make_interval(secs => $4)) \
-                 RETURNING {RETURNING}"
+                 RETURNING {LINK_COLUMNS}"
             ),
             vec![
                 id.into(),
@@ -144,7 +150,7 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
 
     async fn find(&self, link_hash: &[u8]) -> RepoResult<Option<DeviceLink>> {
         self.query_link(
-            &format!("SELECT {RETURNING} FROM device_link WHERE link_hash = $1"),
+            &format!("SELECT {LINK_COLUMNS} FROM device_link WHERE link_hash = $1"),
             vec![link_hash.to_vec().into()],
         )
         .await
@@ -157,7 +163,7 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
                  SET state = 'offered', offer_nonce = $2, offer_ciphertext = $3, \
                      offered_at = now() \
                  WHERE link_hash = $1 AND state = 'open' AND expires_at > now() \
-                 RETURNING {RETURNING}"
+                 RETURNING {LINK_COLUMNS}"
             ),
             vec![
                 link_hash.to_vec().into(),
@@ -183,7 +189,7 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
                      answered_at = now(), expires_at = now() + make_interval(secs => $5) \
                  WHERE link_hash = $1 AND user_id = $2 AND state = 'offered' \
                      AND expires_at > now() \
-                 RETURNING {RETURNING}"
+                 RETURNING {LINK_COLUMNS}"
             ),
             vec![
                 link_hash.to_vec().into(),
@@ -203,7 +209,7 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
                 "UPDATE device_link SET state = 'consumed', {END_LINK} \
                  WHERE link_hash = $1 AND user_id = $2 AND state = 'answered' \
                      AND expires_at > now() \
-                 RETURNING {RETURNING}"
+                 RETURNING {LINK_COLUMNS}"
             ),
             vec![link_hash.to_vec().into(), user_id.into()],
         )
@@ -220,8 +226,9 @@ impl DeviceLinkRepository for SeaOrmDeviceLinkRepository {
             &format!(
                 "UPDATE device_link SET state = 'cancelled', {END_LINK} \
                  WHERE link_hash = $1 AND ($2::uuid IS NULL OR user_id = $2) \
-                     AND state IN {LIVE_STATES} AND expires_at > now() \
-                 RETURNING {RETURNING}"
+                     AND state IN {} AND expires_at > now() \
+                 RETURNING {LINK_COLUMNS}",
+                live_states()
             ),
             vec![link_hash.to_vec().into(), user_id.into()],
         )

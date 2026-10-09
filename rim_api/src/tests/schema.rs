@@ -34,36 +34,41 @@ fn sdl_export_is_nonempty_and_has_core_types() {
     );
 }
 
-/// The device linking API exactly as `docs/specs/device-linking-v1.md` prints it.
+/// The SDL with every `"""` description removed and whitespace collapsed to single spaces.
+fn compact_sdl_without_descriptions(sdl: &str) -> String {
+    let without: String = sdl
+        .split("\"\"\"")
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 0)
+        .map(|(_, part)| part)
+        .collect();
+    without.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The device linking types and fields, with their exact signatures.
 #[test]
-fn device_link_sdl_matches_the_spec() {
-    let sdl = export_sdl(
+fn device_link_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&export_sdl(
         test_service_provider(),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
         test_typing_tracker(),
         test_observers(),
-    );
-    for field in [
+    ));
+    for expected in [
+        "input SealedMessageInput { nonce: String! ciphertext: String! }",
+        "type SealedMessage { nonce: String! ciphertext: String! }",
+        "enum DeviceLinkState { OPEN OFFERED ANSWERED CONSUMED CANCELLED EXPIRED }",
+        "type StartedDeviceLink { linkId: String! expiresAt: DateTime! }",
+        "type DeviceLink { state: DeviceLinkState! expiresAt: DateTime! offer: SealedMessage }",
         "deviceLink(linkId: String!): DeviceLink!",
-        "deviceLinkAnswer(linkId: String!): SealedMessage",
+        "deviceLinkAnswer(linkId: String!): SealedMessage ",
         "startDeviceLink: StartedDeviceLink!",
         "sendDeviceLinkOffer(linkId: String!, offer: SealedMessageInput!): Boolean!",
         "sendDeviceLinkAnswer(linkId: String!, answer: SealedMessageInput!): DeviceLink!",
         "completeDeviceLink(linkId: String!): Boolean!",
         "cancelDeviceLink(linkId: String!): Boolean!",
-        "linkId: String!",
-        "state: DeviceLinkState!",
-        "offer: SealedMessage\n",
     ] {
-        assert!(sdl.contains(field), "SDL lacks `{field}`");
-    }
-    let compact: String = sdl.split_whitespace().collect::<Vec<_>>().join(" ");
-    for definition in [
-        "input SealedMessageInput { nonce: String! ciphertext: String! }",
-        "type SealedMessage { nonce: String! ciphertext: String! }",
-        "enum DeviceLinkState { OPEN OFFERED ANSWERED CONSUMED CANCELLED EXPIRED }",
-    ] {
-        assert!(compact.contains(definition), "SDL lacks `{definition}`");
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
 }

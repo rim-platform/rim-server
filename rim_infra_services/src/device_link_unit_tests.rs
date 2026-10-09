@@ -108,12 +108,6 @@ mod tests {
         row.answer = None;
     }
 
-    const LIVE: &[DeviceLinkState] = &[
-        DeviceLinkState::Open,
-        DeviceLinkState::Offered,
-        DeviceLinkState::Answered,
-    ];
-
     struct FakeLinks(Shared);
 
     #[async_trait]
@@ -122,19 +116,19 @@ mod tests {
             Ok(self.0.lock().unwrap().users.contains(&user_id))
         }
 
-        async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<u64> {
+        async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<Vec<DeviceLinkId>> {
             let mut s = self.0.lock().unwrap();
             let now = s.now;
-            let mut n = 0;
+            let mut ids = Vec::new();
             for row in s
                 .rows
                 .iter_mut()
                 .filter(|r| r.user_id == user_id && r.state.is_live())
             {
                 end(row, DeviceLinkState::Cancelled, now);
-                n += 1;
+                ids.push(row.id);
             }
-            Ok(n)
+            Ok(ids)
         }
 
         async fn create(&self, link: NewDeviceLink) -> RepoResult<DeviceLink> {
@@ -227,13 +221,12 @@ mod tests {
             link_hash: &[u8],
             user_id: Option<UserId>,
         ) -> RepoResult<Option<DeviceLink>> {
-            Ok(self
-                .0
-                .lock()
-                .unwrap()
-                .transition(link_hash, LIVE, user_id, |row, now| {
-                    end(row, DeviceLinkState::Cancelled, now)
-                }))
+            Ok(self.0.lock().unwrap().transition(
+                link_hash,
+                &DeviceLinkState::LIVE,
+                user_id,
+                |row, now| end(row, DeviceLinkState::Cancelled, now),
+            ))
         }
 
         async fn delete_expired(&self, grace: Duration) -> RepoResult<u64> {
@@ -587,6 +580,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_for_a_user_that_does_not_exist_is_not_found() {
+        let h = harness();
+        assert_not_found(h.start(Actor::new(UserId::new())).await, "no such user");
+        assert!(h.state.lock().unwrap().rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_start_refused_for_no_key_identity_leaves_the_live_link_open() {
+        let h = harness();
+        let ada = h.user(true);
+        let link_id = h.start(ada).await.unwrap();
+        h.state.lock().unwrap().principals.remove(&ada.user_id);
+        assert_validation(h.start(ada).await, "no key identity");
+        assert_eq!(h.state_of(&link_id), Some(DeviceLinkState::Open));
+        assert_eq!(h.state.lock().unwrap().rows.len(), 1);
+    }
+
+    #[tokio::test]
     async fn start_is_limited_per_user() {
         let h = harness_with_limits(2, 1000, 1000, 1000);
         let ada = h.user(true);
@@ -628,7 +639,7 @@ mod tests {
         repo.expect_lock_user()
             .returning(|_| Box::pin(async { Ok(true) }));
         repo.expect_cancel_live_links()
-            .returning(|_| Box::pin(async { Ok(0) }));
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
         repo.expect_create().returning(|link: NewDeviceLink| {
             let now = Utc::now();
             Box::pin(async move {
@@ -960,6 +971,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_same_answer_after_expiry_is_a_conflict() {
+        let h = harness();
+        let ada = h.user(true);
+        let link_id = h.answered(ada).await;
+        h.expire_in(&link_id, Duration::zero());
+        assert_conflict(
+            h.answer(ada, &link_id, answer_bytes()).await,
+            "same bytes, expired",
+        );
+    }
+
+    #[tokio::test]
     async fn an_answer_to_another_users_link_or_a_bad_id_is_not_found() {
         let h = harness();
         let ada = h.user(true);
@@ -1080,6 +1103,17 @@ mod tests {
         // A consumed link: conflict.
         let consumed = h.consumed(ada).await;
         assert_conflict(h.cancel(Some(ada), &consumed).await, "consumed");
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_user_cancelling_an_unknown_or_malformed_id_is_unauthenticated() {
+        let h = harness();
+        let ada = h.user(true);
+        h.start(ada).await.unwrap();
+        assert_unauthenticated(h.cancel(Some(ada), &unknown_link_id()).await, "unknown");
+        for link_id in MALFORMED_LINK_IDS {
+            assert_unauthenticated(h.cancel(Some(ada), link_id).await, link_id);
+        }
     }
 
     #[tokio::test]

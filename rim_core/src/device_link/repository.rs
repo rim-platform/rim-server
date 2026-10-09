@@ -3,7 +3,7 @@ use chrono::Duration;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::device_link::model::{DeviceLink, NewDeviceLink, SealedBytes};
+use crate::device_link::model::{DeviceLink, DeviceLinkId, NewDeviceLink, SealedBytes};
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
@@ -22,8 +22,9 @@ pub trait DeviceLinkRepository: Send + Sync {
     async fn lock_user(&self, user_id: UserId) -> RepoResult<bool>;
 
     /// Cancel every `open`, `offered` or `answered` link of the user, expired ones included,
-    /// so the one-live-link index never blocks a new link. Returns how many were.
-    async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<u64>;
+    /// so the one-live-link index never blocks a new link. Returns the ids of the links
+    /// cancelled.
+    async fn cancel_live_links(&self, user_id: UserId) -> RepoResult<Vec<DeviceLinkId>>;
 
     /// Insert an `open` link.
     ///
@@ -31,6 +32,7 @@ pub trait DeviceLinkRepository: Send + Sync {
     /// `Conflict` when the user still has a live-state link, or the hash is taken.
     async fn create(&self, link: NewDeviceLink) -> RepoResult<DeviceLink>;
 
+    /// The link with this hash, in any state, expired or not.
     async fn find(&self, link_hash: &[u8]) -> RepoResult<Option<DeviceLink>>;
 
     /// `open` → `offered`, storing the offer.

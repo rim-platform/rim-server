@@ -287,7 +287,7 @@ async fn one_live_link_per_user() {
     let alice = ctx.create_user("alice").await;
     let bob = ctx.create_user("bob").await;
 
-    repo.create(new_link(alice.id, 1)).await.unwrap();
+    let first = repo.create(new_link(alice.id, 1)).await.unwrap();
     let err = repo.create(new_link(alice.id, 2)).await.unwrap_err();
     assert_eq!(err.kind(), RepoErrorKind::Conflict);
     // Another user is not blocked, and a link hash is unique.
@@ -299,7 +299,10 @@ async fn one_live_link_per_user() {
     // An expired link still holds the slot until it is cancelled with the rest.
     expire_in(&conn, &hash(1), -1).await;
     assert!(repo.create(new_link(alice.id, 3)).await.is_err());
-    assert_eq!(repo.cancel_live_links(alice.id).await.unwrap(), 1);
+    assert_eq!(
+        repo.cancel_live_links(alice.id).await.unwrap(),
+        vec![first.id]
+    );
     let link = repo.find(&hash(1)).await.unwrap().expect("link");
     assert_eq!(link.state, DeviceLinkState::Cancelled);
     repo.create(new_link(alice.id, 3)).await.unwrap();
@@ -317,7 +320,7 @@ async fn one_live_link_per_user() {
         .await
         .unwrap()
         .expect("consumed");
-    assert_eq!(repo.cancel_live_links(alice.id).await.unwrap(), 0);
+    assert!(repo.cancel_live_links(alice.id).await.unwrap().is_empty());
     repo.create(new_link(alice.id, 4)).await.unwrap();
 }
 

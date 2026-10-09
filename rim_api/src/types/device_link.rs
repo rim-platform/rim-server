@@ -1,4 +1,4 @@
-//! Device linking types (Stage 3, `docs/specs/device-linking-v1.md`).
+//! Device linking types.
 
 use async_graphql::{Enum, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
