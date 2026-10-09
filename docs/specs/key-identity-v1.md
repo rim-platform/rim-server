@@ -291,7 +291,10 @@ identity alone: no password, no email.
    meantime refuses the login), creates a session bound to the device, records the device's
    `lastUsedAt`, and sets the same session and CSRF cookies as `login`.
 5. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
-   device, which is `FORBIDDEN` so the client can tell the person to link the device again.
+   device, which is `FORBIDDEN` so the client can tell the person to link the device again. A
+   proof is valid here only when it passes every check of step 3: revocation is looked at after
+   the audience and the challenge (which the attempt uses up), so an old proof, a replayed one or
+   one made for another server never shows whether the device was revoked.
    Failed attempts are limited to 20 per IP per 15 minutes; successful logins do not count.
 
 **Accepted audiences** come from `RIM_KEY_LOGIN_AUDIENCES` (comma-separated `host[:port]`).
