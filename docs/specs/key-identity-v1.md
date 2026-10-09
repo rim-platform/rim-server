@@ -449,6 +449,9 @@ offers recovery must read.
   opens the workspace its preview named). Unconfirmed keys whose principal has no key log on the
   server (a signup or enrollment that never reached it) are removed when signing in with them
   fails. The web app keeps password signup only.
+- **Other sessions.** Right after an enrollment, Settings > Security offers "Sign out other
+  sessions" (`logoutOtherSessions`); Account settings offers it for every account, on the
+  desktop and the web.
 - **Audience.** The `host[:port]` of the GraphQL endpoint URL as written, lowercased, the same
   rule the server applies to `RIM_PUBLIC_BASE_URL`.
 - **Sign-in.** On a cold start whose session cookie is gone or refused, the app signs in with the
