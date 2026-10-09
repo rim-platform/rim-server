@@ -477,10 +477,11 @@ as one `EDITED` entry carrying the newest envelope.
   member with that `user.principal_id`; ids that are not current members are ignored; the author is
   skipped. `mentionAll` is treated as `@channel` / `@here`.
 - Notification rules run as today with what the server knows: `direct`, `mention`,
-  `thread_reply` and `all` work; `keyword` cannot (the desktop client matches keywords after
-  decrypting and shows a local notification, without an inbox entry, only where the server sends
-  none: a group at the `MENTIONS` level, for a message that does not mention the reader). Edits
-  replace mention rows and do not notify again.
+  `thread_reply` and `all` work; `keyword` cannot (the desktop and web clients match keywords after
+  decrypting and show a local notification, without an inbox entry, only where the server sends
+  none: a group at the `MENTIONS` level, for a message that does not mention the reader; the web
+  client only where the person already allowed the site's notifications). Edits replace mention
+  rows and do not notify again.
 - Digests and any email say "Encrypted message from <name>"; `NotificationDue` is unchanged.
 - **What it leaks**: who was mentioned in which message. Accepted, because the server already knows
   every member, every message's sender and time, and a DM's notifications are per message anyway;
@@ -556,9 +557,9 @@ signature could convince a third party. Message deniability is deferred.
 | Feature | Behavior |
 |---|---|
 | Full-text search | Encrypted rows have no text and no search vector; `searchMessages` never returns them. Local search covers them ("on this device") |
-| Link previews | No server fetch (`spawn_link_preview_fetch` skipped). The sender's client fetches and embeds them; receivers never fetch |
+| Link previews | No server fetch (`spawn_link_preview_fetch` skipped). The sender's client fetches and embeds them; receivers never fetch. The web client sends none (a browser cannot read other sites' pages) |
 | Pipelines | Triggers still fire on message events with metadata only; `MessageContains` never matches an encrypted message |
-| The agent | No server-side context or summaries; `chat.search_messages` never returns encrypted rows; `chat.post_message` into an encrypted conversation is refused; `chat.create_group` creates a plaintext group that the creator's desktop then upgrades ("Migration"). The client agent reads through the message service (below), off by default per conversation, with a warning that the text goes to the model provider |
+| The agent | No server-side context or summaries; `chat.search_messages` never returns encrypted rows; `chat.post_message` into an encrypted conversation is refused; `chat.create_group` creates a plaintext group that the creator's desktop then upgrades ("Migration"). The client agent reads through the message service (below), off by default per conversation, with a warning that the text goes to the model provider; when it is on, the client answers `chat.get_recent_messages` and `chat.search_messages` there from the local cache and sends `chat.post_message` through the encrypted send path, each post confirmed by the person |
 | Notifications | From the authenticated mentions and "new message"; digests say "Encrypted message"; keyword notifications are client-local |
 | Slow mode | Channels only, so not applicable |
 | Moderation | Kick, ban, timeout, membership and roles work; timed-out members cannot send envelopes or commit; reports go through franking (`reportMessage` refuses an encrypted message, `reportEncryptedMessage` a plaintext one, and the receipt's sender must be the row's author); a moderator delete removes the row's ciphertext |
@@ -574,15 +575,32 @@ signature could convince a third party. Message deniability is deferred.
 
 S4-4 implements the client message service; this is its contract.
 
+- **Methods** (plugin to host, routed by both hosts but not frozen in protocol v1, listed under
+  `x-notFrozen` in rim-ui's `protocol/plugin-protocol-v1.schema.json`; reference in rim-ui
+  `docs/plugin-chat-methods.md`): `rim.chat.list_messages { conversationId, before?, limit? }` →
+  `{ messages, hasOlder }` (oldest first, `before` a message id, `limit` 1 to 100, default 50);
+  `rim.chat.get_message { messageId }` → `{ message }` (`null` when not on this device);
+  `rim.chat.search_messages { query, conversationId?, limit? }` → `{ messages }` (local search,
+  newest first); `rim.chat.post_message { conversationId, body, threadId? }` → `{ id }`. They
+  replace the earlier `rim.chat.get_messages` and `rim.chat.send_message` names.
 - **Capabilities.** `chat.read` and `chat.write` cover plaintext conversations.
   `chat.read.encrypted` and `chat.write.encrypted` cover encrypted ones and require the plain
-  capability as well. Each is its own line in the consent prompt; the encrypted ones read
-  "Read your encrypted DMs and groups: this plugin sees their decrypted text and can send it
-  anywhere its other permissions allow." Web and desktop plugins get the same names.
+  capability as well (a manifest asking for an encrypted one without the plain one is refused
+  at install; the broker checks the plain one per method, the service the encrypted one per
+  conversation, both answering `CAPABILITY_DENIED`). Each is its own line in the consent
+  prompt; `chat.read.encrypted` reads "Read your encrypted DMs and groups: this plugin sees
+  their decrypted text and can send it anywhere its other permissions allow.", and
+  `chat.write.encrypted` "Post as you in your encrypted DMs and groups: this plugin sends
+  messages in your name there, encrypted like your own." Web and desktop plugins get the same
+  names. A conversation counts as encrypted for its old plaintext too.
 - **What the service returns**: `{ id, conversationId, threadId, author: { principalId,
   displayName }, text, sentAt, editedAt, encrypted, attachments: [{ name, mime, size }] }`, read from
-  the local cache. Never franking keys, attachment secrets, MLS state, ciphertext or keys of any
-  kind. Plugins cannot fetch attachment bytes in v1.
+  the local cache, with `author` a protocol `Principal` and `<@user>` mentions as principal ids.
+  Never franking keys, attachment secrets or blob hashes, MLS state, ciphertext or keys of any
+  kind. Placeholders, messages that could not be verified, tombstones and unacknowledged sends
+  are left out. Plugins cannot fetch attachment bytes in v1. A conversation not fully cached on
+  the device answers `INTERNAL_ERROR` with `data.reason: "notCached"`; the web app, whose plugin
+  service does not yet read the browser's encrypted store, answers reads with `"noCache"`.
 - **Writes** go through the same send path as the person's own messages and are encrypted by the
   client.
 - **Audit**: the host records, per plugin, when each grant was given and revoked and a daily count of
@@ -593,7 +611,9 @@ S4-4 implements the client message service; this is its contract.
 
 - **Who upgrades**: in a DM either member's device; in a group a device of the creator
   (`created_by`), or of any member when the creator is null or no longer a member. The device must be
-  a desktop device (it needs `rim_mls`; the web client after S4-6).
+  a desktop device: the web client takes part in encrypted conversations and creates new ones, but
+  never upgrades an existing one. A DM or group whose eligible members open it only in browsers
+  stays plaintext until one of them opens it on a desktop.
 - **When**: the eligible device upgrades automatically when it opens the conversation and every
   member is ready. While someone is not, the conversation shows "Not encrypted yet: <name> has not
   set up encryption on a desktop device".
@@ -610,15 +630,26 @@ S4-4 implements the client message service; this is its contract.
 
 - The same `rim_mls` crate in wasm with the libcrux provider's portable code. OpenMLS's storage
   trait is synchronous and IndexedDB is not, so the crate keeps state in memory and writes the
-  entries an operation changed to IndexedDB before the operation's result is used (no ciphertext is
-  sent, and no plaintext shown, before the write lands).
+  entries an operation changed to IndexedDB, in one transaction with the plaintext rows and records
+  the operation produced, before the operation's result is used (no ciphertext is sent, and no
+  plaintext shown, before the write lands). A failed write rolls the in-memory state back, so a
+  message is still decrypted once.
 - **Plaintext store**: the web app has no message cache today; decrypt-once requires one, so S4-6
   adds an IndexedDB store of decrypted messages for encrypted conversations.
 - **Keys**: the MLS signature key and HPKE private keys are raw bytes in IndexedDB, because OpenMLS
   signs and decapsulates synchronously; the device key stays a non-extractable WebCrypto key and
   signs only `mls-key` statements and re-add requests. There is no keyring.
 - **Key packages** are refreshed only while a tab is open. A browser unused for 60 days leaves the
-  groups and is re-added when it comes back; what was sent meanwhile is not readable there.
+  groups and is re-added when it comes back: before uploading key packages it sends a re-add
+  request where the server still counts it as a group device and drops its group state elsewhere,
+  then joins from the Welcomes its pending adds bring. What was sent meanwhile is not readable
+  there.
+- **One tab** of a browser runs encryption for an account (a lock held while the page lives, the
+  Web Locks API); another tab says so and waits. Two tabs would advance two copies of the state.
+- **No migration** from the web client ("Migration"), and **no link previews** ("Server features in
+  encrypted conversations").
+- The web app's content security policy allows `'wasm-unsafe-eval'` in `script-src` to compile the
+  module.
 - The weaker-storage notice of `web-linked-device.md` is extended: "Encrypted conversations in this
   browser are only as safe as this browser profile."
 
@@ -902,8 +933,10 @@ incarnation; every leaf-verification failure; authenticated-data mismatches refu
 
 **Clients (S4-3 to S4-6).** End-to-end flows on two desktop instances against a dev server: new DM,
 migration with marker, new device joining and restoring from the archive, attachments, local
-search, mentions and keyword toasts, reports; plugin grants (S4-4); the web client in a headless
-browser with the same flows and the wasm test suite (S4-6).
+search, mentions and keyword toasts, reports; plugin grants (S4-4); the web client (S4-6): the
+crate's test suite in a headless browser (`wasm-bindgen-test`), and the same flows against a
+simulated server with the same wasm module and a fake IndexedDB (Vitest), by hand against a dev
+server and a desktop peer.
 
 ## Deferred
 
