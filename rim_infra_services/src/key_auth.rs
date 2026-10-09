@@ -48,8 +48,9 @@ const CHALLENGE_TTL_SECONDS: i64 = 120;
 /// Failure-limiter key shared by key logins and unauthenticated recoveries.
 const FAILURE_KEY: &str = "key_auth_failure";
 
-/// Most entries a key log submitted at enrollment may have. Every entry is verified before the
-/// user row is locked, so the bound keeps one request's work small.
+/// Most entries a key log may have: at enrollment (every entry is verified before the user row
+/// is locked, so the bound keeps one request's work small), and grown by identity rotations,
+/// so that every stored log can be enrolled on another server.
 const MAX_KEY_LOG_LEN: usize = 256;
 
 /// Longest `principalId` the public key log query looks up (a real one is 49 characters).
@@ -624,6 +625,13 @@ impl KeyAuthService for DefaultKeyAuthService {
         let (next, signer) = state.apply(&entry).map_err(invalid)?;
         if signer == RotationSigner::Identity && cmd.actor.is_none() {
             return Err(ServiceError::Unauthenticated);
+        }
+        // A recovery still goes through at the cap: locking someone out of their account is
+        // worse than a log too long to carry to another server.
+        if signer == RotationSigner::Identity && next.seq as usize >= MAX_KEY_LOG_LEN {
+            return Err(ServiceError::Validation(format!(
+                "a key log may have at most {MAX_KEY_LOG_LEN} entries"
+            )));
         }
         let cert = match &cmd.device {
             Some(device) => {
