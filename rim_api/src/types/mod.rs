@@ -12,6 +12,7 @@ pub(crate) mod command;
 pub(crate) mod command_result;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
+pub(crate) mod device_link;
 pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -54,6 +55,9 @@ pub use conversation::{
     ChannelListFilterInput, Conversation, ConversationTypeEnum, MutedConversation, UnreadCount,
 };
 pub use custom_emoji::CustomEmoji;
+pub use device_link::{
+    DeviceLink, DeviceLinkState, SealedMessage, SealedMessageInput, StartedDeviceLink,
+};
 pub use escalation::{
     EscalationActionKindGql, EscalationPolicyGql, EscalationRunStatusGql, EscalationStepGql,
     EscalationStepInputGql, EscalationTargetInputGql, EscalationTargetKindGql,
