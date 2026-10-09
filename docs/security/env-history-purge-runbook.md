@@ -5,6 +5,10 @@ The remaining step — scrubbing `.env` from published git history — rewrites 
 5 branches and force-pushes to GitHub, so it is left for **Jakub to run while present**,
 not executed unattended._
 
+_Update 2026-10-09: the server no longer reads `RIM_BOOTSTRAP_SECRET` at all (the deprecated
+`bootstrap` mutation was removed; the first account comes from `rim_server bootstrap-user`), so
+the leaked value cannot unlock anything. The DB credentials are still worth treating as exposed._
+
 ## What was already done this session (safe, reversible, high-value)
 
 1. **Rotated `RIM_BOOTSTRAP_SECRET`** in the working `.env` — the leaked value is now dead.

@@ -1,6 +1,6 @@
 use async_graphql::*;
 use rim_services::Actor;
-use rim_services::auth::command::{BootstrapCmd, LoginCmd, LogoutCmd};
+use rim_services::auth::command::{LoginCmd, LogoutCmd};
 use rim_services::auth::service::AuthService;
 
 use crate::auth_context::{require_actor, require_session_id};
@@ -12,40 +12,6 @@ pub(crate) struct AuthMutations;
 
 #[Object]
 impl AuthMutations {
-    #[graphql(
-        deprecation = "Use signupWithInvite with a bootstrapToken issued by the \
-        rim_server bootstrap-user CLI command. The BOOTSTRAP_SECRET path will be \
-        removed in the next minor release."
-    )]
-    async fn bootstrap(
-        &self,
-        ctx: &Context<'_>,
-        input: BootstrapInput,
-    ) -> Result<BootstrapPayload> {
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        let res = auth
-            .bootstrap(BootstrapCmd {
-                secret: input.secret,
-                username: input.username,
-                password: input.password,
-                server_name: input.server_name,
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
-            intent.set(AuthIntent::SetSession {
-                session_token: res.session_token,
-                csrf_token: res.csrf_token,
-            });
-        }
-
-        Ok(BootstrapPayload {
-            user_id: ID(res.user_id.to_string()),
-            server_id: ID(res.server_id.to_string()),
-        })
-    }
-
     async fn login(&self, ctx: &Context<'_>, input: LoginInput) -> Result<LoginPayload> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         // Remote IP for rate limiting — service enforces the limit.
@@ -129,20 +95,6 @@ impl PasswordResetMutations {
 
         Ok(true)
     }
-}
-
-#[derive(InputObject)]
-pub struct BootstrapInput {
-    pub secret: String,
-    pub username: String,
-    pub password: String,
-    pub server_name: String,
-}
-
-#[derive(SimpleObject)]
-pub struct BootstrapPayload {
-    pub user_id: ID,
-    pub server_id: ID,
 }
 
 #[derive(InputObject)]

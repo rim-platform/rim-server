@@ -3,24 +3,22 @@ use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use sea_orm::DatabaseConnection;
 use std::sync::OnceLock;
-use subtle::ConstantTimeEq;
 use tracing::{info, instrument, warn};
 
 use rim_auth::csrf::generate_csrf_token;
 use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
 use rim_core::auth::model::{NewInstanceInvite, NewInvite, NewSession};
-use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, BootstrapCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
+    AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
     ListInvitesQuery, LoginCmd, LogoutCmd, PreviewInviteTokenQuery, RevokeInstanceInviteCmd,
     RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::{
-    AcceptInviteResultDto, AuthSessionDto, BootstrapResultDto, CreateInstanceInviteResultDto,
-    CreateInviteResultDto, InstanceInviteDto, InviteDto, InviteTokenPreviewDto, InviteTokenType,
+    AcceptInviteResultDto, AuthSessionDto, CreateInstanceInviteResultDto, CreateInviteResultDto,
+    InstanceInviteDto, InviteDto, InviteTokenPreviewDto, InviteTokenType,
     JoinServerByInviteResultDto, LoginResultDto, SignupResultDto, WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
@@ -44,7 +42,6 @@ const LOGIN_ACCOUNT_SCOPE: &str = "account";
 pub struct DefaultAuthService {
     repos: AuthRepos,
     db: Option<DatabaseConnection>,
-    bootstrap_secret: Option<String>,
     session_ttl: Duration,
     observers: Observers,
     preview_rate_limiter: RegistrationRateLimiter,
@@ -66,13 +63,12 @@ impl DefaultAuthService {
     /// # Examples
     /// ```ignore
     /// let svc = DefaultAuthService::new(
-    ///     repos, Some(db), None, Duration::days(30), observers, email_sender, None,
+    ///     repos, Some(db), Duration::days(30), observers, email_sender, None,
     /// );
     /// ```
     pub fn new(
         repos: AuthRepos,
         db: Option<DatabaseConnection>,
-        bootstrap_secret: Option<String>,
         session_ttl: Duration,
         observers: Observers,
         email_sender: std::sync::Arc<dyn EmailSender>,
@@ -81,7 +77,6 @@ impl DefaultAuthService {
         Self {
             repos,
             db,
-            bootstrap_secret,
             session_ttl,
             observers,
             preview_rate_limiter: RegistrationRateLimiter::preview_default(),
@@ -160,7 +155,7 @@ impl DefaultAuthService {
     /// # Examples
     /// ```ignore
     /// let svc = DefaultAuthService::with_rate_limiters(
-    ///     repos, Some(db), None, Duration::days(30), observers,
+    ///     repos, Some(db), Duration::days(30), observers,
     ///     preview_rl, signup_rl, email_sender, None,
     /// );
     /// ```
@@ -168,7 +163,6 @@ impl DefaultAuthService {
     pub fn with_rate_limiters(
         repos: AuthRepos,
         db: Option<DatabaseConnection>,
-        bootstrap_secret: Option<String>,
         session_ttl: Duration,
         observers: Observers,
         preview_rate_limiter: RegistrationRateLimiter,
@@ -179,7 +173,6 @@ impl DefaultAuthService {
         Self {
             repos,
             db,
-            bootstrap_secret,
             session_ttl,
             observers,
             preview_rate_limiter,
@@ -440,14 +433,6 @@ impl DefaultAuthService {
         Ok((sess, raw_token, csrf))
     }
 
-    async fn ensure_no_users_exist(&self) -> ServiceResult<()> {
-        let exists = self.repos.user_repo.any_users_exist().await?;
-        if exists {
-            return Err(ServiceError::PermissionDenied);
-        }
-        Ok(())
-    }
-
     /// Create a new user inside an open transaction.
     ///
     /// Checks username uniqueness, then email uniqueness (case-insensitive),
@@ -551,161 +536,6 @@ impl DefaultAuthService {
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
-    #[instrument(name = "auth.bootstrap", skip_all, fields(username = %cmd.username))]
-    async fn bootstrap(&self, cmd: BootstrapCmd) -> ServiceResult<BootstrapResultDto> {
-        let BootstrapCmd {
-            secret,
-            username,
-            password,
-            server_name,
-        } = cmd;
-        let (secret, username, password, server_name) = (
-            secret.as_str(),
-            username.as_str(),
-            password.as_str(),
-            server_name.as_str(),
-        );
-        info!(username = %username, "check bootstrap secret");
-        let expected = self
-            .bootstrap_secret
-            .as_deref()
-            .ok_or(ServiceError::PermissionDenied)?;
-        // M3 hardening: constant-time comparison prevents timing side-channel
-        // that would allow an attacker to brute-force the bootstrap secret
-        // byte-by-byte via response-time differences.
-        if secret.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 0 {
-            return Err(ServiceError::PermissionDenied);
-        }
-
-        self.ensure_no_users_exist().await?;
-
-        Self::validate_username(username)?;
-        Self::validate_password(password)?;
-
-        info!(username = %username, "hash the password");
-        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
-
-        // Run all writes inside a single transaction when DB is available.
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-
-        info!(username = %username, "add user");
-        // Bootstrap (BOOTSTRAP_SECRET path) predates the email requirement. Supply
-        // a synthetic placeholder so the NOT NULL constraint is satisfied. The operator
-        // must update their email via the profile-edit mutation.
-        let user = repos
-            .user_repo
-            .create_user(rim_core::user::model::NewUser {
-                username: username.to_string(),
-                password: password_hash,
-                email: format!("{}@local.invalid", username.to_lowercase()),
-                display_name: None,
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, kind = ?e.kind(), "create_user failed");
-                ServiceError::from(e)
-            })?;
-
-        info!(username = %username, "add server");
-        let server = repos
-            .server_repo
-            .create_server(server_name)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, kind = ?e.kind(), "create_server failed");
-                ServiceError::from(e)
-            })?;
-
-        info!(username = %username, "add member");
-        let _member = add_workspace_member(
-            repos.server_member_repo.as_ref(),
-            repos.conversation_repo.as_ref(),
-            repos.conversation_member_repo.as_ref(),
-            server.id,
-            user.id,
-            ServerMemberRole::Owner,
-        )
-        .await?;
-
-        // Create default #general and #random channels.
-        for channel_name in &["general", "random"] {
-            match repos
-                .conversation_repo
-                .create_conversation_with_members(
-                    NewConversation {
-                        server_id: server.id,
-                        conversation_type: ConversationType::Channel,
-                        title: Some(channel_name.to_string()),
-                        is_private: false,
-                        created_by: Some(user.id),
-                    },
-                    &[user.id],
-                )
-                .await
-            {
-                Ok(conv) => {
-                    info!(
-                        server_id = %server.id,
-                        conversation_id = %conv.id,
-                        channel = %channel_name,
-                        "created default channel"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        server_id = %server.id,
-                        channel = %channel_name,
-                        error = %err,
-                        "failed to create default channel during bootstrap"
-                    );
-                }
-            }
-        }
-
-        info!(username = %username, "create session");
-        let raw_token = generate_session_token();
-        let token_hash = hash_token(&raw_token);
-        let expires_at: DateTime<Utc> = Utc::now() + self.session_ttl;
-        let sess = repos
-            .session_repo
-            .create_session(NewSession {
-                user_id: user.id,
-                token_hash,
-                expires_at,
-                user_agent: None,
-                ip: None,
-            })
-            .await?;
-
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-
-        let csrf = Self::new_csrf_token(&raw_token);
-
-        info!(user_id = %user.id, server_id = %server.id, "bootstrapped instance");
-
-        Ok(BootstrapResultDto {
-            user_id: user.id,
-            server_id: server.id,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_token,
-            csrf_token: csrf,
-        })
-    }
-
     #[instrument(name = "auth.login", skip_all, fields(username = %cmd.username))]
     async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto> {
         let LoginCmd {

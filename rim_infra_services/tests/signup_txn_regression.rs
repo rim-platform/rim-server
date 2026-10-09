@@ -61,7 +61,6 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
     DefaultAuthService::new(
         repos,
         Some(db),
-        None, // no bootstrap secret needed for these paths
         Duration::days(30),
         noop_observers(),
         std::sync::Arc::new(rim_infra_services::email::LogEmailSender),

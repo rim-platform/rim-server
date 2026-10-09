@@ -26,16 +26,6 @@ pub struct InviteDto {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BootstrapResultDto {
-    pub user_id: UserId,
-    pub server_id: ServerId,
-    pub session: AuthSessionDto,
-    pub session_token: String,
-    pub csrf_token: String,
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoginResultDto {
     pub user_id: UserId,
     pub session: AuthSessionDto,
