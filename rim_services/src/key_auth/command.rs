@@ -32,6 +32,9 @@ pub struct EnrollIdentityKeyCmd {
     pub key_log: Vec<SignedPayload>,
     /// Certificate of the device doing the enrolling.
     pub device: SignedPayload,
+    /// A `login` statement signed by that device over a fresh challenge from this server, so
+    /// a log and certificate copied from another server cannot be enrolled here.
+    pub proof: SignedPayload,
 }
 
 #[derive(Debug, Clone)]

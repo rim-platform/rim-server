@@ -481,6 +481,40 @@ mod tests {
             (user_id, session.id)
         }
 
+        /// A `login` statement by `device` over a fresh challenge, as enrollment requires.
+        async fn proof(
+            &self,
+            device: &SigningKey,
+            state: &KeyState,
+            device_id: Uuid,
+        ) -> SignedPayload {
+            self.proof_for(device, state, device_id, AUDIENCE).await
+        }
+
+        async fn proof_for(
+            &self,
+            device: &SigningKey,
+            state: &KeyState,
+            device_id: Uuid,
+            audience: &str,
+        ) -> SignedPayload {
+            let challenge = self
+                .svc
+                .issue_challenge(IssueKeyChallengeCmd {
+                    remote_ip: IP.to_string(),
+                })
+                .await
+                .unwrap();
+            payload(device_login(
+                device,
+                state,
+                device_id,
+                challenge.challenge_id.into(),
+                &challenge.nonce,
+                audience,
+            ))
+        }
+
         async fn enroll(&self, seed: u8) -> Enrolled {
             let (user_id, session) = self.add_user_with_session().await;
             let id = TestIdentity::new(seed);
@@ -489,6 +523,7 @@ mod tests {
             let device_id = Uuid::now_v7();
             let device = signing_key(seed.wrapping_add(50));
             let cert = id.device_cert(&state, device_id, &device, "Laptop");
+            let proof = self.proof(&device, &state, device_id).await;
             let dto = self
                 .svc
                 .enroll(EnrollIdentityKeyCmd {
@@ -496,6 +531,7 @@ mod tests {
                     session_id: session,
                     key_log: vec![payload(inception)],
                     device: payload(cert),
+                    proof,
                 })
                 .await
                 .expect("enroll");
@@ -596,7 +632,8 @@ mod tests {
         let rotation = id.rotate_with_identity(&s0, 2);
         let (s1, _) = s0.apply(&rotation).unwrap();
         let device = signing_key(30);
-        let cert = id.device_cert(&s1, Uuid::now_v7(), &device, "Phone");
+        let device_id = Uuid::now_v7();
+        let cert = id.device_cert(&s1, device_id, &device, "Phone");
 
         let dto = h
             .svc
@@ -605,6 +642,7 @@ mod tests {
                 session_id: session,
                 key_log: vec![payload(inception), payload(rotation)],
                 device: payload(cert),
+                proof: h.proof(&device, &s1, device_id).await,
             })
             .await
             .unwrap();
@@ -636,7 +674,8 @@ mod tests {
         let other = TestIdentity::new(2);
         let inception = other.inception();
         let state = KeyState::from_inception(&inception).unwrap();
-        let cert = other.device_cert(&state, Uuid::now_v7(), &signing_key(60), "Other");
+        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
+        let cert = other.device_cert(&state, device_id, &device, "Other");
         let err = h
             .svc
             .enroll(EnrollIdentityKeyCmd {
@@ -644,6 +683,7 @@ mod tests {
                 session_id: e.session,
                 key_log: vec![payload(inception)],
                 device: payload(cert),
+                proof: h.proof(&device, &state, device_id).await,
             })
             .await
             .unwrap_err();
@@ -651,8 +691,8 @@ mod tests {
 
         // Another account, the same identity.
         let (user_id, session) = h.add_user_with_session().await;
-        let cert =
-            e.id.device_cert(&e.state, Uuid::now_v7(), &signing_key(61), "Other");
+        let (device_id, device) = (Uuid::now_v7(), signing_key(61));
+        let cert = e.id.device_cert(&e.state, device_id, &device, "Other");
         let err = h
             .svc
             .enroll(EnrollIdentityKeyCmd {
@@ -660,6 +700,7 @@ mod tests {
                 session_id: session,
                 key_log: vec![payload(e.id.inception())],
                 device: payload(cert),
+                proof: h.proof(&device, &e.state, device_id).await,
             })
             .await
             .unwrap_err();
@@ -673,7 +714,8 @@ mod tests {
         let id = TestIdentity::new(1);
         let state = KeyState::from_inception(&id.inception()).unwrap();
         let stranger = TestIdentity::new(2);
-        let cert = stranger.device_cert(&state, Uuid::now_v7(), &signing_key(60), "Laptop");
+        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
+        let cert = stranger.device_cert(&state, device_id, &device, "Laptop");
 
         let err = h
             .svc
@@ -682,11 +724,90 @@ mod tests {
                 session_id: session,
                 key_log: vec![payload(id.inception())],
                 device: payload(cert),
+                proof: h.proof(&device, &state, device_id).await,
             })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
         assert!(h.state.lock().unwrap().principals.is_empty());
+    }
+
+    /// A copied log and certificate, as another server would hold them, without the device's
+    /// own proof over a challenge from this server.
+    #[tokio::test]
+    async fn enroll_needs_a_fresh_proof_from_the_enrolling_device() {
+        let h = harness();
+        let (user_id, session) = h.add_user_with_session().await;
+        let id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).unwrap();
+        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
+        let cert = id.device_cert(&state, device_id, &device, "Laptop");
+        let enroll = |proof: SignedPayload| EnrollIdentityKeyCmd {
+            actor: Actor::new(user_id),
+            session_id: session,
+            key_log: vec![payload(inception.clone())],
+            device: payload(cert.clone()),
+            proof,
+        };
+
+        let other_key = h.proof(&signing_key(61), &state, device_id).await;
+        let other_device = h.proof(&device, &state, Uuid::now_v7()).await;
+        let other_server = h
+            .proof_for(&device, &state, device_id, "other.example.com")
+            .await;
+        for bad in [other_key, other_device, other_server] {
+            let err = h.svc.enroll(enroll(bad)).await.unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        }
+        // A proof whose challenge was never issued here.
+        let forged = payload(device_login(
+            &device,
+            &state,
+            device_id,
+            Uuid::now_v7(),
+            "bm9uY2U",
+            AUDIENCE,
+        ));
+        let err = h.svc.enroll(enroll(forged)).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        assert!(h.state.lock().unwrap().principals.is_empty());
+
+        let good = h.proof(&device, &state, device_id).await;
+        h.svc.enroll(enroll(good.clone())).await.unwrap();
+        // The challenge is spent.
+        let (user_id, session) = h.add_user_with_session().await;
+        let err = h
+            .svc
+            .enroll(EnrollIdentityKeyCmd {
+                actor: Actor::new(user_id),
+                session_id: session,
+                ..enroll(good)
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn enroll_rejects_an_oversized_key_log() {
+        let h = harness();
+        let (user_id, session) = h.add_user_with_session().await;
+        let id = TestIdentity::new(1);
+        let state = KeyState::from_inception(&id.inception()).unwrap();
+        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
+        let err = h
+            .svc
+            .enroll(EnrollIdentityKeyCmd {
+                actor: Actor::new(user_id),
+                session_id: session,
+                key_log: vec![payload(id.inception()); 257],
+                device: payload(id.device_cert(&state, device_id, &device, "Laptop")),
+                proof: h.proof(&device, &state, device_id).await,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
     }
 
     // ── Login ─────────────────────────────────────────────────────────────────────────────
@@ -1110,6 +1231,24 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn anonymous_recovery_for_an_unknown_principal_is_unauthenticated() {
+        let h = harness();
+        let mut stranger = TestIdentity::new(5);
+        let state = KeyState::from_inception(&stranger.inception()).unwrap();
+        let err = h
+            .svc
+            .rotate(RotateIdentityKeyCmd {
+                actor: None,
+                entry: payload(stranger.recover(&state, 6)),
+                device: None,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
     }
 
     #[tokio::test]

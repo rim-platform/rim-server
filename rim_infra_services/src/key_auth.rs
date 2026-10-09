@@ -48,6 +48,10 @@ const CHALLENGE_TTL_SECONDS: i64 = 120;
 /// Failure-limiter key shared by key logins and unauthenticated recoveries.
 const FAILURE_KEY: &str = "key_auth_failure";
 
+/// Most entries a key log submitted at enrollment may have. Every entry is verified before the
+/// user row is locked, so the bound keeps one request's work small.
+const MAX_KEY_LOG_LEN: usize = 256;
+
 #[derive(Clone)]
 pub struct KeyAuthRepos {
     pub user_repo: Arc<dyn UserRepository>,
@@ -228,6 +232,12 @@ impl DefaultKeyAuthService {
         })
     }
 
+    /// Whether a proof's `audience` names this server.
+    fn audience_accepted(&self, audience: &str) -> bool {
+        let audience = audience.to_ascii_lowercase();
+        self.accepted_audiences.contains(&audience)
+    }
+
     /// Count an attempt against the caller's failure budget; `RateLimited` once over the limit.
     /// Returns the instant recorded, which a refund must name.
     fn reserve_failure(&self, remote_ip: &str) -> ServiceResult<DateTime<Utc>> {
@@ -291,11 +301,7 @@ impl DefaultKeyAuthService {
             );
             return Err(ServiceError::PermissionDenied);
         }
-        if !self
-            .accepted_audiences
-            .iter()
-            .any(|a| *a == login.audience.to_ascii_lowercase())
-        {
+        if !self.audience_accepted(&login.audience) {
             return Err(fail("audience_mismatch"));
         }
         if !self
@@ -357,7 +363,28 @@ impl KeyAuthService for DefaultKeyAuthService {
         }
         let (user_id, device) = verified?;
 
+        // A revocation (or recovery) commits under the user row lock. Taking the same lock and
+        // reading the device again means a revocation that raced the checks above either ends
+        // this session too or is seen here; it never leaves a live session on a revoked device.
         let (scope, repos) = self.begin().await?;
+        if !repos.key_identity_repo.lock_user(user_id).await? {
+            return Err(ServiceError::Unauthenticated);
+        }
+        let current = repos
+            .key_identity_repo
+            .get_device(user_id, device.device_id)
+            .await?;
+        if current.is_none_or(|d| d.revoked_at.is_some()) {
+            info!(
+                target = "audit",
+                event = "key_login_failure",
+                reason = "device_revoked",
+                user_id = %user_id,
+                device_id = %device.device_id,
+                "key login refused: device revoked during login"
+            );
+            return Err(ServiceError::PermissionDenied);
+        }
         let raw_token = generate_session_token();
         let session = repos
             .session_repo
@@ -400,9 +427,29 @@ impl KeyAuthService for DefaultKeyAuthService {
     #[instrument(name = "key_auth.enroll", skip_all, fields(actor_id = %cmd.actor.user_id))]
     async fn enroll(&self, cmd: EnrollIdentityKeyCmd) -> ServiceResult<KeyIdentityDto> {
         let user_id = cmd.actor.user_id;
+        if cmd.key_log.len() > MAX_KEY_LOG_LEN {
+            return Err(ServiceError::Validation(format!(
+                "a key log may have at most {MAX_KEY_LOG_LEN} entries"
+            )));
+        }
         let statements: Vec<SignedStatement> = cmd.key_log.iter().map(to_statement).collect();
         let state = KeyState::replay(&statements).map_err(invalid)?;
         let cert = verify_device_cert(&state, &to_statement(&cmd.device)).map_err(invalid)?;
+        // Proof that the caller holds the device key, over a challenge from this server. The log
+        // and certificate are public and portable, so without it anyone who has seen them could
+        // enroll someone else's principal on another server.
+        let proof = UnverifiedLogin::read(&to_statement(&cmd.proof)).map_err(invalid)?;
+        if proof.principal_id != state.principal_id || proof.device_id != cert.device_id {
+            return Err(ServiceError::Validation(
+                "the proof must be signed by the device being enrolled".to_string(),
+            ));
+        }
+        let proof = proof.verify(&cert.device_key).map_err(invalid)?;
+        if !self.audience_accepted(&proof.audience) {
+            return Err(ServiceError::Validation(
+                "the proof names another server as its audience".to_string(),
+            ));
+        }
         // `replay` checked that entry 0 is the inception and every later entry a rotation.
         let entries = statements
             .iter()
@@ -420,6 +467,15 @@ impl KeyAuthService for DefaultKeyAuthService {
             .collect();
 
         let (scope, repos) = self.begin().await?;
+        if !repos
+            .key_challenge_repo
+            .consume(proof.challenge_id.into(), &proof.nonce)
+            .await?
+        {
+            return Err(ServiceError::Validation(
+                "the challenge is unknown, already used or expired".to_string(),
+            ));
+        }
         if !repos.key_identity_repo.lock_user(user_id).await? {
             return Err(ServiceError::NotFound);
         }
@@ -548,7 +604,11 @@ impl KeyAuthService for DefaultKeyAuthService {
             .key_identity_repo
             .find_user_by_principal_id(&principal_id)
             .await?
-            .ok_or(ServiceError::NotFound)?;
+            .ok_or(if cmd.actor.is_some() {
+                ServiceError::NotFound
+            } else {
+                ServiceError::Unauthenticated
+            })?;
         if let Some(actor) = &cmd.actor
             && actor.user_id != user_id
         {
