@@ -37,6 +37,7 @@ pub mod storage;
 pub mod typing;
 pub mod user;
 pub mod workspace_feature;
+pub mod workspace_plugin;
 pub mod workspace_state;
 
 use rim_core::principal::model::Principal;

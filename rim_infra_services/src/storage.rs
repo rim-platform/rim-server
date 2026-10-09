@@ -5,15 +5,17 @@ use async_trait::async_trait;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::server::model::ServerId;
 use rim_core::storage::{StorageBackend, StorageError, StoredFile};
+use rim_core::workspace_plugin::repository::WorkspacePluginRepository;
 use rim_services::message_attachment::{MAX_ATTACHMENT_BYTES, UPLOAD_TICKET_TTL_MINUTES};
 use rim_services::storage::service::{QuotaUsage, StorageService};
 use rim_services::{ServiceError, ServiceResult};
 
 pub struct DefaultStorageService {
     backend: Arc<dyn StorageBackend>,
-    /// Source of per-workspace usage: attachments are the only per-workspace uploads large
-    /// enough to need a quota.
+    /// Sources of per-workspace usage: attachments and plugin bundles are the per-workspace
+    /// uploads large enough to need a quota.
     attachment_repo: Arc<dyn MessageAttachmentRepository>,
+    workspace_plugin_repo: Arc<dyn WorkspacePluginRepository>,
     max_workspace_storage_bytes: u64,
 }
 
@@ -21,11 +23,13 @@ impl DefaultStorageService {
     pub fn new(
         backend: Arc<dyn StorageBackend>,
         attachment_repo: Arc<dyn MessageAttachmentRepository>,
+        workspace_plugin_repo: Arc<dyn WorkspacePluginRepository>,
         max_workspace_storage_bytes: u64,
     ) -> Self {
         Self {
             backend,
             attachment_repo,
+            workspace_plugin_repo,
             max_workspace_storage_bytes,
         }
     }
@@ -97,6 +101,10 @@ impl StorageService for DefaultStorageService {
         self.backend.delete(key).await.map_err(map_storage_error)
     }
 
+    async fn download_file(&self, key: &str) -> ServiceResult<Vec<u8>> {
+        self.backend.get(key).await.map_err(map_storage_error)
+    }
+
     async fn get_quota_usage(&self, workspace_id: ServerId) -> ServiceResult<QuotaUsage> {
         let pending_since =
             chrono::Utc::now() - chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES);
@@ -108,8 +116,12 @@ impl StorageService for DefaultStorageService {
                 i64::try_from(MAX_ATTACHMENT_BYTES).unwrap_or(i64::MAX),
             )
             .await?;
+        let bundle_bytes = self
+            .workspace_plugin_repo
+            .bundle_bytes(workspace_id)
+            .await?;
         Ok(QuotaUsage {
-            used_bytes: usage.total_bytes,
+            used_bytes: usage.total_bytes.saturating_add(bundle_bytes),
             max_bytes: Some(self.max_workspace_storage_bytes),
             file_count: usage.count,
         })
@@ -122,13 +134,26 @@ mod tests {
     use crate::file_storage::LocalFileStorage;
     use rim_core::message_attachment::model::AttachmentUsage;
     use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
+    use rim_core::workspace_plugin::repository::MockWorkspacePluginRepository;
     use tempfile::TempDir;
 
-    fn service(backend: Arc<dyn StorageBackend>, usage: AttachmentUsage) -> DefaultStorageService {
+    fn service_with_bundles(
+        backend: Arc<dyn StorageBackend>,
+        usage: AttachmentUsage,
+        bundle_bytes: u64,
+    ) -> DefaultStorageService {
         let mut repo = MockMessageAttachmentRepository::new();
         repo.expect_usage_for_server()
             .returning(move |_, _, _| Box::pin(async move { Ok(usage) }));
-        DefaultStorageService::new(backend, Arc::new(repo), 1_073_741_824)
+        let mut plugins = MockWorkspacePluginRepository::new();
+        plugins
+            .expect_bundle_bytes()
+            .returning(move |_| Box::pin(async move { Ok(bundle_bytes) }));
+        DefaultStorageService::new(backend, Arc::new(repo), Arc::new(plugins), 1_073_741_824)
+    }
+
+    fn service(backend: Arc<dyn StorageBackend>, usage: AttachmentUsage) -> DefaultStorageService {
+        service_with_bundles(backend, usage, 0)
     }
 
     #[tokio::test]
@@ -147,6 +172,11 @@ mod tests {
 
         let data = backend.get("test/hello.txt").await.unwrap();
         assert_eq!(data, b"hello world");
+        assert_eq!(svc.download_file("test/hello.txt").await.unwrap(), data);
+        assert!(matches!(
+            svc.download_file("test/missing.txt").await,
+            Err(ServiceError::NotFound)
+        ));
     }
 
     #[tokio::test]
@@ -182,5 +212,23 @@ mod tests {
         assert_eq!(usage.used_bytes, 4096);
         assert_eq!(usage.max_bytes, Some(1_073_741_824));
         assert_eq!(usage.file_count, 3);
+    }
+
+    #[tokio::test]
+    async fn quota_usage_counts_plugin_bundles() {
+        let tmp = TempDir::new().unwrap();
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
+        let svc = service_with_bundles(
+            backend,
+            AttachmentUsage {
+                total_bytes: 4096,
+                count: 3,
+            },
+            1605,
+        );
+
+        let usage = svc.get_quota_usage(ServerId::new()).await.unwrap();
+        assert_eq!(usage.used_bytes, 4096 + 1605);
     }
 }

@@ -333,6 +333,23 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
+    /// An entry of the workspace's plugin registry was added, updated or removed. Visible to
+    /// every member, guests included; it carries no entry data, so clients refetch
+    /// `workspacePlugins`.
+    WorkspacePluginChanged {
+        workspace_id: ServerId,
+        plugin_id: String,
+        change: WorkspacePluginChange,
+    },
+}
+
+/// What happened to a registry entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspacePluginChange {
+    Added,
+    Updated,
+    Removed,
 }
 
 /// Event payload for message-related events.
@@ -422,7 +439,8 @@ impl WorkspaceEvent {
             | Self::IncidentUpdated { workspace_id, .. }
             | Self::EscalationStepFired { workspace_id, .. }
             | Self::IncidentAcknowledged { workspace_id, .. }
-            | Self::NotificationDue { workspace_id, .. } => workspace_id.to_string(),
+            | Self::NotificationDue { workspace_id, .. }
+            | Self::WorkspacePluginChanged { workspace_id, .. } => workspace_id.to_string(),
         }
     }
 
@@ -485,8 +503,10 @@ impl WorkspaceEvent {
                 WorkspaceStateScopeDto::Server => None,
                 WorkspaceStateScopeDto::User => user_id.as_ref().map(std::slice::from_ref),
             },
-            // Pipeline events are visible to all workspace members.
-            Self::PipelineFired { .. } | Self::PipelineSuspended { .. } => None,
+            // Pipeline and plugin registry events are visible to all workspace members.
+            Self::PipelineFired { .. }
+            | Self::PipelineSuspended { .. }
+            | Self::WorkspacePluginChanged { .. } => None,
             Self::IncidentDeclared {
                 member_user_ids, ..
             }

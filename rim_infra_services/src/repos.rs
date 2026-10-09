@@ -43,6 +43,7 @@ use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::skill_profile::repository::SkillProfileRepository;
 use rim_core::user::repository::UserRepository;
 use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
+use rim_core::workspace_plugin::repository::WorkspacePluginRepository;
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_infra_db::DbHandle;
 
@@ -94,6 +95,7 @@ pub struct AppRepos {
     pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
     pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
     pub device_link_repo: Arc<dyn DeviceLinkRepository>,
+    pub workspace_plugin_repo: Arc<dyn WorkspacePluginRepository>,
 }
 
 #[derive(Clone)]
@@ -365,6 +367,21 @@ impl AppRepos {
         crate::device_link::DeviceLinkRepos {
             user_repo: Arc::clone(&self.user_repo),
             device_link_repo: Arc::clone(&self.device_link_repo),
+        }
+    }
+
+    pub fn for_workspace_plugin(&self) -> crate::workspace_plugin::WorkspacePluginRepos {
+        crate::workspace_plugin::WorkspacePluginRepos {
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            workspace_plugin_repo: Arc::clone(&self.workspace_plugin_repo),
+        }
+    }
+
+    pub fn for_plugin_bundle(&self) -> crate::plugin_bundle::PluginBundleRepos {
+        crate::plugin_bundle::PluginBundleRepos {
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            workspace_plugin_repo: Arc::clone(&self.workspace_plugin_repo),
         }
     }
 
@@ -735,6 +752,11 @@ impl AppRepos {
             ),
             device_link_repo: Arc::new(
                 sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(handle.clone()),
+            ),
+            workspace_plugin_repo: Arc::new(
+                sea_orm_impl::workspace_plugin::SeaOrmWorkspacePluginRepository::new(
+                    handle.clone(),
+                ),
             ),
         }
     }

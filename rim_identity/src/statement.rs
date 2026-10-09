@@ -60,6 +60,7 @@ pub enum Purpose {
     DeviceRevoke,
     ProfileCard,
     Login,
+    PluginManifest,
 }
 
 impl Purpose {
@@ -71,6 +72,7 @@ impl Purpose {
             Self::DeviceRevoke => b"rim.device-revoke.v1\0",
             Self::ProfileCard => b"rim.profile-card.v1\0",
             Self::Login => b"rim.login.v1\0",
+            Self::PluginManifest => b"rim.plugin-manifest.v1\0",
         }
     }
 
@@ -78,10 +80,12 @@ impl Purpose {
     ///
     /// Sized for hybrid Ed25519 + ML-DSA keys, whose tagged text is about 1.8 KB for ML-DSA-44
     /// and 3.5 KB for ML-DSA-87: a key log rotation names two keys, and a profile card lists up
-    /// to 32 device keys. Version 1 statements share the caps.
+    /// to 32 device keys. A plugin manifest embeds a manifest of up to 64 KiB. Version 1
+    /// statements share the caps.
     pub fn max_payload_len(self) -> usize {
         match self {
             Self::ProfileCard => 128 * 1024,
+            Self::PluginManifest => 96 * 1024,
             _ => 16 * 1024,
         }
     }

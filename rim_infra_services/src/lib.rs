@@ -41,6 +41,7 @@ pub mod oncall;
 pub(crate) mod password_reset;
 pub(crate) mod pin;
 pub(crate) mod pipeline;
+pub(crate) mod plugin_bundle;
 pub mod presence;
 pub(crate) mod provider;
 pub(crate) mod read_state;
@@ -56,6 +57,7 @@ pub(crate) mod thread;
 pub mod typing;
 pub(crate) mod user;
 pub(crate) mod workspace_feature;
+pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
 pub(crate) mod url_encode;
@@ -111,6 +113,12 @@ mod command_tests;
 
 #[cfg(test)]
 mod device_link_unit_tests;
+
+#[cfg(test)]
+mod workspace_plugin_unit_tests;
+
+#[cfg(test)]
+mod plugin_bundle_unit_tests;
 
 pub use alert_rate_limiter::AlertRateLimiter;
 pub use auth::DefaultAuthService;

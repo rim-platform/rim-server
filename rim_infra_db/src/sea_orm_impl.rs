@@ -44,4 +44,5 @@ pub mod user;
 pub mod user_command;
 pub(crate) mod user_lock;
 pub mod workspace_feature;
+pub mod workspace_plugin;
 pub mod workspace_state;

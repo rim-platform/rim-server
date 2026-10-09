@@ -817,6 +817,18 @@ impl AppServiceProvider for TestAppServiceProvider {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::device_link::service::MockDeviceLinkService::new())
     }
+
+    fn workspace_plugin_service(
+        &self,
+    ) -> Arc<dyn rim_services::workspace_plugin::service::WorkspacePluginService> {
+        Arc::new(rim_services::workspace_plugin::service::MockWorkspacePluginService::new())
+    }
+
+    fn plugin_bundle_service(
+        &self,
+    ) -> Arc<dyn rim_services::workspace_plugin::service::PluginBundleService> {
+        Arc::new(rim_services::workspace_plugin::service::MockPluginBundleService::new())
+    }
 }
 
 fn schema_with_mocks(

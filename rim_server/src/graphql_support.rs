@@ -519,6 +519,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn workspace_plugin_mutations_need_csrf() {
+        for query in [
+            r#"mutation { addWorkspacePlugin(input: { serverId: "s", statement: { payload: "p", signature: "s" }, status: REQUIRED }) { id } }"#,
+            r#"mutation { updateWorkspacePlugin(input: { serverId: "s", pluginId: "p", status: RECOMMENDED }) { id } }"#,
+            r#"mutation { removeWorkspacePlugin(serverId: "s", pluginId: "p") }"#,
+        ] {
+            let request = async_graphql::Request::new(query);
+            assert!(request_needs_csrf(&request, false), "{query}");
+            assert!(request_needs_csrf(&request, true), "{query}");
+            let batch = async_graphql::BatchRequest::Single(request);
+            let signed_in = TestRequest::default()
+                .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
+                .to_http_request();
+            assert!(
+                enforce_csrf_for_batch(&signed_in, &batch).is_err(),
+                "{query}"
+            );
+        }
+    }
+
     // ── H1 / H3 tests ───────────────────────────────────────────────────────
 
     /// H3 — `force_secure_cookies = true` always returns `true`, regardless of
