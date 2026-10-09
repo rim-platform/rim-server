@@ -85,7 +85,7 @@ pub fn verify_profile_card(
     card: &SignedStatement,
 ) -> IdentityResult<ProfileCard> {
     let raw: RawProfileCard = parse(Purpose::ProfileCard, &card.payload)?;
-    check_header(raw.v, &raw.kind, "profile-card")?;
+    let version = check_header(raw.v, &raw.kind, "profile-card")?;
     if raw.principal_id != state.principal_id {
         return Err(IdentityError::PrincipalMismatch);
     }
@@ -130,11 +130,11 @@ pub fn verify_profile_card(
         }
         devices.push(CardDevice {
             device_id: device.device_id,
-            device_key: PublicKey::parse(&device.device_key, "deviceKey")?,
+            device_key: PublicKey::parse_for(version, &device.device_key, "deviceKey")?,
         });
     }
 
-    verify(Purpose::ProfileCard, &state.identity_key, card)?;
+    verify(Purpose::ProfileCard, version, &state.identity_key, card)?;
     Ok(ProfileCard {
         principal_id: raw.principal_id,
         version: raw.version,
@@ -148,8 +148,9 @@ pub fn verify_profile_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::statement::StatementVersion::{V1, V2};
     use crate::statement::sign;
-    use crate::testing::{TestIdentity, profile_card_payload, signing_key};
+    use crate::testing::{SigningKey, TestIdentity, key_text, profile_card_payload, signing_key};
 
     fn setup() -> (TestIdentity, KeyState) {
         let id = TestIdentity::new(1);
@@ -177,8 +178,8 @@ mod tests {
     #[test]
     fn card_must_be_signed_by_identity_key() {
         let (id, state) = setup();
-        let payload = profile_card_payload(&state, 1, "Jakub", &[], &[]);
-        let card = sign(Purpose::ProfileCard, &id.recovery, payload);
+        let payload = profile_card_payload(V1, &state, 1, "Jakub", &[], &[]);
+        let card = sign(Purpose::ProfileCard, V1, &id.recovery, payload);
         assert_eq!(
             verify_profile_card(&state, &card),
             Err(IdentityError::BadSignature)
@@ -231,5 +232,31 @@ mod tests {
             verify_profile_card(&next, &card),
             Err(IdentityError::StaleKey { .. })
         ));
+    }
+
+    #[test]
+    fn version_2_card_fits_32_hybrid_sized_devices() {
+        let (mut id, state) = setup();
+        id.version = V2;
+        let keys: Vec<SigningKey> = (0..MAX_CARD_DEVICES as u8)
+            .map(|i| signing_key(i + 20))
+            .collect();
+        let devices: Vec<(Uuid, &SigningKey)> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (Uuid::from_u128(i as u128 + 1), k))
+            .collect();
+        let card = id.profile_card(&state, 1, "J", &["https://relay.rim.chat"], &devices);
+        let verified = verify_profile_card(&state, &card).expect("v2 card");
+        assert_eq!(verified.devices.len(), MAX_CARD_DEVICES);
+
+        // A hybrid Ed25519 + ML-DSA-44 key is 32 + 1,312 bytes; tagged, about 1.8 KB of text.
+        // Pad each listed key to that size and check the card still fits the cap.
+        let hybrid_key_text = format!("ed25519-mldsa44:{}", "A".repeat((32 + 1312) * 4 / 3 + 1));
+        let mut padded = card.payload.clone();
+        for key in &keys {
+            padded = padded.replace(&key_text(V2, key), &hybrid_key_text);
+        }
+        assert!(padded.len() < Purpose::ProfileCard.max_payload_len());
     }
 }

@@ -28,9 +28,11 @@ pub use device::{
     DeviceCert, DeviceRevocation, MAX_DEVICE_NAME_CHARS, RevocationSigner, UnverifiedRevocation,
     verify_device_cert,
 };
-pub use encoding::{PRINCIPAL_ID_PREFIX, PublicKey, is_principal_id, principal_id_for_inception};
+pub use encoding::{
+    Algorithm, PRINCIPAL_ID_PREFIX, PublicKey, is_principal_id, principal_id_for_inception,
+};
 pub use error::{IdentityError, IdentityResult};
 pub use key_log::{KeyState, RotationSigner, rotation_principal_id};
 pub use login::{LoginProof, UnverifiedLogin};
 pub use profile_card::{CardDevice, ProfileCard, verify_profile_card};
-pub use statement::{Purpose, STATEMENT_VERSION, SignedStatement, sign};
+pub use statement::{Purpose, SignedStatement, StatementVersion, sign};
