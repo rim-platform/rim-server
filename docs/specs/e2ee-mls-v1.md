@@ -389,7 +389,7 @@ fields refused, every field present, at most 64 KiB):
 |---|---|
 | `id` | The message id; must equal the row id and the authenticated data's `messageId` |
 | `rev` | 0 when sent, +1 per edit; a client never replaces a revision it holds with a lower one |
-| `threadRootId` | The thread root's message id for a thread reply, else `null`; must match the row's thread |
+| `threadRootId` | The thread root's message id for a thread reply, else `null`; must match the row's thread (the receiver maps the row's `threadId` to its root with `thread(…).rootMessageId`) |
 | `body` | 0 to 10,000 Unicode scalar values; mentions are `<@principalId>` tokens |
 | `mentions` | The distinct principal ids of the body's `<@…>` tokens, in order of first appearance, at most 100 |
 | `mentionAll` | `true` when the body notifies everyone: a whole-word `@here` or `@channel` outside `<@…>` tokens, as the server detects it for plaintext |
@@ -454,11 +454,16 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
   its join, older incarnation) is stored only as a placeholder where no plaintext row exists, and
   never replaces one. `RESET` on an encrypted conversation keeps plaintext rows (they cannot be
   refetched) and re-reads the feed over them.
+- An entry more than two epochs behind the device's group (past `max_past_epochs`) cannot be
+  decrypted either and is a placeholder too. Entries are decrypted in feed order with Commits
+  applied only up to each entry's epoch, so this happens only to a device that processed Commits
+  outside the loop.
 - `edited_at` and `is_deleted` come from the feed as for plaintext; a tombstone deletes the plaintext.
-- The archive keeps decrypted `text` and adds `payload.e2ee` (`incarnation`, `epoch`,
-  `senderDeviceId`, `frankingKey`, `receipt`, `receiptKeyId`, `sentAtUs`), an additive field in
-  archive version 1 that S4-3 adds to `history-archive-v1.md`. `sig` stays `null`. Group state and
-  MLS keys are never archived.
+- The archive keeps decrypted `text` and adds `payload.e2ee` (`status`, `incarnation`, `epoch`,
+  `senderDeviceId`, `senderPrincipalId`, `frankingKey`, `receipt`, `receiptKeyId`, `sentAtUs`,
+  `rev`, and `content`, the exact content bytes a report reveals and the attachment secrets need),
+  an additive field in archive version 1 that S4-3 adds to `history-archive-v1.md`. Placeholders
+  are not archived. `sig` stays `null`. Group state and MLS keys are never archived.
 
 ### The change feed
 
@@ -473,8 +478,9 @@ as one `EDITED` entry carrying the newest envelope.
   skipped. `mentionAll` is treated as `@channel` / `@here`.
 - Notification rules run as today with what the server knows: `direct`, `mention`,
   `thread_reply` and `all` work; `keyword` cannot (the desktop client matches keywords after
-  decrypting and shows a local notification, without an inbox entry). Edits replace mention rows
-  and do not notify again.
+  decrypting and shows a local notification, without an inbox entry, only where the server sends
+  none: a group at the `MENTIONS` level, for a message that does not mention the reader). Edits
+  replace mention rows and do not notify again.
 - Digests and any email say "Encrypted message from <name>"; `NotificationDue` is unchanged.
 - **What it leaks**: who was mentioned in which message. Accepted, because the server already knows
   every member, every message's sender and time, and a DM's notifications are per message anyway;
