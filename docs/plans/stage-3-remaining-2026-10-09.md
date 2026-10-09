@@ -18,6 +18,9 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-server | #37 | S3-1: key-only signup (`signupWithKey`, nullable password and email) |
 | rim-ui | #29 | S3-5: device linking on the desktop (old and new device) |
 | rim-ui | #30 | S3-6: key-only signup on the desktop join pages |
+| rim-server | #39 | S3-4: device linking on the server (`device_link` table, service, GraphQL, `rim_identity::device_link`) |
+| rim-server, rim-ui | #41, #32 | S3-8a: `logoutOtherSessions` and the sign-out offer |
+| rim-server, rim-ui | #40, #31 | CLAUDE.md: the coordinating session reviews; comment and commit rules |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.
@@ -47,7 +50,8 @@ Sizes: S under a day, M a day or two, L several days of agent work.
 | # | Repo | PR | Size |
 |---|---|---|---|
 | S3-7 | rim-ui | **The web app as a linked device**: non-extractable Ed25519 WebCrypto keys in IndexedDB, version 2 statements signed in the browser, "Link this device" from the sign-in page, key sign-in; `deviceKeys` capability on for the web with the weaker-storage notice. Needs S3-4 and S3-5. | L |
-| S3-8 | rim-server + rim-ui | **Sign out other sessions** after enrolling (`logoutOtherSessions`), and the identity-key backup on the drive unlocked by the recovery phrase (the archive's second unwrap path), so a linked device can take over the identity key when the first device is gone. | M |
+| S3-8a | rim-server + rim-ui | **Sign out other sessions** after enrolling (`logoutOtherSessions`). Shipped. | S |
+| S3-8b | rim-ui + spec | **Identity-key backup on the drive**, unlocked by the recovery phrase, and the archive key wrapped under the identity key (the archive's second unwrap path), so a linked device can take over the identity key when the first device is gone. | M |
 
 ### Wave 4 (plugin pillar, the rest of Stage 3)
 
