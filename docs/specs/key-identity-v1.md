@@ -267,12 +267,14 @@ mutation, because an identity rotation is accepted on the strength of that sessi
 
 - An **identity rotation** needs a session of that account. Devices stay enrolled. It is
   refused (`VALIDATION`, `a key log may have at most 256 entries`) when the log already has 256
-  entries, the same cap as at enrollment, so every stored log can be enrolled on another server.
+  entries, the same cap as at enrollment, so a log grown by identity rotations can always be
+  enrolled on another server.
 - A **recovery rotation** works **without a session** (the person lost every device). It must
   come with a certificate for a new device under the new identity key. The server appends the
   entry, **revokes every device and ends every session** of the account, then enrolls the new
   device, which can sign in right away. The 256-entry cap does not stop a recovery: being
-  locked out of the account is worse than a log too long to carry elsewhere. Anonymous attempts
+  locked out of the account is worse than a log too long to carry elsewhere. A log that
+  recoveries took past 256 entries is refused by enrollment on other servers. Anonymous attempts
   count against the same per-IP failure limit as logins, whether they succeed or not. An anonymous rotation for a principal
   this server does not know is `UNAUTHENTICATED`; other refusals carry the validation reason,
   so they show whether a principal is enrolled here. That is not secret: `User.principalId` is
