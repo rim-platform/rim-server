@@ -33,7 +33,7 @@ use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::message::repository::MessageRepository;
-use rim_core::moderation::model::NewMessageReport;
+use rim_core::moderation::model::{NewFrankedReport, NewMessageReport};
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::repository::ServerMemberRepository;
@@ -99,8 +99,8 @@ const MAX_COMMIT_PAGE: i32 = 100;
 const AUDIT_ENABLE: &str = "e2ee.enable";
 const AUDIT_REINCARNATE: &str = "e2ee.reincarnate";
 const AUDIT_REPORT: &str = "e2ee.report";
-/// `initiator` of the audit rows written here.
-const AUDIT_INITIATOR: &str = "e2ee";
+/// `initiator` of the e2ee audit rows.
+pub(crate) const AUDIT_INITIATOR: &str = "e2ee";
 
 /// Limiter keys.
 const CLAIM_KEY: &str = "mls_claim";
@@ -1860,7 +1860,10 @@ impl E2eeService for DefaultE2eeService {
                 message_id: message.id,
                 reporter_user_id: cmd.actor.user_id,
                 reason: reason.to_string(),
-                franked_content: Some(content),
+                franked: Some(NewFrankedReport {
+                    content,
+                    sender_device_id: cmd.sender_device_id,
+                }),
             })
             .await
         {

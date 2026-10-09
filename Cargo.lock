@@ -4899,6 +4899,8 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "async-graphql-parser",
+ "async-trait",
+ "base64",
  "chrono",
  "config",
  "dotenvy",

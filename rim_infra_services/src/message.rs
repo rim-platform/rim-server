@@ -24,6 +24,7 @@ use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::message::model::{Message, MessageEncryption, MessageId, NewMessage};
 use rim_core::message::repository::MessageSearchParams;
 use rim_core::message_thread::model::MessageThread;
+use rim_core::moderation::repository::ModerationRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
 use rim_core::user::model::UserId;
@@ -119,6 +120,9 @@ pub struct DefaultMessageService {
     /// Encrypted messages. `None` in unit tests that are not about them; the composition root
     /// wires it.
     e2ee: Option<MessageE2ee>,
+    /// Lets a moderator delete a message with a verified report outside its conversation.
+    /// `None` in unit tests that are not about it; the composition root wires it.
+    moderation_repo: Option<Arc<dyn ModerationRepository>>,
 }
 
 impl DefaultMessageService {
@@ -130,7 +134,46 @@ impl DefaultMessageService {
             audit_log_service: None,
             notification_service: None,
             e2ee: None,
+            moderation_repo: None,
         }
+    }
+
+    pub fn with_moderation_repo(mut self, moderation_repo: Arc<dyn ModerationRepository>) -> Self {
+        self.moderation_repo = Some(moderation_repo);
+        self
+    }
+
+    /// The conversation and the actor's standing when an Owner/Moderator who cannot read the
+    /// conversation deletes a message with a verified franked report; `None` otherwise.
+    async fn reported_message_reach(
+        &self,
+        cmd: &DeleteMessageCmd,
+    ) -> ServiceResult<Option<(Conversation, rim_core::server_member::model::MemberStanding)>> {
+        let Some(moderation_repo) = &self.moderation_repo else {
+            return Ok(None);
+        };
+        let Some(standing) = self
+            .repos
+            .server_member_repo
+            .get_member_standing(cmd.server_id, cmd.actor.user_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !standing.role.is_moderator()
+            || !moderation_repo
+                .has_verified_report(cmd.server_id, cmd.message_id)
+                .await?
+        {
+            return Ok(None);
+        }
+        let conv = crate::util::ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+        Ok(Some((conv, standing)))
     }
 
     pub fn with_e2ee(mut self, e2ee_repo: Arc<dyn E2eeRepository>, wire: Arc<dyn MlsWire>) -> Self {
@@ -1680,7 +1723,7 @@ impl MessageService for DefaultMessageService {
     async fn delete_message(&self, cmd: DeleteMessageCmd) -> ServiceResult<()> {
         // Read gate plus archive, but not the timeout: a timed-out author may still delete
         // their own messages.
-        let (conv, standing) = crate::util::ensure_conversation_readable_with_standing(
+        let readable = crate::util::ensure_conversation_readable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -1690,7 +1733,17 @@ impl MessageService for DefaultMessageService {
             cmd.server_id,
             cmd.conversation_id,
         )
-        .await?;
+        .await;
+        let (conv, standing) = match readable {
+            Ok(reach) => reach,
+            Err(e @ (ServiceError::PermissionDenied | ServiceError::NotFound)) => {
+                match self.reported_message_reach(&cmd).await? {
+                    Some(reach) => reach,
+                    None => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        };
         ensure_not_archived(&conv)?;
 
         if cmd.hard {

@@ -95,10 +95,19 @@ New tables (one migration, `sea migrate generate add_moderation`):
   channel? No: keep it simple and honest, moderators see all reports but the message body is
   only included when the moderator can read the conversation; otherwise only ids and the
   reporter's reason. Document it.
+- Reports of encrypted messages are franked (`docs/specs/e2ee-mls-v1.md`, "Franking"): the
+  server verifies the revealed content against its receipt and stores it with the report.
+  Every moderator sees such a report's author, send time, sender device and verification
+  time; the content itself only through `messageReport(serverId, reportId)`, which records
+  `e2ee.report_viewed`. The content is cleared 90 days after the report is resolved or
+  dismissed (`frankedContentExpiresAt`). A moderator downloads a reported attachment's
+  encrypted blob through `GET /api/reports/{reportId}/attachments/{blobSha256}` and may delete
+  the reported message without being a member of its conversation.
 
 ### Message deletion by moderators
 
-`delete_message`: author, or Owner/Moderator of the workspace. A moderator delete writes an
+`delete_message`: author, or Owner/Moderator of the workspace (who must be able to read the
+conversation, unless the message has a verified franked report). A moderator delete writes an
 audit row `admin.delete_message` with the message id and author (text redacted). The
 `MessageDeleted` event is unchanged.
 

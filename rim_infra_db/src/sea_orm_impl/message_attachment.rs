@@ -244,6 +244,30 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             }),
         )
     }
+
+    async fn find_stored_by_blob_sha256(
+        &self,
+        server_id: ServerId,
+        blob_sha256: Vec<u8>,
+    ) -> RepoResult<Option<MessageAttachment>> {
+        let model = message_attachment::Entity::find()
+            .from_raw_sql(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"SELECT a.* FROM message_attachment a
+                 JOIN message m ON m.id = a.message_id
+                 JOIN conversation c ON c.id = m.conversation_id
+                WHERE c.server_id = $1
+                  AND a.blob_sha256 = $2
+                  AND a.storage_url NOT LIKE 'pending://%'
+                ORDER BY a.id
+                LIMIT 1"#,
+                [Uuid::from(server_id).into(), blob_sha256.into()],
+            ))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(model.map(Into::into))
+    }
 }
 
 /// The smallest UUID v7 for instant `at`. Attachment ids are v7 and Postgres orders `uuid` by

@@ -34,6 +34,8 @@ rim_s2s = { path = "../rim_s2s" }
 rim_identity = { path = "../rim_identity" }
 url = "2.5"
 anyhow = "1.0.99"
+base64 = "0.22.1"
 
 [dev-dependencies]
 rim_services = { path = "../rim_services", features = ["mocks"] }
+async-trait = "0.1.89"

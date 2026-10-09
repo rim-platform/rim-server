@@ -467,6 +467,11 @@ mod tests {
                         message_readable: false,
                         message_text: None,
                         message_author_id: None,
+                        message_sent_at: None,
+                        franking_verified_at: None,
+                        franked_sender_device_id: None,
+                        franked_content: None,
+                        franked_content_expires_at: None,
                     })
                 })
             });
