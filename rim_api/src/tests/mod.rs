@@ -591,6 +591,7 @@ fn test_server_member_dto() -> rim_services::server_member::dto::ServerMemberDto
         member_role: rim_core::server_member::model::ServerMemberRole::Member,
         joined_at: chrono::Utc::now(),
         timeout_until: None,
+        principal_id: None,
     }
 }
 
