@@ -105,6 +105,7 @@ impl DefaultAppServiceProvider {
         public_base_url: Option<String>,
         escalation_scheduler: Arc<dyn EscalationScheduler>,
         key_login_audiences: Vec<String>,
+        franking_keys: crate::franking_keys::SharedFrankingKeys,
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
@@ -166,7 +167,11 @@ impl DefaultAppServiceProvider {
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
             .with_notification_service(Arc::clone(&notification_service))
-            .with_e2ee(Arc::clone(&repos.e2ee_repo), Arc::clone(&mls_wire))
+            .with_e2ee(
+                Arc::clone(&repos.e2ee_repo),
+                Arc::clone(&mls_wire),
+                franking_keys.clone(),
+            )
             .with_moderation_repo(Arc::clone(&repos.moderation_repo)),
         );
         let e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService> = Arc::new(
@@ -176,7 +181,8 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&mls_wire),
                 observers.clone(),
             )
-            .with_audit_log_service(Arc::clone(&audit_log_service)),
+            .with_audit_log_service(Arc::clone(&audit_log_service))
+            .with_franking_keys(franking_keys),
         );
         let key_auth_service: Arc<dyn KeyAuthService> =
             Arc::new(key_auth.with_e2ee_service(Arc::clone(&e2ee_service)));

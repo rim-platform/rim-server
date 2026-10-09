@@ -76,6 +76,7 @@ use crate::e2ee::{
     GroupState, check_group_id, decode_b64, read_private_message, require_device, session_device,
     stale,
 };
+use crate::franking_keys::SharedFrankingKeys;
 use crate::mention::parse_mention_ids;
 use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_action};
 use crate::repos::AppRepos;
@@ -95,6 +96,7 @@ fn encrypted_conversation() -> ServiceError {
 pub(crate) struct MessageE2ee {
     pub e2ee_repo: Arc<dyn E2eeRepository>,
     pub wire: Arc<dyn MlsWire>,
+    pub franking_keys: SharedFrankingKeys,
 }
 
 /// An encrypted message's envelope and authenticated data, checked against the request.
@@ -176,8 +178,17 @@ impl DefaultMessageService {
         Ok(Some((conv, standing)))
     }
 
-    pub fn with_e2ee(mut self, e2ee_repo: Arc<dyn E2eeRepository>, wire: Arc<dyn MlsWire>) -> Self {
-        self.e2ee = Some(MessageE2ee { e2ee_repo, wire });
+    pub fn with_e2ee(
+        mut self,
+        e2ee_repo: Arc<dyn E2eeRepository>,
+        wire: Arc<dyn MlsWire>,
+        franking_keys: SharedFrankingKeys,
+    ) -> Self {
+        self.e2ee = Some(MessageE2ee {
+            e2ee_repo,
+            wire,
+            franking_keys,
+        });
         self
     }
 
@@ -665,16 +676,16 @@ impl DefaultMessageService {
         })
     }
 
-    /// The franking receipt of an envelope, under the server's current franking key.
-    async fn frank(
-        e2ee_repo: &dyn E2eeRepository,
+    /// The franking receipt of an envelope and the id of the key that made it: the server's
+    /// current franking key.
+    fn frank(
+        franking_keys: &SharedFrankingKeys,
         fields: ReceiptFields,
         commitment: &[u8],
-    ) -> ServiceResult<(i32, Vec<u8>)> {
-        let mut secret = vec![0u8; 32];
-        getrandom::fill(&mut secret).map_err(|e| ServiceError::internal(anyhow::anyhow!("{e}")))?;
-        let key = e2ee_repo.current_franking_key(secret).await?;
-        Ok((key.id, receipt(&key.secret, &fields, commitment).to_vec()))
+    ) -> (i32, Vec<u8>) {
+        let keys = franking_keys.keys();
+        let key = keys.current();
+        (key.id, receipt(key.secret(), &fields, commitment).to_vec())
     }
 
     async fn ensure_thread_in_conversation(
@@ -1896,7 +1907,7 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
         let (franking_key_id, franking_receipt) = Self::frank(
-            e2ee_repo.as_ref(),
+            &e2ee.franking_keys,
             ReceiptFields {
                 message_id: cmd.message_id.into(),
                 conversation_id: conv.id.into(),
@@ -1905,8 +1916,7 @@ impl MessageService for DefaultMessageService {
                 sent_at_us: sent_at_us(sent_at),
             },
             &envelope.aad.franking,
-        )
-        .await?;
+        );
         let thread = match cmd.thread_root_message_id {
             Some(root_id) => Some(Self::find_or_create_thread(&repos, conv.id, root_id).await?),
             None => None,
@@ -2069,7 +2079,7 @@ impl MessageService for DefaultMessageService {
         )
         .await?;
         let (franking_key_id, franking_receipt) = Self::frank(
-            e2ee_repo.as_ref(),
+            &e2ee.franking_keys,
             ReceiptFields {
                 message_id: msg.id.into(),
                 conversation_id: conv.id.into(),
@@ -2078,8 +2088,7 @@ impl MessageService for DefaultMessageService {
                 sent_at_us: sent_at_us(msg.sent_at),
             },
             &envelope.aad.franking,
-        )
-        .await?;
+        );
         let updated = e2ee_repo
             .replace_envelope(
                 msg.id,

@@ -802,16 +802,17 @@ impl E2eeRepository for FakeE2ee {
         Ok(message.clone())
     }
 
-    async fn current_franking_key(&self, secret: Vec<u8>) -> RepoResult<FrankingKey> {
-        let mut state = self.state();
-        if state.franking.is_empty() {
-            state.franking.push(FrankingKey { id: 1, secret });
-        }
-        Ok(state.franking.last().cloned().expect("key"))
+    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
+        Ok(self.state().franking.clone())
     }
 
-    async fn get_franking_key(&self, id: i32) -> RepoResult<Option<FrankingKey>> {
-        Ok(self.state().franking.iter().find(|k| k.id == id).cloned())
+    async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>> {
+        Ok(self
+            .state()
+            .messages
+            .values()
+            .filter_map(|m| m.encryption.as_ref().map(|e| e.franking_key_id))
+            .max())
     }
 
     async fn purge(&self, _retention: MlsRetention) -> RepoResult<MlsPurged> {

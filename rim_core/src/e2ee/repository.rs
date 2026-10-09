@@ -302,10 +302,12 @@ pub trait E2eeRepository: Send + Sync {
 
     // ── Franking ─────────────────────────────────────────────────────────
 
-    /// The newest franking key, creating key 1 from `secret` when there is none.
-    async fn current_franking_key(&self, secret: Vec<u8>) -> RepoResult<FrankingKey>;
+    /// The franking keys an older server kept in the `franking_key` table, oldest first. Read
+    /// only to move them into the key file.
+    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>>;
 
-    async fn get_franking_key(&self, id: i32) -> RepoResult<Option<FrankingKey>>;
+    /// The highest `franking_key_id` any message carries.
+    async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>>;
 
     // ── Retention ────────────────────────────────────────────────────────
 

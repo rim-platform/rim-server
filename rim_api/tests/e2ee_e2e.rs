@@ -41,7 +41,7 @@ use rim_services::auth::dto::RegistrationMode;
 use rim_services::provider::AppServiceProvider;
 
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
-use support::{KEY_LOGIN_AUDIENCE, TestCtx};
+use support::{FRANKING_KEY, KEY_LOGIN_AUDIENCE, TestCtx};
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519;
 
@@ -780,20 +780,8 @@ fn report(
 #[tokio::test]
 async fn an_encrypted_dm_carries_messages_edits_reactions_and_reports() {
     let mut f = fixture().await;
-    // A known server franking key (bytes 80..9f), so the receipt can be recomputed here.
-    let server_key: Vec<u8> = (0x80..=0x9f).collect();
-    f.ctx
-        .conn
-        .execute_unprepared(&format!(
-            "INSERT INTO franking_key (id, secret) VALUES (1, decode('{}', 'hex')) \
-             ON CONFLICT (id) DO UPDATE SET secret = EXCLUDED.secret",
-            server_key
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        ))
-        .await
-        .expect("seed franking key");
+    // The test provider's franking key, so the receipt can be recomputed here.
+    let server_key = FRANKING_KEY.to_vec();
     let conv = f.encrypted_dm().await;
 
     let group = f.group(&conv).await;
@@ -1881,4 +1869,141 @@ async fn finding_9_a_replayed_readd_request_is_refused() {
         group["mlsGroup"]["readdRequests"].as_array().map(Vec::len),
         Some(1)
     );
+}
+
+/// A receipt made with the server's franking key over another content does not verify: the
+/// reported commitment must be the one the message row recorded. An edit replaces it, so only
+/// the current version of a message is reportable.
+#[tokio::test]
+async fn finding_7_a_report_must_match_the_stored_commitment() {
+    let mut f = fixture().await;
+    let conv = f.encrypted_dm().await;
+    let conversation_id: Uuid = conv.parse().expect("uuid");
+    let id = Uuid::now_v7();
+    let (request, sent_content, fk) = f.send_request(Who::Alice, &conv, id, "hello", &[]);
+    let sent = exec_ok(&f.schema, request).await["sendEncryptedMessage"].clone();
+    let encryption = sent["encryption"].clone();
+    let sent_at_us: i64 = encryption["sentAtUs"]
+        .as_str()
+        .expect("sentAtUs")
+        .parse()
+        .expect("i64");
+
+    // Someone holding the server's key forges a receipt over content alice never sent.
+    let forged = content(id, 0, "something alice never said", &[]);
+    let forged_commitment = hmac(&fk, &[b"rim.e2ee.franking.v1\0", &forged]);
+    let forged_receipt = hmac(
+        &FRANKING_KEY,
+        &[
+            b"rim.e2ee.franking-receipt.v1\0",
+            id.as_bytes(),
+            conversation_id.as_bytes(),
+            Uuid::from(f.alice.user.id).as_bytes(),
+            f.alice.device_id.as_bytes(),
+            &sent_at_us.to_be_bytes(),
+            &forged_commitment,
+        ],
+    );
+    let mut forged_encryption = encryption.clone();
+    forged_encryption["frankingReceipt"] = json!(b64(&forged_receipt));
+    let server_id = f.server_id();
+    let input = report(
+        &server_id,
+        &conv,
+        id,
+        &forged,
+        &fk,
+        &forged_encryption,
+        &f.alice,
+    );
+    let (code, extensions) = exec_err(&f.schema, f.bob.request(REPORT, input)).await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
+
+    // After an edit the original version no longer matches the row; the edit does.
+    let edited = content(id, 1, "hello, edited", &[]);
+    let edit_fk = [5u8; 32];
+    let envelope = f.alice.encrypt(id, &edited, edit_fk, &[]);
+    let edit = f.alice.request(
+        &format!("mutation Edit($input: EditEncryptedMessageInput!) {{ editEncryptedMessage(input: $input) {{ {MESSAGE_FIELDS} }} }}"),
+        json!({ "input": { "serverId": server_id, "conversationId": conv, "messageId": id, "envelope": envelope } }),
+    );
+    let edited_encryption =
+        exec_ok(&f.schema, edit).await["editEncryptedMessage"]["encryption"].clone();
+    let original = report(
+        &server_id,
+        &conv,
+        id,
+        &sent_content,
+        &fk,
+        &encryption,
+        &f.alice,
+    );
+    let (code, extensions) = exec_err(&f.schema, f.bob.request(REPORT, original)).await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
+    let current = report(
+        &server_id,
+        &conv,
+        id,
+        &edited,
+        &edit_fk,
+        &edited_encryption,
+        &f.alice,
+    );
+    let data = exec_ok(&f.schema, f.bob.request(REPORT, current)).await;
+    assert_eq!(data["reportEncryptedMessage"], json!(true));
+}
+
+/// A message its sender deleted stays reportable: the row keeps its franking columns, and the
+/// verified report holds the content.
+#[tokio::test]
+async fn finding_26_a_deleted_message_is_reported_end_to_end() {
+    let mut f = fixture().await;
+    let conv = f.encrypted_dm().await;
+    let id = Uuid::now_v7();
+    let (request, sent_content, fk) = f.send_request(Who::Alice, &conv, id, "regret", &[]);
+    let sent = exec_ok(&f.schema, request).await["sendEncryptedMessage"].clone();
+    let feed = f.changes(Who::Bob, &conv, None).await;
+    let (received, received_fk) = f.bob.decrypt(
+        feed["changes"][0]["message"]["encryption"]["ciphertext"]
+            .as_str()
+            .expect("ciphertext"),
+        &id.to_string(),
+    );
+    assert_eq!(
+        (received.as_slice(), received_fk),
+        (sent_content.as_slice(), fk)
+    );
+    let delete = f.alice.request(
+        DELETE,
+        json!({ "input": { "serverId": f.server_id(), "conversationId": conv, "messageId": id } }),
+    );
+    exec_ok(&f.schema, delete).await;
+
+    let server_id = f.server_id();
+    let input = report(
+        &server_id,
+        &conv,
+        id,
+        &received,
+        &received_fk,
+        &sent["encryption"],
+        &f.alice,
+    );
+    let data = exec_ok(&f.schema, f.bob.request(REPORT, input)).await;
+    assert_eq!(data["reportEncryptedMessage"], json!(true));
+    let stored: Option<Vec<u8>> = f
+        .ctx
+        .conn
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT r.franked_content FROM message_report r JOIN message m ON m.id = r.message_id \
+             WHERE r.message_id = $1 AND m.is_deleted",
+            [id.into()],
+        ))
+        .await
+        .expect("query")
+        .expect("report of the deleted row")
+        .try_get("", "franked_content")
+        .expect("column");
+    assert_eq!(stored.as_deref(), Some(sent_content.as_slice()));
 }
