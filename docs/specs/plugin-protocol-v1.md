@@ -464,12 +464,38 @@ When key identity ships:
   start with `rimp0_`;
 - the host tells running plugins with `rim.principal.changed`, carrying the new id of the
   signed-in user;
-- the host also sends the full old-to-new mapping through a new notification, which section 16
-  allows within v1, so a plugin that stored `rimp0_` ids can rewrite them.
+- the host also sends the full old-to-new mapping in `rim.principals.remapped` (below), so a
+  plugin that stored `rimp0_` ids can rewrite them.
 
 So: **keep stored principal ids somewhere you can rewrite** (a table column or a map key, not a
 filename baked into a git repo), and treat "the same person under a new id" as possible exactly
 once.
+
+### The id switch notice: `rim.principals.remapped`
+
+Added within v1 (section 16) with the desktop client of key identity. Old hosts never send it;
+old plugins ignore it like any notification they do not use.
+
+```json
+{ "jsonrpc": "2.0", "method": "rim.principals.remapped",
+  "params": { "mappings": [ { "from": "rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU",
+                              "to": "rimp1_nz1POml8JmCMcFDECrtu60ibohPKnywhcExmOPMvTUo" } ] } }
+```
+
+| Param | Type | Meaning |
+|---|---|---|
+| `mappings` | array of `{ from, to }`, 1 to 1000 items | Every provisional id this host has seen switch, with its new id. Each `from` appears once. |
+
+- The host sends it **right after every successful handshake** whenever it knows at least one
+  mapping, and to every running plugin when it learns a new one (in that case after the
+  `rim.principal.changed` that carries the new id of the signed-in user).
+- The list is the **whole** mapping this host knows, not only the new entries, so the same
+  mapping arrives many times. Applying it must be idempotent: replace every stored `from` with its
+  `to`, and leave ids that are not a `from` alone.
+- A host learns a mapping when it sees a person's key-based id for the first time; today that is
+  the signed-in user, since no other person reaches a plugin yet. Mappings are kept per device,
+  so another device may send a different (shorter or longer) list.
+- `from` always starts with `rimp0_` and `to` never does; still treat both as opaque ids.
 
 ## 12. Capabilities
 
@@ -668,6 +694,7 @@ This is the complete list. If a method is not in this section, the host does not
 | `rim.heartbeat` | host → plugin | request | 13 |
 | `rim.command.execute` | host → plugin | request | 9, 10 |
 | `rim.principal.changed` | host → plugin | notification | 11 |
+| `rim.principals.remapped` | host → plugin | notification | 11 |
 | `rim.shutdown` | host → plugin | notification | 15 |
 | `rim.log` | plugin → host | request or notification | 14 |
 

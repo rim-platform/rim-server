@@ -29,9 +29,9 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::auth::dto::{AuthSessionDto, LoginResultDto};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
-    LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
-    SignedPayload,
+    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
+    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
+    RotateIdentityKeyCmd, SignedPayload,
 };
 use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
@@ -48,9 +48,13 @@ const CHALLENGE_TTL_SECONDS: i64 = 120;
 /// Failure-limiter key shared by key logins and unauthenticated recoveries.
 const FAILURE_KEY: &str = "key_auth_failure";
 
-/// Most entries a key log submitted at enrollment may have. Every entry is verified before the
-/// user row is locked, so the bound keeps one request's work small.
+/// Most entries a key log may have: at enrollment (every entry is verified before the user row
+/// is locked, so the bound keeps one request's work small), and grown by identity rotations,
+/// so that a log they grew can be enrolled on another server. Recoveries may pass it.
 const MAX_KEY_LOG_LEN: usize = 256;
+
+/// Longest `principalId` the public key log query looks up (a real one is 49 characters).
+const MAX_PRINCIPAL_ID_LEN: usize = 64;
 
 #[derive(Clone)]
 pub struct KeyAuthRepos {
@@ -622,6 +626,13 @@ impl KeyAuthService for DefaultKeyAuthService {
         if signer == RotationSigner::Identity && cmd.actor.is_none() {
             return Err(ServiceError::Unauthenticated);
         }
+        // A recovery still goes through at the cap: locking someone out of their account is
+        // worse than a log too long to carry to another server.
+        if signer == RotationSigner::Identity && next.seq as usize >= MAX_KEY_LOG_LEN {
+            return Err(ServiceError::Validation(format!(
+                "a key log may have at most {MAX_KEY_LOG_LEN} entries"
+            )));
+        }
         let cert = match &cmd.device {
             Some(device) => {
                 Some(verify_device_cert(&next, &to_statement(device)).map_err(invalid)?)
@@ -717,6 +728,30 @@ impl KeyAuthService for DefaultKeyAuthService {
         query: GetMyKeyIdentityQuery,
     ) -> ServiceResult<KeyIdentityDto> {
         self.my_key_identity(query.actor.user_id).await
+    }
+
+    #[instrument(name = "key_auth.get_key_log", skip_all)]
+    async fn get_key_log(&self, query: GetKeyLogQuery) -> ServiceResult<Vec<KeyLogEntryDto>> {
+        // A principal id is 49 characters; anything much longer is not one, and is not looked up.
+        if query.principal_id.len() > MAX_PRINCIPAL_ID_LEN {
+            return Ok(Vec::new());
+        }
+        let Some(user_id) = self
+            .repos
+            .key_identity_repo
+            .find_user_by_principal_id(&query.principal_id)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .repos
+            .key_identity_repo
+            .list_key_log(user_id)
+            .await?
+            .into_iter()
+            .map(log_entry_dto)
+            .collect())
     }
 }
 
