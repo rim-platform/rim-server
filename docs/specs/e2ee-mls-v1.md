@@ -42,8 +42,9 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 | `Channel`, public | No | Readable by every workspace member by design |
 
 - **Ready member.** A user whose `principal_id` is set and who has at least one *MLS-active* device:
-  not revoked, with a key package uploaded in the last 60 days. Bots, ingest tokens, the CLI and
-  password-only accounts are never ready.
+  not revoked, with a key package uploaded in the last 60 days (`device_key.last_key_package_upload_at`,
+  set by every upload; key package rows themselves expire after 30 days). Bots, ingest tokens, the
+  CLI and password-only accounts are never ready.
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
   Commit of an existing plaintext DM or group is accepted ("Migration"). It is never cleared.
@@ -143,14 +144,19 @@ commits pending changes first, without waiting (the server refuses its message o
   `KeyPackageRef` (OpenMLS `hash_ref`, 32 bytes for this suite) is new. A new last-resort package
   replaces the device's previous one in the same transaction.
 - **Claiming**: `claimMlsKeyPackages` takes `(principalId, deviceId)` pairs for one conversation
-  and returns one package per device, atomically: the oldest unclaimed one-time package
-  (`FOR UPDATE SKIP LOCKED`), else the last-resort package (not consumed). The caller must be a
+  and returns one package per device, in one transaction: the oldest unclaimed one-time package
+  (`FOR UPDATE SKIP LOCKED`), else the last-resort package (not consumed). A device with neither
+  (or, for a re-add, with no one-time package) is left out of the answer. The caller must be a
   session device that is a group device, or, while the conversation has no group, the session of
   a conversation member. Every target must be a pending add or a re-add target of that
-  conversation. The claim records `(claimed_at, claimed_by_device_key_id,
-  claimed_for_conversation_id)`; a Commit may use a claimed package for one hour.
+  conversation, in the group's suite; when the caller may start a new incarnation ("Incarnations")
+  every MLS-active device of a member but the caller's is a target, in the preferred suite. The
+  claim records `(claimed_at, claimed_by_device_key_id, claimed_for_conversation_id)`; a Commit may
+  use a package claimed for its conversation by its committer for one hour. A last-resort row
+  keeps only its latest claim, so a Commit uses it only while that claim is the committer's.
 - **Last resort** packages are never used for re-adds (see "Lost state").
-- Claimed one-time rows are deleted 7 days after the claim; expired rows hourly.
+- An accepted Commit deletes the one-time packages it added. Claimed one-time rows are deleted 7
+  days after the claim; expired rows hourly.
 
 ## Groups
 
@@ -187,7 +193,11 @@ name the conversation and incarnation they expect.
    step 2; the first accepted Commit wins.
 
 The server refuses an incarnation's first Commit unless every member has at least one device among
-the resulting group devices (`VALIDATION`, `every member needs at least one device in the group`).
+the resulting group devices (`VALIDATION`, `every member needs at least one device in the group`),
+and unless the committer is MLS-active itself. A conversation's first group (incarnation 1) is
+created by the device of the member "Migration" names, or, for a conversation created encrypted,
+by the creator's device during the first 60 seconds and any member's after (`FORBIDDEN`
+otherwise).
 
 ### Welcome delivery and joining
 
@@ -222,7 +232,9 @@ past the server's Commit retention, signs a **re-add request** with its device k
 ```
 
 `lastEpoch` is the last epoch it processed, or `null` with no state. Before asking, it uploads
-fresh key packages and discards its old group state. Protections against a server forcing re-adds:
+fresh key packages and discards its old group state. The server accepts a request only from a
+device that is still a group device of the incarnation it names, which must be the current one
+(an older one is `STALE_EPOCH`), with `lastEpoch` at most the group's epoch. Protections against a server forcing re-adds:
 
 | Rule | Stops |
 |---|---|
@@ -244,7 +256,9 @@ from a group device of the current incarnation only when one holds:
   incarnation's, and every claimed package offers it;
 - **Recovery**: the committer has a re-add request on the current incarnation older than 10
   minutes and no Commit was accepted on it since that request;
-- **No devices left** in the current incarnation.
+- **No devices left**: no group device of the current incarnation is MLS-active for a current
+  member. Then the committer need not be a group device: any MLS-active device of a member may
+  start the next incarnation.
 
 The old `mls_group` row gets `retired_at`; every message, Commit and Welcome of it is refused from
 then on (`STALE_EPOCH` naming the new incarnation). Clients show "Encryption was reset by
@@ -381,15 +395,17 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
 {"v":1,"type":"commit","adds":[{"principalId":"rimp1_…","deviceId":"<uuid>","keyPackageRef":"<base64url>"}],"removes":[{"principalId":"rimp1_…","deviceId":"<uuid>"}]}
 ```
 
-- **Application**: at most 8 KiB. The server checks `messageId` against the request, `franking` is 32
-  bytes, every mention is a principal id. The receiver checks after decrypting that `messageId`,
+- **Application**: at most 8 KiB. The server checks `messageId` against the request (a UUID v7),
+  `franking` is 32 bytes, every mention is a principal id, distinct, at most 100. The receiver checks after decrypting that `messageId`,
   `mentions` and `mentionAll` equal the content's and that `franking` equals the recomputed
   commitment.
-- **Commit**: at most 256 KiB. The server checks: every add is a pending add or a re-add target, uses
-  a key package claimed for this conversation by this device in the last hour, named exactly by
-  `keyPackageRef`, and belonging to that device; every remove is a group device that is a pending
-  remove or is re-added in the same Commit with a re-add request outstanding; the committer is not
-  removed. The receiver checks that the staged Commit's Add proposals have exactly these
+- **Commit**: at most 256 KiB, no device added or removed twice. The server checks: every add is a
+  pending add or a re-add target, uses a key package claimed for this conversation by this device
+  in the last hour, named exactly by `keyPackageRef`, of the group's suite, and belonging to that
+  device; every remove is a group device that is a pending remove or is re-added in the same
+  Commit with a re-add request outstanding; the committer is not removed. A Commit with adds
+  carries a Welcome of the group's suite whose `new_member` refs are exactly the adds'; one
+  without adds carries none. The receiver checks that the staged Commit's Add proposals have exactly these
   `KeyPackageRef`s and its Remove proposals remove exactly these devices.
 
 ### Edits, deletes and metadata
@@ -522,7 +538,7 @@ signature could convince a third party. Message deniability is deferred.
 | The agent | No server-side context or summaries; `chat.search_messages` never returns encrypted rows; `chat.post_message` into an encrypted conversation is refused; `chat.create_group` creates a plaintext group that the creator's desktop then upgrades ("Migration"). The client agent reads through the message service (below), off by default per conversation, with a warning that the text goes to the model provider |
 | Notifications | From the authenticated mentions and "new message"; digests say "Encrypted message"; keyword notifications are client-local |
 | Slow mode | Channels only, so not applicable |
-| Moderation | Kick, ban, timeout, membership and roles work; timed-out members cannot send envelopes or commit; reports go through franking; a moderator delete removes the row's ciphertext |
+| Moderation | Kick, ban, timeout, membership and roles work; timed-out members cannot send envelopes or commit; reports go through franking (`reportMessage` refuses an encrypted message, `reportEncryptedMessage` a plaintext one, and the receipt's sender must be the row's author); a moderator delete removes the row's ciphertext |
 | Pins, reactions, custom emoji | Server metadata, unchanged |
 | Threads | `thread_id` and thread rows are metadata; replies are encrypted messages with `threadRootMessageId`; `thread_reply` notifications work |
 | Forwarding | `forwardMessage` refuses an encrypted source or target (`VALIDATION`). The client forwards by sending new content: `sendEncryptedMessage(forwardedFromMessageId)` into an encrypted conversation, or, after a confirmation that the text will be posted unencrypted, `sendMessage(forwardedFromMessageId)` into a plaintext one. The server checks the caller can read the source and records the origin |
@@ -675,8 +691,11 @@ ALTER TABLE message_report
     ADD COLUMN franked_content bytea NULL, ADD COLUMN franking_verified_at timestamptz NULL;
 ```
 
-The change-feed function also sets `edited_at` when `mls_ciphertext` changes, and the update trigger
-gains `OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
+The migration also adds `device_key.last_key_package_upload_at timestamptz NULL`, the MLS
+activity signal (key package rows are deleted when they expire, so their age cannot carry it).
+The change-feed function also sets `edited_at` when `mls_ciphertext` changes to a new envelope
+(clearing it on delete is not an edit), and the update trigger gains
+`OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
 the previous function and trigger, then drops the new columns, indexes and tables; it refuses to
 run while an encrypted message exists (rolling back would leave rows with neither text nor
 ciphertext). Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
@@ -761,11 +780,13 @@ type Mutation {
 ```
 
 - `mlsCommits`: `afterEpoch` exclusive (null from 0), `limit` 1 to 100 (default 50), oldest first;
-  caller must be a conversation member. `principalDevices` answers an empty list for a principal
-  who shares no workspace with the caller, at most 100 ids per call.
+  caller must be a conversation member. `principalDevices` answers one entry per distinct id asked,
+  in order, with an empty device list for a principal who shares no workspace with the caller, at
+  most 100 ids per call.
 - New objects `E2eeQueries` and `E2eeMutations` are appended to the last query and mutation groups.
-  All mutations need the CSRF header. S4-1 sets the GraphQL request body limit to at least 8 MiB
-  if it is lower (a 4 MiB Commit is 5.4 MiB of base64url).
+  All mutations need the CSRF header. The GraphQL request body must allow at least 8 MiB (a 4 MiB
+  Commit is 5.4 MiB of base64url); the server sets no limit of its own on `/api`, so a proxy in
+  front of it must not set a lower one.
 
 ### Errors
 
@@ -791,7 +812,10 @@ lists as today):
 ```
 
 `epoch` is the Commit's epoch. `MlsMembershipChanged` fires when pending adds or removes change
-(membership, devices, key package activity, re-add requests). `MlsWelcomeAvailable` goes to
+(membership, devices, key package activity, re-add requests): on adds, removals, leaves, kicks and
+bans in an encrypted conversation, on a device revocation or recovery, on a key package upload by
+a device that is not in a group yet, on a re-add request, and with every Commit that adds or
+removes devices. `MlsWelcomeAvailable` goes to
 `user_id` only; clients ignore it for other devices.
 
 ## Limits and audit
