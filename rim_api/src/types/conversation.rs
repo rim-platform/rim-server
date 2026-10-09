@@ -36,6 +36,9 @@ pub struct Conversation {
     /// Slow mode (Track 1.2): minimum seconds between two messages of the same non-moderator
     /// member; `0` when off.
     pub slow_mode_seconds: i32,
+    /// When the conversation became end-to-end encrypted; null for plaintext. Messages from
+    /// then on are encrypted.
+    pub encrypted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[ComplexObject]
@@ -90,6 +93,28 @@ impl Conversation {
             .effective_level
             .into())
     }
+
+    /// The conversation's current MLS group; null for plaintext and before the first Commit.
+    #[graphql(complexity = 5)]
+    async fn mls_group(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<super::MlsGroup>> {
+        if self.encrypted_at.is_none() {
+            return Ok(None);
+        }
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn rim_services::e2ee::service::E2eeService>>()?;
+        let group = svc
+            .group(rim_services::e2ee::command::GetMlsGroupQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id: crate::ids::parse_uuid_id(&self.server_id)?,
+                conversation_id: crate::ids::parse_uuid_id(&self.id)?,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        Ok(group.map(Into::into))
+    }
 }
 
 impl Conversation {
@@ -135,6 +160,7 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
             member_count,
             created_by: value.created_by.map(|id| async_graphql::ID(id.to_string())),
             slow_mode_seconds: value.slow_mode_seconds,
+            encrypted_at: value.encrypted_at,
         }
     }
 }

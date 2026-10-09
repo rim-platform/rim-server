@@ -243,6 +243,24 @@ fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) 
         WorkspaceEvent::PipelineFired { .. }
         | WorkspaceEvent::PipelineSuspended { .. }
         | WorkspaceEvent::WorkspacePluginChanged { .. } => true,
+
+        // MLS events: encrypted conversations are DMs and groups, so members only.
+        WorkspaceEvent::MlsCommitAccepted {
+            member_user_ids, ..
+        }
+        | WorkspaceEvent::MlsMembershipChanged {
+            member_user_ids, ..
+        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+
+        // A Welcome is for one user's device.
+        WorkspaceEvent::MlsWelcomeAvailable {
+            user_id: event_user_id,
+            member_user_ids,
+            ..
+        } => {
+            event_user_id.to_string() == user_id
+                && member_user_ids.iter().any(|id| id.to_string() == user_id)
+        }
     }
 }
 
@@ -426,6 +444,7 @@ mod tests {
             forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            encryption: None,
             reactions: vec![],
         };
         let m = member_user_ids;
@@ -840,5 +859,59 @@ mod tests {
         assert_eq!(json["plugin_id"], "dev.example.hello-web");
         assert_eq!(json["change"], "updated");
         assert_eq!(json.as_object().expect("object").len(), 4);
+    }
+
+    #[test]
+    fn mls_events_reach_members_and_welcomes_their_device_user() {
+        let (member, stranger) = (UserId::new(), UserId::new());
+        let (workspace_id, conversation_id) = (ServerId::new(), ConversationId::new());
+        let accepted = WorkspaceEvent::MlsCommitAccepted {
+            workspace_id,
+            conversation_id,
+            incarnation: 1,
+            epoch: 7,
+            member_user_ids: vec![member],
+        };
+        assert!(user_can_see_event_as(&accepted, &member.to_string(), false));
+        assert!(!user_can_see_event_as(
+            &accepted,
+            &stranger.to_string(),
+            false
+        ));
+        let json = serde_json::to_value(&accepted).expect("serialize");
+        assert_eq!(json["type"], "MlsCommitAccepted");
+        assert_eq!(json["epoch"], 7);
+        assert_eq!(json["incarnation"], 1);
+        assert_eq!(json.as_object().expect("object").len(), 5);
+
+        let changed = WorkspaceEvent::MlsMembershipChanged {
+            workspace_id,
+            conversation_id,
+            member_user_ids: vec![member],
+        };
+        assert!(user_can_see_event_as(&changed, &member.to_string(), true));
+        assert!(!user_can_see_event_as(
+            &changed,
+            &stranger.to_string(),
+            false
+        ));
+
+        let device_id = uuid::Uuid::now_v7();
+        let welcome = WorkspaceEvent::MlsWelcomeAvailable {
+            workspace_id,
+            conversation_id,
+            user_id: member,
+            device_id,
+            member_user_ids: vec![member],
+        };
+        assert!(user_can_see_event_as(&welcome, &member.to_string(), false));
+        assert!(!user_can_see_event_as(
+            &welcome,
+            &stranger.to_string(),
+            false
+        ));
+        let json = serde_json::to_value(&welcome).expect("serialize");
+        assert_eq!(json["device_id"], device_id.to_string());
+        assert_eq!(json["user_id"], member.to_string());
     }
 }

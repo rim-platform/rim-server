@@ -52,6 +52,8 @@ pub(crate) fn remote_ip(ctx: &Context<'_>) -> String {
 pub struct AuthActorCtx {
     actor: Option<rim_core::user::model::UserId>,
     session_id: Option<rim_core::auth::model::SessionId>,
+    /// The device the session is bound to; `None` for a password session.
+    device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
 }
 
 impl AuthActorCtx {
@@ -59,7 +61,24 @@ impl AuthActorCtx {
         actor: Option<rim_core::user::model::UserId>,
         session_id: Option<rim_core::auth::model::SessionId>,
     ) -> Self {
-        Self { actor, session_id }
+        Self {
+            actor,
+            session_id,
+            device_key_id: None,
+        }
+    }
+
+    /// The context of a session bound to `device_key_id`.
+    pub fn with_device_key_id(
+        mut self,
+        device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
+    ) -> Self {
+        self.device_key_id = device_key_id;
+        self
+    }
+
+    pub fn device_key_id(&self) -> Option<rim_core::key_identity::model::DeviceKeyId> {
+        self.device_key_id
     }
 
     pub fn actor(&self) -> Option<rim_core::user::model::UserId> {
@@ -93,6 +112,22 @@ pub fn require_actor(ctx: &Context<'_>) -> Result<rim_core::user::model::UserId,
         })?
         .actor()
         .ok_or_else(unauthenticated_error)
+}
+
+/// The signed-in user and the device their session is bound to. Services refuse MLS calls
+/// without the device (`FORBIDDEN`).
+pub(crate) fn require_mls_caller(
+    ctx: &Context<'_>,
+) -> Result<rim_services::e2ee::command::MlsCaller, Error> {
+    let actor = require_actor(ctx)?;
+    let device_key_id = ctx
+        .data::<AuthActorCtx>()
+        .ok()
+        .and_then(AuthActorCtx::device_key_id);
+    Ok(rim_services::e2ee::command::MlsCaller {
+        actor: rim_services::Actor::new(actor),
+        device_key_id,
+    })
 }
 
 pub fn require_session_id(ctx: &Context<'_>) -> Result<rim_core::auth::model::SessionId, Error> {
