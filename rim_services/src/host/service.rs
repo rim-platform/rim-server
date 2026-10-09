@@ -85,3 +85,16 @@ pub trait RemoteKeyPackages: Send + Sync {
     /// `None` when the target user is local; otherwise what their relay handed out.
     async fn claim(&self, claim: RemoteClaim) -> ServiceResult<Option<Vec<RemoteKeyPackage>>>;
 }
+
+/// Whether a relay holds an active delegation a device signed for a space on this host, which
+/// lets it forward that device's requests.
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait DelegationCheck: Send + Sync {
+    async fn delegated(
+        &self,
+        user_id: UserId,
+        device_key_id: rim_core::key_identity::model::DeviceKeyId,
+        relay_server_id: &str,
+    ) -> ServiceResult<bool>;
+}

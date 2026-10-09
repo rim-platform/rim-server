@@ -1,0 +1,1310 @@
+//! This server as its users' relay: contacts, blocks and the request inbox, the queue of host
+//! events with per-device cursors, identities served to and fetched from other servers, and
+//! what hosts deliver.
+
+pub(crate) mod identity;
+pub(crate) mod inbox;
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, Duration, Utc};
+use sea_orm::DatabaseConnection;
+use tokio::sync::broadcast;
+use tracing::{info, instrument, warn};
+use uuid::Uuid;
+
+use rim_core::e2ee::repository::E2eeRepository;
+use rim_core::host::model::UserKind;
+use rim_core::host::repository::HostRepository;
+use rim_core::key_identity::model::DeviceKeyId;
+use rim_core::key_identity::repository::KeyIdentityRepository;
+use rim_core::relay::model::{
+    DmRequest, DmRequestId, DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem,
+    RelayItemRecord,
+};
+use rim_core::relay::repository::RelayRepository;
+use rim_core::user::model::UserId;
+use rim_core::user::repository::UserRepository;
+use rim_identity::{SignedStatement, UnverifiedDeviceRequest, is_principal_id};
+use rim_infra_db::{TransactionScope, begin_transaction};
+use rim_s2s::SharedIdentity;
+use rim_s2s::host::{read_host_event, verify_host_event};
+use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::e2ee::command::MlsCaller;
+use rim_services::e2ee::{ACCEPTED_CIPHER_SUITES, PREFERRED_CIPHER_SUITE};
+use rim_services::relay::dto::{
+    ContactDto, DeliverItem, DeliverResponse, DmRequestDto, IdentityDocument, OutboxPage,
+    PeerClaimRequest, PeerClaimResponse, PeerKeyPackage, QueueSpace, RefusedItem, RelayCleanup,
+    RelayItemDto, RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
+};
+use rim_services::relay::service::RelayService;
+use rim_services::s2s::dto::{PeerKeysDto, PeerLookup, S2sMethod, S2sRequest};
+use rim_services::s2s::service::{PeerService, S2sClient};
+use rim_services::{Actor, ServiceError, ServiceResult};
+
+use crate::registration_rate_limiter::RegistrationRateLimiter;
+use crate::relay::identity::{local_document, verify_identity};
+use crate::relay::inbox::{Filing, InboxFacts, file};
+use crate::repos::AppRepos;
+
+/// Most items one delivery carries.
+pub(crate) const MAX_DELIVER_ITEMS: usize = 256;
+/// Most bytes one delivery or outbox page carries.
+pub(crate) const MAX_DELIVER_BYTES: i64 = 8 * 1024 * 1024;
+/// Most relay URLs a contact carries.
+const MAX_CONTACT_RELAYS: usize = 8;
+/// Longest relay URL, in bytes.
+const MAX_RELAY_URL_LEN: usize = 256;
+/// Longest report reason, in characters.
+const MAX_REPORT_REASON_CHARS: usize = 1000;
+/// How long a fetched identity is served from the cache.
+const IDENTITY_CACHE_TTL: Duration = Duration::hours(24);
+/// How long an ignored request is kept, so its conversation stays dropped.
+const IGNORED_REQUEST_TTL: Duration = Duration::days(30);
+/// Most devices one claim names.
+const MAX_CLAIM_DEVICES: usize = 64;
+/// Claims per stranger principal per day.
+const STRANGER_CLAIMS_PER_DAY: u32 = 20;
+/// Largest card a DM invite may carry.
+const MAX_CARD_BYTES: usize = 128 * 1024;
+/// How far an accepted conversation's row lives: as long as the relay does.
+fn accepted_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
+    now + Duration::days(365 * 100)
+}
+
+#[derive(Clone)]
+pub struct RelayRepos {
+    pub relay_repo: Arc<dyn RelayRepository>,
+    pub host_repo: Arc<dyn HostRepository>,
+    pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
+    pub e2ee_repo: Arc<dyn E2eeRepository>,
+    pub user_repo: Arc<dyn UserRepository>,
+}
+
+/// Limits of the relay's queues.
+#[derive(Debug, Clone, Copy)]
+pub struct RelaySettings {
+    /// Bytes queued per local user before the oldest items are dropped.
+    pub queue_bytes_per_user: i64,
+    /// How long items and requests are kept.
+    pub retention: Duration,
+}
+
+pub struct DefaultRelayService {
+    repos: RelayRepos,
+    db: Option<DatabaseConnection>,
+    identity: SharedIdentity,
+    peers: Arc<dyn PeerService>,
+    client: Arc<dyn S2sClient>,
+    settings: RelaySettings,
+    notices: broadcast::Sender<RelayNotice>,
+    stranger_claims: RegistrationRateLimiter,
+}
+
+/// Validate a principal id given by a client.
+fn check_principal(principal_id: &str) -> ServiceResult<()> {
+    if is_principal_id(principal_id) {
+        Ok(())
+    } else {
+        Err(ServiceError::Validation(
+            "principalId is not a principal id".to_string(),
+        ))
+    }
+}
+
+/// Relay URLs as on a contact link: 1 to 8, each 1 to 256 bytes of printable ASCII without
+/// `?`, `#` or `@`.
+pub(crate) fn check_relay_urls(urls: &[String]) -> ServiceResult<()> {
+    if urls.is_empty() || urls.len() > MAX_CONTACT_RELAYS {
+        return Err(ServiceError::Validation(format!(
+            "give 1 to {MAX_CONTACT_RELAYS} relay URLs"
+        )));
+    }
+    for url in urls {
+        let printable = url.bytes().all(|b| (0x21..=0x7e).contains(&b));
+        if url.is_empty()
+            || url.len() > MAX_RELAY_URL_LEN
+            || !printable
+            || url.contains(['?', '#', '@'])
+        {
+            return Err(ServiceError::Validation(format!(
+                "a relay URL is 1 to {MAX_RELAY_URL_LEN} bytes of printable ASCII without ?, # or @"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The origin (`scheme://host[:port]`) of a relay URL.
+pub(crate) fn origin_of(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    match parsed.scheme() {
+        "https" | "http" => {}
+        _ => return None,
+    }
+    Some(parsed.origin().ascii_serialization())
+}
+
+/// The relays a card payload lists, verified when it was stored.
+pub(crate) fn card_relays(card_payload: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(card_payload)
+        .ok()
+        .and_then(|v| v.get("relays").cloned())
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default()
+}
+
+fn item_dto(record: RelayItemRecord) -> RelayItemDto {
+    RelayItemDto {
+        id: record.id,
+        host_server_id: record.host_server_id,
+        workspace_id: record.workspace_id,
+        envelope: SignedJson {
+            payload: record.payload,
+            signature: record.signature,
+        },
+    }
+}
+
+fn upstream(server_id: &str) -> ServiceError {
+    ServiceError::UpstreamUnavailable {
+        host_server_id: server_id.to_string(),
+    }
+}
+
+/// What a delivered envelope says about where it belongs.
+struct ReadEnvelope {
+    workspace_id: Uuid,
+    stream: String,
+    seq: Option<i64>,
+    conversation_id: Option<Uuid>,
+    invite: Option<Invite>,
+}
+
+/// The parts of a `DmInvite` the request inbox keeps.
+struct Invite {
+    from_principal_id: String,
+    card: Option<SignedJson>,
+}
+
+impl DefaultRelayService {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        repos: RelayRepos,
+        db: Option<DatabaseConnection>,
+        identity: SharedIdentity,
+        peers: Arc<dyn PeerService>,
+        client: Arc<dyn S2sClient>,
+        settings: RelaySettings,
+    ) -> Self {
+        let (notices, _) = broadcast::channel(1024);
+        Self {
+            repos,
+            db,
+            identity,
+            peers,
+            client,
+            settings,
+            notices,
+            stranger_claims: RegistrationRateLimiter::new(24 * 60 * 60, STRANGER_CLAIMS_PER_DAY),
+        }
+    }
+
+    async fn begin(&self) -> ServiceResult<(Option<TransactionScope>, RelayRepos)> {
+        let scope = match &self.db {
+            Some(db) => Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(&s.handle()).for_relay(),
+            None => self.repos.clone(),
+        };
+        Ok((scope, repos))
+    }
+
+    async fn commit(scope: Option<TransactionScope>) -> ServiceResult<()> {
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        Ok(())
+    }
+
+    fn notify(&self, notice: RelayNotice) {
+        let _ = self.notices.send(notice);
+    }
+
+    fn own_id(&self) -> String {
+        self.identity.current().server_id().to_string()
+    }
+
+    /// The session's device: the caller's and not revoked.
+    async fn session_device(&self, caller: &MlsCaller) -> ServiceResult<DeviceKeyId> {
+        crate::e2ee::session_device(self.repos.e2ee_repo.as_ref(), caller)
+            .await
+            .map(|d| d.device_key_id)
+    }
+
+    async fn request_dto(&self, request: DmRequest) -> ServiceResult<DmRequestDto> {
+        let held_items = if request.status == DmRequestStatus::Pending {
+            self.repos
+                .relay_repo
+                .held_items(request.id)
+                .await?
+                .into_iter()
+                .map(item_dto)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(DmRequestDto {
+            id: request.id,
+            from_principal_id: request.from_principal_id,
+            card: SignedJson {
+                payload: request.card_payload,
+                signature: request.card_signature,
+            },
+            host_server_id: request.host_server_id,
+            conversation_id: request.conversation_id,
+            held_items,
+            status: request.status,
+            created_at: request.created_at,
+            expires_at: request.expires_at,
+        })
+    }
+
+    async fn own_request(&self, actor: Actor, id: DmRequestId) -> ServiceResult<DmRequest> {
+        self.repos
+            .relay_repo
+            .get_request(actor.user_id, id)
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
+    /// A pinned peer's keys, ready to verify what it signed.
+    async fn peer_keys(&self, server_id: &str, key_seq: Option<u32>) -> ServiceResult<PeerKeysDto> {
+        match self.peers.resolve(server_id, None, key_seq).await? {
+            PeerLookup::Ready(keys) => Ok(keys),
+            PeerLookup::Unknown => Err(ServiceError::Forbidden("unknown peer".to_string())),
+            PeerLookup::Forked => Err(ServiceError::Forbidden("peer forked".to_string())),
+            PeerLookup::Blocked => Err(ServiceError::Forbidden("peer blocked".to_string())),
+        }
+    }
+
+    /// Check an envelope a host delivered: it names that host, verifies under its key at the
+    /// envelope's `keySeq`, and has a space id. `None` when it does not.
+    async fn read_envelope(
+        &self,
+        peer_server_id: &str,
+        keys: &PeerKeysDto,
+        envelope: &SignedJson,
+    ) -> Option<ReadEnvelope> {
+        let statement = SignedStatement {
+            payload: envelope.payload.clone(),
+            signature: envelope.signature.clone(),
+        };
+        let unverified = read_host_event(&statement).ok()?;
+        if unverified.host != peer_server_id {
+            return None;
+        }
+        let key_text = match keys.key_for_seq(unverified.key_seq) {
+            Some(key) => key.to_string(),
+            None if unverified.key_seq > keys.head_seq => self
+                .peer_keys(peer_server_id, Some(unverified.key_seq))
+                .await
+                .ok()?
+                .key_for_seq(unverified.key_seq)?
+                .to_string(),
+            None => return None,
+        };
+        let key = rim_identity::PublicKey::parse(&key_text, "peer key").ok()?;
+        let event = verify_host_event(&key, &statement).ok()?;
+        let workspace_id = Uuid::parse_str(&event.workspace_id).ok()?;
+        let seq = match event.seq {
+            Some(seq) => Some(i64::try_from(seq).ok()?),
+            None => None,
+        };
+        let conversation_id = event
+            .event
+            .get("conversation_id")
+            .and_then(|v| v.as_str())
+            .and_then(|v| Uuid::parse_str(v).ok());
+        let invite =
+            (event.event.get("type").and_then(|v| v.as_str()) == Some("DmInvite")).then(|| {
+                Invite {
+                    from_principal_id: event
+                        .event
+                        .get("from_principal_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    card: event
+                        .event
+                        .get("from_card")
+                        .and_then(|v| serde_json::from_value::<SignedJson>(v.clone()).ok())
+                        .filter(|c| c.payload.len() <= MAX_CARD_BYTES),
+                }
+            });
+        Some(ReadEnvelope {
+            workspace_id,
+            stream: event.stream,
+            seq,
+            conversation_id,
+            invite,
+        })
+    }
+
+    /// File one recipient's copy of an envelope. Returns a refusal reason, if any.
+    #[allow(clippy::too_many_arguments)]
+    async fn file_for(
+        &self,
+        repos: &RelayRepos,
+        peer_server_id: &str,
+        read: &ReadEnvelope,
+        envelope: &SignedJson,
+        envelope_id: &mut Option<i64>,
+        principal_id: &str,
+        device_id: Option<Uuid>,
+        notices: &mut Vec<RelayNotice>,
+    ) -> ServiceResult<Option<&'static str>> {
+        let Some((user_id, UserKind::Local)) = repos.host_repo.find_user(principal_id).await?
+        else {
+            return Ok(Some("unknown_principal"));
+        };
+        let device_key_id = match device_id {
+            Some(device_id) => {
+                match repos
+                    .key_identity_repo
+                    .get_device(user_id, device_id)
+                    .await?
+                {
+                    Some(device) if device.revoked_at.is_none() => Some(device.id),
+                    _ => return Ok(Some("unknown_device")),
+                }
+            }
+            None => None,
+        };
+        let now = Utc::now();
+        let request = match read.conversation_id {
+            Some(conversation_id) => {
+                match repos
+                    .relay_repo
+                    .find_request(user_id, peer_server_id, conversation_id)
+                    .await?
+                {
+                    Some(request) => {
+                        let held = if request.status == DmRequestStatus::Pending {
+                            repos.relay_repo.count_held(request.id).await?
+                        } else {
+                            0
+                        };
+                        Some((request.id, request.status, held))
+                    }
+                    None => None,
+                }
+            }
+            None => None,
+        };
+        let mut facts = InboxFacts {
+            is_invite: read.invite.is_some(),
+            conversation_scoped: read.conversation_id.is_some(),
+            blocked: false,
+            trusted: false,
+            request,
+            pending_for_user: 0,
+            filed_by_sender_today: 0,
+        };
+        if let Some(invite) = &read.invite {
+            let from = invite.from_principal_id.as_str();
+            facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?;
+            facts.trusted = repos.relay_repo.is_contact(user_id, from).await?
+                || repos.relay_repo.accepted_from(user_id, from).await?;
+            if facts.request.is_none() {
+                facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
+                facts.filed_by_sender_today = repos
+                    .relay_repo
+                    .count_requests_from(from, now - Duration::days(1))
+                    .await?;
+            }
+        }
+
+        let request_id = match file(&facts) {
+            Filing::Refuse(reason) => return Ok(Some(reason)),
+            Filing::Drop => return Ok(None),
+            Filing::Deliver => None,
+            Filing::Hold(id) => Some(id),
+            filing @ (Filing::FileAccepted | Filing::FileRequest) => {
+                let (Some(invite), Some(conversation_id)) = (&read.invite, read.conversation_id)
+                else {
+                    return Ok(Some("invalid_envelope"));
+                };
+                let Some(card) = &invite.card else {
+                    return Ok(Some("invalid_envelope"));
+                };
+                let pending = filing == Filing::FileRequest;
+                let request = repos
+                    .relay_repo
+                    .insert_request(NewDmRequest {
+                        status: if pending {
+                            DmRequestStatus::Pending
+                        } else {
+                            DmRequestStatus::Accepted
+                        },
+                        user_id,
+                        from_principal_id: invite.from_principal_id.clone(),
+                        card_payload: card.payload.clone(),
+                        card_signature: card.signature.clone(),
+                        host_server_id: peer_server_id.to_string(),
+                        conversation_id,
+                        expires_at: if pending {
+                            now + self.settings.retention
+                        } else {
+                            accepted_expiry(now)
+                        },
+                    })
+                    .await?;
+                if pending {
+                    notices.push(RelayNotice::DmRequestReceived {
+                        user_id,
+                        request_id: request.id,
+                        from_principal_id: request.from_principal_id.clone(),
+                        host_server_id: request.host_server_id.clone(),
+                        conversation_id,
+                    });
+                    Some(request.id)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let envelope_id = match envelope_id {
+            Some(id) => *id,
+            None => {
+                let id = repos
+                    .relay_repo
+                    .insert_envelope(NewRelayEnvelope {
+                        host_server_id: peer_server_id.to_string(),
+                        workspace_id: read.workspace_id,
+                        stream: read.stream.clone(),
+                        seq: read.seq,
+                        payload: envelope.payload.clone(),
+                        signature: envelope.signature.clone(),
+                    })
+                    .await?;
+                *envelope_id = Some(id);
+                id
+            }
+        };
+        let size =
+            i32::try_from(envelope.payload.len() + envelope.signature.len()).unwrap_or(i32::MAX);
+        repos
+            .relay_repo
+            .insert_item(NewRelayItem {
+                user_id,
+                envelope_id,
+                device_key_id,
+                request_id,
+                size_bytes: size,
+                expires_at: now + self.settings.retention,
+            })
+            .await?;
+        notices.push(RelayNotice::Items { user_id });
+        Ok(None)
+    }
+
+    /// Drop a user's oldest items over the byte cap.
+    async fn enforce_cap(
+        &self,
+        repos: &RelayRepos,
+        user_id: UserId,
+        notices: &mut Vec<RelayNotice>,
+    ) -> ServiceResult<()> {
+        let queued = repos.relay_repo.queued_bytes(user_id).await?;
+        let over = queued - self.settings.queue_bytes_per_user;
+        if over <= 0 {
+            return Ok(());
+        }
+        let dropped = repos.relay_repo.drop_oldest(user_id, over).await?;
+        if !dropped.is_empty() {
+            warn!(user_id = %user_id, spaces = dropped.len(), "relay queue over its cap; dropped the oldest items");
+            notices.push(RelayNotice::QueueOverflow {
+                user_id,
+                spaces: dropped
+                    .into_iter()
+                    .map(|d| QueueSpace {
+                        host_server_id: d.host_server_id,
+                        workspace_id: d.workspace_id,
+                    })
+                    .collect(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The identity a relay serves for a principal, fetched over S2S and verified.
+    async fn fetch_identity(
+        &self,
+        relay_server_id: &str,
+        principal_id: &str,
+    ) -> ServiceResult<IdentityDocument> {
+        let response = self
+            .client
+            .send(S2sRequest {
+                peer_server_id: relay_server_id.to_string(),
+                method: S2sMethod::Get,
+                path: format!("/principals/{principal_id}"),
+                body: Vec::new(),
+                content_type: None,
+                headers: Vec::new(),
+            })
+            .await
+            .map_err(|e| {
+                warn!(peer_server_id = %relay_server_id, error = %e, "identity fetch failed");
+                upstream(relay_server_id)
+            })?;
+        match response.status {
+            200 => {}
+            404 => return Err(ServiceError::NotFound),
+            _ => return Err(upstream(relay_server_id)),
+        }
+        let document: IdentityDocument =
+            serde_json::from_slice(&response.body).map_err(|_| upstream(relay_server_id))?;
+        if document.principal_id != principal_id {
+            return Err(upstream(relay_server_id));
+        }
+        verify_identity(&document).map_err(|reason| {
+            warn!(peer_server_id = %relay_server_id, reason, "a relay served an identity that does not verify");
+            upstream(relay_server_id)
+        })?;
+        Ok(document)
+    }
+}
+
+/// Fetch a principal's identity from the first of `relay_urls` that serves it, pinning each
+/// relay first. Returns the document and the serving relay's id.
+pub(crate) async fn fetch_from_relays(
+    peers: &dyn PeerService,
+    client: &dyn S2sClient,
+    principal_id: &str,
+    relay_urls: &[String],
+) -> ServiceResult<(IdentityDocument, String)> {
+    let mut last = ServiceError::NotFound;
+    for url in relay_urls {
+        let Some(origin) = origin_of(url) else {
+            continue;
+        };
+        let pinned = match peers.pin(&origin, None).await {
+            Ok(pinned) => pinned,
+            Err(e) => {
+                warn!(origin = %origin, error = %e, "could not pin a relay");
+                last = upstream(&origin);
+                continue;
+            }
+        };
+        let response = client
+            .send(S2sRequest {
+                peer_server_id: pinned.server_id.clone(),
+                method: S2sMethod::Get,
+                path: format!("/principals/{principal_id}"),
+                body: Vec::new(),
+                content_type: None,
+                headers: Vec::new(),
+            })
+            .await;
+        let response = match response {
+            Ok(r) if r.status == 200 => r,
+            Ok(r) if r.status == 404 => {
+                last = ServiceError::NotFound;
+                continue;
+            }
+            Ok(_) | Err(_) => {
+                last = upstream(&pinned.server_id);
+                continue;
+            }
+        };
+        let Ok(document) = serde_json::from_slice::<IdentityDocument>(&response.body) else {
+            last = upstream(&pinned.server_id);
+            continue;
+        };
+        if document.principal_id != principal_id || verify_identity(&document).is_err() {
+            warn!(peer_server_id = %pinned.server_id, "a relay served an identity that does not verify");
+            last = upstream(&pinned.server_id);
+            continue;
+        }
+        return Ok((document, pinned.server_id));
+    }
+    Err(last)
+}
+
+#[async_trait]
+impl RelayService for DefaultRelayService {
+    async fn contacts(&self, actor: Actor) -> ServiceResult<Vec<ContactDto>> {
+        Ok(self
+            .repos
+            .relay_repo
+            .list_contacts(actor.user_id)
+            .await?
+            .into_iter()
+            .map(|c| ContactDto {
+                principal_id: c.principal_id,
+                relay_urls: c.relay_urls,
+                added_at: c.added_at,
+            })
+            .collect())
+    }
+
+    #[instrument(name = "relay.add_contact", skip_all, fields(actor_id = %actor.user_id))]
+    async fn add_contact(
+        &self,
+        actor: Actor,
+        principal_id: String,
+        relay_urls: Vec<String>,
+    ) -> ServiceResult<ContactDto> {
+        check_principal(&principal_id)?;
+        check_relay_urls(&relay_urls)?;
+        let contact = self
+            .repos
+            .relay_repo
+            .upsert_contact(actor.user_id, &principal_id, relay_urls)
+            .await?;
+        Ok(ContactDto {
+            principal_id: contact.principal_id,
+            relay_urls: contact.relay_urls,
+            added_at: contact.added_at,
+        })
+    }
+
+    async fn remove_contact(&self, actor: Actor, principal_id: String) -> ServiceResult<bool> {
+        Ok(self
+            .repos
+            .relay_repo
+            .delete_contact(actor.user_id, &principal_id)
+            .await?)
+    }
+
+    #[instrument(name = "relay.block_principal", skip_all, fields(actor_id = %actor.user_id))]
+    async fn block_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool> {
+        check_principal(&principal_id)?;
+        let (scope, repos) = self.begin().await?;
+        let added = repos.relay_repo.block(actor.user_id, &principal_id).await?;
+        let ignored = repos
+            .relay_repo
+            .ignore_pending_from(
+                actor.user_id,
+                &principal_id,
+                Utc::now() + IGNORED_REQUEST_TTL,
+            )
+            .await?;
+        Self::commit(scope).await?;
+        info!(
+            target = "audit",
+            event = "relay.principal_blocked",
+            user_id = %actor.user_id,
+            principal_id = %principal_id,
+            ignored_requests = ignored,
+            "a user blocked a principal"
+        );
+        Ok(added)
+    }
+
+    async fn unblock_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool> {
+        Ok(self
+            .repos
+            .relay_repo
+            .unblock(actor.user_id, &principal_id)
+            .await?)
+    }
+
+    async fn dm_requests(
+        &self,
+        actor: Actor,
+        status: Option<DmRequestStatus>,
+    ) -> ServiceResult<Vec<DmRequestDto>> {
+        let requests = self
+            .repos
+            .relay_repo
+            .list_requests(actor.user_id, status)
+            .await?;
+        let mut result = Vec::with_capacity(requests.len());
+        for request in requests {
+            result.push(self.request_dto(request).await?);
+        }
+        Ok(result)
+    }
+
+    #[instrument(name = "relay.accept_dm_request", skip_all, fields(actor_id = %actor.user_id))]
+    async fn accept_dm_request(
+        &self,
+        actor: Actor,
+        id: DmRequestId,
+    ) -> ServiceResult<DmRequestDto> {
+        let request = self.own_request(actor, id).await?;
+        let (scope, repos) = self.begin().await?;
+        let decided = repos
+            .relay_repo
+            .decide_request(
+                request.id,
+                DmRequestStatus::Accepted,
+                accepted_expiry(Utc::now()),
+            )
+            .await?
+            .ok_or_else(|| ServiceError::Conflict("the request was decided already".to_string()))?;
+        repos.relay_repo.release_held(request.id).await?;
+        let relays: Vec<String> = card_relays(&request.card_payload)
+            .into_iter()
+            .take(MAX_CONTACT_RELAYS)
+            .collect();
+        if check_relay_urls(&relays).is_ok() {
+            repos
+                .relay_repo
+                .upsert_contact(actor.user_id, &request.from_principal_id, relays)
+                .await?;
+        }
+        Self::commit(scope).await?;
+        self.notify(RelayNotice::Items {
+            user_id: actor.user_id,
+        });
+        self.request_dto(decided).await
+    }
+
+    #[instrument(name = "relay.ignore_dm_request", skip_all, fields(actor_id = %actor.user_id))]
+    async fn ignore_dm_request(
+        &self,
+        actor: Actor,
+        id: DmRequestId,
+    ) -> ServiceResult<DmRequestDto> {
+        let request = self.own_request(actor, id).await?;
+        let (scope, repos) = self.begin().await?;
+        let decided = repos
+            .relay_repo
+            .decide_request(
+                request.id,
+                DmRequestStatus::Ignored,
+                Utc::now() + IGNORED_REQUEST_TTL,
+            )
+            .await?
+            .ok_or_else(|| ServiceError::Conflict("the request was decided already".to_string()))?;
+        repos.relay_repo.delete_held(request.id).await?;
+        Self::commit(scope).await?;
+        self.request_dto(decided).await
+    }
+
+    #[instrument(name = "relay.report_dm_request", skip_all, fields(actor_id = %actor.user_id))]
+    async fn report_dm_request(
+        &self,
+        actor: Actor,
+        id: DmRequestId,
+        reason: String,
+    ) -> ServiceResult<bool> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.chars().count() > MAX_REPORT_REASON_CHARS {
+            return Err(ServiceError::Validation(format!(
+                "a reason is 1 to {MAX_REPORT_REASON_CHARS} characters"
+            )));
+        }
+        let request = self.own_request(actor, id).await?;
+        if request.status == DmRequestStatus::Pending {
+            self.ignore_dm_request(actor, id).await?;
+        }
+        info!(
+            target = "audit",
+            event = "relay.dm_request_reported",
+            user_id = %actor.user_id,
+            request_id = %request.id,
+            principal_id = %request.from_principal_id,
+            host_server_id = %request.host_server_id,
+            "a user reported a DM request"
+        );
+        Ok(true)
+    }
+
+    async fn relay_items(
+        &self,
+        caller: MlsCaller,
+        after: Option<i64>,
+        limit: i64,
+    ) -> ServiceResult<RelayItemPageDto> {
+        let device = self.session_device(&caller).await?;
+        let after = match after {
+            Some(after) => after,
+            None => self.repos.relay_repo.device_cursor(device).await?,
+        };
+        let mut items = self
+            .repos
+            .relay_repo
+            .list_items(caller.actor.user_id, device, after, limit + 1)
+            .await?;
+        let has_more = items.len() as i64 > limit;
+        items.truncate(limit.max(0) as usize);
+        Ok(RelayItemPageDto {
+            items: items.into_iter().map(item_dto).collect(),
+            has_more,
+        })
+    }
+
+    async fn ack_relay_items(&self, caller: MlsCaller, up_to: i64) -> ServiceResult<bool> {
+        let device = self.session_device(&caller).await?;
+        if up_to < 0 {
+            return Err(ServiceError::Validation("upTo is an item id".to_string()));
+        }
+        self.repos.relay_repo.ack(device, up_to).await?;
+        Ok(true)
+    }
+
+    #[instrument(name = "relay.leave_relay", skip_all, fields(actor_id = %actor.user_id))]
+    async fn leave_relay(&self, actor: Actor) -> ServiceResult<bool> {
+        self.repos.relay_repo.clear_user(actor.user_id).await?;
+        info!(
+            target = "audit",
+            event = "relay.left",
+            user_id = %actor.user_id,
+            "a user left this relay; their queue, requests and contacts are deleted"
+        );
+        Ok(true)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<RelayNotice> {
+        self.notices.subscribe()
+    }
+
+    async fn check_outgoing_request(
+        &self,
+        user_id: UserId,
+        device_key_id: Option<DeviceKeyId>,
+        payload: String,
+        signature: String,
+    ) -> ServiceResult<String> {
+        let forbidden = |why: &str| ServiceError::Forbidden(why.to_string());
+        let device_key_id =
+            device_key_id.ok_or_else(|| forbidden("this session is not bound to a device"))?;
+        let statement = SignedStatement { payload, signature };
+        let unverified = UnverifiedDeviceRequest::read(&statement)
+            .map_err(|e| ServiceError::Validation(e.to_string()))?;
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::Unauthenticated)?;
+        if user.principal_id.as_deref() != Some(unverified.principal_id.as_str()) {
+            return Err(forbidden("the device request names another principal"));
+        }
+        let device = self
+            .repos
+            .key_identity_repo
+            .get_device(user_id, unverified.device_id)
+            .await?
+            .filter(|d| d.id == device_key_id)
+            .ok_or_else(|| forbidden("the device request names another device"))?;
+        if device.revoked_at.is_some() {
+            return Err(forbidden("the device is revoked"));
+        }
+        let key = identity::device_key(&device.public_key)?;
+        let request = unverified
+            .verify(&key)
+            .map_err(|_| forbidden("the device signature does not verify"))?;
+        Ok(request.host)
+    }
+
+    async fn local_identity(
+        &self,
+        principal_id: String,
+    ) -> ServiceResult<Option<IdentityDocument>> {
+        match self.repos.host_repo.find_user(&principal_id).await? {
+            Some((user_id, UserKind::Local)) => {
+                local_document(
+                    self.repos.key_identity_repo.as_ref(),
+                    self.repos.e2ee_repo.as_ref(),
+                    user_id,
+                    &principal_id,
+                )
+                .await
+            }
+            _ => Ok(None),
+        }
+    }
+
+    #[instrument(name = "relay.remote_identity", skip_all, fields(actor_id = %_actor.user_id))]
+    async fn remote_identity(
+        &self,
+        _actor: Actor,
+        principal_id: String,
+        relay_url: Option<String>,
+    ) -> ServiceResult<RemoteIdentityDto> {
+        check_principal(&principal_id)?;
+        if let Some(document) = self.local_identity(principal_id.clone()).await? {
+            return Ok(RemoteIdentityDto {
+                document,
+                served_by: self.own_id(),
+            });
+        }
+        let cached = self.repos.relay_repo.cached_identity(&principal_id).await?;
+        if let Some(cached) = &cached
+            && Utc::now() - cached.fetched_at < IDENTITY_CACHE_TTL
+            && let Ok(document) = serde_json::from_str::<IdentityDocument>(&cached.identity)
+        {
+            return Ok(RemoteIdentityDto {
+                document,
+                served_by: cached.served_by.clone(),
+            });
+        }
+        let (document, served_by) = match relay_url {
+            Some(url) => {
+                check_relay_urls(std::slice::from_ref(&url))?;
+                fetch_from_relays(
+                    self.peers.as_ref(),
+                    self.client.as_ref(),
+                    &principal_id,
+                    &[url],
+                )
+                .await?
+            }
+            None => {
+                let served_by = cached
+                    .map(|c| c.served_by)
+                    .ok_or_else(|| ServiceError::Validation("relayUrl is required".to_string()))?;
+                (
+                    self.fetch_identity(&served_by, &principal_id).await?,
+                    served_by,
+                )
+            }
+        };
+        let text = serde_json::to_string(&document).map_err(ServiceError::internal)?;
+        self.repos
+            .relay_repo
+            .store_identity(&principal_id, &served_by, &text)
+            .await?;
+        Ok(RemoteIdentityDto {
+            document,
+            served_by,
+        })
+    }
+
+    async fn remote_server(&self, _actor: Actor, origin: String) -> ServiceResult<RemoteServerDto> {
+        let origin = origin_of(&origin)
+            .filter(|o| *o == origin.trim_end_matches('/'))
+            .ok_or_else(|| {
+                ServiceError::Validation("origin must be scheme://host[:port]".to_string())
+            })?;
+        let pinned = self.peers.pin(&origin, None).await?;
+        let discovery = self
+            .peers
+            .discovery_document(&pinned.server_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        Ok(RemoteServerDto {
+            server_id: pinned.server_id,
+            origin: pinned.origin,
+            discovery,
+        })
+    }
+
+    #[instrument(name = "relay.deliver", skip_all, fields(peer_server_id = %peer_server_id, items = items.len()))]
+    async fn deliver(
+        &self,
+        peer_server_id: String,
+        items: Vec<DeliverItem>,
+    ) -> ServiceResult<DeliverResponse> {
+        if items.len() > MAX_DELIVER_ITEMS {
+            return Err(ServiceError::Validation(format!(
+                "deliver at most {MAX_DELIVER_ITEMS} items"
+            )));
+        }
+        let keys = self.peer_keys(&peer_server_id, None).await?;
+        let (scope, repos) = self.begin().await?;
+        let mut through = repos.relay_repo.received_through(&peer_server_id).await?;
+        let mut refused = Vec::new();
+        let mut notices = Vec::new();
+        let mut users = HashSet::new();
+        for item in &items {
+            let id: i64 = item
+                .id
+                .parse()
+                .map_err(|_| ServiceError::Validation("an item id is not a number".to_string()))?;
+            if id <= through {
+                continue;
+            }
+            match self
+                .read_envelope(&peer_server_id, &keys, &item.envelope)
+                .await
+            {
+                None => refused.push(RefusedItem {
+                    id: item.id.clone(),
+                    reason: "invalid_envelope".to_string(),
+                    principal_id: None,
+                }),
+                Some(read) => {
+                    let mut envelope_id = None;
+                    let mut seen = HashSet::new();
+                    for principal_id in item.recipients.iter().filter(|p| seen.insert(*p)) {
+                        let before = notices.len();
+                        if let Some(reason) = self
+                            .file_for(
+                                &repos,
+                                &peer_server_id,
+                                &read,
+                                &item.envelope,
+                                &mut envelope_id,
+                                principal_id,
+                                item.device_id,
+                                &mut notices,
+                            )
+                            .await?
+                        {
+                            refused.push(RefusedItem {
+                                id: item.id.clone(),
+                                reason: reason.to_string(),
+                                principal_id: Some(principal_id.clone()),
+                            });
+                        }
+                        for notice in &notices[before..] {
+                            users.insert(notice.user_id());
+                        }
+                    }
+                }
+            }
+            through = id;
+        }
+        for user_id in users {
+            self.enforce_cap(&repos, user_id, &mut notices).await?;
+        }
+        repos
+            .relay_repo
+            .advance_received_through(&peer_server_id, through)
+            .await?;
+        Self::commit(scope).await?;
+        for notice in notices {
+            self.notify(notice);
+        }
+        Ok(DeliverResponse {
+            acked_through: through.to_string(),
+            refused,
+        })
+    }
+
+    #[instrument(name = "relay.claim_for_peer", skip_all, fields(peer_server_id = %peer_server_id))]
+    async fn claim_for_peer(
+        &self,
+        peer_server_id: String,
+        request: PeerClaimRequest,
+    ) -> ServiceResult<PeerClaimResponse> {
+        if request.conversation.host != peer_server_id {
+            return Err(ServiceError::Forbidden(
+                "the claim names another host".to_string(),
+            ));
+        }
+        if request.devices.is_empty() || request.devices.len() > MAX_CLAIM_DEVICES {
+            return Err(ServiceError::Validation(format!(
+                "claim 1 to {MAX_CLAIM_DEVICES} devices"
+            )));
+        }
+        if request.devices.iter().collect::<HashSet<_>>().len() != request.devices.len() {
+            return Err(ServiceError::Validation(
+                "a device is named twice".to_string(),
+            ));
+        }
+        let suite = request.cipher_suite.unwrap_or(PREFERRED_CIPHER_SUITE);
+        if !ACCEPTED_CIPHER_SUITES.contains(&suite) {
+            return Err(ServiceError::Validation(format!(
+                "cipher suite {suite} is not accepted"
+            )));
+        }
+        let Some((user_id, UserKind::Local)) = self
+            .repos
+            .host_repo
+            .find_user(&request.principal_id)
+            .await?
+        else {
+            return Err(ServiceError::NotFound);
+        };
+        let claimer = request.claimer.principal_id.as_str();
+        if self.repos.relay_repo.is_blocked(user_id, claimer).await? {
+            return Err(ServiceError::Forbidden(
+                "the claimer is blocked".to_string(),
+            ));
+        }
+        let stranger = !(self.repos.relay_repo.is_contact(user_id, claimer).await?
+            || self
+                .repos
+                .relay_repo
+                .accepted_from(user_id, claimer)
+                .await?
+            || self
+                .repos
+                .host_repo
+                .shares_workspace(user_id, claimer)
+                .await?);
+        if stranger
+            && let RateLimitDecision::Limited {
+                retry_after_seconds,
+            } = self
+                .stranger_claims
+                .check_and_record(claimer, "stranger_claim", Utc::now())
+        {
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        let (scope, repos) = self.begin().await?;
+        let mut key_packages = Vec::with_capacity(request.devices.len());
+        for device_id in &request.devices {
+            let Some(device) = repos
+                .key_identity_repo
+                .get_device(user_id, *device_id)
+                .await?
+            else {
+                continue;
+            };
+            if device.revoked_at.is_some() {
+                continue;
+            }
+            if let Some(package) = repos
+                .e2ee_repo
+                .claim_key_package_for_peer(device.id, suite, !stranger)
+                .await?
+            {
+                key_packages.push(PeerKeyPackage {
+                    device_id: *device_id,
+                    key_package: URL_SAFE_NO_PAD.encode(&package.key_package),
+                    key_package_ref: URL_SAFE_NO_PAD.encode(&package.key_package_ref),
+                    last_resort: package.last_resort,
+                });
+            }
+        }
+        Self::commit(scope).await?;
+        info!(
+            claimed = key_packages.len(),
+            stranger,
+            user_id = %user_id,
+            "handed out key packages to a host"
+        );
+        Ok(PeerClaimResponse { key_packages })
+    }
+
+    async fn pull_outbox(&self, peer_server_id: String) -> ServiceResult<u64> {
+        let after = self
+            .repos
+            .relay_repo
+            .received_through(&peer_server_id)
+            .await?;
+        let response = self
+            .client
+            .send(S2sRequest {
+                peer_server_id: peer_server_id.clone(),
+                method: S2sMethod::Get,
+                path: format!("/outbox?after={after}&limit={MAX_DELIVER_ITEMS}"),
+                body: Vec::new(),
+                content_type: None,
+                headers: Vec::new(),
+            })
+            .await
+            .map_err(|_| upstream(&peer_server_id))?;
+        if response.status != 200 {
+            return Err(upstream(&peer_server_id));
+        }
+        let page: OutboxPage =
+            serde_json::from_slice(&response.body).map_err(|_| upstream(&peer_server_id))?;
+        let count = page.items.len() as u64;
+        if count > 0 {
+            self.deliver(peer_server_id, page.items).await?;
+        }
+        Ok(count)
+    }
+
+    async fn identity_changed(&self, user_id: UserId) -> ServiceResult<()> {
+        let Some(user) = self.repos.user_repo.get_by_id(user_id).await? else {
+            return Ok(());
+        };
+        let Some(principal_id) = user.principal_id else {
+            return Ok(());
+        };
+        let Some(document) = self.local_identity(principal_id.clone()).await? else {
+            return Ok(());
+        };
+        let body = serde_json::to_vec(&document).map_err(ServiceError::internal)?;
+        let own = self.own_id();
+        for host in self.repos.relay_repo.hosts_of_user(user_id).await? {
+            if host == own {
+                continue;
+            }
+            let result = self
+                .client
+                .send(S2sRequest {
+                    peer_server_id: host.clone(),
+                    method: S2sMethod::Post,
+                    path: "/identity".to_string(),
+                    body: body.clone(),
+                    content_type: None,
+                    headers: Vec::new(),
+                })
+                .await;
+            match result {
+                Ok(r) if r.status == 200 => {}
+                Ok(r) => {
+                    warn!(peer_server_id = %host, status = r.status, "a host refused an identity push")
+                }
+                Err(e) => {
+                    warn!(peer_server_id = %host, error = %e, "could not push an identity to a host")
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn cleanup(&self) -> ServiceResult<RelayCleanup> {
+        let now = Utc::now();
+        Ok(RelayCleanup {
+            acked_items: self.repos.relay_repo.delete_acked_items().await?,
+            expired_items: self.repos.relay_repo.delete_expired_items(now).await?,
+            expired_requests: self.repos.relay_repo.delete_expired_requests(now).await?,
+            orphan_envelopes: self.repos.relay_repo.delete_orphan_envelopes().await?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_urls_follow_the_contact_link_rules() {
+        assert!(check_relay_urls(&["https://relay.example".to_string()]).is_ok());
+        assert!(check_relay_urls(&[]).is_err());
+        assert!(check_relay_urls(&["https://a.example/?x".to_string()]).is_err());
+        assert!(check_relay_urls(&["https://u@a.example".to_string()]).is_err());
+        assert!(check_relay_urls(&["https://a.example/#f".to_string()]).is_err());
+        assert!(check_relay_urls(&["https://a b".to_string()]).is_err());
+        assert!(check_relay_urls(&["x".repeat(257)]).is_err());
+        assert!(check_relay_urls(&vec!["https://a.example".to_string(); 9]).is_err());
+    }
+
+    #[test]
+    fn origins_drop_paths_and_keep_ports() {
+        assert_eq!(
+            origin_of("https://relay.example/x").as_deref(),
+            Some("https://relay.example")
+        );
+        assert_eq!(
+            origin_of("http://127.0.0.1:8099").as_deref(),
+            Some("http://127.0.0.1:8099")
+        );
+        assert_eq!(origin_of("ftp://relay.example"), None);
+    }
+
+    #[test]
+    fn card_relays_are_read_from_the_payload() {
+        assert_eq!(
+            card_relays(r#"{"relays":["https://a.example","https://b.example"]}"#),
+            vec!["https://a.example", "https://b.example"]
+        );
+        assert!(card_relays("{}").is_empty());
+    }
+}
