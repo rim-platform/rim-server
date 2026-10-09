@@ -79,7 +79,12 @@ keyHash  = base64url(SHA-256(tagged key text))          (as device_key.key_hash)
   server recovery key offline").
 - **CLI** (S5-1, beside `bootstrap_cmd.rs`): `rim_server server-key show`, `server-key rotate` (a
   `signer: server` rotation; the old seed is overwritten after the entry commits),
-  `server-key recover --recovery-key-file F [--new-recovery-key]`.
+  `server-key recover --recovery-key-file F [--new-recovery-key]`. The new seed is written to
+  `<key file>.next` (0600) before its entry commits and moved over the key file after; a start
+  that finds the log head naming the `.next` seed moves it into place. A running server checks the
+  log every minute and switches to the new key, re-signing its descriptor. `recover` works without
+  the key file; with `--new-recovery-key` it writes the new recovery key where first boot does,
+  refusing to overwrite a file there.
 
 ### Discovery document
 
@@ -127,8 +132,13 @@ the peer; at most one fetch per peer per minute and 60 in total.
 | Fetched log | Action |
 |---|---|
 | Equal to the pin | Keep; take the descriptor if its version is higher |
-| Extends the pin with valid rotations | Accept. After a `signer: server` rotation the previous key stays valid 24 hours; after a `signer: recovery` rotation it is refused at once |
+| Extends the pin with valid rotations | Accept. After a `signer: server` rotation the previous key stays valid 24 hours from when this server accepted the extension; after a `signer: recovery` rotation it is refused at once |
 | Does not extend it (a fork) | Status `forked`: requests either way fail `403 peer_forked`, ERROR log, audit `s2s.peer_forked`, until `rim_server peer reset <id>` after an out-of-band check |
+| A prefix of the pin | Keep the pin (the peer serves an older view, say a lagging node) |
+
+A first pin keeps the key before the head but gives it no grace: the grace counts from an
+extension this server saw. A refetch whose inception hashes to another id (the origin now serves
+another server) fails and keeps the pin; only a log from the same inception can fork it.
 
 ### Host keys in clients
 
@@ -198,7 +208,10 @@ Every response from the RIM layer, errors included, is signed by the responder, 
 plus `"content-digest";req` when the request had a body, with `created`, `keyid`, `alg`, `tag`.
 `Rim-Request-Nonce` echoes the request's nonce and binds the answer to it. RFC 9421 §2.4 advises
 against covering the request's `Signature` field, hence the echo. A caller treats an unsigned or
-badly signed response as a transport failure (retry), never as an answer.
+badly signed response as a transport failure (retry), never as an answer, and refuses a response
+whose `created` is more than 300 s from its clock. A refusal of a request whose nonce cannot be
+read echoes an empty `Rim-Request-Nonce`; no caller can match it. While server-to-server traffic
+is off, `/s2s/v1/…` answers an unsigned `404`.
 
 ### Errors
 
@@ -212,7 +225,17 @@ Bodies are `{"error":"<code>","message":"…"}`.
 | 404 | `not_found` | Unknown principal, space or conversation |
 | 409 | `replay` | Nonce seen; device request `seq` refused (`highestSeq` in the body) |
 | 413, 429 | `too_large`, `rate_limited` | Caps; `Retry-After` |
+| 500 | `internal` | The responder failed (its database, say); retry |
 | 503 | `role_disabled` | The endpoint belongs to a role this server does not run |
+
+A request in a method other than `GET` or `POST` fails the profile (`401`). A peer with status
+`blocked` gets `403 peer_not_allowed`.
+
+### Ping
+
+`GET /s2s/v1/ping` → `200 {"serverId":"rims1_…","roles":["host","relay"]}`, served by every role.
+It runs the whole request check and signs its answer, so it tests a pin and the transport both
+ways.
 
 ### Implementation
 
@@ -234,8 +257,8 @@ Actix's request types.
 | `RIM_ROLE` | Client API | S2S endpoints |
 |---|---|---|
 | `both` (default) | Everything | All |
-| `relay` | All but `createServer` (`FORBIDDEN`); existing workspaces keep working for local users | Discovery, `principals`, `identity`, `key-packages/claim`, `deliver`, `presence`, and host endpoints for its direct space only |
-| `host` | All but `/api/remote/…`, contacts, DM requests and remote spaces; local users DM inside workspaces | Discovery and host endpoints; `deliver` answers `503` |
+| `relay` | All but `createServer` (`FORBIDDEN`); existing workspaces keep working for local users | Discovery, `ping`, `principals`, `identity`, `key-packages/claim`, `deliver`, `presence`, and host endpoints for its direct space only |
+| `host` | All but `/api/remote/…`, contacts, DM requests and remote spaces; local users DM inside workspaces | Discovery, `ping` and host endpoints; `deliver` answers `503` |
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -899,11 +922,13 @@ is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error
 | Remote user's direct session | 24 h |
 
 Rate limits are the in-memory per-node limiters; nonces, `seq` windows and cursors are in the
-database, so correctness never depends on one node. Audit (`command_audit_log`, ids only):
+database, so correctness never depends on one node. Audit (ids only):
 `s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`, `host.remote_join`,
 `host.delegation_accepted`, `host.revocation_applied`, `relay.principal_blocked`,
-`relay.registration_pow`, `server_key.rotated`, `server_key.recovered`. Logs carry server, principal
-and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
+`relay.registration_pow`, `server_key.created`, `server_key.rotated`, `server_key.recovered`,
+`s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
+key and peer events have neither (its columns are `NOT NULL`), so they go to the audit log stream
+(`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
 queue bytes, S2S responses by status, signature failures by reason.
 
 ## Threat model
@@ -1097,8 +1122,38 @@ At the relay of A.1, for `key-identity-v1.md` appendix B's inception payload, wi
 `powBits` 16: the smallest working counter is 37283, nonce `AAAAAAAAkaM` (8 bytes big-endian), hash
 `00002f63d137749fda27201ccf9d282a4ed846287d49c55fea89a47617e78ed6`.
 
-### To be filled by S5-1
+### Filled by S5-1
 
-RFC 9421 appendix B.2.6 run through `rim_s2s` (the RFC's key and message, in the crate's tests),
-and a `server-rotate` entry (host seed 40 to seed 41, `signer: server`, `prev` from A.1) with the
-descriptor re-signed at `keySeq` 1, `version` 2.
+**RFC 9421 appendix B.2.6** through `rim_s2s` (`rim_s2s/src/vectors.rs`): the RFC's
+`test-key-ed25519` (seed: the last 32 bytes of its PKCS#8 key), the components `"date" "@method"
+"@path" "@authority" "content-type" "content-length"` with `created=1618884473` and
+`keyid="test-key-ed25519"` serialize to the RFC's `Signature-Input`, the crate builds the RFC's
+signature base, and signing it gives the RFC's
+`sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:`.
+
+**Rotation.** The host of A.1 rotates from seed 40 to seed 41 (`signer: server`, recovery key
+unchanged, `createdAt` 2026-10-10T00:00:00Z), signed by the seed 40 key:
+
+```
+{"v":2,"type":"server-rotate","serverId":"rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw","seq":1,"prev":"oUvCbfqOS1bUTL5gAtene_faqghv8PaPgrRDIJpXLOM","serverKey":"ed25519:-kg0FH9uaQw2k-_2EzYEZAPNiuKhTzGzxAc1hWkjlWU","recoveryKey":"ed25519:_L44YyQXu1uHXUmjwCJwYzkXxgk_0B67Wf9kFuN6_gw","signer":"server","createdAt":"2026-10-10T00:00:00Z"}
+ed25519:cysmxfZAsbKJKvFGkftqHCqAzySvf4MMD9PTimeNavN_Oi91Zt-lfcvCswkb08SnVDrS-iMWK1WT1n7iY_fZAA
+```
+
+| Item | Value |
+|---|---|
+| Key hash of the seed 41 key | `fvKh1r_va0lqRvlpGojY2V1JzJMQeSESlNpO4OXw6Ak` |
+| `prev` for seq 2 | `sU02HLfXJNvkpkHn28DO3JdBxQpmTr3Dl4y94zIY9hU` |
+
+The descriptor of A.2 re-signed by the seed 41 key at `keySeq` 1, `version` 2, `issuedAt`
+2026-10-10T00:00:00Z (the A.2 descriptor no longer verifies against this log):
+
+```
+{"v":2,"type":"server-descriptor","serverId":"rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw","keySeq":1,"version":2,"roles":["host","relay"],"endpoints":{"graphql":"https://host.example/api","websocket":"wss://host.example/api/ws","s2s":"https://host.example/s2s/v1"},"s2sVersions":[1],"mlsCipherSuites":[79],"limits":{"maxBodyBytes":8388608,"clockSkewSeconds":300,"maxDeliverItems":256},"registration":{"mode":"invite","powBits":null},"issuedAt":"2026-10-10T00:00:00Z"}
+ed25519:Yuy9VdOS78e8fL4sMDT9PHmBkZcuzeJEvLlfdD8dRhDjJeJiivU4FcatDrlwEKaB3l9Beado7Qi6_33D7UN0AA
+```
+
+Both computed by `rim_s2s` and cross-checked with Python `cryptography` 50.0.2. Every value of
+A.1 to A.8 reproduces byte for byte in `rim_s2s`'s tests.
+
+**Without `RIM_PUBLIC_BASE_URL`** the descriptor's `graphql` and `websocket` endpoints use
+`http://localhost:<RIM_SERVER_PORT>`; `s2s` is null.

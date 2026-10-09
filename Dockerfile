@@ -60,6 +60,10 @@ USER rim
 #   RIM_CORS_ALLOWED_ORIGIN — CORS origin (optional)
 #   RIM_DATA_DIR          — Data directory (default: ./data)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
+#   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the
+#                           data directory on a volume, the key is the server's identity
+#   RIM_PUBLIC_BASE_URL   — https origin; turns server-to-server traffic on
+#   RIM_ROLE              — relay, host or both (default: both)
 
 ENV RIM_SERVER_HOST=0.0.0.0 \
     RIM_SERVER_PORT=8080 \
