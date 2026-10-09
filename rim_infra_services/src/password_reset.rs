@@ -172,12 +172,18 @@ impl PasswordResetService for DefaultPasswordResetService {
             info!(user_id = %user.id, "password reset requested for a key account; ignored");
             return Ok(());
         }
+        // No address to write to (a key-only account, which the check above already answered):
+        // the same answer again.
+        let Some(email) = user.email.as_deref() else {
+            info!(user_id = %user.id, "password reset requested for an account without email; ignored");
+            return Ok(());
+        };
 
         let raw_token = Self::generate_reset_token();
         let token_hash = hash_token(&raw_token);
         let expires_at = now + Duration::hours(1);
         let link = self.build_reset_link(&raw_token);
-        let message = templates::password_reset(&user.email, &link);
+        let message = templates::password_reset(email, &link);
 
         // Token creation and the email send are spawned rather than awaited, so a known
         // username returns after the same single lookup as an unknown one. Awaiting the insert,
@@ -320,7 +326,7 @@ mod tests {
         User {
             id,
             username: username.to_string(),
-            password_hash: "hash".to_string(),
+            password_hash: Some("hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -328,7 +334,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            email: email.to_string(),
+            email: Some(email.to_string()),
             timezone: None,
             principal_id: None,
         }
@@ -797,6 +803,83 @@ mod tests {
             user_repo,
             token_repo,
             session_repo,
+            crate::email::MockEmailSender::new(),
+            None,
+        );
+        let err = svc
+            .reset_password(ResetPasswordCmd {
+                token: "rim_rst_valid".to_string(),
+                new_password: "new-password-123".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    /// A key-only account: no password, no email, a principal id.
+    fn key_only_user(id: UserId, username: &str) -> User {
+        User {
+            password_hash: None,
+            email: None,
+            principal_id: Some("rimp1_keyonly".to_string()),
+            ..make_user(id, username, "unused@example.com")
+        }
+    }
+
+    #[tokio::test]
+    async fn request_reset_for_a_key_only_account_sends_nothing() {
+        let user_id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .returning(move |_| Ok(Some(key_only_user(user_id, "alice"))));
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo.expect_create().never();
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().never();
+
+        let svc = build_service(user_repo, token_repo, email_sender, None);
+        assert!(svc.request_reset(reset_cmd("alice")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn request_reset_for_an_account_without_email_sends_nothing() {
+        let user_id = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(move |_| {
+            Ok(Some(User {
+                email: None,
+                ..make_user(user_id, "alice", "unused@example.com")
+            }))
+        });
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo.expect_create().never();
+        let mut email_sender = crate::email::MockEmailSender::new();
+        email_sender.expect_send().never();
+
+        let svc = build_service(user_repo, token_repo, email_sender, None);
+        assert!(svc.request_reset(reset_cmd("alice")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reset_password_for_a_key_only_account_is_refused() {
+        let user_id = UserId::new();
+        let record = token_record(user_id);
+
+        let mut token_repo = MockPasswordResetTokenRepository::new();
+        token_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(record.clone())));
+        token_repo.expect_try_mark_used().never();
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(key_only_user(id, "alice"))));
+        user_repo.expect_update_password().never();
+
+        let svc = build_service(
+            user_repo,
+            token_repo,
             crate::email::MockEmailSender::new(),
             None,
         );

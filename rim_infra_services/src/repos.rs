@@ -169,6 +169,22 @@ pub struct AuthRepos {
     pub moderation_repo: Arc<dyn ModerationRepository>,
 }
 
+impl AuthRepos {
+    /// The repositories the shared signup helpers (`crate::signup`) check and claim
+    /// registration tokens with.
+    pub(crate) fn signup_repos(&self) -> crate::signup::SignupRepos {
+        crate::signup::SignupRepos {
+            bootstrap_token_repo: Arc::clone(&self.bootstrap_token_repo),
+            instance_invite_repo: Arc::clone(&self.instance_invite_repo),
+            invite_repo: Arc::clone(&self.invite_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CommandRepos {
     pub user_command_repo: Arc<dyn UserCommandRepository>,
@@ -339,6 +355,7 @@ impl AppRepos {
             session_repo: Arc::clone(&self.session_repo),
             key_identity_repo: Arc::clone(&self.key_identity_repo),
             key_challenge_repo: Arc::clone(&self.key_challenge_repo),
+            signup: self.for_auth().signup_repos(),
         }
     }
 

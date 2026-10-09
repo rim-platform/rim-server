@@ -56,9 +56,10 @@ async fn boot_recovery_arms_active_run_with_past_deadline_and_ignores_cancelled_
     let user = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "u".to_string(),
-            password: "hash".to_string(),
-            email: "u@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("u@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();

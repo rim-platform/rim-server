@@ -72,6 +72,7 @@ pub use invite::{
 pub use key_identity::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLogEntry, KeyLogEntryKind,
     KeyLoginChallenge, ProfileCard, RotateIdentityKeyInput, SignedStatement, SignedStatementInput,
+    SignupWithKeyInput,
 };
 pub use keybind::{
     DefaultKeybind, Keybind, KeybindContext, KeybindLayers, KeybindScope, KeybindSource,

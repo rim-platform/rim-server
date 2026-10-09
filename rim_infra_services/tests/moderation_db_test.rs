@@ -53,9 +53,10 @@ async fn create_user(handle: &DbHandle, name: &str) -> rim_core::user::model::Us
     SeaOrmUserRepository::new(handle.clone())
         .create_user(rim_core::user::model::NewUser {
             username: name.to_string(),
-            password: "hash".to_string(),
-            email: format!("{name}@example.com"),
+            password: Some("hash".to_string()),
+            email: Some(format!("{name}@example.com")),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("create user")

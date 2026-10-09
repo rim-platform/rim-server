@@ -48,6 +48,7 @@ pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub(crate) mod server;
 pub(crate) mod server_member;
+pub(crate) mod signup;
 pub(crate) mod skill_profile;
 pub mod storage;
 pub(crate) mod thread;
