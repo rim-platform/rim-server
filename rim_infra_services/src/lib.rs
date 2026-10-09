@@ -49,6 +49,7 @@ pub(crate) mod read_state;
 pub mod registration_rate_limiter;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
+pub mod s2s;
 pub(crate) mod server;
 pub(crate) mod server_member;
 pub(crate) mod signup;

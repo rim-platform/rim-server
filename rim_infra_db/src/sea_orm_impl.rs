@@ -37,6 +37,7 @@ pub mod on_call_rotation_participant;
 pub mod on_call_schedule;
 pub mod password_reset_token;
 pub mod pipeline;
+pub mod s2s;
 pub mod server;
 pub mod server_member;
 pub mod session;
