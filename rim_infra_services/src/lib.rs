@@ -1,4 +1,3 @@
-pub(crate) mod action;
 pub mod alert_rate_limiter;
 pub(crate) mod audit;
 // pub(crate) promoted to pub: DefaultAuthService is re-exported below for integration tests
@@ -17,11 +16,9 @@ pub mod email;
 // by the composition root (rim_server/src/app.rs), mirroring the DefaultOnCallService precedent
 // above.
 pub mod escalation;
-pub(crate) mod event;
 pub mod file_storage;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
-pub(crate) mod integration;
 pub(crate) mod key_auth;
 pub(crate) mod keybind;
 pub(crate) mod link_preview;
@@ -51,7 +48,6 @@ pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub(crate) mod server;
 pub(crate) mod server_member;
-pub(crate) mod setting;
 pub(crate) mod skill_profile;
 pub mod storage;
 pub(crate) mod thread;
