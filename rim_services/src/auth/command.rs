@@ -19,6 +19,13 @@ pub struct LogoutCmd {
     pub session_id: rim_core::auth::model::SessionId,
 }
 
+/// Sign out every session of the actor's account except `session_id`, the calling one.
+#[derive(Debug, Clone)]
+pub struct LogoutOtherSessionsCmd {
+    pub actor: Actor,
+    pub session_id: rim_core::auth::model::SessionId,
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateInviteCmd {
     pub actor: Actor,

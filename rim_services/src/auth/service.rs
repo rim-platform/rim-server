@@ -5,8 +5,9 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::auth::command::{
     AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    ListInvitesQuery, LoginCmd, LogoutCmd, PreviewInviteTokenQuery, RevokeInstanceInviteCmd,
-    RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
+    ListInvitesQuery, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd, PreviewInviteTokenQuery,
+    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd,
+    SignupWithInstanceInviteCmd,
 };
 use crate::auth::dto::{
     AcceptInviteResultDto, CreateInstanceInviteResultDto, CreateInviteResultDto, InstanceInviteDto,
@@ -20,6 +21,14 @@ pub trait AuthService: Send + Sync {
     async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto>;
 
     async fn logout(&self, cmd: LogoutCmd) -> ServiceResult<()>;
+
+    /// Revoke every session of the actor's account except the calling one. Returns how many
+    /// were revoked.
+    ///
+    /// # Errors
+    /// - `NotFound` — the calling session does not exist.
+    /// - `PermissionDenied` — the calling session belongs to another account.
+    async fn logout_other_sessions(&self, cmd: LogoutOtherSessionsCmd) -> ServiceResult<u64>;
 
     async fn create_invite(&self, cmd: CreateInviteCmd) -> ServiceResult<CreateInviteResultDto>;
 

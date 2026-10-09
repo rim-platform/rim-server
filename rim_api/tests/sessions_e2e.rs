@@ -1,0 +1,130 @@
+//! Resolver-level e2e test for `logoutOtherSessions` over a real database.
+//!
+//! Run with:
+//! ```sh
+//! cargo test -p rim_api --features e2e-tests -- --test-threads=1
+//! ```
+#![cfg(feature = "e2e-tests")]
+
+mod support;
+
+use std::sync::Arc;
+
+use async_graphql::Request;
+use serde_json::json;
+
+use rim_api::AppSchema;
+use rim_api::auth_context::AuthActorCtx;
+use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
+use rim_auth::password::hash_password;
+use rim_core::user::model::NewUser;
+use rim_core::user::repository::UserRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+use rim_services::auth::dto::RegistrationMode;
+use rim_services::provider::AppServiceProvider;
+
+use support::TestCtx;
+use support::graphql::{anonymous_request, exec_err_code, exec_ok};
+
+const PASSWORD: &str = "correct horse battery";
+
+const LOGIN: &str = r#"
+mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
+
+const LOGOUT_OTHER_SESSIONS: &str = "mutation { logoutOtherSessions }";
+
+const ME: &str = "query { me { id username } }";
+
+async fn create_user(ctx: &TestCtx, username: &str) {
+    SeaOrmUserRepository::new(ctx.db.clone())
+        .create_user(NewUser {
+            username: username.to_string(),
+            password: Some(hash_password(PASSWORD).expect("hash")),
+            email: Some(format!("{username}@test.example.com")),
+            display_name: None,
+            key_identity: None,
+        })
+        .await
+        .expect("create_user");
+}
+
+/// Sign in with the password and return the new session token.
+async fn login(schema: &AppSchema, username: &str) -> String {
+    let intent = Arc::new(AuthIntentCtx::default());
+    let request = anonymous_request(
+        LOGIN,
+        json!({ "input": { "username": username, "password": PASSWORD } }),
+    )
+    .data(Arc::clone(&intent));
+    exec_ok(schema, request).await;
+    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
+        panic!("login must set a session");
+    };
+    session_token
+}
+
+/// A request carrying `session_token` as the session cookie, resolved the way the HTTP layer
+/// resolves it: a revoked or unknown session yields no actor.
+async fn with_session(
+    provider: &Arc<dyn AppServiceProvider>,
+    session_token: &str,
+    query: &str,
+) -> Request {
+    let auth = provider
+        .request_authenticator()
+        .authenticate_session_token(Some(session_token))
+        .await
+        .expect("authenticate");
+    Request::new(query).data(AuthActorCtx::new(auth.user_id, auth.session_id))
+}
+
+/// Two password sessions of one account and one of another: `logoutOtherSessions` from the
+/// first ends the second, keeps the caller, and leaves the other account alone.
+#[tokio::test]
+async fn logout_other_sessions_ends_every_session_but_the_callers() {
+    let ctx = TestCtx::new().await;
+    create_user(&ctx, "ada").await;
+    create_user(&ctx, "grace").await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let provider = ctx.build_provider();
+
+    let desktop = login(&schema, "ada").await;
+    let laptop = login(&schema, "ada").await;
+    let grace = login(&schema, "grace").await;
+
+    let data = exec_ok(
+        &schema,
+        with_session(&provider, &desktop, LOGOUT_OTHER_SESSIONS).await,
+    )
+    .await;
+    assert_eq!(data["logoutOtherSessions"], json!(1));
+
+    assert_eq!(
+        exec_err_code(&schema, with_session(&provider, &laptop, ME).await).await,
+        "UNAUTHENTICATED"
+    );
+    let data = exec_ok(&schema, with_session(&provider, &desktop, ME).await).await;
+    assert_eq!(data["me"]["username"], json!("ada"));
+    let data = exec_ok(&schema, with_session(&provider, &grace, ME).await).await;
+    assert_eq!(data["me"]["username"], json!("grace"));
+
+    // Nothing left to end.
+    let data = exec_ok(
+        &schema,
+        with_session(&provider, &desktop, LOGOUT_OTHER_SESSIONS).await,
+    )
+    .await;
+    assert_eq!(data["logoutOtherSessions"], json!(0));
+}
+
+/// Without a session the mutation is refused.
+#[tokio::test]
+async fn logout_other_sessions_needs_a_session() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+
+    assert_eq!(
+        exec_err_code(&schema, anonymous_request(LOGOUT_OTHER_SESSIONS, json!({}))).await,
+        "UNAUTHENTICATED"
+    );
+}

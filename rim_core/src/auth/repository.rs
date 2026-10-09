@@ -19,6 +19,9 @@ pub trait SessionRepository: Send + Sync {
     async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
     async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;
     async fn revoke_all_for_user(&self, user_id: UserId) -> RepoResult<u64>;
+    /// Revoke every active session of `user_id` except `keep`. Returns how many were revoked.
+    async fn revoke_all_for_user_except(&self, user_id: UserId, keep: SessionId)
+    -> RepoResult<u64>;
     /// Record that a key login session belongs to `device_key_id`, so revoking the device ends
     /// the session.
     async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()>;
