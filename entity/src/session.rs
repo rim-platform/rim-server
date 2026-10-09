@@ -15,10 +15,19 @@ pub struct Model {
     pub revoked_at: Option<DateTimeWithTimeZone>,
     pub user_agent: Option<String>,
     pub ip: Option<String>,
+    pub device_key_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::device_key::Entity",
+        from = "Column::DeviceKeyId",
+        to = "super::device_key::Column::Id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    DeviceKey,
     #[sea_orm(
         belongs_to = "super::user::Entity",
         from = "Column::UserId",
@@ -27,6 +36,12 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     User,
+}
+
+impl Related<super::device_key::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::DeviceKey.def()
+    }
 }
 
 impl Related<super::user::Entity> for Entity {

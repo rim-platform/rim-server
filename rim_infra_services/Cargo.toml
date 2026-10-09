@@ -31,6 +31,7 @@ lettre = { version = "0.11", default-features = false, features = [
 rim_core = { path = "../rim_core", features = ["serde"] }
 rim_services = { path = "../rim_services" }
 rim_auth = { path = "../rim_auth" }
+rim_identity = { path = "../rim_identity" }
 rim_infra_db = { path = "../rim_infra_db" }
 
 [dev-dependencies]
@@ -39,6 +40,7 @@ mockall = "0.13"
 tempfile = "3"
 rim_core = { path = "../rim_core", features = ["mocks"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
+rim_identity = { path = "../rim_identity", features = ["testing"] }
 
 # Needed for mock types generated via rim_core "mocks" feature.
 

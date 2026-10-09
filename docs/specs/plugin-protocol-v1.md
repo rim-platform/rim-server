@@ -458,7 +458,8 @@ device and in every session, and it cannot be turned back into the account id.
 
 When key identity ships:
 
-- each person's id becomes a hash of their inception key, which survives key rotation;
+- each person's id becomes a hash of the first entry of their key log (`rimp1_`, see
+  `docs/specs/key-identity-v1.md`), which survives key rotation;
 - the switch happens **once**. Every `rimp0_` id maps to exactly one new id, and new ids never
   start with `rimp0_`;
 - the host tells running plugins with `rim.principal.changed`, carrying the new id of the
