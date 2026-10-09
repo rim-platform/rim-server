@@ -18,6 +18,7 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-server | #37 | S3-1: key-only signup (`signupWithKey`, nullable password and email) |
 | rim-ui | #29 | S3-5: device linking on the desktop (old and new device) |
 | rim-ui | #30 | S3-6: key-only signup on the desktop join pages |
+| rim-ui | #34 | S3-7: the web app as a linked device (spec amended for its camera scan and certificate check) |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.

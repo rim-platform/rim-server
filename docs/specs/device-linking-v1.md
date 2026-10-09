@@ -18,8 +18,8 @@ client and the later web client for giving a new device its own certified device
 5. The old device reads it through `deviceLink`, shows the name and an 8-character fingerprint the
    new device also shows, signs a certificate, calls `addDeviceKey`, sends a sealed **answer**
    (the certificate, nothing else) with `sendDeviceLinkAnswer`, then republishes its profile card.
-6. The new device polls `deviceLinkAnswer`, verifies the certificate against `keyLog`, stores its
-   keys, signs in with `keyLoginChallenge` + `loginWithKey`, and calls `completeDeviceLink`.
+6. The new device polls `deviceLinkAnswer`, checks the certificate (the desktop verifies it
+   against `keyLog`; the web client checks that it names its own device), stores its keys, signs in with `keyLoginChallenge` + `loginWithKey`, and calls `completeDeviceLink`.
 7. States: `open` → `offered` → `answered` → `consumed`; `cancelled` and expiry end any live state.
 8. Anonymous calls answer `UNAUTHENTICATED` alike for every link they cannot act on, and are
    rate-limited per IP. The server stores sealed bytes and never interprets them.
@@ -396,8 +396,11 @@ type Mutation {
 
 Same as the new desktop device, except:
 
-- It only takes a pasted code, and only for its own GraphQL endpoint (cookies and CORS would fail
-  for another).
+- It takes a pasted code or reads the QR code with the camera (`getUserMedia`, frames decoded in
+  the page; nothing leaves it), and only for its own GraphQL endpoint (cookies and CORS would fail
+  for another). A relative endpoint is resolved against the page before it is compared or named as
+  an audience. URL resolution drops a default port, so a server whose audience is configured with
+  one (`rim.chat:443`) refuses those proofs: configure audiences without a default port.
 - The device key is a WebCrypto Ed25519 key generated with `extractable: false` and kept as a
   `CryptoKey` in IndexedDB; the public key is exported raw and tagged `ed25519:`. A browser
   without Ed25519 in WebCrypto cannot be linked; there is no fallback to extractable keys.
@@ -406,7 +409,19 @@ Same as the new desktop device, except:
   false, ["encrypt", "decrypt"])`, then `encrypt({ name: "AES-GCM", iv, additionalData,
   tagLength: 128 })`, whose output is already ciphertext followed by tag.
 - `platform` is `web`. The secret lives only in the page; a reload abandons the attempt.
+- New device rule 5 without the replay: it opens the answer and checks that the certificate is a
+  `device` statement naming exactly the offer's `deviceId` and `deviceKey` and a well-formed
+  principal id, but does not fetch and replay `keyLog`. Replaying adds nothing here. The page's
+  code comes from the server it links through, so a check in that code cannot protect it from
+  that server. An answer from a party that saw the code either carries a certificate no identity
+  key made, which `loginWithKey` refuses, so the key never signs in and the person removes it on
+  the sign-in screen; or a certificate from that party's own account, which a replay would accept
+  just the same (the browser then signs in to an account the person can see is not theirs).
 - The web client is never the old device in v1: it holds no identity key.
+- It signs login proofs in the browser (statement version 2, Ed25519 over `rim.login.v1\0` and the
+  payload), and the key stays usable only while that page is open: script running in the page can
+  have it sign but cannot export it. The app says so before linking, and the old device shows the
+  web note when the offer says `platform: "web"`.
 
 ## Failure and retry
 
@@ -434,7 +449,8 @@ Same as the new desktop device, except:
   it needs the folder or drive sign-in in any case.
 - **Moving the identity key** off the enrolling device, or holding it offline.
 - **Short typed codes** with a PAKE (CPace, SPAKE2), so a code can be read aloud.
-- **QR scanning**, with the mobile PWA; the code format is fixed now so the QR works then.
+- **QR scanning on the desktop.** The web client scans (see above); the desktop takes the pasted
+  code.
 - **A subscription** in place of polling (see GraphQL).
 - **Linking across servers** (a code whose endpoint is not the new device's server): Stage 5.
 - Rate limits shared across nodes.
