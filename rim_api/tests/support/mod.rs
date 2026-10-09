@@ -10,6 +10,8 @@
 /// `rim_infra_db/tests/support/mod.rs`).
 #[allow(dead_code)] // Not every test binary that includes `support` uses the GraphQL helpers.
 pub mod graphql;
+#[allow(dead_code)] // Only the encryption tests use the MLS client.
+pub mod mls;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 

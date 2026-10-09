@@ -135,6 +135,7 @@ async fn stream_seqs_have_no_gaps_or_repeats_under_concurrency() {
     let scope = begin_transaction(&conn).await.unwrap();
     let in_txn = SeaOrmHostRepository::new(scope.handle());
     assert_eq!(in_txn.next_stream_seq(server.id, "w").await.unwrap(), 2);
+    drop(in_txn);
     drop(scope);
     assert_eq!(repo.next_stream_seq(server.id, "w").await.unwrap(), 2);
 }
@@ -407,7 +408,10 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         rim_core::repository::error::RepoErrorKind::Conflict
     );
     let accepted_at_once = repo
-        .insert_request(new(DmRequestStatus::Accepted, Uuid::now_v7()))
+        .insert_request(NewDmRequest {
+            expires_at: Utc::now() + Duration::days(36500),
+            ..new(DmRequestStatus::Accepted, Uuid::now_v7())
+        })
         .await
         .unwrap();
     assert_eq!(
