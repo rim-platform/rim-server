@@ -23,3 +23,4 @@ sea-orm = { version = "2.0.0-rc.20", features = ["runtime-tokio-rustls", "sqlx-p
 migration = { path = "../migration" }
 uuid = { version = "1", features = ["v7"] }
 rim_services = { path = "../rim_services" }
+rim_identity = { path = "../rim_identity", features = ["testing"] }
