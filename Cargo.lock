@@ -3696,10 +3696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rim-server"
-version = "0.1.0"
-
-[[package]]
 name = "rim_api"
 version = "0.1.0"
 dependencies = [
