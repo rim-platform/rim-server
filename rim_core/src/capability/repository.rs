@@ -2,18 +2,8 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::capability::model::{Capability, CapabilitySourceKind, RegisteredCapability};
+use crate::capability::model::{CapabilitySourceKind, RegisteredCapability};
 use crate::repository::error::RepoResult;
-
-/// Read-only access to the human-facing capability catalogue surfaced in
-/// Settings → Capabilities. NOT consulted by the runtime gate — see
-/// [`CapabilityRegistryRepository`] for that.
-#[cfg_attr(any(test, feature = "mocks"), automock)]
-#[async_trait]
-pub trait CapabilityRepository: Send + Sync {
-    async fn list_capabilities(&self) -> RepoResult<Vec<Capability>>;
-    async fn get_capability(&self, id: &str) -> RepoResult<Option<Capability>>;
-}
 
 /// Persistence surface for the `capability_registry` table — Phase 1 §3.3
 /// (closes Black Widow C1). The runtime gate calls `is_registered` on every

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::email::EmailSender;
 use chrono::Duration;
-use rim_services::action::service::ActionService;
 use rim_services::audit::service::AuditLogService;
 use rim_services::auth::service::{AuthService, RequestAuthenticator};
 use rim_services::capability::service::CapabilityService;
@@ -12,12 +11,10 @@ use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::escalation::scheduler::EscalationScheduler;
 use rim_services::escalation::service::EscalationPolicyService;
-use rim_services::event::service::EventService;
 use rim_services::events::EventObserver;
 use rim_services::events::Observers;
 use rim_services::incident::service::IncidentService;
 use rim_services::ingest_token::service::IngestTokenService;
-use rim_services::integration::service::IntegrationService;
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::link_preview::service::LinkPreviewService;
@@ -38,7 +35,6 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
-use rim_services::setting::service::SettingService;
 use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
@@ -50,7 +46,6 @@ use crate::repos::AppRepos;
 
 #[derive(Clone)]
 pub struct DefaultAppServiceProvider {
-    action_service: Arc<dyn ActionService>,
     audit_log_service: Arc<dyn AuditLogService>,
     auth_service: Arc<dyn AuthService>,
     capability_service: Arc<dyn CapabilityService>,
@@ -59,10 +54,8 @@ pub struct DefaultAppServiceProvider {
     conversation_service: Arc<dyn ConversationService>,
     custom_emoji_service: Arc<dyn CustomEmojiService>,
     escalation_policy_service: Arc<dyn EscalationPolicyService>,
-    event_service: Arc<dyn EventService>,
     incident_service: Arc<dyn IncidentService>,
     ingest_token_service: Arc<dyn IngestTokenService>,
-    integration_service: Arc<dyn IntegrationService>,
     key_auth_service: Arc<dyn KeyAuthService>,
     keybind_service: Arc<dyn KeybindService>,
     link_preview_service: Arc<dyn LinkPreviewService>,
@@ -80,7 +73,6 @@ pub struct DefaultAppServiceProvider {
     read_state_service: Arc<dyn ReadStateService>,
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
-    setting_service: Arc<dyn SettingService>,
     skill_profile_service: Arc<dyn SkillProfileService>,
     storage_service: Arc<dyn StorageService>,
     thread_service: Arc<dyn ThreadService>,
@@ -109,7 +101,6 @@ impl DefaultAppServiceProvider {
         escalation_scheduler: Arc<dyn EscalationScheduler>,
         key_login_audiences: Vec<String>,
     ) -> Self {
-        let action_service: Arc<dyn ActionService> = Arc::new(crate::action::DefaultActionService);
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
         let auth_service: Arc<dyn AuthService> = Arc::new(
@@ -148,9 +139,6 @@ impl DefaultAppServiceProvider {
                 repos.for_conversation(),
                 observers.clone(),
             ));
-        let event_service: Arc<dyn EventService> = Arc::new(crate::event::DefaultEventService);
-        let integration_service: Arc<dyn IntegrationService> =
-            Arc::new(crate::integration::DefaultIntegrationService);
         let notification_service: Arc<dyn NotificationService> =
             Arc::new(crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
@@ -230,8 +218,6 @@ impl DefaultAppServiceProvider {
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
         );
-        let setting_service: Arc<dyn SettingService> =
-            Arc::new(crate::setting::DefaultSettingService);
         let thread_service: Arc<dyn ThreadService> =
             Arc::new(crate::thread::DefaultThreadService::new(repos.for_thread()));
         let user_service: Arc<dyn UserService> =
@@ -362,7 +348,6 @@ impl DefaultAppServiceProvider {
             ));
 
         Self {
-            action_service,
             audit_log_service,
             auth_service,
             capability_service,
@@ -371,10 +356,8 @@ impl DefaultAppServiceProvider {
             conversation_service,
             custom_emoji_service,
             escalation_policy_service,
-            event_service,
             incident_service,
             ingest_token_service,
-            integration_service,
             key_auth_service,
             keybind_service,
             link_preview_service,
@@ -392,7 +375,6 @@ impl DefaultAppServiceProvider {
             read_state_service,
             server_service,
             server_member_service,
-            setting_service,
             skill_profile_service,
             storage_service,
             thread_service,
@@ -406,9 +388,6 @@ impl DefaultAppServiceProvider {
 }
 
 impl AppServiceProvider for DefaultAppServiceProvider {
-    fn action_service(&self) -> Arc<dyn ActionService> {
-        Arc::clone(&self.action_service)
-    }
     fn audit_log_service(&self) -> Arc<dyn AuditLogService> {
         Arc::clone(&self.audit_log_service)
     }
@@ -436,17 +415,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn escalation_policy_service(&self) -> Arc<dyn EscalationPolicyService> {
         Arc::clone(&self.escalation_policy_service)
     }
-    fn event_service(&self) -> Arc<dyn EventService> {
-        Arc::clone(&self.event_service)
-    }
     fn incident_service(&self) -> Arc<dyn IncidentService> {
         Arc::clone(&self.incident_service)
     }
     fn ingest_token_service(&self) -> Arc<dyn IngestTokenService> {
         Arc::clone(&self.ingest_token_service)
-    }
-    fn integration_service(&self) -> Arc<dyn IntegrationService> {
-        Arc::clone(&self.integration_service)
     }
     fn key_auth_service(&self) -> Arc<dyn KeyAuthService> {
         Arc::clone(&self.key_auth_service)
@@ -490,9 +463,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn server_member_service(&self) -> Arc<dyn ServerMemberService> {
         Arc::clone(&self.server_member_service)
-    }
-    fn setting_service(&self) -> Arc<dyn SettingService> {
-        Arc::clone(&self.setting_service)
     }
     fn skill_profile_service(&self) -> Arc<dyn SkillProfileService> {
         Arc::clone(&self.skill_profile_service)

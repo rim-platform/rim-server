@@ -1,16 +1,6 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-/// Human-facing capability description. Surfaced through the legacy
-/// `list_capabilities` UI (Settings → Capabilities). NOT consulted by the
-/// runtime gate — that uses [`RegisteredCapability`] / `is_registered`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Capability {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-}
-
 /// Source of a registered capability — controls who is treated as
 /// "holding" it inside [`crate::capability::repository::CapabilityRegistryRepository`].
 ///

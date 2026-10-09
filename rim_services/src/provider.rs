@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::action::service::ActionService;
 use crate::audit::service::AuditLogService;
 use crate::auth::service::{AuthService, RequestAuthenticator};
 use crate::capability::service::CapabilityService;
@@ -9,10 +8,8 @@ use crate::command::service::CommandService;
 use crate::conversation::service::ConversationService;
 use crate::custom_emoji::service::CustomEmojiService;
 use crate::escalation::service::EscalationPolicyService;
-use crate::event::service::EventService;
 use crate::incident::service::IncidentService;
 use crate::ingest_token::service::IngestTokenService;
-use crate::integration::service::IntegrationService;
 use crate::key_auth::service::KeyAuthService;
 use crate::keybind::service::KeybindService;
 use crate::link_preview::service::LinkPreviewService;
@@ -30,7 +27,6 @@ use crate::pipeline::service::PipelineService;
 use crate::read_state::service::ReadStateService;
 use crate::server::service::ServerService;
 use crate::server_member::service::ServerMemberService;
-use crate::setting::service::SettingService;
 use crate::skill_profile::service::SkillProfileService;
 use crate::storage::service::StorageService;
 use crate::user::service::UserService;
@@ -38,7 +34,6 @@ use crate::workspace_feature::service::WorkspaceFeatureService;
 use crate::workspace_state::service::WorkspaceStateService;
 
 pub trait AppServiceProvider: Send + Sync {
-    fn action_service(&self) -> Arc<dyn ActionService>;
     fn audit_log_service(&self) -> Arc<dyn AuditLogService>;
     fn auth_service(&self) -> Arc<dyn AuthService>;
     fn capability_service(&self) -> Arc<dyn CapabilityService>;
@@ -48,10 +43,8 @@ pub trait AppServiceProvider: Send + Sync {
     fn custom_emoji_service(&self) -> Arc<dyn CustomEmojiService>;
     fn link_preview_service(&self) -> Arc<dyn LinkPreviewService>;
     fn escalation_policy_service(&self) -> Arc<dyn EscalationPolicyService>;
-    fn event_service(&self) -> Arc<dyn EventService>;
     fn incident_service(&self) -> Arc<dyn IncidentService>;
     fn ingest_token_service(&self) -> Arc<dyn IngestTokenService>;
-    fn integration_service(&self) -> Arc<dyn IntegrationService>;
     fn key_auth_service(&self) -> Arc<dyn KeyAuthService>;
     fn keybind_service(&self) -> Arc<dyn KeybindService>;
     fn macro_service(&self) -> Arc<dyn MacroService>;
@@ -66,7 +59,6 @@ pub trait AppServiceProvider: Send + Sync {
     fn read_state_service(&self) -> Arc<dyn ReadStateService>;
     fn server_service(&self) -> Arc<dyn ServerService>;
     fn server_member_service(&self) -> Arc<dyn ServerMemberService>;
-    fn setting_service(&self) -> Arc<dyn SettingService>;
     fn skill_profile_service(&self) -> Arc<dyn SkillProfileService>;
     fn storage_service(&self) -> Arc<dyn StorageService>;
     fn thread_service(&self) -> Arc<dyn ThreadService>;

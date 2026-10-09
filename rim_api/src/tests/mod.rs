@@ -18,17 +18,14 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 use rim_services::ServiceError;
-use rim_services::action::service::MockActionService;
 use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
 use rim_services::capability::service::MockCapabilityService;
 use rim_services::channel_lens::service::MockChannelLensService;
 use rim_services::command::service::MockCommandService;
 use rim_services::conversation::service::MockConversationService;
 use rim_services::custom_emoji::service::MockCustomEmojiService;
-use rim_services::event::service::MockEventService;
 use rim_services::incident::service::MockIncidentService;
 use rim_services::ingest_token::service::MockIngestTokenService;
-use rim_services::integration::service::MockIntegrationService;
 use rim_services::key_auth::service::MockKeyAuthService;
 use rim_services::keybind::service::MockKeybindService;
 use rim_services::link_preview::service::MockLinkPreviewService;
@@ -46,7 +43,6 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::MockReadStateService;
 use rim_services::server::service::MockServerService;
 use rim_services::server_member::service::MockServerMemberService;
-use rim_services::setting::service::MockSettingService;
 use rim_services::skill_profile::service::MockSkillProfileService;
 use rim_services::storage::service::MockStorageService;
 use rim_services::user::service::MockUserService;
@@ -117,14 +113,11 @@ fn assert_no_errors(res: &async_graphql::Response) {
 fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -138,7 +131,6 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(user),
@@ -175,14 +167,11 @@ fn schema_with_server_mocks(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -196,7 +185,6 @@ fn schema_with_server_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(server),
             server_member: Arc::new(server_member),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -230,14 +218,11 @@ fn schema_with_server_mocks(
 fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(keybind),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -251,7 +236,6 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -291,14 +275,11 @@ fn schema_with_incident_mocks(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -312,7 +293,6 @@ fn schema_with_incident_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(user),
@@ -348,14 +328,11 @@ fn schema_with_oncall_mock(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -369,7 +346,6 @@ fn schema_with_oncall_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -405,14 +381,11 @@ fn schema_with_escalation_policy_mock(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -426,7 +399,6 @@ fn schema_with_escalation_policy_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -644,14 +616,11 @@ fn test_attachment_dto() -> rim_services::message_attachment::dto::AttachmentDto
 // ── Provider / schema builders ────────────────────────────────────────
 
 struct TestAppServiceProvider {
-    action: Arc<dyn rim_services::action::service::ActionService>,
     audit_log: Arc<dyn rim_services::audit::service::AuditLogService>,
     auth: Arc<dyn rim_services::auth::service::AuthService>,
     capability: Arc<dyn rim_services::capability::service::CapabilityService>,
     command: Arc<dyn rim_services::command::service::CommandService>,
     conversation: Arc<dyn rim_services::conversation::service::ConversationService>,
-    event: Arc<dyn rim_services::event::service::EventService>,
-    integration: Arc<dyn rim_services::integration::service::IntegrationService>,
     keybind: Arc<dyn rim_services::keybind::service::KeybindService>,
     macro_def: Arc<dyn rim_services::macro_def::service::MacroService>,
     mention: Arc<dyn rim_services::mention::service::MentionService>,
@@ -666,7 +635,6 @@ struct TestAppServiceProvider {
     read_state: Arc<dyn rim_services::read_state::service::ReadStateService>,
     server: Arc<dyn rim_services::server::service::ServerService>,
     server_member: Arc<dyn rim_services::server_member::service::ServerMemberService>,
-    setting: Arc<dyn rim_services::setting::service::SettingService>,
     storage: Arc<dyn rim_services::storage::service::StorageService>,
     thread: Arc<dyn rim_services::message_thread::service::ThreadService>,
     user: Arc<dyn rim_services::user::service::UserService>,
@@ -687,10 +655,6 @@ struct TestAppServiceProvider {
 }
 
 impl AppServiceProvider for TestAppServiceProvider {
-    fn action_service(&self) -> Arc<dyn rim_services::action::service::ActionService> {
-        Arc::clone(&self.action)
-    }
-
     fn audit_log_service(&self) -> Arc<dyn rim_services::audit::service::AuditLogService> {
         Arc::clone(&self.audit_log)
     }
@@ -711,16 +675,6 @@ impl AppServiceProvider for TestAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::conversation::service::ConversationService> {
         Arc::clone(&self.conversation)
-    }
-
-    fn event_service(&self) -> Arc<dyn rim_services::event::service::EventService> {
-        Arc::clone(&self.event)
-    }
-
-    fn integration_service(
-        &self,
-    ) -> Arc<dyn rim_services::integration::service::IntegrationService> {
-        Arc::clone(&self.integration)
     }
 
     fn keybind_service(&self) -> Arc<dyn rim_services::keybind::service::KeybindService> {
@@ -784,10 +738,6 @@ impl AppServiceProvider for TestAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::server_member::service::ServerMemberService> {
         Arc::clone(&self.server_member)
-    }
-
-    fn setting_service(&self) -> Arc<dyn rim_services::setting::service::SettingService> {
-        Arc::clone(&self.setting)
     }
 
     fn storage_service(&self) -> Arc<dyn rim_services::storage::service::StorageService> {
@@ -883,14 +833,11 @@ fn schema_with_mocks(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(auth),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(conv),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -904,7 +851,6 @@ fn schema_with_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(thread),
             user: Arc::new(MockUserService::new()),
@@ -935,23 +881,14 @@ fn schema_with_mocks(
     )
 }
 
-fn schema_with_platform_mocks(
-    action: MockActionService,
-    capability: MockCapabilityService,
-    event: MockEventService,
-    integration: MockIntegrationService,
-    setting: MockSettingService,
-) -> crate::AppSchema {
+fn schema_with_capability_mock(capability: MockCapabilityService) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(action),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(capability),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(event),
-            integration: Arc::new(integration),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -965,7 +902,6 @@ fn schema_with_platform_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(setting),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -999,14 +935,11 @@ fn schema_with_platform_mocks(
 fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(command),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -1020,7 +953,6 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -1058,14 +990,11 @@ fn schema_with_audit_mock(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(audit_log),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -1079,7 +1008,6 @@ fn schema_with_audit_mock(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
@@ -1114,14 +1042,11 @@ fn schema_with_audit_mock(
 /// to build (no resolver is actually invoked, so every mock is empty).
 fn test_service_provider() -> Arc<dyn AppServiceProvider> {
     Arc::new(TestAppServiceProvider {
-        action: Arc::new(MockActionService::new()),
         audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
         auth: Arc::new(MockAuthService::new()),
         capability: Arc::new(MockCapabilityService::new()),
         command: Arc::new(MockCommandService::new()),
         conversation: Arc::new(MockConversationService::new()),
-        event: Arc::new(MockEventService::new()),
-        integration: Arc::new(MockIntegrationService::new()),
         keybind: Arc::new(MockKeybindService::new()),
         macro_def: Arc::new(MockMacroService::new()),
         mention: Arc::new(MockMentionService::new()),
@@ -1135,7 +1060,6 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         read_state: Arc::new(MockReadStateService::new()),
         server: Arc::new(MockServerService::new()),
         server_member: Arc::new(MockServerMemberService::new()),
-        setting: Arc::new(MockSettingService::new()),
         storage: Arc::new(MockStorageService::new()),
         thread: Arc::new(MockThreadService::new()),
         user: Arc::new(MockUserService::new()),
@@ -1165,14 +1089,11 @@ fn schema_with_ingest_token_mocks(
 ) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
-            action: Arc::new(MockActionService::new()),
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
             capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
-            event: Arc::new(MockEventService::new()),
-            integration: Arc::new(MockIntegrationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
             macro_def: Arc::new(MockMacroService::new()),
             mention: Arc::new(MockMentionService::new()),
@@ -1186,7 +1107,6 @@ fn schema_with_ingest_token_mocks(
             read_state: Arc::new(MockReadStateService::new()),
             server: Arc::new(MockServerService::new()),
             server_member: Arc::new(MockServerMemberService::new()),
-            setting: Arc::new(MockSettingService::new()),
             storage: Arc::new(MockStorageService::new()),
             thread: Arc::new(MockThreadService::new()),
             user: Arc::new(MockUserService::new()),
