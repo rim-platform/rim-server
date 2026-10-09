@@ -51,6 +51,9 @@ mutation Revoke($revocation: SignedStatementInput!) {
 const MY_KEY_IDENTITY: &str = r#"
 query { myKeyIdentity { principalId keySeq devices { deviceId revokedAt } } }"#;
 
+const KEY_LOG: &str = r#"
+query KeyLog($principalId: String!) { keyLog(principalId: $principalId) { seq kind statement { payload } } }"#;
+
 const PASSWORD_LOGIN: &str = r#"
 mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
 
@@ -141,6 +144,24 @@ async fn enroll_then_key_login_then_revoke() {
         exec_err_code(&schema, password_login("ada")).await,
         "UNAUTHENTICATED"
     );
+
+    // The key log is public: a signed-out device reads it by principal id.
+    let data = exec_ok(
+        &schema,
+        anonymous_request(KEY_LOG, json!({ "principalId": state.principal_id })),
+    )
+    .await;
+    assert_eq!(data["keyLog"][0]["kind"], json!("INCEPTION"));
+    assert_eq!(
+        data["keyLog"][0]["statement"]["payload"],
+        json!(inception.payload)
+    );
+    let data = exec_ok(
+        &schema,
+        anonymous_request(KEY_LOG, json!({ "principalId": "rimp1_nobody" })),
+    )
+    .await;
+    assert_eq!(data["keyLog"], json!([]));
 
     // Challenge login.
     let login = |challenge: &Value| {

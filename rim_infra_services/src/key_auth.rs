@@ -29,9 +29,9 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::auth::dto::{AuthSessionDto, LoginResultDto};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
-    LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
-    SignedPayload,
+    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
+    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
+    RotateIdentityKeyCmd, SignedPayload,
 };
 use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
@@ -716,6 +716,26 @@ impl KeyAuthService for DefaultKeyAuthService {
         query: GetMyKeyIdentityQuery,
     ) -> ServiceResult<KeyIdentityDto> {
         self.my_key_identity(query.actor.user_id).await
+    }
+
+    #[instrument(name = "key_auth.get_key_log", skip_all)]
+    async fn get_key_log(&self, query: GetKeyLogQuery) -> ServiceResult<Vec<KeyLogEntryDto>> {
+        let Some(user_id) = self
+            .repos
+            .key_identity_repo
+            .find_user_by_principal_id(&query.principal_id)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .repos
+            .key_identity_repo
+            .list_key_log(user_id)
+            .await?
+            .into_iter()
+            .map(log_entry_dto)
+            .collect())
     }
 }
 
