@@ -8,7 +8,6 @@ use crate::command::sensitivity::CommandSensitivityDto;
 use crate::command::verb::TypedVerb;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandSourceKindDto {
     BuiltIn,
     Plugin,
@@ -17,14 +16,12 @@ pub enum CommandSourceKindDto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandExecutionTargetDto {
     Backend,
     DesktopLocal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandSurfaceDto {
     Palette,
     ContextMenu,
@@ -33,7 +30,6 @@ pub enum CommandSurfaceDto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandArgumentTypeDto {
     String,
     Integer,
@@ -49,7 +45,6 @@ pub enum CommandArgumentTypeDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommandArgumentDto {
     pub name: String,
     pub title: String,
@@ -61,7 +56,6 @@ pub struct CommandArgumentDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommandContextDto {
     pub workspace_id: Option<rim_core::server::model::ServerId>,
     pub conversation_id: Option<rim_core::conversation::model::ConversationId>,
@@ -74,7 +68,6 @@ pub struct CommandContextDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommandDefinitionDto {
     pub id: String,
     pub title: String,
@@ -142,7 +135,6 @@ pub struct CommandDefinitionDto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandResultStatusDto {
     Success,
     Error,
@@ -173,7 +165,6 @@ impl fmt::Display for CommandResultStatusDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PipeStageResultDto {
     pub stage_index: u32,
     pub command_id: String,
@@ -183,7 +174,6 @@ pub struct PipeStageResultDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommandResultDto {
     pub status: CommandResultStatusDto,
     pub message: String,
@@ -198,14 +188,12 @@ pub struct CommandResultDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UserCommandStepDto {
     pub command_id: String,
     pub args: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UserCommandDto {
     pub id: UserCommandId,
     pub command_key: String,

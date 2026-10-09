@@ -1,5 +1,4 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IntegrationKindDto {
     BuiltIn,
     LocalPlugin,
@@ -19,7 +18,6 @@ impl From<rim_core::integration::model::IntegrationKind> for IntegrationKindDto 
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IntegrationDto {
     pub id: String,
     pub kind: IntegrationKindDto,

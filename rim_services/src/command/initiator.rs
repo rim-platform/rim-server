@@ -56,7 +56,6 @@ use std::fmt;
 /// transport-layer GraphQL enum (`rim_api::types::CommandInitiator`) mirrors
 /// it via `From` impl — `rim_core` stays transport-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandInitiator {
     /// User typed/clicked in the command palette. Default for any callsite
     /// that has not been audited and explicitly tagged.

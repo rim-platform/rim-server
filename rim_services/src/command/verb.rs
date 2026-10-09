@@ -12,7 +12,6 @@ use std::str::FromStr;
 /// value). When adding a variant, add a matching arm in `as_str()`,
 /// `from_str`, and the unit test round-trip list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TypedVerb {
     Read,
     Write,

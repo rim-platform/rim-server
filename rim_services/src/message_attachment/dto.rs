@@ -1,7 +1,6 @@
 use rim_core::message_attachment::model::MessageAttachmentId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AttachmentStatus {
     PendingUpload,
     Uploaded,
@@ -10,7 +9,6 @@ pub enum AttachmentStatus {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttachmentDto {
     pub id: MessageAttachmentId,
     pub status: AttachmentStatus,
@@ -28,7 +26,6 @@ pub struct AttachmentDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UploadTicketDto {
     pub attachment_id: MessageAttachmentId,
 

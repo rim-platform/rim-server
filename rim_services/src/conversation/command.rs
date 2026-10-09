@@ -8,7 +8,6 @@ use crate::Actor;
 use crate::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreateConversationCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -23,7 +22,6 @@ pub struct CreateConversationCmd {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetConversationQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -31,7 +29,6 @@ pub struct GetConversationQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListInboxConversationsQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -42,7 +39,6 @@ pub struct ListInboxConversationsQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListChannelsQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -56,7 +52,6 @@ pub struct ListChannelsQuery {
 /// Add (invite) workspace members to a channel or group. The actor must be a member of the
 /// conversation. Not valid for DMs.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AddConversationMembersCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -67,7 +62,6 @@ pub struct AddConversationMembersCmd {
 /// Remove a member from a channel or group: Owner/Moderator may remove anyone, anyone else only
 /// themselves (equivalent to [`LeaveConversationCmd`]).
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RemoveConversationMemberCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -76,7 +70,6 @@ pub struct RemoveConversationMemberCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UpdateConversationTopicCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -86,7 +79,6 @@ pub struct UpdateConversationTopicCmd {
 
 /// Join a public, unarchived channel. Idempotent.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct JoinChannelCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -95,7 +87,6 @@ pub struct JoinChannelCmd {
 
 /// Leave a channel or group (not a DM).
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LeaveConversationCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -104,7 +95,6 @@ pub struct LeaveConversationCmd {
 
 /// Archive (`archived: true`) or unarchive a channel. Owner/Moderator only.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ArchiveConversationCmd {
     pub actor: Actor,
     pub server_id: ServerId,

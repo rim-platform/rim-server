@@ -8,7 +8,6 @@ use rim_core::workspace_feature::model::{WorkspaceFeature, WorkspaceFeatureState
 /// feature, `enabled` is [`WorkspaceFeature::default_enabled`] and `updated_by`/`updated_at`
 /// are `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WorkspaceFeatureStateDto {
     pub server_id: ServerId,
     pub feature: WorkspaceFeature,

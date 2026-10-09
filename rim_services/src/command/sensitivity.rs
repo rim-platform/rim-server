@@ -69,7 +69,6 @@ const B64_LIKE_MIN_CHARS: usize = 40;
 /// Unchanged from v1 per Fury v2 §3.1 ("`Safe, Sensitive, Mutating, Restricted`,
 /// unchanged from v1").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommandSensitivityDto {
     /// Read-only, no side effects observable to other users.
     /// E.g. `list_channels`, `search_messages`.

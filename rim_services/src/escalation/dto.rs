@@ -9,7 +9,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationPolicyDto {
     pub id: EscalationPolicyId,
     pub server_id: ServerId,
@@ -50,7 +49,6 @@ pub fn escalation_policy_dto(
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationStepDto {
     pub id: EscalationStepId,
     pub policy_id: EscalationPolicyId,
@@ -76,7 +74,6 @@ impl From<EscalationStep> for EscalationStepDto {
 /// A step input for `createEscalationPolicy`/`updateEscalationPolicy` — no `id`/`policy_id`
 /// (assigned by the repository) since the full step list is replaced atomically (§3).
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationStepInput {
     pub delay_seconds: i64,
     pub target: EscalationTarget,
@@ -86,7 +83,6 @@ pub struct EscalationStepInput {
 /// Read projection of the DB `escalation_run` row for a live incident (FLAG C —
 /// `Incident.escalationRun`, landing in C1c's GraphQL resolver on top of this DTO).
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EscalationRunDto {
     pub id: EscalationRunId,
     pub incident_id: IncidentId,

@@ -5,14 +5,12 @@ use rim_core::server::model::ServerId;
 use crate::Actor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnreadCountDto {
     pub conversation_id: ConversationId,
     pub count: i64,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MarkAsReadCmd {
     pub actor: Actor,
     pub workspace_id: ServerId,
@@ -21,14 +19,12 @@ pub struct MarkAsReadCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MarkAllAsReadCmd {
     pub actor: Actor,
     pub workspace_id: ServerId,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnreadCountsQuery {
     pub actor: Actor,
     pub workspace_id: ServerId,
