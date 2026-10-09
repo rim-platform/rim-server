@@ -59,8 +59,10 @@ Sizes: S under a day, M a day or two, L several days of agent work.
 
 | # | Repo | PR | Size |
 |---|---|---|---|
-| S3-9 | rim-ui | **Web-capable plugins** (Track 2.3): a second plugin kind in a sandboxed iframe with the same capability prompts and panel slots. | L |
-| S3-10 | rim-server + rim-ui | **Workspace-shared plugins** (Track 2.4): per-workspace registry (recommended or required, who approved it, pinned version), manifests signed by a publisher key, install from the palette. | M/L |
+| W4-0 | rim-server | **Specs**: `docs/specs/web-plugins-v1.md` and `docs/specs/workspace-plugins-v1.md`. Shipped. | S |
+| S3-9 | rim-ui | **Web-capable plugins** (Track 2.3): the `WebSandboxed` kind in a sandboxed iframe (frame shell, `MessagePort` transport, `network.fetch`, storage, bundles, SDK transport and browser build, the GitHub PRs showcase). | L |
+| S3-10a | rim-server | **Workspace plugin registry**: `rim_identity::plugin_manifest`, the two tables, `WorkspacePluginService`, GraphQL, the bundle endpoints, the event. | M |
+| S3-10b | rim-ui | **Registry client**: verification on both platforms, sign-and-publish, the palette source, install/required/update/removal flows, add from files. | M/L |
 
 ## Rules for every PR
 
