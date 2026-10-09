@@ -160,6 +160,20 @@ impl E2eeRepository for FakeE2ee {
             .collect())
     }
 
+    async fn mls_active_device_ids(
+        &self,
+        user_id: UserId,
+        active_since: DateTime<Utc>,
+    ) -> RepoResult<Vec<Uuid>> {
+        Ok(self
+            .state()
+            .devices
+            .iter()
+            .filter(|d| d.user_id == user_id && Self::active(d, active_since))
+            .map(|d| d.device_id)
+            .collect())
+    }
+
     async fn desired_devices(
         &self,
         conversation_id: ConversationId,

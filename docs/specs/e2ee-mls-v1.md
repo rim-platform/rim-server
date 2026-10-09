@@ -43,8 +43,9 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 
 - **Ready member.** A user whose `principal_id` is set and who has at least one *MLS-active* device:
   not revoked, with a key package uploaded in the last 60 days (`device_key.last_key_package_upload_at`,
-  set by every upload; key package rows themselves expire after 90 days). Bots, ingest tokens, the
-  CLI and password-only accounts are never ready.
+  set by every upload; key package rows themselves expire after 90 days), shown as
+  `PrincipalDevice.mlsActive`. Bots, ingest tokens, the CLI and password-only accounts are never
+  ready.
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
   Commit of an existing plaintext DM or group is accepted ("Migration"). It is never cleared.
@@ -195,9 +196,11 @@ name the conversation and incarnation they expect.
    checks that every member is ready, creates the conversation with `encrypted_at = created_at`,
    and no group. A DM pair that already has a DM gets that conversation back, as today; a plaintext
    one is then upgraded as in "Migration".
-2. It calls `claimMlsKeyPackages` for every desired device but its own, creates the group at epoch
-   0 with incarnation 1, adds them, and sends the Commit with the Welcome through
-   `submitMlsCommit(incarnation: 1, epoch: 0, cipherSuite: 79)`.
+2. It calls `claimMlsKeyPackages` for every desired device but its own (with no group there is no
+   `mlsGroup` to list pending adds: the desired devices are the members' devices with
+   `PrincipalDevice.mlsActive`, from `principalDevices`), creates the group at epoch 0 with
+   incarnation 1, adds the devices that got a package, and sends the Commit with the Welcome
+   through `submitMlsCommit(incarnation: 1, epoch: 0, cipherSuite: 79)`.
 3. The server creates `mls_group` (epoch 1 after the Commit), records the group devices (the
    committer and the adds), stores the Welcome for each added device, and emits
    `MlsWelcomeAvailable` to their users.
@@ -753,7 +756,8 @@ type ClaimedKeyPackage { userId: ID!  principalId: String!  deviceId: ID!  keyPa
 type MlsCommit { id: ID!  incarnation: Int!  epoch: Int!  senderPrincipalId: String  senderDeviceId: ID  message: String!  createdAt: DateTime! }
 type MlsCommitPage { commits: [MlsCommit!]!  hasMore: Boolean! }
 type MlsWelcome { id: ID!  serverId: ID!  conversationId: ID!  incarnation: Int!  epoch: Int!  message: String!  expiresAt: DateTime! }
-type PrincipalDevice { deviceId: ID!  name: String!  certificate: SignedStatement!  revokedAt: DateTime  revocation: SignedStatement }
+type PrincipalDevice { deviceId: ID!  name: String!  certificate: SignedStatement!  revokedAt: DateTime  revocation: SignedStatement
+                      mlsActive: Boolean! }  # not revoked, a key package uploaded in the last 60 days
 type PrincipalDevices { principalId: String!  devices: [PrincipalDevice!]! }
 
 input CreateConversationInput { encrypted: Boolean }                   # additive; default false

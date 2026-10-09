@@ -268,6 +268,9 @@ pub struct PrincipalDevice {
     pub certificate: SignedStatement,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revocation: Option<SignedStatement>,
+    /// Not revoked and uploaded key packages in the last 60 days: the device is set up for
+    /// encryption and belongs in its member's encrypted groups.
+    pub mls_active: bool,
 }
 
 impl From<PrincipalDeviceDto> for PrincipalDevice {
@@ -285,6 +288,7 @@ impl From<PrincipalDeviceDto> for PrincipalDevice {
             },
             revoked_at: value.revoked_at,
             revocation,
+            mls_active: value.mls_active,
         }
     }
 }

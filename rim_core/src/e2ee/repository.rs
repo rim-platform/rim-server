@@ -61,6 +61,14 @@ pub trait E2eeRepository: Send + Sync {
         active_since: DateTime<Utc>,
     ) -> RepoResult<Vec<UserId>>;
 
+    /// The `device_id`s of the user's unrevoked devices that uploaded key packages at or after
+    /// `active_since`.
+    async fn mls_active_device_ids(
+        &self,
+        user_id: UserId,
+        active_since: DateTime<Utc>,
+    ) -> RepoResult<Vec<Uuid>>;
+
     /// The unrevoked devices of the conversation's current members that uploaded key packages
     /// at or after `active_since`, with whether each has a key package of `cipher_suite` that
     /// can be handed out.

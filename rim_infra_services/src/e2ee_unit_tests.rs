@@ -1638,6 +1638,8 @@ mod tests {
             .state()
             .visible
             .insert(f.alice.user, HashSet::from([f.bob.user]));
+        f.repo.state().devices[1].last_key_package_upload_at =
+            Some(Utc::now() - Duration::days(61));
         let answer = f
             .service
             .principal_devices(PrincipalDevicesQuery {
@@ -1652,6 +1654,19 @@ mod tests {
             .unwrap();
         assert_eq!(answer.len(), 2);
         assert_eq!(answer[0].devices.len(), 2);
+        let active = |device_id| {
+            answer[0]
+                .devices
+                .iter()
+                .find(|d| d.device_id == device_id)
+                .map(|d| d.mls_active)
+        };
+        assert_eq!(
+            active(f.bob.device_id),
+            Some(false),
+            "60 days without an upload"
+        );
+        assert_eq!(active(f.bob2.device_id), Some(true));
         assert!(answer[1].devices.is_empty());
         let err = f
             .service
