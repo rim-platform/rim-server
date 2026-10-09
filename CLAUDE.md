@@ -52,6 +52,10 @@ cargo test -p rim_api --features e2e-tests -- --test-threads=1
 cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 ```
 
+`rim_server` is a library with a thin binary; `rim_api`'s e2e tests depend on it (a dev-dependency
+cycle cargo allows) to run two servers in one process (`rim_api/tests/s2s_e2e.rs`, second
+database `<DATABASE_URL name>b`, created when missing).
+
 Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. The root `Cargo.toml` is a virtual manifest (no root package), so plain `cargo test` at the root runs every member, same as `--workspace`.
 
 ## Architecture
@@ -103,6 +107,7 @@ Cross-cutting contracts that define boundaries between layers:
 | `migration` | SeaORM migrations + CLI |
 | `rim_auth` | Cryptographic primitives (Argon2, SHA2, base64) |
 | `rim_identity` | Key identity statements (Ed25519 key log, device certificates, profile cards, login proofs); verification only, no I/O. Contract: `docs/specs/key-identity-v1.md` |
+| `rim_s2s` | Server identity and the S2S transport without storage or Actix: server key log and `rims1_` ids, the signed descriptor, server-signed statements, the RFC 9421 signature profile. Contract: `docs/specs/server-to-server-v1.md`; operator view: `docs/server-identity.md` |
 | `rim_logging` | Structured tracing initialization (JSON output) |
 
 ## Conventions
