@@ -18,6 +18,11 @@ use crate::util::{
     ensure_server_member,
 };
 
+/// The only file name and media type an encrypted conversation's attachment is created with:
+/// the real ones travel encrypted in the message.
+const ENCRYPTED_FILENAME: &str = "encrypted";
+const ENCRYPTED_CONTENT_TYPE: &str = "application/octet-stream";
+
 #[derive(Clone)]
 pub struct DefaultMessageAttachmentService {
     repos: AttachmentRepos,
@@ -106,6 +111,7 @@ impl DefaultMessageAttachmentService {
             size_bytes: att.file_size.max(0) as u64,
             storage_key,
             created_at,
+            blob_sha256: att.blob_sha256,
         }
     }
 
@@ -126,15 +132,18 @@ impl DefaultMessageAttachmentService {
 
     /// Verifies the actor is a member of the conversation (via the full 3-step
     /// gate: server membership → conversation in server → conversation access),
-    /// then returns the loaded message. With `write`, an archived conversation is
-    /// rejected with `ConversationArchived` as well.
+    /// then returns the loaded message and its conversation. With `write`, an archived
+    /// conversation is rejected with `ConversationArchived` as well.
     async fn ensure_actor_can_access_message(
         &self,
         server_id: rim_core::server::model::ServerId,
         actor_id: rim_core::user::model::UserId,
         message_id: rim_core::message::model::MessageId,
         write: bool,
-    ) -> ServiceResult<rim_core::message::model::Message> {
+    ) -> ServiceResult<(
+        rim_core::message::model::Message,
+        rim_core::conversation::model::Conversation,
+    )> {
         let message = self
             .repos
             .message_repo
@@ -142,14 +151,14 @@ impl DefaultMessageAttachmentService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        if write {
+        let conversation = if write {
             ensure_conversation_writable(
                 self.access_repos(),
                 actor_id,
                 server_id,
                 message.conversation_id,
             )
-            .await?;
+            .await?
         } else {
             ensure_conversation_member_access(
                 self.access_repos(),
@@ -157,10 +166,10 @@ impl DefaultMessageAttachmentService {
                 server_id,
                 message.conversation_id,
             )
-            .await?;
-        }
+            .await?
+        };
 
-        Ok(message)
+        Ok((message, conversation))
     }
 
     async fn ensure_actor_can_manage_attachment(
@@ -179,7 +188,7 @@ impl DefaultMessageAttachmentService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        let message = self
+        let (message, _) = self
             .ensure_actor_can_access_message(server_id, actor_id, att.message_id, true)
             .await?;
 
@@ -200,7 +209,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             ));
         };
 
-        let message = self
+        let (message, conversation) = self
             .ensure_actor_can_access_message(cmd.server_id, cmd.actor.user_id, message_id, true)
             .await?;
 
@@ -211,6 +220,30 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         if message.sent_by != cmd.actor.user_id {
             return Err(ServiceError::PermissionDenied);
         }
+
+        let blob_sha256 = match (&cmd.blob_sha256, conversation.is_encrypted()) {
+            (Some(hash), true) => {
+                if cmd.filename != ENCRYPTED_FILENAME || cmd.content_type != ENCRYPTED_CONTENT_TYPE
+                {
+                    return Err(ServiceError::Validation(format!(
+                        "an encrypted conversation's attachment is named `{ENCRYPTED_FILENAME}` \
+                         with type `{ENCRYPTED_CONTENT_TYPE}`"
+                    )));
+                }
+                Some(crate::e2ee::decode_fixed::<32>("blobSha256", hash)?.to_vec())
+            }
+            (None, true) => {
+                return Err(ServiceError::Validation(
+                    "blobSha256 is required in an encrypted conversation".to_string(),
+                ));
+            }
+            (Some(_), false) => {
+                return Err(ServiceError::Validation(
+                    "blobSha256 is only for encrypted conversations".to_string(),
+                ));
+            }
+            (None, false) => None,
+        };
 
         let sanitized_filename = Self::sanitize_filename(&cmd.filename).ok_or_else(|| {
             ServiceError::Validation("attachment filename is invalid".to_string())
@@ -248,7 +281,7 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             file_size: cmd.size_bytes as i64,
             mime_type: cmd.content_type.trim().to_owned(),
             metadata,
-            blob_sha256: None,
+            blob_sha256,
         };
         // The declared size is reserved against the workspace quota now, while the upload is
         // still pending; `complete_upload` refuses any file larger than what was declared.
@@ -329,14 +362,13 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        let _message = self
-            .ensure_actor_can_access_message(
-                query.server_id,
-                query.actor.user_id,
-                att.message_id,
-                false,
-            )
-            .await?;
+        self.ensure_actor_can_access_message(
+            query.server_id,
+            query.actor.user_id,
+            att.message_id,
+            false,
+        )
+        .await?;
 
         Ok(Self::attachment_dto(att))
     }
@@ -447,6 +479,37 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             return Err(ServiceError::Validation(
                 "uploaded file is empty".to_string(),
             ));
+        }
+        // An encrypted blob is opaque: exactly the declared size and hash, nothing sniffed.
+        let is_octet_stream = cmd
+            .content_type
+            .trim()
+            .eq_ignore_ascii_case(ENCRYPTED_CONTENT_TYPE);
+        match &attachment.blob_sha256 {
+            Some(expected) => {
+                use sha2::Digest;
+                if !is_octet_stream {
+                    return Err(ServiceError::Validation(format!(
+                        "an encrypted attachment is uploaded as {ENCRYPTED_CONTENT_TYPE}"
+                    )));
+                }
+                if i64::try_from(uploaded_size).ok() != Some(attachment.file_size) {
+                    return Err(ServiceError::Validation(
+                        "the uploaded blob's size differs from the declared size".to_string(),
+                    ));
+                }
+                if sha2::Sha256::digest(&cmd.data).as_slice() != expected.as_slice() {
+                    return Err(ServiceError::Validation(
+                        "the uploaded blob does not match blobSha256".to_string(),
+                    ));
+                }
+            }
+            None if is_octet_stream => {
+                return Err(ServiceError::Validation(
+                    "file type not allowed".to_string(),
+                ));
+            }
+            None => {}
         }
         if uploaded_size > u64::try_from(attachment.file_size).unwrap_or(0) {
             return Err(ServiceError::Validation(format!(

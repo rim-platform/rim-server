@@ -263,6 +263,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             archived_at: None,
                             created_by: None,
                             slow_mode_seconds: 0,
+                            encrypted_at: None,
                         },
                         ConversationDto {
                             id: channel_b_id,
@@ -275,6 +276,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             archived_at: Some(chrono::Utc::now()),
                             created_by: None,
                             slow_mode_seconds: 0,
+                            encrypted_at: None,
                         },
                     ],
                     None,

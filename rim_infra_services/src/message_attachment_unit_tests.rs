@@ -376,6 +376,7 @@ mod tests {
         size_bytes: u64,
     ) -> CreateAttachmentCmd {
         CreateAttachmentCmd {
+            blob_sha256: None,
             actor: Actor::new(actor_id),
             server_id,
             conversation_id,
@@ -956,6 +957,7 @@ mod tests {
         // Filenames containing ".." are rejected outright (not stripped).
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,
@@ -971,6 +973,7 @@ mod tests {
         // Null bytes in filename should be stripped
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,
@@ -1011,6 +1014,7 @@ mod tests {
 
         let err = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id: ConversationId::new(),
@@ -1206,6 +1210,7 @@ mod tests {
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {
+                blob_sha256: None,
                 actor: Actor::new(actor_id),
                 server_id,
                 conversation_id,

@@ -19,6 +19,10 @@ pub struct CreateConversationCmd {
     /// Channels only: visible to members alone. Rejected with `Validation` for DMs and groups.
     /// Cannot be changed after creation.
     pub is_private: bool,
+
+    /// DMs and groups only: end-to-end encrypted from creation. Every member must be ready
+    /// for encryption.
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

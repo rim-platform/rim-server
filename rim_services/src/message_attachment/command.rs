@@ -15,6 +15,9 @@ pub struct CreateAttachmentCmd {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: u64,
+    /// Unpadded base64url SHA-256 of the blob: required in an encrypted conversation, refused
+    /// in a plaintext one.
+    pub blob_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -123,6 +123,7 @@ pub(super) async fn create_channel(
             participants: ConversationParticipants::Channel,
             title: Some(name),
             is_private,
+            encrypted: false,
         })
         .await?;
 
@@ -461,6 +462,7 @@ mod tests {
                 archived_at: None,
                 created_by: None,
                 slow_mode_seconds: 0,
+                encrypted_at: None,
             }],
             None,
             None,
@@ -601,6 +603,7 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            encrypted_at: None,
         }
     }
 
@@ -679,6 +682,7 @@ mod tests {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     })
                 })
             });
@@ -720,6 +724,7 @@ mod tests {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     })
                 })
             });
@@ -760,6 +765,7 @@ mod tests {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     })
                 })
             });

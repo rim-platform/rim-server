@@ -266,6 +266,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
                     thread_root_message_id: None,
                     is_deleted: false,
                     sent_at: chrono::Utc::now(),
+                    encryption: None,
                 })
             })
         });
@@ -352,6 +353,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
             })
         });
@@ -375,6 +377,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
             })
         });
@@ -466,6 +469,7 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
             })
         });
@@ -552,6 +556,7 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
             })
         });

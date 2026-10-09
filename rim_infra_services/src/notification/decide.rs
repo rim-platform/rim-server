@@ -24,6 +24,8 @@ use rim_core::notification::model::{NotificationReason, UserNotificationSettings
 use rim_core::notification_preference::model::NotificationPreference;
 use rim_core::user::model::UserId;
 
+use rim_services::notification::command::EncryptedMentions;
+
 use crate::mention::parse_mention_ids;
 
 /// Tokens that mention everyone in the conversation (whole word, case-insensitive).
@@ -42,6 +44,9 @@ pub(crate) struct DecisionInput<'a> {
     /// Users without an entry have the default settings.
     pub settings_by_user: &'a HashMap<UserId, UserNotificationSettings>,
     pub now: DateTime<Utc>,
+    /// The declared mentions of an encrypted message, which has no text to read them from;
+    /// keywords never match it.
+    pub encrypted_mentions: Option<&'a EncryptedMentions>,
 }
 
 /// One recipient of a notification.
@@ -60,13 +65,26 @@ pub(crate) fn decide(input: &DecisionInput<'_>) -> Vec<Decision> {
         return vec![];
     }
     let text = message.text.as_deref().unwrap_or("");
-    let mentioned: HashSet<UserId> = parse_mention_ids(text).into_iter().collect();
-    // Keywords and channel mentions are matched outside `<@uuid>` tokens, so a keyword never
-    // hits inside a mentioned user's id.
-    let plain_lower = strip_mention_tokens(text).to_lowercase();
-    let channel_mention = CHANNEL_MENTION_TOKENS
-        .iter()
-        .any(|token| contains_whole_word(&plain_lower, token));
+    let (mentioned, plain_lower, channel_mention) = match input.encrypted_mentions {
+        Some(mentions) => (
+            mentions.user_ids.iter().copied().collect::<HashSet<_>>(),
+            String::new(),
+            mentions.all,
+        ),
+        None => {
+            // Keywords and channel mentions are matched outside `<@uuid>` tokens, so a keyword
+            // never hits inside a mentioned user's id.
+            let plain_lower = strip_mention_tokens(text).to_lowercase();
+            let channel_mention = CHANNEL_MENTION_TOKENS
+                .iter()
+                .any(|token| contains_whole_word(&plain_lower, token));
+            (
+                parse_mention_ids(text).into_iter().collect(),
+                plain_lower,
+                channel_mention,
+            )
+        }
+    };
     let is_direct = input.conversation.conversation_type == ConversationType::Direct;
 
     let mut seen = HashSet::new();
@@ -89,11 +107,13 @@ pub(crate) fn decide(input: &DecisionInput<'_>) -> Vec<Decision> {
             NotificationReason::Direct
         } else if channel_mention || mentioned.contains(&user_id) {
             NotificationReason::Mention
-        } else if settings.is_some_and(|s| {
-            s.keywords
-                .iter()
-                .any(|k| contains_whole_word(&plain_lower, &k.to_lowercase()))
-        }) {
+        } else if input.encrypted_mentions.is_none()
+            && settings.is_some_and(|s| {
+                s.keywords
+                    .iter()
+                    .any(|k| contains_whole_word(&plain_lower, &k.to_lowercase()))
+            })
+        {
             NotificationReason::Keyword
         } else if message.thread_id.is_some() && input.thread_participants.contains(&user_id) {
             NotificationReason::ThreadReply
@@ -314,6 +334,7 @@ mod tests {
             prefs_by_user: &prefs,
             settings_by_user: &settings_by_user,
             now: now(),
+            encrypted_mentions: None,
         });
         assert!(
             decisions.iter().all(|d| d.user_id != alice),
@@ -634,6 +655,7 @@ mod tests {
             prefs_by_user: &HashMap::new(),
             settings_by_user: &HashMap::new(),
             now: now(),
+            encrypted_mentions: None,
         });
         assert_eq!(
             decisions,
@@ -660,6 +682,7 @@ mod tests {
             prefs_by_user: &HashMap::new(),
             settings_by_user: &HashMap::new(),
             now: now(),
+            encrypted_mentions: None,
         });
         assert!(decisions.is_empty());
     }

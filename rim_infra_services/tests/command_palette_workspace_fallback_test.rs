@@ -168,6 +168,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        encrypted_at: None,
                     }],
                     None,
                     None,
