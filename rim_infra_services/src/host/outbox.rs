@@ -154,7 +154,7 @@ pub(crate) fn deliver_item(id: i64, item: &str) -> Result<DeliverItem, serde_jso
     serde_json::from_value(value)
 }
 
-/// `(relay, principal)` pairs a relay refused, skipped by the writer for 24 hours.
+/// `(relay, principal)` pairs a relay does not hold, skipped by the writer for 24 hours.
 #[derive(Default)]
 pub struct RefusalCache {
     refused: Mutex<HashMap<(String, String), Instant>>,
@@ -580,10 +580,9 @@ impl OutboxSender {
                 Some(p) => vec![p.clone()],
                 None => principals.get(&refusal.id).cloned().unwrap_or_default(),
             };
-            if matches!(
-                refusal.reason.as_str(),
-                "unknown_principal" | "not_subscribed" | "blocked"
-            ) {
+            // Only a principal the relay does not hold is skipped as a whole; other refusals are
+            // about one conversation.
+            if refusal.reason == "unknown_principal" {
                 for principal in refused {
                     self.refusals.refuse(peer, &principal);
                 }
