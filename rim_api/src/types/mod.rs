@@ -13,6 +13,7 @@ pub(crate) mod command_result;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod e2ee;
 pub(crate) mod escalation;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -58,6 +59,13 @@ pub use conversation::{
 pub use custom_emoji::CustomEmoji;
 pub use device_link::{
     DeviceLink, DeviceLinkState, SealedMessage, SealedMessageInput, StartedDeviceLink,
+};
+pub use e2ee::{
+    ClaimMlsKeyPackagesInput, ClaimedKeyPackage, EditEncryptedMessageInput, MessageEncryption,
+    MlsCommit, MlsCommitPage, MlsDevice, MlsDeviceRefInput, MlsGroup, MlsKeyPackageStatus,
+    MlsPendingDevice, MlsReaddRequest, MlsWelcome, PrincipalDevice, PrincipalDevices,
+    ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
+    SubmitMlsCommitInput,
 };
 pub use escalation::{
     EscalationActionKindGql, EscalationPolicyGql, EscalationRunStatusGql, EscalationStepGql,

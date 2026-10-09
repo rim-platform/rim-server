@@ -197,6 +197,7 @@ mod tests {
                         RequestAuthResultDto {
                             user_id: Some(user_id),
                             session_id: Some(SessionId::new()),
+                            device_key_id: None,
                         }
                     } else {
                         RequestAuthResultDto::default()

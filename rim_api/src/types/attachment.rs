@@ -27,6 +27,8 @@ pub struct Attachment {
     pub filename: String,
     pub content_type: String,
     pub size_bytes: u64,
+    /// Unpadded base64url SHA-256 of an encrypted conversation's blob.
+    pub blob_sha256: Option<String>,
 }
 
 impl From<rim_services::message_attachment::dto::AttachmentDto> for Attachment {
@@ -37,6 +39,10 @@ impl From<rim_services::message_attachment::dto::AttachmentDto> for Attachment {
             filename: value.filename,
             content_type: value.content_type,
             size_bytes: value.size_bytes,
+            blob_sha256: value.blob_sha256.as_deref().map(|hash| {
+                use base64::Engine;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
+            }),
         }
     }
 }

@@ -74,6 +74,23 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("until", Value::from(until.to_rfc3339()));
             })
         }
+        ServiceError::Forbidden(msg) => Error::new(msg).extend_with(|_, e| {
+            e.set("code", Value::from("FORBIDDEN"));
+        }),
+        // The client fetches Commits up to the current epoch and retries.
+        ServiceError::StaleEpoch { incarnation, epoch } => Error::new(format!(
+            "the group is at incarnation {incarnation}, epoch {epoch}"
+        ))
+        .extend_with(|_, e| {
+            e.set("code", Value::from("STALE_EPOCH"));
+            e.set("incarnation", Value::from(incarnation));
+            e.set("epoch", Value::from(epoch));
+        }),
+        ServiceError::MlsCommitRequired { reason } => Error::new("a Commit is required first")
+            .extend_with(|_, e| {
+                e.set("code", Value::from("MLS_COMMIT_REQUIRED"));
+                e.set("reason", Value::from(reason.as_str()));
+            }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),

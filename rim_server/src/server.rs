@@ -5,8 +5,7 @@ use crate::file_handlers::{
     handle_attachment_download, handle_avatar_upload, handle_file_download, handle_file_upload,
 };
 use crate::graphql_support::{
-    apply_auth_cookies, enforce_csrf_for_batch, extract_actor_and_session_id,
-    internal_graphql_error_response,
+    apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
 };
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
@@ -198,17 +197,18 @@ async fn graphql_handler(
             .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
             .map(|d| Arc::clone(d.get_ref()));
 
-        let (actor, session_id) = match request_authenticator {
-            Some(authenticator) => match extract_actor_and_session_id(&req, authenticator.as_ref()).await {
+        let auth = match request_authenticator {
+            Some(authenticator) => match extract_auth(&req, authenticator.as_ref()).await {
                 Ok(v) => v,
                 Err(err) => {
                     tracing::error!(request_id = %request_id, error = ?err, "failed to extract auth session");
                     return internal_graphql_error_response("failed to validate session");
                 }
             },
-            None => (None, None),
+            None => Default::default(),
         };
-        let actor_ctx = AuthActorCtx::new(actor, session_id);
+        let actor_ctx = AuthActorCtx::new(auth.user_id, auth.session_id)
+            .with_device_key_id(auth.device_key_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
         // Extract the remote IP for rate-limiting resolvers (e.g. previewInviteToken).
@@ -271,20 +271,19 @@ async fn graphql_ws_handler(
         .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
         .map(|d| Arc::clone(d.get_ref()));
 
-    let (actor, session_id) = match request_authenticator {
-        Some(authenticator) => {
-            match extract_actor_and_session_id(&req, authenticator.as_ref()).await {
-                Ok(v) => v,
-                Err(err) => {
-                    tracing::error!(error = ?err, "WS: failed to extract auth session");
-                    return Err(actix_web::error::ErrorUnauthorized(
-                        "failed to validate session",
-                    ));
-                }
+    let auth = match request_authenticator {
+        Some(authenticator) => match extract_auth(&req, authenticator.as_ref()).await {
+            Ok(v) => v,
+            Err(err) => {
+                tracing::error!(error = ?err, "WS: failed to extract auth session");
+                return Err(actix_web::error::ErrorUnauthorized(
+                    "failed to validate session",
+                ));
             }
-        }
-        None => (None, None),
+        },
+        None => Default::default(),
     };
+    let (actor, session_id) = (auth.user_id, auth.session_id);
 
     // Defense-in-depth: reject unauthenticated users at the transport level
     // so that even if a subscription resolver forgets `require_actor`, the
@@ -295,7 +294,8 @@ async fn graphql_ws_handler(
         ));
     };
 
-    let actor_ctx = AuthActorCtx::new(Some(actor), session_id);
+    let actor_ctx =
+        AuthActorCtx::new(Some(actor), session_id).with_device_key_id(auth.device_key_id);
 
     let mut data = async_graphql::Data::default();
     data.insert(actor_ctx);
