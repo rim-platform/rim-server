@@ -21,6 +21,8 @@ identity-related: `docs/specs/key-identity-v1.md`._
 | rim-server | #39 | S3-4: device linking on the server (`device_link` table, service, GraphQL, `rim_identity::device_link`) |
 | rim-server, rim-ui | #41, #32 | S3-8a: `logoutOtherSessions` and the sign-out offer |
 | rim-server, rim-ui | #40, #31 | CLAUDE.md: the coordinating session reviews; comment and commit rules |
+| rim-ui | #33 | S3-7: the web app as a linked device (WebCrypto keys, link by code, key sign-in) |
+| rim-ui | #35 | S3-8b: identity-key backup on the drive, takeover on a linked device, archive key wrapped under the identity key |
 
 The user id shape in plugins (7.0), the local cache, local search and the drive archive
 (Stage 2) are also in.
