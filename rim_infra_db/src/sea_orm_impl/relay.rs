@@ -214,11 +214,7 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
-    async fn advance_received_through(
-        &self,
-        peer_server_id: &str,
-        through: i64,
-    ) -> RepoResult<()> {
+    async fn advance_received_through(&self, peer_server_id: &str, through: i64) -> RepoResult<()> {
         self.execute(
             "INSERT INTO s2s_peer_inbound (peer_server_id, received_through) VALUES ($1, $2) \
              ON CONFLICT (peer_server_id) DO UPDATE SET received_through = \
@@ -334,7 +330,12 @@ impl RelayRepository for SeaOrmRelayRepository {
                        AND (i.device_key_id IS NULL OR i.device_key_id = $2) AND i.id > $3 \
                      ORDER BY i.id LIMIT $4"
                 ),
-                vec![uuid(user_id), uuid(device_key_id), after.into(), limit.into()],
+                vec![
+                    uuid(user_id),
+                    uuid(device_key_id),
+                    after.into(),
+                    limit.into(),
+                ],
             )
             .await?
             .into_iter()
@@ -437,13 +438,11 @@ impl RelayRepository for SeaOrmRelayRepository {
         .ok_or_else(|| RepoError::with_message(RepoErrorKind::Internal, "no request row"))
     }
 
-    async fn get_request(
-        &self,
-        user_id: UserId,
-        id: DmRequestId,
-    ) -> RepoResult<Option<DmRequest>> {
+    async fn get_request(&self, user_id: UserId, id: DmRequestId) -> RepoResult<Option<DmRequest>> {
         self.request(
-            &format!("SELECT {REQUEST_COLUMNS} FROM relay_dm_request WHERE id = $1 AND user_id = $2"),
+            &format!(
+                "SELECT {REQUEST_COLUMNS} FROM relay_dm_request WHERE id = $1 AND user_id = $2"
+            ),
             vec![uuid(id), uuid(user_id)],
         )
         .await

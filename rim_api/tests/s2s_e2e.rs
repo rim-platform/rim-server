@@ -277,6 +277,7 @@ fn ping() -> S2sRequest {
         path: "/ping".into(),
         body: vec![],
         content_type: None,
+        headers: vec![],
     }
 }
 

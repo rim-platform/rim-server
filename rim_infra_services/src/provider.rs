@@ -12,7 +12,6 @@ use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::device_link::service::DeviceLinkService;
 use rim_services::escalation::scheduler::EscalationScheduler;
 use rim_services::escalation::service::EscalationPolicyService;
-use rim_services::events::EventObserver;
 use rim_services::events::Observers;
 use rim_services::incident::service::IncidentService;
 use rim_services::ingest_token::service::IngestTokenService;
@@ -203,8 +202,10 @@ impl DefaultAppServiceProvider {
         let read_state_observers = observers.clone();
         let incident_observers = observers.clone();
         let workspace_plugin_observers = observers.clone();
-        let ws_state_broadcaster = Arc::clone(observers.broadcaster());
-        let pipeline_broadcaster_clone = Arc::clone(observers.broadcaster());
+        let ws_state_broadcaster: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(observers.clone());
+        let pipeline_broadcaster_clone: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(observers.clone());
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
