@@ -20,6 +20,8 @@ pub struct Model {
     pub claimed_at: Option<DateTimeWithTimeZone>,
     pub claimed_by_device_key_id: Option<Uuid>,
     pub claimed_for_conversation_id: Option<Uuid>,
+    pub claimed_for_incarnation: Option<i32>,
+    pub claim_count: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

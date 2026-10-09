@@ -10,6 +10,8 @@ pub struct MlsKeyPackageStatusDto {
     pub cipher_suite: i32,
     pub available: i64,
     pub last_resort_not_after: Option<DateTime<Utc>>,
+    /// How often the last-resort key package was handed out.
+    pub last_resort_claims: i32,
     pub oldest_not_after: Option<DateTime<Utc>>,
 }
 

@@ -13,11 +13,11 @@ use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, MlsCommit, MlsCommitId, MlsDesiredDevice,
-    MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus,
-    MlsPurged, MlsReaddRequest, MlsReaddRequestId, MlsRetention, MlsWelcome, MlsWelcomeId,
-    NewEncryptedMessage, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
-    NewMlsWelcome,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
+    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
+    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit, NewMlsGroup,
+    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -43,6 +43,7 @@ pub(crate) fn b64(bytes: &[u8]) -> String {
 pub(crate) struct StoredPackage {
     pub(crate) meta: MlsKeyPackage,
     pub(crate) bytes: Vec<u8>,
+    pub(crate) claims: i32,
 }
 
 pub(crate) type Welcomes = Vec<(MlsWelcomeId, NewMlsWelcome, HashSet<DeviceKeyId>)>;
@@ -97,7 +98,11 @@ impl FakeE2ee {
             && p.meta.cipher_suite == suite
             && !p.meta.last_resort
             && p.meta.claimed_at.is_none()
-            && p.meta.not_after > now
+            && Self::usable(p, now)
+    }
+
+    fn usable(p: &StoredPackage, now: DateTime<Utc>) -> bool {
+        p.meta.not_after > now + chrono::Duration::days(KEY_PACKAGE_MIN_REMAINING_DAYS)
     }
 }
 
@@ -177,7 +182,7 @@ impl E2eeRepository for FakeE2ee {
                 has_key_package: state.packages.iter().any(|p| {
                     p.meta.device_key_id == d.device_key_id
                         && p.meta.cipher_suite == cipher_suite
-                        && p.meta.not_after > now
+                        && Self::usable(p, now)
                         && (p.meta.last_resort || p.meta.claimed_at.is_none())
                 }),
             })
@@ -270,11 +275,14 @@ impl E2eeRepository for FakeE2ee {
                 key_package_ref: package.key_package_ref,
                 last_resort: package.last_resort,
                 not_after: package.not_after,
+                created_at: Utc::now(),
                 claimed_at: None,
                 claimed_by_device_key_id: None,
                 claimed_for_conversation_id: None,
+                claimed_for_incarnation: None,
             },
             bytes: package.key_package,
+            claims: 0,
         });
         Ok(id)
     }
@@ -303,9 +311,15 @@ impl E2eeRepository for FakeE2ee {
                 .filter(|p| p.meta.last_resort)
                 .map(|p| p.meta.not_after)
                 .max(),
+            last_resort_claims: mine
+                .iter()
+                .filter(|p| p.meta.last_resort)
+                .map(|p| p.claims)
+                .max()
+                .unwrap_or(0),
             oldest_not_after: mine
                 .iter()
-                .filter(|p| !p.meta.last_resort && p.meta.claimed_at.is_none())
+                .filter(|p| Self::available(p, device_key_id, SUITE, Utc::now()))
                 .map(|p| p.meta.not_after)
                 .min(),
         }])
@@ -317,17 +331,27 @@ impl E2eeRepository for FakeE2ee {
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
+        uploaded_after: Option<DateTime<Utc>>,
     ) -> RepoResult<Option<ClaimedKeyPackage>> {
         let mut state = self.state();
         let now = Utc::now();
-        let found = state
+        let mut candidates: Vec<&mut StoredPackage> = state
             .packages
             .iter_mut()
-            .find(|p| Self::available(p, device_key_id, cipher_suite, now));
+            .filter(|p| Self::available(p, device_key_id, cipher_suite, now))
+            .filter(|p| uploaded_after.is_none_or(|at| p.meta.created_at > at))
+            .collect();
+        let found = if uploaded_after.is_some() {
+            candidates.pop()
+        } else {
+            candidates.into_iter().next()
+        };
         Ok(found.map(|p| {
             p.meta.claimed_at = Some(now);
             p.meta.claimed_by_device_key_id = Some(claimed_by);
             p.meta.claimed_for_conversation_id = Some(conversation_id);
+            p.meta.claimed_for_incarnation = Some(incarnation);
             ClaimedKeyPackage {
                 id: p.meta.id,
                 device_key_id,
@@ -344,6 +368,7 @@ impl E2eeRepository for FakeE2ee {
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
     ) -> RepoResult<Option<ClaimedKeyPackage>> {
         let mut state = self.state();
         let now = Utc::now();
@@ -351,12 +376,14 @@ impl E2eeRepository for FakeE2ee {
             p.meta.device_key_id == device_key_id
                 && p.meta.cipher_suite == cipher_suite
                 && p.meta.last_resort
-                && p.meta.not_after > now
+                && Self::usable(p, now)
         });
         Ok(found.map(|p| {
             p.meta.claimed_at = Some(now);
             p.meta.claimed_by_device_key_id = Some(claimed_by);
             p.meta.claimed_for_conversation_id = Some(conversation_id);
+            p.meta.claimed_for_incarnation = Some(incarnation);
+            p.claims += 1;
             ClaimedKeyPackage {
                 id: p.meta.id,
                 device_key_id,

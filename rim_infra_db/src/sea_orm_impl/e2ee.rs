@@ -3,11 +3,11 @@ use chrono::{DateTime, Duration, Utc};
 use entity::message;
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, MlsCommit, MlsCommitId, MlsDesiredDevice,
-    MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus,
-    MlsPurged, MlsReaddRequest, MlsReaddRequestId, MlsRetention, MlsWelcome, MlsWelcomeId,
-    NewEncryptedMessage, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
-    NewMlsWelcome,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
+    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
+    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit, NewMlsGroup,
+    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -94,7 +94,13 @@ struct PrincipalUserRow {
 }
 
 const KEY_PACKAGE_COLUMNS: &str = "id, user_id, device_key_id, cipher_suite, key_package_ref, \
-     last_resort, not_after, claimed_at, claimed_by_device_key_id, claimed_for_conversation_id";
+     last_resort, not_after, created_at, claimed_at, claimed_by_device_key_id, \
+     claimed_for_conversation_id, claimed_for_incarnation";
+
+/// A key package that can still be handed out.
+fn usable(alias: &str) -> String {
+    format!("{alias}not_after > now() + interval '{KEY_PACKAGE_MIN_REMAINING_DAYS} days'")
+}
 
 #[derive(FromQueryResult)]
 struct KeyPackageRow {
@@ -105,9 +111,11 @@ struct KeyPackageRow {
     key_package_ref: Vec<u8>,
     last_resort: bool,
     not_after: DateTimeWithTimeZone,
+    created_at: DateTimeWithTimeZone,
     claimed_at: Option<DateTimeWithTimeZone>,
     claimed_by_device_key_id: Option<Uuid>,
     claimed_for_conversation_id: Option<Uuid>,
+    claimed_for_incarnation: Option<i32>,
 }
 
 impl From<KeyPackageRow> for MlsKeyPackage {
@@ -120,9 +128,11 @@ impl From<KeyPackageRow> for MlsKeyPackage {
             key_package_ref: row.key_package_ref,
             last_resort: row.last_resort,
             not_after: row.not_after.into(),
+            created_at: row.created_at.into(),
             claimed_at: row.claimed_at.map(Into::into),
             claimed_by_device_key_id: row.claimed_by_device_key_id.map(Into::into),
             claimed_for_conversation_id: row.claimed_for_conversation_id.map(Into::into),
+            claimed_for_incarnation: row.claimed_for_incarnation,
         }
     }
 }
@@ -155,6 +165,7 @@ struct StatusRow {
     cipher_suite: i32,
     available: i64,
     last_resort_not_after: Option<DateTimeWithTimeZone>,
+    last_resort_claims: Option<i32>,
     oldest_not_after: Option<DateTimeWithTimeZone>,
 }
 
@@ -450,18 +461,21 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         let id: Uuid = conversation_id.into();
         let rows: Vec<DesiredDeviceRow> = self
             .all(
-                r#"SELECT d.id AS device_key_id, d.user_id, u.principal_id, d.device_id,
-                          EXISTS (SELECT 1 FROM mls_key_package k
-                                  WHERE k.device_key_id = d.id AND k.cipher_suite = $3
-                                    AND k.not_after > now()
-                                    AND (k.last_resort OR k.claimed_at IS NULL))
-                              AS has_key_package
-                   FROM conversation_member cm
-                   JOIN "user" u ON u.id = cm.user_id
-                   JOIN device_key d ON d.user_id = u.id
-                   WHERE cm.conversation_id = $1 AND u.principal_id IS NOT NULL
-                     AND d.revoked_at IS NULL AND d.last_key_package_upload_at >= $2
-                   ORDER BY d.device_id"#,
+                &format!(
+                    r#"SELECT d.id AS device_key_id, d.user_id, u.principal_id, d.device_id,
+                              EXISTS (SELECT 1 FROM mls_key_package k
+                                      WHERE k.device_key_id = d.id AND k.cipher_suite = $3
+                                        AND {}
+                                        AND (k.last_resort OR k.claimed_at IS NULL))
+                                  AS has_key_package
+                       FROM conversation_member cm
+                       JOIN "user" u ON u.id = cm.user_id
+                       JOIN device_key d ON d.user_id = u.id
+                       WHERE cm.conversation_id = $1 AND u.principal_id IS NOT NULL
+                         AND d.revoked_at IS NULL AND d.last_key_package_upload_at >= $2
+                       ORDER BY d.device_id"#,
+                    usable("k.")
+                ),
                 vec![id.into(), utc(active_since), cipher_suite.into()],
             )
             .await?;
@@ -537,9 +551,12 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         let row = self
             .db
             .query_one_raw(Self::statement(
-                "SELECT count(*) AS n FROM mls_key_package \
-                 WHERE device_key_id = $1 AND cipher_suite = $2 AND claimed_at IS NULL \
-                   AND NOT last_resort AND not_after > now()",
+                &format!(
+                    "SELECT count(*) AS n FROM mls_key_package \
+                     WHERE device_key_id = $1 AND cipher_suite = $2 AND claimed_at IS NULL \
+                       AND NOT last_resort AND {}",
+                    usable("")
+                ),
                 vec![id.into(), cipher_suite.into()],
             ))
             .await
@@ -597,14 +614,18 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         let id: Uuid = device_key_id.into();
         let rows: Vec<StatusRow> = self
             .all(
-                "SELECT cipher_suite,
-                        count(*) FILTER (WHERE NOT last_resort AND claimed_at IS NULL
-                                           AND not_after > now()) AS available,
-                        max(not_after) FILTER (WHERE last_resort) AS last_resort_not_after,
-                        min(not_after) FILTER (WHERE NOT last_resort AND claimed_at IS NULL
-                                                 AND not_after > now()) AS oldest_not_after
-                 FROM mls_key_package WHERE device_key_id = $1
-                 GROUP BY cipher_suite ORDER BY cipher_suite",
+                &format!(
+                    "SELECT cipher_suite,
+                            count(*) FILTER (WHERE NOT last_resort AND claimed_at IS NULL
+                                               AND {usable}) AS available,
+                            max(not_after) FILTER (WHERE last_resort) AS last_resort_not_after,
+                            max(claim_count) FILTER (WHERE last_resort) AS last_resort_claims,
+                            min(not_after) FILTER (WHERE NOT last_resort AND claimed_at IS NULL
+                                                     AND {usable}) AS oldest_not_after
+                     FROM mls_key_package WHERE device_key_id = $1
+                     GROUP BY cipher_suite ORDER BY cipher_suite",
+                    usable = usable("")
+                ),
                 vec![id.into()],
             )
             .await?;
@@ -614,6 +635,7 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                 cipher_suite: row.cipher_suite,
                 available: row.available,
                 last_resort_not_after: row.last_resort_not_after.map(Into::into),
+                last_resort_claims: row.last_resort_claims.unwrap_or(0),
                 oldest_not_after: row.oldest_not_after.map(Into::into),
             })
             .collect())
@@ -625,30 +647,41 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
+        uploaded_after: Option<DateTime<Utc>>,
     ) -> RepoResult<Option<ClaimedKeyPackage>> {
         let device: Uuid = device_key_id.into();
         let claimer: Uuid = claimed_by.into();
         let conversation: Uuid = conversation_id.into();
+        let order = if uploaded_after.is_some() {
+            "created_at DESC, id DESC"
+        } else {
+            "created_at, id"
+        };
         let row: Option<ClaimedRow> = self
             .one(
                 &format!(
                     "UPDATE mls_key_package
                      SET claimed_at = now(), claimed_by_device_key_id = $3,
-                         claimed_for_conversation_id = $4
+                         claimed_for_conversation_id = $4, claimed_for_incarnation = $5
                      WHERE id = (
                          SELECT id FROM mls_key_package
                          WHERE device_key_id = $1 AND cipher_suite = $2 AND claimed_at IS NULL
-                           AND NOT last_resort AND not_after > now()
-                         ORDER BY created_at, id
+                           AND NOT last_resort AND {}
+                           AND ($6::timestamptz IS NULL OR created_at > $6)
+                         ORDER BY {order}
                          LIMIT 1
                          FOR UPDATE SKIP LOCKED)
-                     RETURNING {CLAIMED_COLUMNS}"
+                     RETURNING {CLAIMED_COLUMNS}",
+                    usable("")
                 ),
                 vec![
                     device.into(),
                     cipher_suite.into(),
                     claimer.into(),
                     conversation.into(),
+                    incarnation.into(),
+                    uploaded_after.into(),
                 ],
             )
             .await?;
@@ -661,6 +694,7 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         cipher_suite: i32,
         claimed_by: DeviceKeyId,
         conversation_id: ConversationId,
+        incarnation: i32,
     ) -> RepoResult<Option<ClaimedKeyPackage>> {
         let device: Uuid = device_key_id.into();
         let claimer: Uuid = claimed_by.into();
@@ -670,16 +704,18 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                 &format!(
                     "UPDATE mls_key_package
                      SET claimed_at = now(), claimed_by_device_key_id = $3,
-                         claimed_for_conversation_id = $4
-                     WHERE device_key_id = $1 AND cipher_suite = $2 AND last_resort
-                       AND not_after > now()
-                     RETURNING {CLAIMED_COLUMNS}"
+                         claimed_for_conversation_id = $4, claimed_for_incarnation = $5,
+                         claim_count = claim_count + 1
+                     WHERE device_key_id = $1 AND cipher_suite = $2 AND last_resort AND {}
+                     RETURNING {CLAIMED_COLUMNS}",
+                    usable("")
                 ),
                 vec![
                     device.into(),
                     cipher_suite.into(),
                     claimer.into(),
                     conversation.into(),
+                    incarnation.into(),
                 ],
             )
             .await?;

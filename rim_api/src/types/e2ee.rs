@@ -149,9 +149,11 @@ impl From<MessageEncryptionDto> for MessageEncryption {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct MlsKeyPackageStatus {
     pub cipher_suite: i32,
-    /// Unclaimed, unexpired one-time key packages.
+    /// Unclaimed one-time key packages that can still be handed out (valid for 14 more days).
     pub available: i32,
     pub last_resort_not_after: Option<DateTime<Utc>>,
+    /// How often the last-resort key package was handed out; past 5 the device replaces it.
+    pub last_resort_claims: i32,
     /// The earliest expiry among the available one-time key packages.
     pub oldest_not_after: Option<DateTime<Utc>>,
 }
@@ -162,6 +164,7 @@ impl From<MlsKeyPackageStatusDto> for MlsKeyPackageStatus {
             cipher_suite: value.cipher_suite,
             available: int(value.available),
             last_resort_not_after: value.last_resort_not_after,
+            last_resort_claims: value.last_resort_claims,
             oldest_not_after: value.oldest_not_after,
         }
     }

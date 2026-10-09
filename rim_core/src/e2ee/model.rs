@@ -14,6 +14,10 @@ use crate::server::model::ServerId;
 use crate::user::model::UserId;
 
 model_id!(MlsKeyPackageId);
+
+/// Days a key package must still be valid to be handed out; one closer to expiry counts as
+/// absent.
+pub const KEY_PACKAGE_MIN_REMAINING_DAYS: i64 = 14;
 model_id!(MlsCommitId);
 model_id!(MlsWelcomeId);
 model_id!(MlsReaddRequestId);
@@ -80,9 +84,13 @@ pub struct MlsKeyPackage {
     pub key_package_ref: Vec<u8>,
     pub last_resort: bool,
     pub not_after: DateTime<Utc>,
+    /// When it was uploaded.
+    pub created_at: DateTime<Utc>,
     pub claimed_at: Option<DateTime<Utc>>,
     pub claimed_by_device_key_id: Option<DeviceKeyId>,
     pub claimed_for_conversation_id: Option<ConversationId>,
+    /// The incarnation the latest claim is for.
+    pub claimed_for_incarnation: Option<i32>,
 }
 
 /// A key package handed to a committer.
@@ -99,9 +107,11 @@ pub struct ClaimedKeyPackage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MlsKeyPackageStatus {
     pub cipher_suite: i32,
-    /// Unclaimed, unexpired one-time key packages.
+    /// Unclaimed one-time key packages that can still be handed out.
     pub available: i64,
     pub last_resort_not_after: Option<DateTime<Utc>>,
+    /// How often the last-resort key package was handed out.
+    pub last_resort_claims: i32,
     /// The earliest expiry among the available one-time key packages.
     pub oldest_not_after: Option<DateTime<Utc>>,
 }

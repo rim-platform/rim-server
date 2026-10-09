@@ -368,7 +368,8 @@ mod tests {
             std::mem::take(&mut *self.events.0.lock().expect("events"))
         }
 
-        /// Store a key package of `d`, claimed by `claimer` that long ago when given.
+        /// Store a key package of `d`, claimed by `claimer` that long ago when given, for the
+        /// current incarnation (1 without a group).
         fn package(
             &self,
             d: &Device,
@@ -377,7 +378,15 @@ mod tests {
             claimed: Option<(&Device, Duration)>,
         ) -> Vec<u8> {
             let key_package_ref = vec![tag; 32];
-            self.repo.state().packages.push(StoredPackage {
+            let mut state = self.repo.state();
+            let incarnation = state
+                .groups
+                .iter()
+                .filter(|g| g.conversation_id == self.conv.id && g.retired_at.is_none())
+                .map(|g| g.incarnation)
+                .max()
+                .unwrap_or(1);
+            state.packages.push(StoredPackage {
                 meta: MlsKeyPackage {
                     id: MlsKeyPackageId::new(),
                     user_id: d.user,
@@ -386,11 +395,14 @@ mod tests {
                     key_package_ref: key_package_ref.clone(),
                     last_resort,
                     not_after: Utc::now() + Duration::days(30),
+                    created_at: Utc::now(),
                     claimed_at: claimed.map(|(_, ago)| Utc::now() - ago),
                     claimed_by_device_key_id: claimed.map(|(by, _)| by.id),
                     claimed_for_conversation_id: claimed.map(|_| self.conv.id),
+                    claimed_for_incarnation: claimed.map(|_| incarnation),
                 },
                 bytes: vec![tag; 64],
+                claims: 0,
             });
             key_package_ref
         }
@@ -1047,6 +1059,12 @@ mod tests {
         // Recovery: alice asked over ten minutes ago and nobody committed since.
         let waited = readd_request(&f, &f.alice, Duration::minutes(11));
         f.repo.state().readds.push(waited);
+        let err = f
+            .submit(f.commit_cmd(&f.alice, 2, 0, &[(&f.bob, &r)], &[]))
+            .await
+            .unwrap_err();
+        assert!(validation(err).contains("claimed for another incarnation"));
+        f.repo.state().packages[0].meta.claimed_for_incarnation = Some(2);
         let commit = f
             .service
             .submit_commit(f.commit_cmd(&f.alice, 2, 0, &[(&f.bob, &r)], &[]))
@@ -1075,6 +1093,7 @@ mod tests {
         f.group(1, 3, &[&f.bob2]);
         f.repo.state().devices[2].revoked_at = Some(Utc::now());
         let r = f.package(&f.bob, 1, false, Some((&f.alice, Duration::minutes(1))));
+        f.repo.state().packages[0].meta.claimed_for_incarnation = Some(2);
         f.submit(f.commit_cmd(&f.alice, 2, 0, &[(&f.bob, &r)], &[]))
             .await
             .expect("no devices left");
@@ -1168,22 +1187,64 @@ mod tests {
     async fn a_readd_target_never_gets_a_last_resort_package() {
         let f = Fixture::new();
         f.group(1, 1, &[&f.alice, &f.bob, &f.bob2]);
-        let request = readd_request(&f, &f.bob, Duration::zero());
+        // A one-time package from before the request, from the lost state.
+        f.package(&f.bob, 3, false, None);
+        f.repo.state().packages[0].meta.created_at = Utc::now() - Duration::minutes(5);
+        let request = readd_request(&f, &f.bob, Duration::minutes(1));
         f.repo.state().readds.push(request);
         f.package(&f.bob, 1, true, None);
+        let err = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            validation(err),
+            "the device has not uploaded key packages since its re-add request"
+        );
+        // The newest package uploaded since is handed out, for the current incarnation.
+        f.package(&f.bob, 2, false, None);
+        f.package(&f.bob, 4, false, None);
+        f.repo.state().packages[2].meta.created_at = Utc::now() - Duration::seconds(10);
+        let claimed = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob]))
+            .await
+            .unwrap();
+        assert_eq!(claimed[0].key_package_ref, vec![4; 32]);
+        let state = f.repo.state();
+        let used = state
+            .packages
+            .iter()
+            .find(|p| p.meta.key_package_ref == vec![4; 32])
+            .unwrap();
+        assert_eq!(used.meta.claimed_for_incarnation, Some(1));
+    }
+
+    #[tokio::test]
+    async fn packages_close_to_expiry_count_as_absent_and_last_resort_claims_are_counted() {
+        let f = Fixture::new();
+        f.package(&f.bob, 1, false, None);
+        f.repo.state().packages[0].meta.not_after = Utc::now() + Duration::days(13);
+        f.package(&f.bob, 2, true, None);
+        for _ in 0..2 {
+            let claimed = f
+                .service
+                .claim_key_packages(claim(&f, &f.alice, &[&f.bob]))
+                .await
+                .unwrap();
+            assert_eq!(claimed[0].key_package_ref, vec![2; 32]);
+        }
+        let status = f.service.key_package_status(f.bob.caller()).await.unwrap();
+        assert_eq!(status[0].available, 0);
+        assert_eq!(status[0].last_resort_claims, 2);
+        f.repo.state().packages[1].meta.not_after = Utc::now() + Duration::days(13);
         let claimed = f
             .service
             .claim_key_packages(claim(&f, &f.alice, &[&f.bob]))
             .await
             .unwrap();
         assert!(claimed.is_empty());
-        f.package(&f.bob, 2, false, None);
-        let claimed = f
-            .service
-            .claim_key_packages(claim(&f, &f.alice, &[&f.bob]))
-            .await
-            .unwrap();
-        assert_eq!(claimed[0].key_package_ref, vec![2; 32]);
     }
 
     // ── Key package uploads, with real OpenMLS key packages ────────────────────────────

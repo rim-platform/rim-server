@@ -208,8 +208,47 @@ fn commit(f: &Fixture, epoch: i64, body: u8) -> NewMlsCommit {
 }
 
 #[tokio::test]
+async fn a_readd_claims_the_newest_package_uploaded_after_its_request() {
+    let f = fixture().await;
+    for tag in 1..=3 {
+        f.repo
+            .insert_key_package(key_package(&f.bob, tag, false, 30))
+            .await
+            .unwrap();
+        // Distinct upload times.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let found = f
+        .repo
+        .find_key_packages_by_refs(&[vec![1; 32]])
+        .await
+        .unwrap();
+    let after_first = found[0].created_at;
+    let claim = |after| {
+        f.repo
+            .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1, after)
+    };
+    let newest = claim(Some(after_first)).await.unwrap().expect("newest");
+    assert_eq!(newest.key_package_ref, vec![3; 32]);
+    let next = claim(Some(after_first))
+        .await
+        .unwrap()
+        .expect("next newest");
+    assert_eq!(next.key_package_ref, vec![2; 32]);
+    assert!(
+        claim(Some(after_first)).await.unwrap().is_none(),
+        "the package from before the request is never used"
+    );
+}
+
+#[tokio::test]
 async fn key_packages_are_claimed_oldest_first_then_the_last_resort() {
     let f = fixture().await;
+    // Valid for 10 more days: too close to expiry to hand out.
+    f.repo
+        .insert_key_package(key_package(&f.bob, 6, false, 10))
+        .await
+        .unwrap();
     for tag in 1..=3 {
         f.repo
             .insert_key_package(key_package(&f.bob, tag, false, 30))
@@ -259,7 +298,7 @@ async fn key_packages_are_claimed_oldest_first_then_the_last_resort() {
     for _ in 0..3 {
         let package = f
             .repo
-            .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+            .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1, None)
             .await
             .unwrap()
             .expect("one-time package");
@@ -269,15 +308,15 @@ async fn key_packages_are_claimed_oldest_first_then_the_last_resort() {
     assert_eq!(claimed, vec![1, 2, 3], "oldest first");
     assert!(
         f.repo
-            .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+            .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1, None)
             .await
             .unwrap()
             .is_none(),
-        "expired packages are never handed out"
+        "expired packages and ones close to expiry are never handed out"
     );
     let last_resort = f
         .repo
-        .claim_last_resort_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+        .claim_last_resort_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1)
         .await
         .unwrap()
         .expect("last resort");
@@ -285,11 +324,14 @@ async fn key_packages_are_claimed_oldest_first_then_the_last_resort() {
     // The last-resort package stays and can be handed out again.
     assert!(
         f.repo
-            .claim_last_resort_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+            .claim_last_resort_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 2)
             .await
             .unwrap()
             .is_some()
     );
+    let status = f.repo.key_package_status(f.bob.device).await.unwrap();
+    assert_eq!(status[0].available, 0);
+    assert_eq!(status[0].last_resort_claims, 2);
 
     let found = f
         .repo
@@ -300,7 +342,14 @@ async fn key_packages_are_claimed_oldest_first_then_the_last_resort() {
     let one_time = found.iter().find(|p| !p.last_resort).expect("one-time");
     assert_eq!(one_time.claimed_by_device_key_id, Some(f.alice.device));
     assert_eq!(one_time.claimed_for_conversation_id, Some(f.conv.id));
+    assert_eq!(one_time.claimed_for_incarnation, Some(1));
     assert!(one_time.claimed_at.is_some());
+    let last_resort = found.iter().find(|p| p.last_resort).expect("last resort");
+    assert_eq!(
+        last_resort.claimed_for_incarnation,
+        Some(2),
+        "the latest claim"
+    );
 
     let ids: Vec<_> = found.iter().map(|p| p.id).collect();
     assert_eq!(
@@ -363,7 +412,7 @@ async fn concurrent_claims_never_hand_out_a_package_twice() {
             let scope = begin_transaction(&conn).await.unwrap();
             let repo = SeaOrmE2eeRepository::new(scope.handle());
             let claimed = repo
-                .claim_one_time_key_package(device, SUITE, claimer, conv)
+                .claim_one_time_key_package(device, SUITE, claimer, conv, 1, None)
                 .await
                 .unwrap();
             // Hold the row lock a moment so the claims overlap.
@@ -930,7 +979,7 @@ async fn readd_requests_and_retention() {
         .await
         .unwrap();
     f.repo
-        .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+        .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1, None)
         .await
         .unwrap()
         .unwrap();
@@ -982,7 +1031,7 @@ async fn deleting_a_conversation_or_device_cascades() {
         .await
         .unwrap();
     f.repo
-        .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id)
+        .claim_one_time_key_package(f.bob.device, SUITE, f.alice.device, f.conv.id, 1, None)
         .await
         .unwrap();
     let commit = f.repo.insert_commit(commit(&f, 1, 1)).await.unwrap();
