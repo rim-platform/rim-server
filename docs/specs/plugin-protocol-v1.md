@@ -13,6 +13,10 @@ disagree, the schema wins**, and this document has a bug.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
+Two later documents build on this one without changing it: `web-plugins-v1.md` (the
+`WebSandboxed` kind: the same messages over a sandboxed iframe's `MessagePort`) and
+`workspace-plugins-v1.md` (per-workspace registries and manifests signed by a publisher's key).
+
 ## Contents
 
 1. [The protocol in one minute](#1-the-protocol-in-one-minute)
