@@ -49,6 +49,9 @@ pub struct DefaultConversationService {
     /// Readiness of members for encrypted conversations. `None` in unit tests that are not about
     /// them; the composition root wires it.
     e2ee_repo: Option<Arc<dyn E2eeRepository>>,
+    /// The relay's direct space, where everyone is a guest, guests start DMs and groups, and
+    /// there are no channels.
+    direct_space_id: Option<rim_core::server::model::ServerId>,
 }
 
 impl DefaultConversationService {
@@ -57,7 +60,49 @@ impl DefaultConversationService {
             repos,
             observers,
             e2ee_repo: None,
+            direct_space_id: None,
         }
+    }
+
+    pub fn with_direct_space(mut self, direct_space_id: rim_core::server::model::ServerId) -> Self {
+        self.direct_space_id = Some(direct_space_id);
+        self
+    }
+
+    fn is_direct_space(&self, server_id: rim_core::server::model::ServerId) -> bool {
+        self.direct_space_id == Some(server_id)
+    }
+
+    /// Make users members of the direct space, as guests, when they are not yet.
+    async fn join_direct_space(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+        user_ids: &[UserId],
+    ) -> ServiceResult<()> {
+        for &user_id in user_ids {
+            if self
+                .repos
+                .server_member_repo
+                .is_member(server_id, user_id)
+                .await?
+            {
+                continue;
+            }
+            match self
+                .repos
+                .server_member_repo
+                .add_member(server_id, user_id, ServerMemberRole::Guest)
+                .await
+            {
+                Ok(_) => {}
+                Err(err) if matches!(err.kind(), RepoErrorKind::Conflict) => {}
+                Err(err) if matches!(err.kind(), RepoErrorKind::NotFound) => {
+                    return Err(ServiceError::NotFound);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
     }
 
     pub fn with_e2ee_repo(mut self, e2ee_repo: Arc<dyn E2eeRepository>) -> Self {
@@ -134,7 +179,7 @@ impl DefaultConversationService {
     ) -> ServiceResult<Conversation> {
         let standing =
             member_standing(self.repos.server_member_repo.as_ref(), server_id, actor).await?;
-        if standing.role.is_guest() {
+        if standing.role.is_guest() && !self.is_direct_space(server_id) {
             return Err(ServiceError::PermissionDenied);
         }
         ensure_not_timed_out(&standing)?;
@@ -295,7 +340,28 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        // Member, not timed out; guests may only open DMs (Track 1.2).
+        let direct = self.is_direct_space(cmd.server_id);
+        if direct {
+            if cmd.participants == ConversationParticipants::Channel {
+                return Err(ServiceError::Validation(
+                    "the direct space has no channels".to_string(),
+                ));
+            }
+            let mut joining = vec![cmd.actor.user_id];
+            match &cmd.participants {
+                ConversationParticipants::DirectMessage { other_user_id } => {
+                    joining.push(*other_user_id);
+                }
+                ConversationParticipants::Group { member_ids } => {
+                    joining.extend(member_ids.iter().copied());
+                }
+                ConversationParticipants::Channel => {}
+            }
+            self.join_direct_space(cmd.server_id, &joining).await?;
+        }
+
+        // Member, not timed out; guests may only open DMs (Track 1.2), except in the direct
+        // space, where everyone is a guest.
         let standing = ensure_workspace_writable(
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
@@ -303,6 +369,7 @@ impl ConversationService for DefaultConversationService {
         )
         .await?;
         if standing.role.is_guest()
+            && !direct
             && !matches!(
                 cmd.participants,
                 ConversationParticipants::DirectMessage { .. }
@@ -632,6 +699,9 @@ impl ConversationService for DefaultConversationService {
             .into_iter()
             .filter(|id| seen.insert(*id))
             .collect();
+        if self.is_direct_space(cmd.server_id) {
+            self.join_direct_space(cmd.server_id, &targets).await?;
+        }
         for &user_id in &targets {
             if !self
                 .repos

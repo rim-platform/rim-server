@@ -19,6 +19,7 @@ pub mod email;
 // above.
 pub mod escalation;
 pub mod file_storage;
+pub mod host;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod key_auth;
@@ -47,6 +48,7 @@ pub mod presence;
 pub(crate) mod provider;
 pub(crate) mod read_state;
 pub mod registration_rate_limiter;
+pub mod relay;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;
@@ -142,7 +144,7 @@ pub use notification::NotificationRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use oncall::OnCallRepos;
 pub use pipeline::PipelineRepos;
-pub use provider::DefaultAppServiceProvider;
+pub use provider::{DefaultAppServiceProvider, FederationHooks};
 pub use registration_rate_limiter::RegistrationRateLimiter;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,

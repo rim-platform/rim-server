@@ -590,6 +590,7 @@ mod tests {
             key_identity_repo: Arc::new(FakeKeys(Arc::clone(&state))),
             key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
             signup,
+            host_repo: Arc::new(local_users_only()),
         };
         let svc = DefaultKeyAuthService::new(
             repos,
@@ -604,6 +605,14 @@ mod tests {
             RegistrationRateLimiter::new(3600, limits.failure),
         );
         Harness { state, svc }
+    }
+
+    /// A host repository where every user is local.
+    fn local_users_only() -> rim_core::host::repository::MockHostRepository {
+        let mut host = rim_core::host::repository::MockHostRepository::new();
+        host.expect_user_kind()
+            .returning(|_| Box::pin(async { Ok(Some(rim_core::host::model::UserKind::Local)) }));
+        host
     }
 
     fn harness() -> Harness {

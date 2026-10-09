@@ -412,6 +412,12 @@ pub fn build_test_provider_with(
         e2ee_repo: Arc::new(rim_infra_db::sea_orm_impl::e2ee::SeaOrmE2eeRepository::new(
             db.clone(),
         )),
+        relay_repo: Arc::new(rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository::new(
+            db.clone(),
+        )),
+        host_repo: Arc::new(rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository::new(
+            db.clone(),
+        )),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
@@ -528,6 +534,7 @@ pub fn build_test_provider_with(
         None, // no public_base_url configured for registration tests
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
         vec![KEY_LOGIN_AUDIENCE.to_string()],
+        rim_infra_services::FederationHooks::default(),
     ));
 
     (service_provider, observers)

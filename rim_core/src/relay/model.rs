@@ -96,8 +96,11 @@ pub struct DmRequest {
     pub expires_at: DateTime<Utc>,
 }
 
+/// A request to file. A conversation from a contact is filed `Accepted` at once, so every
+/// conversation a relay delivers for has a row; such rows are not listed as requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewDmRequest {
+    pub status: DmRequestStatus,
     pub user_id: UserId,
     pub from_principal_id: String,
     pub card_payload: String,

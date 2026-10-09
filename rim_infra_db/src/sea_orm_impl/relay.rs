@@ -67,6 +67,10 @@ struct DroppedRow {
     workspace_id: Uuid,
 }
 
+/// Rows filed as requests, leaving out conversations accepted at once (from contacts), whose
+/// `decided_at` is their `created_at`.
+const FILED: &str = "decided_at IS DISTINCT FROM created_at";
+
 const REQUEST_COLUMNS: &str = "id, user_id, from_principal_id, card_payload, card_signature, \
      host_server_id, conversation_id, status, created_at, decided_at, expires_at";
 
@@ -420,8 +424,11 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.request(
             &format!(
                 "INSERT INTO relay_dm_request (id, user_id, from_principal_id, card_payload, \
-                 card_signature, host_server_id, conversation_id, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {REQUEST_COLUMNS}"
+                 card_signature, host_server_id, conversation_id, expires_at, status, \
+                 created_at, decided_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), \
+                         CASE WHEN $9 = 'pending' THEN NULL ELSE now() END) \
+                 RETURNING {REQUEST_COLUMNS}"
             ),
             vec![
                 uuid(DmRequestId::new()),
@@ -432,6 +439,7 @@ impl RelayRepository for SeaOrmRelayRepository {
                 request.host_server_id.into(),
                 request.conversation_id.into(),
                 request.expires_at.into(),
+                request.status.as_str().into(),
             ],
         )
         .await?
@@ -456,7 +464,7 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.requests(
             &format!(
                 "SELECT {REQUEST_COLUMNS} FROM relay_dm_request \
-                 WHERE user_id = $1 AND ($2::text IS NULL OR status = $2) \
+                 WHERE user_id = $1 AND ($2::text IS NULL OR status = $2) AND {FILED} \
                  ORDER BY created_at DESC, id DESC"
             ),
             vec![uuid(user_id), status.map(|s| s.as_str().to_string()).into()],
@@ -478,8 +486,10 @@ impl RelayRepository for SeaOrmRelayRepository {
         since: DateTime<Utc>,
     ) -> RepoResult<i64> {
         self.count(
-            "SELECT count(*) AS n FROM relay_dm_request \
-             WHERE from_principal_id = $1 AND created_at >= $2",
+            &format!(
+                "SELECT count(*) AS n FROM relay_dm_request \
+                 WHERE from_principal_id = $1 AND created_at >= $2 AND {FILED}"
+            ),
             vec![principal_id.into(), since.into()],
         )
         .await
