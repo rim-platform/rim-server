@@ -55,4 +55,6 @@ pub use plugin_manifest::{
     PluginSource, Validity, read_plugin_manifest, verify_plugin_manifest,
 };
 pub use profile_card::{CardDevice, ProfileCard, verify_profile_card};
-pub use statement::{Purpose, SignedStatement, StatementVersion, sign};
+pub use statement::{
+    Purpose, SignedStatement, StatementVersion, sign, sign_with_context, verify_with_context,
+};
