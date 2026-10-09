@@ -11,8 +11,8 @@ the backend for a programmable workspace platform.
 This repo is a multi-crate Rust workspace (edition 2024). Most work happens in `rim_server`,
 `rim_api`, `rim_core`, `rim_services`, `rim_infra_db`, `entity`, and `migration`.
 
-Workspace note: the root package (`rim-server`) has no lib/bin targets; it mainly exists for
-workspace coordination and integration tests. Prefer `--workspace/--all` or `-p <crate>`.
+Workspace note: the root `Cargo.toml` is a virtual manifest (no root package), so plain `cargo`
+commands at the root cover every member. Use `-p <crate>` to scope.
 
 ## Build / Run / Lint / Test
 
@@ -46,8 +46,8 @@ cargo test -p rim_services send_message
 # Specific test path (when you know it)
 cargo test -p rim_services conversation::tests::creates_conversation
 
-# One integration test target (tests/<name>.rs)
-cargo test -p rim-server --test common
+# One integration test target (<crate>/tests/<name>.rs)
+cargo test -p rim_infra_db --features db-tests --test user_repo
 
 # Show stdout/logs
 cargo test -p rim_core -- --nocapture
@@ -57,9 +57,8 @@ Common flags: `-- --nocapture`, `-- --test-threads=1`, `-p <crate>`.
 
 ## Workspace Tips
 
-- From the workspace root, plain `cargo test` only runs the root package targets (currently the
-  integration tests under `tests/`). Use `cargo test --workspace` or `cargo test --all` to run
-  everything.
+- The root manifest is virtual, so plain `cargo test` from the workspace root runs every
+  member's tests, the same as `cargo test --workspace`.
 - Prefer `-p <crate>` when iterating to avoid rebuilding the entire workspace.
 - When debugging clippy/rustfmt failures, run the same commands as CI:
   - `cargo fmt --all -- --check`
@@ -72,7 +71,7 @@ Local dev typically uses `.env` (loaded via `dotenvy` in `rim_server` and `rim_l
 - `DATABASE_URL`: Postgres connection string (migrations/tests)
 - `RIM_SERVER_HOST`: bind host (see `rim_server/src/config.rs`)
 - `RIM_SERVER_PORT`: bind port
-- `RIM_LOG_LEVEL`: `error|warn|info|debug|trace` (default `info`)
+- `RUST_LOG`: tracing filter, e.g. `info` or `rim_server=debug,info` (default `info`)
 
 CI uses Postgres 17. For local dev:
 

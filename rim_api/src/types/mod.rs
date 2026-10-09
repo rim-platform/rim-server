@@ -105,9 +105,7 @@ pub use pipeline::{
     PipelineFilterConditionInput, PipelineFilterGql, PipelineFilterInput, PipelineGql,
     PipelineTriggerGql, PipelineTriggerInput, PipelineTriggerKindGql, UpdatePipelineInput,
 };
-pub use platform::{
-    Action, Capability, Event, Integration, IntegrationKind, Setting, SettingScope,
-};
+pub use platform::Capability;
 pub use skill_profile::{FeatureUsage, SkillProfileGql, SkillTier};
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};

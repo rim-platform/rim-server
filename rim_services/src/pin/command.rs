@@ -5,7 +5,6 @@ use rim_core::server::model::ServerId;
 use crate::Actor;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PinMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -14,7 +13,6 @@ pub struct PinMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnpinMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -23,7 +21,6 @@ pub struct UnpinMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListPinnedMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,

@@ -177,10 +177,6 @@ mod tests {
                 conversation_id: ConversationId,
                 user_id: UserId,
             ) -> RepoResult<()>;
-            async fn get_members_for_conversation(
-                &self,
-                conversation_id: ConversationId,
-            ) -> RepoResult<Vec<ConversationMember>>;
             async fn is_member(
                 &self,
                 conversation_id: ConversationId,

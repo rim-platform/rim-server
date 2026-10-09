@@ -4,7 +4,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AuthSessionDto {
     pub user_id: UserId,
     pub session_id: rim_core::auth::model::SessionId,
@@ -12,7 +11,6 @@ pub struct AuthSessionDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InviteDto {
     pub id: rim_core::auth::model::InviteId,
     pub server_id: ServerId,
@@ -25,17 +23,6 @@ pub struct InviteDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BootstrapResultDto {
-    pub user_id: UserId,
-    pub server_id: ServerId,
-    pub session: AuthSessionDto,
-    pub session_token: String,
-    pub csrf_token: String,
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoginResultDto {
     pub user_id: UserId,
     pub session: AuthSessionDto,
@@ -44,14 +31,12 @@ pub struct LoginResultDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreateInviteResultDto {
     pub invite: InviteDto,
     pub invite_token: String,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AcceptInviteResultDto {
     pub user_id: UserId,
     pub server_id: ServerId,
@@ -61,13 +46,11 @@ pub struct AcceptInviteResultDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct JoinServerByInviteResultDto {
     pub server_id: ServerId,
 }
 
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestAuthResultDto {
     pub user_id: Option<UserId>,
     pub session_id: Option<rim_core::auth::model::SessionId>,
@@ -78,7 +61,6 @@ pub struct RequestAuthResultDto {
 /// `server_id` is `Some` only when a workspace invite was used;
 /// bootstrap and instance-invite signups land in "no workspaces yet" state.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignupResultDto {
     pub user_id: UserId,
     pub server_id: Option<ServerId>,
@@ -89,7 +71,6 @@ pub struct SignupResultDto {
 
 /// Metadata about an instance invite, returned to admin callers.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InstanceInviteDto {
     pub id: InstanceInviteId,
     pub created_by_user_id: UserId,
@@ -102,7 +83,6 @@ pub struct InstanceInviteDto {
 
 /// Result of `create_instance_invite`, containing the raw token for display.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreateInstanceInviteResultDto {
     pub invite: InstanceInviteDto,
     /// The raw (unhashed) invite token. Shown to the admin exactly once.
@@ -115,7 +95,6 @@ pub struct CreateInstanceInviteResultDto {
 /// the frontend; they are now distinct so the frontend knows which input field
 /// to use on `signupWithInvite` (`bootstrapToken` vs `instanceInviteToken`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InviteTokenType {
     /// Bootstrap token: "create your RIM account" flow via `bootstrapToken` input.
     Bootstrap,
@@ -127,7 +106,6 @@ pub enum InviteTokenType {
 
 /// Minimal workspace info included in a workspace-invite preview.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WorkspaceInvitePreviewDto {
     pub server_id: ServerId,
     pub server_name: String,
@@ -138,7 +116,6 @@ pub struct WorkspaceInvitePreviewDto {
 ///
 /// Does NOT consume the token. See spec §4.7.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InviteTokenPreviewDto {
     pub token_type: InviteTokenType,
     pub expires_at: Option<DateTime<Utc>>,
@@ -148,7 +125,6 @@ pub struct InviteTokenPreviewDto {
 
 /// The registration mode in effect for this deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RegistrationMode {
     /// Default: signup requires a valid token (bootstrap, instance, or workspace invite).
     InviteOnly,

@@ -40,16 +40,6 @@ impl LinkPreviewRepository for SeaOrmLinkPreviewRepository {
         Ok(inserted.into())
     }
 
-    async fn get_for_message(&self, message_id: MessageId) -> RepoResult<Vec<LinkPreview>> {
-        let previews = link_preview::Entity::find()
-            .filter(link_preview::Column::MessageId.eq::<Uuid>(message_id.into()))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(previews.into_iter().map(Into::into).collect())
-    }
-
     async fn get_for_messages(
         &self,
         message_ids: &[MessageId],

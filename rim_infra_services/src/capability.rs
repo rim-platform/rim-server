@@ -25,7 +25,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 /// Adding a new builtin cap = add a row here AND rerun migrations on every
 /// deploy. The strict default-deny gate guarantees a forgotten entry fails
 /// closed (the new command's `required_capabilities` lookup returns
-/// `is_registered = false` → `PermissionDenied`), which is a louder failure
+/// registry lookup finds no row → `PermissionDenied`), which is a louder failure
 /// mode than silently allowing.
 pub struct BuiltinCapabilitySpec {
     pub id: &'static str,

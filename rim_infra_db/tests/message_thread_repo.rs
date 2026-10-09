@@ -3,12 +3,9 @@
 mod support;
 
 use rim_core::conversation::model::ConversationType;
-use rim_core::message::model::{MessageId, NewMessage};
-use rim_core::message::repository::MessageRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::PageDir;
-use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 
 #[tokio::test]
@@ -22,8 +19,8 @@ async fn create_get_and_list_threads_for_conversation() {
         .create_conversation(server.id, ConversationType::Group)
         .await;
 
-    let t1 = repo.create_thread(conv.id).await.unwrap();
-    let t2 = repo.create_thread(conv.id).await.unwrap();
+    let t1 = ctx.create_thread(conv.id).await;
+    let t2 = ctx.create_thread(conv.id).await;
 
     let at1 = chrono::Utc::now() + chrono::Duration::seconds(1);
     let at2 = chrono::Utc::now() + chrono::Duration::seconds(2);
@@ -75,68 +72,6 @@ async fn create_get_and_list_threads_for_conversation() {
         .unwrap();
     assert_eq!(before.items.len(), 1);
     assert_eq!(before.items[0].id, page1.items[0].id);
-}
-
-#[tokio::test]
-async fn set_first_message_conflict_and_not_found() {
-    let ctx = support::TestCtx::new().await;
-
-    let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
-    let msg_repo = SeaOrmMessageRepository::new(ctx.db.clone());
-
-    let server = ctx.create_server("s").await;
-    let conv = ctx
-        .create_conversation(server.id, ConversationType::Group)
-        .await;
-    let user = ctx.create_user("testuser").await;
-    let thread = ctx.create_thread(conv.id).await;
-
-    let msg = msg_repo
-        .create_message(&NewMessage {
-            conversation_id: conv.id,
-            thread_id: Some(thread.id),
-            parent_message_id: None,
-            sent_by: user.id,
-            text: Some("t".to_string()),
-            attachments: vec![],
-            forwarded_from_message_id: None,
-        })
-        .await
-        .unwrap();
-
-    thread_repo
-        .set_first_message(thread.id, msg.id)
-        .await
-        .unwrap();
-
-    let fetched = thread_repo
-        .get_by_root_message(msg.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(fetched.id, thread.id);
-
-    let other_thread = thread_repo.create_thread(conv.id).await.unwrap();
-    let err = thread_repo
-        .set_first_message(other_thread.id, msg.id)
-        .await
-        .unwrap_err();
-    assert!(matches!(err.kind(), RepoErrorKind::Conflict));
-
-    let err = thread_repo
-        .set_first_message(thread.id, MessageId::new())
-        .await
-        .unwrap_err();
-    assert!(matches!(err.kind(), RepoErrorKind::Conflict));
-
-    let err = thread_repo
-        .set_first_message(
-            rim_core::message_thread::model::MessageThreadId::new(),
-            msg.id,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(err.kind(), RepoErrorKind::NotFound));
 }
 
 #[tokio::test]
@@ -231,7 +166,7 @@ async fn list_threads_before_returns_threads_adjacent_to_cursor() {
     let base = chrono::Utc::now();
     let mut threads = Vec::new();
     for i in 0..5 {
-        let t = repo.create_thread(conv.id).await.unwrap();
+        let t = ctx.create_thread(conv.id).await;
         repo.touch_last_message_at(t.id, base + chrono::Duration::seconds(i))
             .await
             .unwrap();

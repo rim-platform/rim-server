@@ -8,7 +8,6 @@ use rim_core::server::model::ServerId;
 use crate::message::dto::MessagePageCursor;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReplyToMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -20,7 +19,6 @@ pub struct ReplyToMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SendMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -34,13 +32,11 @@ pub struct SendMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageAttachmentRef {
     pub attachment_id: rim_core::message_attachment::model::MessageAttachmentId,
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetMessageQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -49,7 +45,6 @@ pub struct GetMessageQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetMessageReferenceQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -58,7 +53,6 @@ pub struct GetMessageReferenceQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -71,7 +65,6 @@ pub struct ListMessagesQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListThreadMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -84,7 +77,6 @@ pub struct ListThreadMessagesQuery {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SearchMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -101,7 +93,6 @@ pub struct SearchMessagesQuery {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EditMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -112,7 +103,6 @@ pub struct EditMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ForwardMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -122,7 +112,6 @@ pub struct ForwardMessageCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeleteMessageCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -135,7 +124,6 @@ pub struct DeleteMessageCmd {
 /// One conversation to read in [`ListMessageChangesQuery`], with the version the client last
 /// synced to (`0` for "from the beginning").
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageChangeCursor {
     pub conversation_id: ConversationId,
     pub after_version: i64,
@@ -144,7 +132,6 @@ pub struct MessageChangeCursor {
 /// The message change feed: what changed in these conversations since each one's cursor.
 /// See `docs/message-change-feed.md`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListMessageChangesQuery {
     pub actor: Actor,
     pub server_id: ServerId,

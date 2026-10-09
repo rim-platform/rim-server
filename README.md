@@ -69,7 +69,7 @@ cargo run -p rim_server
 
 Configuration is read from the environment (or a local, untracked `.env`) — see
 `rim_server/src/config.rs`. The essentials are `DATABASE_URL`, `RIM_SERVER_HOST`,
-`RIM_SERVER_PORT`, and `RIM_LOG_LEVEL`. Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
+`RIM_SERVER_PORT`; the log level comes from `RUST_LOG` (default `info`). Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
 without it, emails are logged (recipient and subject only) instead of sent. Behind a reverse
 proxy, set `RIM_TRUST_FORWARDED_HEADERS=true` (and make the proxy the only entry point);
 otherwise per-IP limits on login, signup and password-reset requests see every client as the

@@ -4,8 +4,8 @@
 **Date:** 2026-04-22
 **Audience:** Tony (CTO), Black Widow (security), Ant-Man (UX), Kuba (owner — morning approval)
 **Inputs:**
-- v1 design `docs/design/ai-agent-reframe-design-2026-04-22.md`
-- Falcon's audit `docs/design/ai-agent-audit-2026-04-22.md`
+- v1 design `docs/design/ai-agent-reframe-design-2026-04-22.md` (superseded by this v2; deleted 2026-10-09, see git history)
+- Falcon's audit `docs/design/ai-agent-audit-2026-04-22.md` (deleted 2026-10-09, see git history)
 - **Widow's security review `docs/security/ai-reframe-review-2026-04-22.md` (verdict v1: 🟡 YELLOW, 2 CRITICAL + 5 HIGH + 6 MEDIUM + 4 LOW)**
 - Ant-Man's UX `docs/design/skill-macros-2026-04-22.md`
 - `CLAUDE.md` (architectural rules), `ROADMAP.md`

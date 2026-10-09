@@ -1,4 +1,3 @@
-pub mod action;
 pub mod alert;
 pub mod audit;
 pub mod auth;
@@ -8,11 +7,9 @@ pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
 pub mod escalation;
-pub mod event;
 pub mod events;
 pub mod incident;
 pub mod ingest_token;
-pub mod integration;
 pub mod key_auth;
 pub mod keybind;
 pub mod link_preview;
@@ -34,7 +31,6 @@ pub mod provider;
 pub mod read_state;
 pub mod server;
 pub mod server_member;
-pub mod setting;
 pub mod skill_profile;
 pub mod storage;
 pub mod typing;
@@ -48,7 +44,6 @@ use rim_core::user::model::UserId;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Actor {
     pub principal: Principal,
     pub user_id: UserId,
@@ -192,14 +187,6 @@ impl From<RepoError> for ServiceError {
             _ => ServiceError::internal(err),
         }
     }
-}
-
-#[deprecated(
-    since = "0.0.0",
-    note = "use `?` with From<RepoError> for ServiceError instead"
-)]
-pub fn map_repo_error(err: RepoError) -> ServiceError {
-    ServiceError::from(err)
 }
 
 #[cfg(test)]

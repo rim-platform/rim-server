@@ -2,6 +2,8 @@
 
 > **Note (2026-10-04):** the server-side `rim_services::plugin_host` module discussed below was removed on 2026-10-04 as unused. The plugin host and its manifest validation live in the desktop client (`rim-ui/src-tauri/src/plugin_host/`).
 
+> **Note (2026-10-09):** `docs/actual_state.md`, cited below as the April state inventory, was deleted as outdated; it remains in git history.
+
 **Date:** 2026-04-29
 **For:** Jakub (CEO)
 **From:** Doctor Strange (strategic foresight, RIM)
@@ -101,7 +103,7 @@ I picked five competitors that actually move our positioning, plus two prior-art
 
 ### What RIM has that Slack/Discord/Mattermost don't, today
 
-- A real command palette, shipped, with ~30 commands ([actual_state.md §2](../actual_state.md))
+- A real command palette, shipped, with ~30 commands (`actual_state.md` §2)
 - Chainable macros with pre-validation pass and per-stage results — verified shipped
 - 19 default keybinds, fully user-customizable per workspace, context-aware
 - COMPOSE/NAVIGATE vim-mode anchored to composer focus (j/k nav, r/e/t/p actions) — unique
@@ -274,7 +276,6 @@ This is opinion. You decide; Fury delegates.
 
 - `/home/kuba/RustroverProjects/rim-server/docs/vision.md`
 - `/home/kuba/RustroverProjects/rim-server/docs/competitive-analysis.md`
-- `/home/kuba/RustroverProjects/rim-server/docs/actual_state.md`
 - `/home/kuba/RustroverProjects/rim-server/docs/plugin_model.md`
 - `/home/kuba/RustroverProjects/rim-server/docs/keybind_model.md`
 - `/home/kuba/RustroverProjects/rim-server/docs/design/cli-v1-design-2026-04-22.md`

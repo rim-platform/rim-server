@@ -7,14 +7,12 @@ use chrono::{DateTime, Utc};
 use crate::command::sensitivity::CommandSensitivityDto;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MacroStepDto {
     pub command_id: String,
     pub args: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MacroDto {
     pub id: MacroId,
     pub server_id: ServerId,

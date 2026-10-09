@@ -6,14 +6,6 @@ use rim_core::server::model::ServerId;
 use crate::Actor;
 
 #[derive(Debug, Clone)]
-pub struct BootstrapCmd {
-    pub secret: String,
-    pub username: String,
-    pub password: String,
-    pub server_name: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct LoginCmd {
     pub username: String,
     pub password: String,

@@ -73,28 +73,6 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(model.map(Into::into))
     }
 
-    async fn delete_by_username(&self, username: &str) -> RepoResult<()> {
-        let user = self.find_by_username(username).await?;
-        let Some(user) = user else {
-            return Err(RepoError::new(RepoErrorKind::NotFound));
-        };
-
-        user::Entity::delete_by_id(user.id)
-            .exec(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(())
-    }
-
-    async fn any_users_exist(&self) -> RepoResult<bool> {
-        let model = user::Entity::find()
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(model.is_some())
-    }
-
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User> {
         let model = user::Entity::find_by_id(id)
             .one(&self.db)

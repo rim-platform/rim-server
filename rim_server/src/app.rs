@@ -129,7 +129,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
         raw_db,
-        config.bootstrap_secret.clone(),
         chrono::Duration::days(i64::from(config.session_ttl_days)),
         observers,
         Arc::clone(&storage_service),

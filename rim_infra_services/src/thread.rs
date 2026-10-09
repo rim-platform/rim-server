@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tracing::info;
 
 use rim_services::message_thread::command::{
-    CreateThreadCmd, GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
+    GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
 };
 use rim_services::message_thread::dto::{ThreadDto, ThreadPageCursor};
 use rim_services::message_thread::service::ThreadService;
@@ -11,9 +11,7 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_core::repository::pagination::Page;
 
 use crate::ThreadRepos;
-use crate::util::{
-    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
-};
+use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
 
 #[derive(Clone)]
 pub struct DefaultThreadService {
@@ -77,68 +75,6 @@ impl DefaultThreadService {
 
 #[async_trait]
 impl ThreadService for DefaultThreadService {
-    async fn create_thread(&self, cmd: CreateThreadCmd) -> ServiceResult<ThreadDto> {
-        ensure_conversation_writable(
-            ConversationAccessRepos::from_arcs(
-                &self.repos.server_member_repo,
-                &self.repos.conversation_repo,
-                &self.repos.conversation_member_repo,
-            ),
-            cmd.actor.user_id,
-            cmd.server_id,
-            cmd.conversation_id,
-        )
-        .await?;
-
-        let root_message = self
-            .repos
-            .message_repo
-            .get_by_id(cmd.root_message_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        if root_message.conversation_id != cmd.conversation_id || root_message.thread_id.is_some() {
-            return Err(ServiceError::NotFound);
-        }
-
-        if let Some(existing) = self
-            .repos
-            .message_thread_repo
-            .get_by_root_message(cmd.root_message_id)
-            .await?
-        {
-            return self.to_dto(existing, cmd.server_id).await;
-        }
-
-        let thread = match self
-            .repos
-            .message_thread_repo
-            .create_thread_for_root(cmd.conversation_id, cmd.root_message_id)
-            .await
-        {
-            Ok(thread) => thread,
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    rim_core::repository::error::RepoErrorKind::Conflict
-                ) =>
-            {
-                self.repos
-                    .message_thread_repo
-                    .get_by_root_message(cmd.root_message_id)
-                    .await?
-                    .ok_or(ServiceError::Conflict(
-                        "thread already exists for message".to_string(),
-                    ))?
-            }
-            Err(err) => return Err(ServiceError::from(err)),
-        };
-
-        info!(thread_id = %thread.id, root_message_id = %cmd.root_message_id, "created thread from message");
-
-        self.to_dto(thread, cmd.server_id).await
-    }
-
     async fn get_thread_by_root_message(
         &self,
         query: GetThreadByRootMessageQuery,

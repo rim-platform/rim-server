@@ -92,10 +92,6 @@ impl StorageService for DefaultStorageService {
         Ok(stored)
     }
 
-    async fn download_file(&self, key: &str) -> ServiceResult<Vec<u8>> {
-        self.backend.get(key).await.map_err(map_storage_error)
-    }
-
     async fn delete_file(&self, key: &str) -> ServiceResult<()> {
         tracing::info!(key = %key, "deleting file");
         self.backend.delete(key).await.map_err(map_storage_error)
@@ -140,7 +136,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let backend: Arc<dyn StorageBackend> =
             Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
-        let svc = service(backend, AttachmentUsage::default());
+        let svc = service(Arc::clone(&backend), AttachmentUsage::default());
 
         let stored = svc
             .upload_file("test/hello.txt", b"hello world", "text/plain")
@@ -149,7 +145,7 @@ mod tests {
         assert_eq!(stored.key, "test/hello.txt");
         assert_eq!(stored.size_bytes, 11);
 
-        let data = svc.download_file("test/hello.txt").await.unwrap();
+        let data = backend.get("test/hello.txt").await.unwrap();
         assert_eq!(data, b"hello world");
     }
 
@@ -158,14 +154,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let backend: Arc<dyn StorageBackend> =
             Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
-        let svc = service(backend, AttachmentUsage::default());
+        let svc = service(Arc::clone(&backend), AttachmentUsage::default());
 
         svc.upload_file("to_delete.txt", b"bye", "text/plain")
             .await
             .unwrap();
         svc.delete_file("to_delete.txt").await.unwrap();
 
-        let err = svc.download_file("to_delete.txt").await;
+        let err = backend.get("to_delete.txt").await;
         assert!(err.is_err());
     }
 

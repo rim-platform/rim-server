@@ -7,7 +7,6 @@ use rim_core::user::model::UserId;
 use crate::Actor;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SkillProfileDto {
     pub user_id: UserId,
     pub features_used: HashMap<String, DateTime<Utc>>,

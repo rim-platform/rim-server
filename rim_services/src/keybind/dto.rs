@@ -1,7 +1,6 @@
 use rim_core::keybind::model::{KeybindContext, KeybindId, KeybindScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeybindSourceDto {
     Default,
     User,
@@ -9,7 +8,6 @@ pub enum KeybindSourceDto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeybindScopeDto {
     User,
     Workspace,
@@ -34,7 +32,6 @@ impl From<KeybindScopeDto> for KeybindScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeybindContextDto {
     Global,
     Composer,
@@ -74,7 +71,6 @@ impl From<KeybindContextDto> for KeybindContext {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeybindDto {
     pub id: KeybindId,
     pub scope: KeybindScopeDto,
@@ -88,7 +84,6 @@ pub struct KeybindDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DefaultKeybindDto {
     pub source: KeybindSourceDto,
     pub keystroke: String,
@@ -98,7 +93,6 @@ pub struct DefaultKeybindDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeybindLayersDto {
     pub default_keybind: Option<DefaultKeybindDto>,
     pub user_keybind: Option<KeybindDto>,
@@ -107,7 +101,6 @@ pub struct KeybindLayersDto {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeybindRuntimeSourceDto {
     DeviceLocal,
     Workspace,
@@ -116,7 +109,6 @@ pub enum KeybindRuntimeSourceDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeviceLocalKeybindDto {
     pub keystroke: String,
     pub command_id: String,
@@ -126,7 +118,6 @@ pub struct DeviceLocalKeybindDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EffectiveKeybindDto {
     pub source: KeybindRuntimeSourceDto,
     pub keystroke: String,
@@ -137,7 +128,6 @@ pub struct EffectiveKeybindDto {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RuntimeKeybindLayersDto {
     pub device_local_keybind: Option<DeviceLocalKeybindDto>,
     pub backend_layers: KeybindLayersDto,

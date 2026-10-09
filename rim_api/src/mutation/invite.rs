@@ -49,34 +49,6 @@ impl InviteMutations {
         })
     }
 
-    async fn accept_invite(
-        &self,
-        ctx: &Context<'_>,
-        input: AcceptInviteInput,
-    ) -> Result<AcceptInvitePayload> {
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        let res = auth
-            .accept_invite(AcceptInviteCmd {
-                invite_token: input.invite_token,
-                username: input.username,
-                password: input.password,
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
-            intent.set(AuthIntent::SetSession {
-                session_token: res.session_token,
-                csrf_token: res.csrf_token,
-            });
-        }
-
-        Ok(AcceptInvitePayload {
-            user_id: ID(res.user_id.to_string()),
-            server_id: ID(res.server_id.to_string()),
-        })
-    }
-
     async fn join_server_by_invite(
         &self,
         ctx: &Context<'_>,
@@ -312,19 +284,6 @@ pub struct CreateInviteInput {
 pub struct CreateInvitePayload {
     pub invite_token: String,
     pub invite_id: ID,
-}
-
-#[derive(InputObject)]
-pub struct AcceptInviteInput {
-    pub invite_token: String,
-    pub username: String,
-    pub password: String,
-}
-
-#[derive(SimpleObject)]
-pub struct AcceptInvitePayload {
-    pub user_id: ID,
-    pub server_id: ID,
 }
 
 #[derive(InputObject)]

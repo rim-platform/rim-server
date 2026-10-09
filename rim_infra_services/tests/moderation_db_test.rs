@@ -42,7 +42,6 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
     DefaultAuthService::new(
         repos,
         Some(db),
-        None,
         Duration::days(30),
         Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>),
         Arc::new(rim_infra_services::email::LogEmailSender),
