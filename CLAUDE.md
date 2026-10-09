@@ -52,7 +52,7 @@ cargo test -p rim_api --features e2e-tests -- --test-threads=1
 cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 ```
 
-Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. Plain `cargo test` (without `--workspace`) only runs root package targets.
+Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. The root `Cargo.toml` is a virtual manifest (no root package), so plain `cargo test` at the root runs every member, same as `--workspace`.
 
 ## Architecture
 
