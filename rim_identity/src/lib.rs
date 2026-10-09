@@ -15,11 +15,14 @@
 //!   checked against their [`KeyHistory`].
 //! - [`verify_mls_key`], [`verify_mls_readd`]: a device's MLS signature key and its requests to
 //!   be added to a group again, both signed by its device key.
+//! - [`UnverifiedDeviceRequest`]: a device's signature over one request it sends to a space
+//!   hosted on another server.
 //! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
 //!   and tests use it; the server only relays the sealed bytes.
 
 mod device;
 pub mod device_link;
+mod device_request;
 mod encoding;
 mod error;
 mod key_log;
@@ -37,6 +40,10 @@ pub mod testing;
 pub use device::{
     DeviceCert, DeviceRevocation, MAX_DEVICE_NAME_CHARS, RevocationSigner, UnverifiedRevocation,
     verify_device_cert,
+};
+pub use device_request::{
+    DeviceRequest, MAX_DEVICE_REQUEST_SEQ, UnverifiedDeviceRequest, body_sha256,
+    device_request_payload,
 };
 pub use encoding::{
     Algorithm, PRINCIPAL_ID_PREFIX, PublicKey, is_principal_id, principal_id_for_inception,

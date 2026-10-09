@@ -63,6 +63,7 @@ pub enum Purpose {
     PluginManifest,
     MlsKey,
     MlsReadd,
+    DeviceRequest,
 }
 
 impl Purpose {
@@ -77,6 +78,7 @@ impl Purpose {
             Self::PluginManifest => b"rim.plugin-manifest.v1\0",
             Self::MlsKey => b"rim.mls-key.v1\0",
             Self::MlsReadd => b"rim.mls-readd.v1\0",
+            Self::DeviceRequest => b"rim.device-request.v1\0",
         }
     }
 
