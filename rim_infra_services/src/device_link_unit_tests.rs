@@ -251,7 +251,7 @@ mod tests {
         User {
             id,
             username: format!("user-{id}"),
-            password_hash: "hash".to_string(),
+            password_hash: Some("hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -259,7 +259,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            email: format!("{id}@example.com"),
+            email: Some(format!("{id}@example.com")),
             timezone: None,
             principal_id,
         }

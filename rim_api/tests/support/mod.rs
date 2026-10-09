@@ -159,9 +159,10 @@ impl TestCtx {
         let repo = SeaOrmUserRepository::new(self.db.clone());
         repo.create_user(NewUser {
             username: username.to_string(),
-            password: "$argon2id$v=invalid$test_only".to_string(),
-            email: format!("{}@test.example.com", username.to_lowercase()),
+            password: Some("$argon2id$v=invalid$test_only".to_string()),
+            email: Some(format!("{}@test.example.com", username.to_lowercase())),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("create_user failed")

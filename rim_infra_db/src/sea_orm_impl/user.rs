@@ -50,9 +50,14 @@ impl UserRepository for SeaOrmUserRepository {
         let user = user::ActiveModel {
             id: Set(UserId::new().into()),
             username: Set(user_data.username.to_owned()),
-            password_hash: Set(user_data.password.to_owned()),
-            email: Set(user_data.email.to_owned()),
-            display_name: Set(user_data.display_name.to_owned()),
+            password_hash: Set(user_data.password),
+            email: Set(user_data.email),
+            display_name: Set(user_data.display_name),
+            principal_id: Set(user_data
+                .key_identity
+                .as_ref()
+                .map(|k| k.principal_id.clone())),
+            identity_key: Set(user_data.key_identity.map(|k| k.identity_key)),
             ..Default::default()
         };
         let res = user::Entity::insert(user)
@@ -135,7 +140,7 @@ impl UserRepository for SeaOrmUserRepository {
             .ok_or(RepoError::new(RepoErrorKind::NotFound))?;
 
         let mut active = model.into_active_model();
-        active.password_hash = Set(password_hash);
+        active.password_hash = Set(Some(password_hash));
         active.updated_at = Set(chrono::Utc::now().into());
         active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
