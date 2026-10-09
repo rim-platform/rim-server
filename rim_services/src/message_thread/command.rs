@@ -7,16 +7,6 @@ use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CreateThreadCmd {
-    pub actor: Actor,
-    pub server_id: ServerId,
-    pub conversation_id: ConversationId,
-    pub root_message_id: MessageId,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetThreadQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -25,7 +15,6 @@ pub struct GetThreadQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetThreadByRootMessageQuery {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -34,7 +23,6 @@ pub struct GetThreadByRootMessageQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListThreadsQuery {
     pub actor: Actor,
     pub server_id: ServerId,

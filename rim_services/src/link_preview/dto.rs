@@ -3,7 +3,6 @@ use rim_core::link_preview::model::{LinkPreview, LinkPreviewId};
 use rim_core::message::model::MessageId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinkPreviewDto {
     pub id: LinkPreviewId,
     pub message_id: MessageId,

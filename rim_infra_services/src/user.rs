@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use rim_core::user::model::UpdateProfilePatch;
-use rim_services::user::command::{GetMeQuery, GetUserQuery, UpdateMyProfileCmd};
+use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
 use rim_services::{ServiceError, ServiceResult};
@@ -50,17 +50,6 @@ impl UserService for DefaultUserService {
             .repos
             .user_repo
             .get_by_id(query.actor.user_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        Ok(Self::convert_to_dto(user))
-    }
-
-    async fn get_user(&self, query: GetUserQuery) -> ServiceResult<UserDto> {
-        let user = self
-            .repos
-            .user_repo
-            .get_by_id(query.user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
 

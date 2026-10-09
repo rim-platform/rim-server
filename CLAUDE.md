@@ -52,7 +52,7 @@ cargo test -p rim_api --features e2e-tests -- --test-threads=1
 cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 ```
 
-Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. Plain `cargo test` (without `--workspace`) only runs root package targets.
+Use `-p <crate>` when iterating to avoid rebuilding the entire workspace. The root `Cargo.toml` is a virtual manifest (no root package), so plain `cargo test` at the root runs every member, same as `--workspace`.
 
 ## Architecture
 
@@ -118,7 +118,7 @@ Cross-cutting contracts that define boundaries between layers:
 
 ## Local Dev Environment
 
-Requires `.env` file with: `DATABASE_URL`, `RIM_SERVER_HOST`, `RIM_SERVER_PORT`, `RIM_LOG_LEVEL`. Config loaded via `dotenvy` in `rim_server/src/config.rs`.
+Requires `.env` file with: `DATABASE_URL`, `RIM_SERVER_HOST`, `RIM_SERVER_PORT`; the log filter comes from `RUST_LOG` (default `info`). Config loaded via `dotenvy` in `rim_server/src/config.rs`.
 
 ## GraphQL Schema Export (CRITICAL for frontend codegen)
 

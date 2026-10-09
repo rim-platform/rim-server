@@ -1,7 +1,7 @@
 # Track B3 — Email Delivery (implementation spec)
 
 **Author:** iron-man · **Implementer:** hulk · **Requested by:** nick-fury
-**Priority:** third in Track B. **Prereq:** `track-b-dbtests-loud-skip-fix.md`.
+**Priority:** third in Track B. **Prereq:** `track-b-dbtests-loud-skip-fix.md` (done: db-tests panic without `DATABASE_URL`; spec deleted 2026-10-09).
 **Scope:** reliable **transactional** SMTP send wired to password reset, invites, and incident
 notification. **No digest engine** — that is an explicit follow-up (§9).
 

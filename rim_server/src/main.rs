@@ -15,8 +15,8 @@ fn initialize() -> Option<LoggingHandle> {
     // audit-log background appender alive (P4-A1 §0.5 sink). Dropping it
     // would silently drop pending audit lines.
     let handle = init_tracing_json().ok();
-    log::info!("Initializing application...");
-    log::info!("Initializing DB");
+    tracing::info!("Initializing application...");
+    tracing::info!("Initializing DB");
     handle
 }
 

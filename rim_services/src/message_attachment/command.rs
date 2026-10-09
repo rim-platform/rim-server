@@ -5,7 +5,6 @@ use rim_core::message_attachment::model::MessageAttachmentId;
 use rim_core::server::model::ServerId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreateAttachmentCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -19,7 +18,6 @@ pub struct CreateAttachmentCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FinalizeAttachmentCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -27,7 +25,6 @@ pub struct FinalizeAttachmentCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeleteAttachmentCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -35,7 +32,6 @@ pub struct DeleteAttachmentCmd {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetAttachmentQuery {
     pub actor: Actor,
     pub server_id: ServerId,

@@ -6,7 +6,6 @@ use rim_core::user::model::UserId;
 use rim_core::conversation::model::ConversationType;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConversationDto {
     pub id: ConversationId,
     pub server_id: ServerId,
@@ -39,7 +38,6 @@ impl ConversationDto {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InboxPageCursor {
     pub last_activity_at: chrono::DateTime<chrono::Utc>,
     pub conversation_id: ConversationId,
@@ -64,7 +62,6 @@ impl From<InboxPageCursor> for ConversationActivityCursor {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChannelPageCursor {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub conversation_id: ConversationId,

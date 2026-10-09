@@ -24,7 +24,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::user::model::UserId;
     use rim_services::message_thread::command::{
-        CreateThreadCmd, GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
+        GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
     };
     use rim_services::message_thread::service::ThreadService;
     use rim_services::{Actor, ServiceError};
@@ -124,10 +124,6 @@ mod tests {
                 conversation_id: ConversationId,
                 user_id: UserId,
             ) -> RepoResult<()>;
-            async fn get_members_for_conversation(
-                &self,
-                conversation_id: ConversationId,
-            ) -> RepoResult<Vec<ConversationMember>>;
             async fn is_member(
                 &self,
                 conversation_id: ConversationId,
@@ -188,17 +184,11 @@ mod tests {
                 &self,
                 message_ids: &[MessageId],
             ) -> RepoResult<std::collections::HashMap<MessageId, MessageThreadId>>;
-            async fn create_thread(&self, conversation_id: ConversationId) -> RepoResult<MessageThread>;
             async fn create_thread_for_root(
                 &self,
                 conversation_id: ConversationId,
                 message_id: MessageId,
             ) -> RepoResult<MessageThread>;
-            async fn set_first_message(
-                &self,
-                thread_id: MessageThreadId,
-                message_id: MessageId,
-            ) -> RepoResult<()>;
             async fn touch_last_message_at(
                 &self,
                 thread_id: MessageThreadId,
@@ -309,87 +299,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
-    }
-
-    #[tokio::test]
-    async fn create_thread_creates_or_returns_existing_thread_for_timeline_message() {
-        let actor_id = UserId::new();
-        let server_id = ServerId::new();
-        let conv = conversation(server_id);
-        let conv_id = conv.id;
-        let root_message_id = MessageId::new();
-        let root_message = Message {
-            id: root_message_id,
-            conversation_id: conv_id,
-            thread_id: None,
-            sent_by: actor_id,
-            text: Some("root".to_string()),
-            has_attachments: false,
-            parent_message_id: None,
-            forwarded_from_message_id: None,
-            is_deleted: false,
-            sent_at: chrono::Utc::now(),
-        };
-        let created_thread = thread(conv_id);
-
-        let mut conversation_repo = MockConversationRepository::new();
-        let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
-
-        let mut message_repo = MockMessageRepository::new();
-        let root_for_repo = root_message.clone();
-        message_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(root_for_repo.clone())));
-
-        let mut message_thread_repo = MockMessageThreadRepository::new();
-        message_thread_repo
-            .expect_get_by_root_message()
-            .return_once(move |_mid| Ok(None));
-        let thread_for_create = created_thread.clone();
-        message_thread_repo
-            .expect_create_thread_for_root()
-            .return_once(move |_cid, _mid| Ok(thread_for_create.clone()));
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let svc = DefaultThreadService::new(ThreadRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_thread_repo: Arc::new(message_thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
-
-        let dto = svc
-            .create_thread(CreateThreadCmd {
-                actor: Actor::new(actor_id),
-                server_id,
-                conversation_id: conv_id,
-                root_message_id,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(dto.id, created_thread.id);
-        assert_eq!(dto.root_message_id, created_thread.first_message_id);
     }
 
     #[tokio::test]

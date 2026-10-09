@@ -454,7 +454,6 @@ pub fn build_test_provider(
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
         &repos,
         raw_db,
-        None, // no bootstrap secret needed for registration tests
         chrono::Duration::days(30),
         observers.clone(),
         Arc::clone(&storage_service),

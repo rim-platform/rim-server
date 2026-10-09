@@ -14,7 +14,6 @@ use crate::command::verb::TypedVerb;
 /// field is now this typed enum. Conversion to/from `String` happens only
 /// at the repo boundary via `as_str()` / `TryFrom<&str>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AuditOutcome {
     Success,
     Error,
@@ -75,7 +74,6 @@ impl TryFrom<&str> for AuditOutcome {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AuditLogEntryDto {
     pub id: Uuid,
     pub actor_user_id: Uuid,
@@ -109,7 +107,6 @@ pub struct AuditLogEntryDto {
 }
 
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListAuditLogQuery {
     pub actor_user_id: Option<Uuid>,
     pub server_id: Option<Uuid>,
@@ -123,14 +120,12 @@ pub struct ListAuditLogQuery {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AuditLogPageInfo {
     pub has_next_page: bool,
     pub has_prev_page: bool,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AuditLogPage {
     pub items: Vec<AuditLogEntryDto>,
     /// Cursor pointing after the last item in this page.

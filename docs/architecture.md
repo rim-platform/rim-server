@@ -277,15 +277,10 @@ The intended final runtime precedence is:
 
 ### Platform Primitives
 
-The system also has early platform foundations for:
-
-- actions
-- events
-- capabilities
-- integrations
-- settings
-
-These exist as skeletons today and will deepen in later phases.
+Of the early platform foundations, only capabilities remain: the `capabilities` query lists the
+static catalogue, and the capability registry backs the runtime gate. The hardcoded `actions`,
+`events`, `integrations` and `settings` stubs were removed; actions are commands, events are the
+workspace event stream, and integrations and settings will get real models when they are built.
 
 ## Commands, Keybinds, Plugins, and Context
 

@@ -5,7 +5,6 @@ use crate::Actor;
 use crate::pipeline::dto::{PipelineActionDto, PipelineFilterDto, PipelineTriggerDto};
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreatePipelineCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -18,7 +17,6 @@ pub struct CreatePipelineCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UpdatePipelineCmd {
     pub actor: Actor,
     pub pipeline_id: PipelineId,
@@ -31,14 +29,12 @@ pub struct UpdatePipelineCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeletePipelineCmd {
     pub actor: Actor,
     pub pipeline_id: PipelineId,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListPipelinesCmd {
     pub actor: Actor,
     pub server_id: ServerId,
@@ -46,7 +42,6 @@ pub struct ListPipelinesCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TogglePipelineCmd {
     pub actor: Actor,
     pub pipeline_id: PipelineId,

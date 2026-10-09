@@ -6,7 +6,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreadDto {
     pub id: MessageThreadId,
     pub server_id: ServerId,
@@ -21,7 +20,6 @@ pub struct ThreadDto {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreadPageCursor {
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub thread_id: MessageThreadId,

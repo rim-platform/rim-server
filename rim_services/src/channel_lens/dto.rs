@@ -7,7 +7,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChannelLensDto {
     pub id: ChannelLensId,
     pub server_id: ServerId,
@@ -37,7 +36,6 @@ impl From<ChannelLens> for ChannelLensDto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FilterSpecDto {
     pub conditions: Vec<FilterConditionDto>,
     pub logic: FilterLogicDto,
@@ -62,7 +60,6 @@ impl From<FilterSpecDto> for FilterSpec {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FilterConditionDto {
     pub field: FilterFieldDto,
     pub op: FilterOpDto,
@@ -90,7 +87,6 @@ impl From<FilterConditionDto> for FilterCondition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FilterFieldDto {
     HasLinks,
     AuthorId,
@@ -124,7 +120,6 @@ impl From<FilterFieldDto> for FilterField {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FilterOpDto {
     Eq,
     In,
@@ -152,7 +147,6 @@ impl From<FilterOpDto> for FilterOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FilterLogicDto {
     And,
     Or,

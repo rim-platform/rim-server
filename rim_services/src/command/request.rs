@@ -4,7 +4,6 @@ use crate::command::dto::{CommandContextDto, CommandSurfaceDto, UserCommandStepD
 use crate::command::initiator::CommandInitiator;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ListCommandsQuery {
     pub actor: Actor,
     pub context: Option<CommandContextDto>,
@@ -12,14 +11,12 @@ pub struct ListCommandsQuery {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GetCommandQuery {
     pub actor: Actor,
     pub command_id: String,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExecuteCommandCmd {
     pub actor: Actor,
     pub command_id: String,
@@ -52,7 +49,6 @@ pub struct ExecuteCommandCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CreateUserCommandCmd {
     pub actor: Actor,
     pub command_key: String,
@@ -62,7 +58,6 @@ pub struct CreateUserCommandCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UpdateUserCommandCmd {
     pub actor: Actor,
     pub command_id: String,
@@ -73,7 +68,6 @@ pub struct UpdateUserCommandCmd {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeleteUserCommandCmd {
     pub actor: Actor,
     pub command_id: String,

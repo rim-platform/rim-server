@@ -6,7 +6,7 @@ that merges the plugin platform and decentralization into five stages. Supersede
 `docs/decisions/decentralization-2026-10-08.md` for the key-identity decentralization
 decision, `docs/decisions/post-quantum-hybrid-2026-10-09.md` for hybrid post-quantum crypto,
 `docs/decisions/relay-proxied-workspaces-2026-10-09.md` for workspace traffic through the
-user's relay, and `docs/next-steps-2026-10-04.md` for the 2026-10-04 state of both repositories.
+user's relay, and "Where We Are Now" below for the state of both repositories.
 The shipped-state ledger is at the end._
 
 ## Strategic Thesis — 2026-10-04

@@ -4,7 +4,6 @@ use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CustomEmojiDto {
     pub id: CustomEmojiId,
     pub server_id: ServerId,

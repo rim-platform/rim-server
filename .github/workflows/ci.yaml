@@ -26,9 +26,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Clippy (feature-gated test code)
-        # Lints the test code behind db-tests/infra-db-tests/e2e-tests, which the step above
-        # doesn't compile. --all-features is intentionally NOT used: it also enables the
-        # unrelated `serde` feature on rim_core/rim_services, which doesn't currently compile.
+        # Lints the test code behind db-tests/infra-db-tests/e2e-tests. The plain run above is
+        # not redundant: code that only feature-gated tests call is dead (and warned about)
+        # only when the features are off, which is how the server itself is built.
         run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
 
   test_and_coverage:
