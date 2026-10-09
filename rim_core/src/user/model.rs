@@ -7,7 +7,8 @@ model_id!(UserId);
 pub struct User {
     pub id: UserId,
     pub username: String,
-    pub password_hash: String,
+    /// Argon2 hash of the password; `None` for a key-only account, which has never had one.
+    pub password_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_login_at: Option<DateTime<Utc>>,
@@ -15,8 +16,9 @@ pub struct User {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
-    /// Lowercased, trimmed email address. NOT NULL at the DB layer.
-    pub email: String,
+    /// Lowercased, trimmed email address; `None` for a key-only account. Anything that emails
+    /// users skips an account without one.
+    pub email: Option<String>,
     /// IANA timezone name (e.g. `"America/Chicago"`), validated on write. Display/defaulting
     /// only — see `docs/oncall.md`: rotation handoff math lives on the on-call **schedule's**
     /// timezone, never the user's.
@@ -29,12 +31,27 @@ pub struct User {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUser {
     pub username: String,
-    pub password: String,
+    /// Argon2 hash of the password; `None` for a key-only account, which must then carry
+    /// `key_identity` (the database refuses a row with neither).
+    pub password: Option<String>,
     /// Lowercased, trimmed email address. The repository stores this directly;
-    /// callers must normalise before constructing this struct.
-    pub email: String,
+    /// callers must normalise before constructing this struct. `None` for a key-only account.
+    pub email: Option<String>,
     /// Optional display name. When `None`, the service layer falls back to `username`.
     pub display_name: Option<String>,
+    /// The key identity the account is created with (key-only signup); `None` for a password
+    /// account, which may enroll one later.
+    pub key_identity: Option<NewUserKeyIdentity>,
+}
+
+/// The key identity a key-only account is created with. Its key log is stored separately,
+/// through `KeyIdentityRepository::insert_key_log`, in the same transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUserKeyIdentity {
+    /// `rimp1_...`, derived from the log's inception.
+    pub principal_id: String,
+    /// The current identity key (the log head's) in tagged form.
+    pub identity_key: String,
 }
 
 #[derive(Debug, Clone, Default)]

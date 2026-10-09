@@ -60,6 +60,16 @@ pub struct RevokeInviteCmd {
     pub invite_id: rim_core::auth::model::InviteId,
 }
 
+/// The registration token a signup presents in invite-only mode, by kind. Each kind is
+/// checked and consumed the way its password signup does it: a bootstrap token or an instance
+/// invite creates an account with no workspace; a workspace invite also joins its server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignupToken {
+    Bootstrap(String),
+    InstanceInvite(String),
+    WorkspaceInvite(String),
+}
+
 /// Command for signing up with a bootstrap token.
 #[derive(Debug, Clone)]
 pub struct SignupWithBootstrapCmd {

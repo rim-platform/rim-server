@@ -76,9 +76,10 @@ async fn who_is_on_call_matches_pure_resolver() {
     let owner = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "owner".to_string(),
-            password: "hash".to_string(),
-            email: "owner@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("owner@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();
@@ -93,27 +94,30 @@ async fn who_is_on_call_matches_pure_resolver() {
     let u1 = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "u1".to_string(),
-            password: "hash".to_string(),
-            email: "u1@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("u1@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();
     let u2 = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "u2".to_string(),
-            password: "hash".to_string(),
-            email: "u2@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("u2@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();
     let override_user = user_repo
         .create_user(rim_core::user::model::NewUser {
             username: "override_user".to_string(),
-            password: "hash".to_string(),
-            email: "overrideuser@example.com".to_string(),
+            password: Some("hash".to_string()),
+            email: Some("overrideuser@example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .unwrap();

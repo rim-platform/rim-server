@@ -12,18 +12,23 @@ use async_graphql::Request;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use chrono::Utc;
 use rim_api::auth_context::RemoteIp;
 use rim_auth::password::hash_password;
-use rim_core::auth::repository::SessionRepository;
-use rim_core::user::model::NewUser;
+use rim_core::auth::repository::{BootstrapTokenRepository, SessionRepository};
+use rim_core::server::repository::ServerRepository;
+use rim_core::user::model::{NewUser, UserId};
 use rim_core::user::repository::UserRepository;
-use rim_identity::testing::{TestIdentity, device_login, signing_key};
+use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
 use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
+use rim_infra_db::sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository;
+use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::registration::seed_bootstrap_token;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
 const PASSWORD: &str = "correct horse battery";
@@ -53,6 +58,9 @@ query { myKeyIdentity { principalId keySeq devices { deviceId revokedAt } } }"#;
 
 const KEY_LOG: &str = r#"
 query KeyLog($principalId: String!) { keyLog(principalId: $principalId) { seq kind statement { payload } } }"#;
+
+const SIGNUP_WITH_KEY: &str = r#"
+mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId serverId } }"#;
 
 const PASSWORD_LOGIN: &str = r#"
 mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
@@ -87,9 +95,10 @@ async fn enroll_login_revoke(version: StatementVersion) {
     let user = users
         .create_user(NewUser {
             username: "ada".to_string(),
-            password: hash_password(PASSWORD).expect("hash"),
-            email: "ada@test.example.com".to_string(),
+            password: Some(hash_password(PASSWORD).expect("hash")),
+            email: Some("ada@test.example.com".to_string()),
             display_name: None,
+            key_identity: None,
         })
         .await
         .expect("create_user");
@@ -257,4 +266,196 @@ async fn my_key_identity_before_enrollment() {
         exec_err_code(&schema, anonymous_request(MY_KEY_IDENTITY, json!({}))).await,
         "UNAUTHENTICATED"
     );
+}
+
+/// A device's signed proof over a fresh challenge from `schema`.
+async fn fresh_proof(
+    schema: &rim_api::AppSchema,
+    device: &SigningKey,
+    state: &KeyState,
+    device_id: Uuid,
+) -> SignedStatement {
+    let challenge = exec_ok(schema, anonymous_request(CHALLENGE, json!({}))).await;
+    let challenge = &challenge["keyLoginChallenge"];
+    device_login(
+        device,
+        state,
+        device_id,
+        challenge["challengeId"]
+            .as_str()
+            .expect("challengeId")
+            .parse()
+            .expect("uuid"),
+        challenge["nonce"].as_str().expect("nonce"),
+        KEY_LOGIN_AUDIENCE,
+    )
+}
+
+/// `signupWithKey` for `username`, with a new device of `id` and a fresh proof; `extra` adds
+/// input fields (a token).
+async fn signup_request(
+    schema: &rim_api::AppSchema,
+    username: &str,
+    id: &TestIdentity,
+    device_seed: u8,
+    extra: Value,
+) -> Request {
+    let inception = id.inception();
+    let state = KeyState::from_inception(&inception).expect("inception");
+    let device_id = Uuid::now_v7();
+    let device = signing_key(device_seed);
+    let cert = id.device_cert(&state, device_id, &device, "Laptop");
+    let proof = fresh_proof(schema, &device, &state, device_id).await;
+    let mut input = json!({
+        "username": username,
+        "keyLog": [statement(&inception)],
+        "device": statement(&cert),
+        "proof": statement(&proof),
+    });
+    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
+        input.extend(extra.clone());
+    }
+    anonymous_request(SIGNUP_WITH_KEY, json!({ "input": input }))
+        .data(RemoteIp::new("198.51.100.7"))
+}
+
+/// Open mode: an account is created from a version 2 key identity alone. It signs in with its
+/// device key; no password signs in to it.
+#[tokio::test]
+async fn open_signup_with_key_then_key_login_and_no_password() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::Open).await;
+
+    let id = TestIdentity::with_version(3, StatementVersion::V2);
+    let inception = id.inception();
+    let state = KeyState::from_inception(&inception).expect("inception");
+    let device_id = Uuid::now_v7();
+    let device = signing_key(23);
+    let cert = id.device_cert(&state, device_id, &device, "Laptop");
+    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    let data = exec_ok(
+        &schema,
+        anonymous_request(
+            SIGNUP_WITH_KEY,
+            json!({ "input": {
+                "username": "keyada",
+                "displayName": "  Ada  ",
+                "keyLog": [statement(&inception)],
+                "device": statement(&cert),
+                "proof": statement(&proof),
+            } }),
+        )
+        .data(RemoteIp::new("198.51.100.7")),
+    )
+    .await;
+    assert!(data["signupWithKey"]["serverId"].is_null());
+    let user_id: UserId = data["signupWithKey"]["userId"]
+        .as_str()
+        .expect("userId")
+        .parse::<Uuid>()
+        .expect("uuid")
+        .into();
+
+    let user = SeaOrmUserRepository::new(ctx.db.clone())
+        .get_by_id(user_id)
+        .await
+        .expect("get user")
+        .expect("user");
+    assert_eq!(user.password_hash, None);
+    assert_eq!(user.email, None);
+    assert_eq!(user.display_name.as_deref(), Some("Ada"));
+    assert_eq!(
+        user.principal_id.as_deref(),
+        Some(state.principal_id.as_str())
+    );
+
+    // The device signs in with a new challenge.
+    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    let data = exec_ok(
+        &schema,
+        anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(&proof) }))
+            .data(RemoteIp::new("198.51.100.1")),
+    )
+    .await;
+    assert_eq!(data["loginWithKey"]["userId"], json!(user_id.to_string()));
+
+    // No password signs in to a key-only account.
+    assert_eq!(
+        exec_err_code(&schema, password_login("keyada")).await,
+        "UNAUTHENTICATED"
+    );
+}
+
+/// Invite-only mode with a bootstrap token: the token is consumed and the account starts with
+/// no workspace, as for `signupWithInvite`.
+#[tokio::test]
+async fn invite_only_signup_with_key_and_bootstrap_token() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let raw_token = "test_bootstrap_token_key_signup_abcdefgh";
+    let token_id = seed_bootstrap_token(
+        &ctx.db,
+        raw_token,
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    let id = TestIdentity::with_version(4, StatementVersion::V2);
+
+    // Without a token, invite-only mode refuses.
+    let request = signup_request(&schema, "admin", &id, 24, json!({})).await;
+    assert_eq!(exec_err_code(&schema, request).await, "VALIDATION");
+
+    let request = signup_request(
+        &schema,
+        "admin",
+        &id,
+        24,
+        json!({ "bootstrapToken": raw_token }),
+    )
+    .await;
+    let data = exec_ok(&schema, request).await;
+    assert!(data["signupWithKey"]["serverId"].is_null());
+    let user_id: UserId = data["signupWithKey"]["userId"]
+        .as_str()
+        .expect("userId")
+        .parse::<Uuid>()
+        .expect("uuid")
+        .into();
+
+    let token = SeaOrmBootstrapTokenRepository::new(ctx.db.clone())
+        .get_by_id(token_id)
+        .await
+        .expect("get token")
+        .expect("token");
+    assert!(token.used_at.is_some());
+    assert_eq!(token.consumed_by_user_id, Some(user_id));
+
+    let user = SeaOrmUserRepository::new(ctx.db.clone())
+        .get_by_id(user_id)
+        .await
+        .expect("get user")
+        .expect("user");
+    assert_eq!(user.password_hash, None);
+    assert_eq!(user.email, None);
+    assert!(user.principal_id.is_some());
+
+    let servers = SeaOrmServerRepository::new(ctx.db.clone())
+        .get_servers_for_user(user_id)
+        .await
+        .expect("list memberships");
+    assert!(servers.is_empty(), "bootstrap signup joins no workspace");
+}
+
+/// A second account may not take a principal id another account here holds.
+#[tokio::test]
+async fn second_signup_with_the_same_principal_is_a_conflict() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::Open).await;
+    let id = TestIdentity::with_version(5, StatementVersion::V2);
+
+    let request = signup_request(&schema, "first", &id, 25, json!({})).await;
+    exec_ok(&schema, request).await;
+    // The same identity, from another device, under another username.
+    let request = signup_request(&schema, "second", &id, 26, json!({})).await;
+    assert_eq!(exec_err_code(&schema, request).await, "CONFLICT");
 }

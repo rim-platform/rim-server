@@ -178,9 +178,32 @@ impl TestCtx {
         let repo = SeaOrmUserRepository::new(self.db.clone());
         repo.create_user(rim_core::user::model::NewUser {
             username: username.to_string(),
-            password: "test_hash".to_string(),
-            email: format!("{}@test.example.com", username.to_lowercase()),
+            password: Some("test_hash".to_string()),
+            email: Some(format!("{}@test.example.com", username.to_lowercase())),
             display_name: None,
+            key_identity: None,
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Create a key-only account: no password, no email, `principal_id` and a stand-in
+    /// identity key set (key-only signup).
+    pub async fn create_key_only_user(
+        &self,
+        username: &str,
+        principal_id: &str,
+    ) -> rim_core::user::model::User {
+        let repo = SeaOrmUserRepository::new(self.db.clone());
+        repo.create_user(rim_core::user::model::NewUser {
+            username: username.to_string(),
+            password: None,
+            email: None,
+            display_name: None,
+            key_identity: Some(rim_core::user::model::NewUserKeyIdentity {
+                principal_id: principal_id.to_string(),
+                identity_key: format!("ed25519:{principal_id}"),
+            }),
         })
         .await
         .unwrap()

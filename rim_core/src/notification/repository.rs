@@ -115,7 +115,8 @@ pub trait NotificationRepository: Send + Sync {
     /// Users with a digest frequency other than `off` whose oldest unread, un-emailed
     /// notification is at least one digest interval old (hourly: created at or before
     /// `hourly_cutoff`; daily: at or before `daily_cutoff`) and whose last digest, if any, is at
-    /// least as old. One row per `(user, workspace)`.
+    /// least as old. One row per `(user, workspace)`. Users without an email address (key-only
+    /// accounts) are left out: there is nowhere to send their digest.
     async fn list_digest_candidates(
         &self,
         hourly_cutoff: DateTime<Utc>,

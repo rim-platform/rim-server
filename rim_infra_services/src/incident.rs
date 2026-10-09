@@ -206,8 +206,12 @@ impl DefaultIncidentService {
         );
 
         for owner in owners {
+            // A key-only account has no email address to write to.
+            let Some(email) = owner.email.as_deref() else {
+                continue;
+            };
             let message = crate::email::templates::incident_declared(
-                &owner.email,
+                email,
                 &severity_label,
                 &incident.title,
                 &link,
@@ -458,8 +462,12 @@ impl DefaultIncidentService {
                         )
                     });
                     for user in users {
+                        // A key-only account has no email address to write to.
+                        let Some(email) = user.email.as_deref() else {
+                            continue;
+                        };
                         let message = crate::email::templates::escalation_step(
-                            &user.email,
+                            email,
                             &severity_label,
                             &incident.title,
                             link.as_deref(),

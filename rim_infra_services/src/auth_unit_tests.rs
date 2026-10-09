@@ -120,7 +120,7 @@ mod tests {
         User {
             id,
             username: username.to_string(),
-            password_hash: "hash".to_string(),
+            password_hash: Some("hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -128,7 +128,7 @@ mod tests {
             avatar_url: None,
             status_text: None,
             bio: None,
-            email: format!("{}@local.invalid", username.to_lowercase()),
+            email: Some(format!("{}@local.invalid", username.to_lowercase())),
             timezone: None,
             principal_id: None,
         }
@@ -628,7 +628,7 @@ mod tests {
             Ok(Some(User {
                 id: existing_user_id,
                 username: "taken".to_string(),
-                password_hash: "hash".to_string(),
+                password_hash: Some("hash".to_string()),
                 created_at: now,
                 updated_at: now,
                 last_login_at: Some(now),
@@ -636,7 +636,7 @@ mod tests {
                 avatar_url: None,
                 status_text: None,
                 bio: None,
-                email: "taken@local.invalid".to_string(),
+                email: Some("taken@local.invalid".to_string()),
                 timezone: None,
                 principal_id: None,
             }))
@@ -2074,7 +2074,8 @@ mod tests {
             .returning(move |new: NewUser| {
                 // Verify normalisation happened before the repo is called.
                 assert_eq!(
-                    new.email, "foo@bar.com",
+                    new.email.as_deref(),
+                    Some("foo@bar.com"),
                     "email must be lowercased and trimmed"
                 );
                 assert_eq!(
@@ -2618,7 +2619,7 @@ mod tests {
     async fn login_succeeds_and_successes_do_not_count_against_account_limit() {
         let user_id = UserId::new();
         let mut user = make_user(user_id, "alice");
-        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+        user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
 
         let mut user_repo = MockUserRepository::new();
         user_repo
@@ -2667,6 +2668,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn login_to_a_key_only_account_is_refused_like_a_wrong_password() {
+        let user_id = UserId::new();
+        let user = User {
+            password_hash: None,
+            email: None,
+            principal_id: Some("rimp1_keyonly".to_string()),
+            ..make_user(user_id, "keyonly")
+        };
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .returning(move |_| Ok(Some(user.clone())));
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_create_session().never();
+
+        // A per-(IP, username) failure limit of 1: the refusal is counted as a failed login,
+        // exactly like a wrong password, so the next attempt is throttled before any lookup.
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 10),
+            RegistrationRateLimiter::new(900, 1),
+            RegistrationRateLimiter::new(3600, 10),
+        );
+        let err = svc
+            .login(login_cmd("keyonly", "any-password", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        let err = svc
+            .login(login_cmd("keyonly", "any-password", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
     }
 
     #[tokio::test]
@@ -2781,7 +2820,7 @@ mod tests {
     async fn login_pair_limit_locks_out_the_guesser_not_the_owner() {
         let user_id = UserId::new();
         let mut user = make_user(user_id, "victim");
-        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+        user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
 
         let mut user_repo = MockUserRepository::new();
         // Two guesses from the attacker, one attempt on another account from the same
@@ -2927,7 +2966,7 @@ mod tests {
     /// username is unknown.
     fn victim_login_mocks(user_id: UserId) -> (MockUserRepository, MockSessionRepository) {
         let mut user = make_user(user_id, "victim");
-        user.password_hash = rim_auth::password::hash_password("correct-horse").unwrap();
+        user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
         let mut user_repo = MockUserRepository::new();
         // Exact match, like the real repository: usernames are case-sensitive.
         user_repo
@@ -3051,9 +3090,9 @@ mod tests {
     #[tokio::test]
     async fn login_to_a_case_variant_account_does_not_exempt_the_other() {
         let mut victim = make_user(UserId::new(), "alice");
-        victim.password_hash = rim_auth::password::hash_password("victim-pass").unwrap();
+        victim.password_hash = Some(rim_auth::password::hash_password("victim-pass").unwrap());
         let mut attacker = make_user(UserId::new(), "Alice");
-        attacker.password_hash = rim_auth::password::hash_password("attacker-pass").unwrap();
+        attacker.password_hash = Some(rim_auth::password::hash_password("attacker-pass").unwrap());
 
         let mut user_repo = MockUserRepository::new();
         user_repo

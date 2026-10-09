@@ -1,14 +1,13 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use regex::Regex;
 use sea_orm::DatabaseConnection;
 use std::sync::OnceLock;
 use tracing::{info, instrument, warn};
 
-use rim_auth::csrf::generate_csrf_token;
 use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
-use rim_core::auth::model::{NewInstanceInvite, NewInvite, NewSession};
+use rim_core::auth::model::{NewInstanceInvite, NewInvite};
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
@@ -32,6 +31,7 @@ use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
+use crate::signup;
 use crate::url_encode::percent_encode_path_segment;
 use crate::util::{add_workspace_member, ensure_not_banned, ensure_server_owner};
 
@@ -131,6 +131,13 @@ impl DefaultAuthService {
         self
     }
 
+    /// Use `limiter` for open-mode signups, so other signup paths (key-only signup) can share
+    /// one per-IP budget with the password signup.
+    pub(crate) fn with_signup_rate_limiter(mut self, limiter: RegistrationRateLimiter) -> Self {
+        self.signup_rate_limiter = limiter;
+        self
+    }
+
     /// Share the store of recent successful login sources, so other services (password
     /// reset) can forget an account's sources.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
@@ -183,26 +190,6 @@ impl DefaultAuthService {
         Ok(())
     }
 
-    fn validate_username(username: &str) -> ServiceResult<()> {
-        let trimmed = username.trim();
-        let len = trimmed.len();
-        if !(3..=32).contains(&len) {
-            return Err(ServiceError::Validation(
-                "username must be between 3 and 32 characters".to_string(),
-            ));
-        }
-        if !trimmed
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(ServiceError::Validation(
-                "username may only contain alphanumeric characters, underscores, or hyphens"
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Validate and normalise an email address.
     ///
     /// Trims outer whitespace, lowercases, checks the pragmatic regex from spec
@@ -235,50 +222,6 @@ impl DefaultAuthService {
             return Err(ServiceError::Validation("invalid email".to_string()));
         }
         Ok(trimmed.to_lowercase())
-    }
-
-    /// Normalise an optional display name, falling back to `username` when
-    /// absent or blank after trim.
-    ///
-    /// Length of a non-empty (post-trim) value is capped at 80 characters per
-    /// spec §13.3. An 81-character value returns a `Validation` error.
-    ///
-    /// # Errors
-    /// - `ServiceError::Validation("display name length")` if the trimmed value
-    ///   is non-empty and its length exceeds 80 characters.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let name = DefaultAuthService::normalize_display_name(None, "alice")?;
-    /// assert_eq!(name, "alice");
-    ///
-    /// let name = DefaultAuthService::normalize_display_name(Some("   "), "alice")?;
-    /// assert_eq!(name, "alice");
-    ///
-    /// let name = DefaultAuthService::normalize_display_name(Some("Alice Smith"), "alice")?;
-    /// assert_eq!(name, "Alice Smith");
-    /// ```
-    pub(crate) fn normalize_display_name(
-        input: Option<&str>,
-        username: &str,
-    ) -> ServiceResult<String> {
-        match input {
-            None => Ok(username.to_string()),
-            Some(raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Ok(username.to_string());
-                }
-                if trimmed.len() > 80 {
-                    return Err(ServiceError::Validation("display name length".to_string()));
-                }
-                Ok(trimmed.to_string())
-            }
-        }
-    }
-
-    fn new_csrf_token(session_token: &str) -> String {
-        generate_csrf_token(session_token)
     }
 
     fn to_invite_dto(inv: rim_core::auth::model::Invite) -> InviteDto {
@@ -322,7 +265,21 @@ impl DefaultAuthService {
             return Err(ServiceError::Unauthenticated);
         };
 
-        let ok = verify_password(password, &user.password_hash).map_err(ServiceError::internal)?;
+        // A key-only account has no password: pay the same Argon2 cost as a wrong password,
+        // so neither the answer nor its timing tells it apart.
+        let Some(password_hash) = user.password_hash.as_deref() else {
+            verify_dummy_password(password).map_err(ServiceError::internal)?;
+            tracing::info!(
+                target = "audit",
+                event = "login_failure",
+                user_id = %user.id,
+                username = %username,
+                reason = "key_only_account",
+                "login attempt failed: account has no password"
+            );
+            return Err(ServiceError::Unauthenticated);
+        };
+        let ok = verify_password(password, password_hash).map_err(ServiceError::internal)?;
         if !ok {
             // H4 audit: wrong password.
             tracing::info!(
@@ -403,30 +360,19 @@ impl DefaultAuthService {
         user_agent: Option<String>,
         ip: Option<String>,
     ) -> ServiceResult<(rim_core::auth::model::Session, String, String)> {
-        let raw_token = generate_session_token();
-        let token_hash = hash_token(&raw_token);
-        let expires_at: DateTime<Utc> = Utc::now() + session_ttl;
-        let sess = repos
-            .session_repo
-            .create_session(NewSession {
-                user_id,
-                token_hash,
-                expires_at,
-                user_agent,
-                ip,
-            })
-            .await?;
-
-        let csrf = Self::new_csrf_token(&raw_token);
-        Ok((sess, raw_token, csrf))
+        signup::create_session(
+            repos.session_repo.as_ref(),
+            session_ttl,
+            user_id,
+            user_agent,
+            ip,
+        )
+        .await
     }
 
-    /// Create a new user inside an open transaction.
-    ///
-    /// Checks username uniqueness, then email uniqueness (case-insensitive),
-    /// before inserting. The `email` must already be normalised (lowercased,
-    /// trimmed) by the caller. `display_name` is stored as-is (the fallback to
-    /// username must be resolved before this call).
+    /// Create a password account inside an open transaction (see [`signup::create_user`]).
+    /// The `email` must already be normalised (lowercased, trimmed) by the caller, and
+    /// `display_name` resolved.
     ///
     /// # Errors
     /// - `ServiceError::Conflict` — username already taken.
@@ -439,45 +385,17 @@ impl DefaultAuthService {
         email: &str,
         display_name: Option<String>,
     ) -> ServiceResult<rim_core::user::model::User> {
-        if repos.user_repo.find_by_username(username).await?.is_some() {
-            return Err(ServiceError::Conflict(
-                "username already exists".to_string(),
-            ));
-        }
-
-        if repos.user_repo.find_by_email(email).await?.is_some() {
-            // H4 audit: log email-taken attempts so operators can detect
-            // enumeration attacks or signup bot activity.
-            tracing::info!(
-                target = "audit",
-                event = "email_taken_attempt",
-                email = %email,
-                username = %username,
-                "signup rejected: email already in use"
-            );
-            return Err(ServiceError::EmailTaken);
-        }
-
-        let user = repos
-            .user_repo
-            .create_user(rim_core::user::model::NewUser {
+        signup::create_user(
+            repos.user_repo.as_ref(),
+            rim_core::user::model::NewUser {
                 username: username.to_string(),
-                password: password_hash,
-                email: email.to_string(),
+                password: Some(password_hash),
+                email: Some(email.to_string()),
                 display_name,
-            })
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("unique") || msg.contains("duplicate") {
-                    return rim_core::repository::error::RepoError::new(
-                        rim_core::repository::error::RepoErrorKind::Conflict,
-                    );
-                }
-                e
-            })?;
-
-        Ok(user)
+                key_identity: None,
+            },
+        )
+        .await
     }
 
     /// Ensure the actor is an Owner on at least one server (instance-invite gate).
@@ -699,25 +617,13 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let (invite_token, username, password) =
             (invite_token.as_str(), username.as_str(), password.as_str());
-        Self::validate_username(username)?;
+        signup::validate_username(username)?;
         Self::validate_password(password)?;
 
-        let token_hash = hash_token(invite_token);
-        let inv = self
-            .repos
-            .invite_repo
-            .get_by_token_hash(&token_hash)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        if inv.revoked_at.is_some() {
-            return Err(ServiceError::PermissionDenied);
-        }
-        if let Some(expires_at) = inv.expires_at
-            && expires_at < Utc::now()
-        {
-            return Err(ServiceError::PermissionDenied);
-        }
+        let inv =
+            signup::check_workspace_invite(self.repos.invite_repo.as_ref(), invite_token).await?;
+        let server_id = inv.server_id;
+        let token = signup::CheckedToken::WorkspaceInvite(inv);
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
@@ -750,9 +656,10 @@ impl AuthService for DefaultAuthService {
             .user_repo
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
-                password: password_hash,
-                email: format!("{}@local.invalid", username.to_lowercase()),
+                password: Some(password_hash),
+                email: Some(format!("{}@local.invalid", username.to_lowercase())),
                 display_name: None,
+                key_identity: None,
             })
             .await
             .map_err(|e| {
@@ -765,65 +672,21 @@ impl AuthService for DefaultAuthService {
                 e
             })?;
 
-        // A brand-new account cannot carry a ban yet; checked anyway so every join path
-        // refuses banned users the same way (Track 1.2).
-        ensure_not_banned(repos.moderation_repo.as_ref(), inv.server_id, user.id).await?;
-        let _member = add_workspace_member(
-            repos.server_member_repo.as_ref(),
-            repos.conversation_repo.as_ref(),
-            repos.conversation_member_repo.as_ref(),
-            inv.server_id,
-            user.id,
-            inv.role,
-        )
-        .await?;
+        // Joins the server, then consumes the invite; a failure rolls the transaction back.
+        signup::claim_token(&repos.signup_repos(), &token, user.id).await?;
 
-        let consumed = repos.invite_repo.try_consume(inv.id).await?;
-        if !consumed {
-            // Don't leak whether it's exhausted vs missing.
-            // Transaction is dropped → rolled back automatically.
-            return Err(ServiceError::PermissionDenied);
-        }
-
-        let raw_token = generate_session_token();
-        let token_hash = hash_token(&raw_token);
-        let expires_at: DateTime<Utc> = Utc::now() + self.session_ttl;
-        let sess = repos
-            .session_repo
-            .create_session(NewSession {
-                user_id: user.id,
-                token_hash,
-                expires_at,
-                user_agent: None,
-                ip: None,
-            })
-            .await?;
+        let (sess, raw_token, csrf) =
+            Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
 
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        self.observers.emit(WorkspaceEvent::MemberJoined {
-            workspace_id: inv.server_id,
-            user_id: user.id,
-            username: username.to_string(),
-        });
-
-        // H4 audit: workspace-invite signup success.
-        tracing::info!(
-            target = "audit",
-            event = "accept_invite_success",
-            user_id = %user.id,
-            invite_id = %inv.id,
-            server_id = %inv.server_id,
-            "user created via workspace invite"
-        );
-
-        let csrf = Self::new_csrf_token(&raw_token);
+        signup::announce_claimed(&token, user.id, username, &self.observers);
 
         Ok(AcceptInviteResultDto {
             user_id: user.id,
-            server_id: inv.server_id,
+            server_id,
             session: Self::to_session_dto(&sess),
             session_token: raw_token,
             csrf_token: csrf,
@@ -994,27 +857,16 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
-        Self::validate_username(username)?;
+        signup::validate_username(username)?;
         Self::validate_password(password)?;
         let email = Self::validate_email(&email)?;
         let resolved_display_name =
-            Self::normalize_display_name(display_name.as_deref(), username)?;
+            signup::normalize_display_name(display_name.as_deref(), username)?;
 
-        let token_hash = hash_token(&raw_token);
-        let token = self
-            .repos
-            .bootstrap_token_repo
-            .get_by_token_hash(&token_hash)
-            .await?
-            .ok_or(ServiceError::InvalidToken)?;
-
-        // Indistinguishable: consumed and revoked both map to InvalidToken (§4.5).
-        if token.used_at.is_some() || token.revoked_at.is_some() {
-            return Err(ServiceError::InvalidToken);
-        }
-        if token.expires_at < Utc::now() {
-            return Err(ServiceError::ExpiredToken);
-        }
+        let token = signup::CheckedToken::Bootstrap(
+            signup::check_bootstrap_token(self.repos.bootstrap_token_repo.as_ref(), &raw_token)
+                .await?,
+        );
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
@@ -1041,24 +893,9 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
 
-        // Atomic try-mark: eliminates the double-spend race (C1 hardening).
-        // If another concurrent request already consumed the token between our
-        // pre-check and this UPDATE, rows_affected == 0 → return InvalidToken
-        // and roll back the transaction.
-        let claimed = txn_repos
-            .bootstrap_token_repo
-            .try_mark_used(token.id, user.id)
-            .await?;
-        if !claimed {
-            // Rollback is automatic when `scope` is dropped without commit.
-            tracing::info!(
-                target = "audit",
-                event = "bootstrap_token_double_spend_rejected",
-                bootstrap_token_id = %token.id,
-                "bootstrap token already consumed by concurrent request"
-            );
-            return Err(ServiceError::InvalidToken);
-        }
+        // Atomic try-mark: a token another request consumed since the pre-check is
+        // `InvalidToken`, and the transaction rolls back when `scope` is dropped.
+        signup::claim_token(&txn_repos.signup_repos(), &token, user.id).await?;
 
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
@@ -1067,15 +904,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        tracing::info!(
-            target = "audit",
-            event = "bootstrap_token_consumed",
-            bootstrap_token_id = %token.id,
-            consumed_by_user_id = %user.id,
-            "bootstrap token consumed"
-        );
-
-        info!(user_id = %user.id, "user created via bootstrap token");
+        signup::announce_claimed(&token, user.id, username, &self.observers);
 
         Ok(SignupResultDto {
             user_id: user.id,
@@ -1100,26 +929,16 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
-        Self::validate_username(username)?;
+        signup::validate_username(username)?;
         Self::validate_password(password)?;
         let email = Self::validate_email(&email)?;
         let resolved_display_name =
-            Self::normalize_display_name(display_name.as_deref(), username)?;
+            signup::normalize_display_name(display_name.as_deref(), username)?;
 
-        let token_hash = hash_token(&raw_token);
-        let invite = self
-            .repos
-            .instance_invite_repo
-            .get_by_token_hash(&token_hash)
-            .await?
-            .ok_or(ServiceError::InvalidToken)?;
-
-        if invite.revoked_at.is_some() {
-            return Err(ServiceError::InvalidToken);
-        }
-        if invite.expires_at < Utc::now() {
-            return Err(ServiceError::ExpiredToken);
-        }
+        let token = signup::CheckedToken::InstanceInvite(
+            signup::check_instance_invite(self.repos.instance_invite_repo.as_ref(), &raw_token)
+                .await?,
+        );
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 
@@ -1146,14 +965,8 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
 
-        let consumed = txn_repos
-            .instance_invite_repo
-            .try_consume(invite.id)
-            .await?;
-        if !consumed {
-            // Exhausted since we last checked — treat as invalid.
-            return Err(ServiceError::InvalidToken);
-        }
+        // An invite used up since the pre-check is `InvalidToken`.
+        signup::claim_token(&txn_repos.signup_repos(), &token, user.id).await?;
 
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
@@ -1162,15 +975,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        tracing::info!(
-            target = "audit",
-            event = "instance_invite_consumed",
-            instance_invite_id = %invite.id,
-            consumed_by_user_id = %user.id,
-            "instance invite consumed"
-        );
-
-        info!(user_id = %user.id, "user created via instance invite");
+        signup::announce_claimed(&token, user.id, username, &self.observers);
 
         Ok(SignupResultDto {
             user_id: user.id,
@@ -1193,31 +998,13 @@ impl AuthService for DefaultAuthService {
         let (username, password) = (username.as_str(), password.as_str());
 
         // Rate limit check (§4.4).
-        let decision = self
-            .signup_rate_limiter
-            .check_and_record(&remote_ip, "signup", Utc::now());
-        if let rim_services::command::rate_limit::RateLimitDecision::Limited {
-            retry_after_seconds,
-        } = decision
-        {
-            // H4 audit: rate-limited signup attempts for operator visibility.
-            tracing::info!(
-                target = "audit",
-                event = "signup_rate_limited",
-                remote_ip = %remote_ip,
-                retry_after_seconds = %retry_after_seconds,
-                "open-mode signup rate limited"
-            );
-            return Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            });
-        }
+        signup::check_open_signup_rate(&self.signup_rate_limiter, &remote_ip)?;
 
-        Self::validate_username(username)?;
+        signup::validate_username(username)?;
         Self::validate_password(password)?;
         let email = Self::validate_email(&email)?;
         let resolved_display_name =
-            Self::normalize_display_name(display_name.as_deref(), username)?;
+            signup::normalize_display_name(display_name.as_deref(), username)?;
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 

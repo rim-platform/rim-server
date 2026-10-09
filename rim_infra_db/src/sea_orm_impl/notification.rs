@@ -385,6 +385,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         let daily_cutoff: DateTimeWithTimeZone = daily_cutoff.into();
         // `pending` aggregates unread, un-emailed rows; `last` is the newest `emailed_at` (the
         // previous digest) per user and workspace. The cutoff is the frequency's interval.
+        // Users without an email address (key-only accounts) are never candidates.
         let rows = self
             .db
             .query_all_raw(Statement::from_sql_and_values(
@@ -412,6 +413,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
                    JOIN server srv ON srv.id = s.server_id
                    LEFT JOIN last l ON l.user_id = s.user_id AND l.server_id = s.server_id
                    WHERE s.digest <> 'off'
+                     AND u.email IS NOT NULL
                      AND p.oldest_pending_at <= CASE s.digest WHEN 'hourly' THEN $1 ELSE $2 END
                      AND (l.last_digest_at IS NULL
                           OR l.last_digest_at <= CASE s.digest WHEN 'hourly' THEN $1 ELSE $2 END)

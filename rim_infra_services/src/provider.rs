@@ -102,6 +102,9 @@ impl DefaultAppServiceProvider {
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
+        // Shared so password and key-only signups count against one open-mode budget per IP.
+        let signup_rate_limiter =
+            crate::registration_rate_limiter::RegistrationRateLimiter::signup_default();
         let auth_service: Arc<dyn AuthService> = Arc::new(
             crate::auth::DefaultAuthService::new(
                 repos.for_auth(),
@@ -111,7 +114,8 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&email_sender),
                 public_base_url.clone(),
             )
-            .with_known_login_sources(known_login_sources.clone()),
+            .with_known_login_sources(known_login_sources.clone())
+            .with_signup_rate_limiter(signup_rate_limiter.clone()),
         );
         let key_auth_service: Arc<dyn KeyAuthService> =
             Arc::new(crate::key_auth::DefaultKeyAuthService::new(
@@ -119,6 +123,8 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 session_ttl,
                 key_login_audiences,
+                observers.clone(),
+                signup_rate_limiter,
             ));
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
