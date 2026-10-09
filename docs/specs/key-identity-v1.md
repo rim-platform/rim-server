@@ -162,6 +162,15 @@ Every later entry is a **rotation**:
   fine: a certificate is checked once, when the device is added).
 - `"signer": "recovery"`: signed by the current recovery key. The recovery key may change.
   This is how a person who lost their identity key gets back in.
+- In every entry the identity key differs from the recovery key, and an entry with a field this
+  section does not name is refused, by servers and clients alike.
+
+**Key log head pinning (clients).** A client keeps, per principal, the `seq` and payload hash of
+the head of the longest log it verified. The first log it verifies for a principal pins its head;
+a log served later must contain the pinned entry at its `seq` (the same payload hash), and the
+pin then moves to the new head. A log that is shorter, or that holds another entry at the pinned
+`seq`, is refused: the client says the person's identity changed in a way RIM cannot verify, and
+treats that principal's devices as unverified.
 
 ### Device certificate
 
@@ -170,7 +179,9 @@ Every later entry is a **rotation**:
 ```
 
 Signed by the identity key at `keySeq`, which must be the head of the log when the server
-receives it. `deviceId` is chosen by the client (UUID v7 recommended). `name` is trimmed, 1 to
+receives it. Clients accept a certificate at an older `keySeq` (devices stay enrolled across
+identity rotations) unless a recovery rotation follows that `keySeq`: a recovery voids what the
+lost key signed, as for plugin manifests. `deviceId` is chosen by the client (UUID v7 recommended). `name` is trimmed, 1 to
 64 characters, no control characters. Per account, a `deviceId` and a `deviceKey` are each used
 once, **revoked devices included**: a revoked device comes back only with a new id and key. A
 key counts as used whichever version spelled it.
@@ -183,7 +194,10 @@ key counts as used whichever version spelled it.
 
 `"signer": "identity"` (current identity key, any device) or `"signer": "device"` (the device
 being revoked signs its own retirement, so a device can sign itself out for good without the
-identity key). Revoking is idempotent: the first signed revocation is kept.
+identity key). Revoking is idempotent: the first signed revocation is kept. Clients verify a
+revocation the server lists (by an identity key of the log, the one current when it was signed,
+or by the revoked device's own key) and remember a device seen revoked, so a server that later
+omits the revocation changes nothing on that client.
 
 ### Profile card
 
