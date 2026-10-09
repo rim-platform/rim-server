@@ -74,7 +74,7 @@ pub struct HostEventFields<'a> {
     pub issued_at: &'a str,
 }
 
-/// The payload text of a host event, in the order the specification prints it.
+/// The payload text of a host event, in its fixed field order.
 pub fn host_event_payload(fields: &HostEventFields<'_>) -> String {
     let seq = fields
         .seq
@@ -239,7 +239,7 @@ mod tests {
         }
     }
 
-    /// A.5, built through the payload builder.
+    /// The known-answer host event, built through the payload builder.
     #[test]
     fn a5_host_event_vector() {
         let signed = sign_host_event(
@@ -262,7 +262,7 @@ mod tests {
         );
     }
 
-    /// A.6's response, built through the payload builder.
+    /// The known-answer host response, built through the payload builder.
     #[test]
     fn a6_host_response_vector() {
         let request = r#"{"v":2,"type":"device-request","principalId":"rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0","deviceId":"00000000-0000-0000-0000-000000000001","host":"rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw","method":"POST","path":"/api","seq":1791504000000000,"bodySha256":"a2PtmXdQU8dMqDduw8cQymbwEmFEilShfZfDDArTcwU","issuedAt":"2026-10-09T00:00:00Z"}"#;

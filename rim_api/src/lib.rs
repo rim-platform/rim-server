@@ -14,6 +14,7 @@ pub mod auth_context;
 pub mod auth_intent;
 pub mod broadcast;
 pub mod errors;
+// pub: rim_server injects the FederationContext and runs forwarded GraphQL with its checks.
 pub mod federation;
 pub mod graphql;
 pub mod ids;

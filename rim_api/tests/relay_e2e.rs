@@ -346,11 +346,16 @@ fn verify_item(host: &Node, item: &Value) -> Item {
 
 /// Sign up `name` on `node` with a key, publish a card naming the node, and upload key packages.
 async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
+    sign_up_with_card(node, name, seed, 1).await
+}
+
+/// [`sign_up`] publishing card `card_version`. A seed is one person with one device everywhere.
+async fn sign_up_with_card(node: &Node, name: &str, seed: u8, card_version: u64) -> Person {
     let http = reqwest::Client::new();
     let identity = TestIdentity::with_version(seed, StatementVersion::V2);
     let inception = identity.inception();
     let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
+    let device_id = Uuid::from_u128(0x1000 + u128::from(seed));
     let device_key = signing_key(seed.wrapping_add(50));
     let cert = identity.device_cert(&state, device_id, &device_key, "Desktop");
     let challenge: Value = http
@@ -414,7 +419,9 @@ async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
         state,
         seq: 1_791_504_000_000_000 + u64::from(seed) * 1_000_000_000,
     };
-    person.publish_card(1, &[node.origin.as_str()]).await;
+    person
+        .publish_card(card_version, &[node.origin.as_str()])
+        .await;
     let packages = vec![
         person.mls.key_package(false),
         person.mls.key_package(false),
@@ -1169,6 +1176,68 @@ async fn relay_and_host_roles_refuse_what_they_do_not_run() {
 
     host.stop().await;
     relay.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_it() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    alice.start_dm(&bob, &b, false).await;
+    bob.pending_request(&alice).await;
+    let remote = user_id(&a, &bob.principal()).await;
+    let row = |node: &Node, id: UserId| {
+        let db = node.db.clone();
+        async move {
+            let row = db
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    r#"SELECT kind, username, (SELECT count(*) FROM server_member m
+                         JOIN server s ON s.id = m.server_id AND s.kind = 'direct'
+                         WHERE m.user_id = u.id) AS direct
+                       FROM "user" u WHERE id = $1"#,
+                    [Uuid::from(id).into()],
+                ))
+                .await
+                .expect("query")
+                .expect("row");
+            (
+                row.try_get::<String>("", "kind").expect("kind"),
+                row.try_get::<String>("", "username").expect("username"),
+                row.try_get::<i64>("", "direct").expect("direct"),
+            )
+        }
+    };
+    let (kind, username, direct) = row(&a, remote).await;
+    assert_eq!(kind, "remote");
+    assert!(username.starts_with("r_"));
+    assert_eq!(direct, 1);
+
+    // Bob signs up on Alice's relay with the same key and device: the row becomes his.
+    sign_up_with_card(&a, "bobby", 2, 2).await;
+    assert_eq!(user_id(&a, &bob.principal()).await, remote);
+    assert_eq!(
+        row(&a, remote).await,
+        ("local".to_string(), "bobby".to_string(), 1)
+    );
+
+    // Leaving his own relay deletes his requests and contacts there.
+    bob.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": alice.principal(), "r": [a.origin] }),
+    )
+    .await;
+    let left = bob.ok("mutation { leaveRelay }", json!({})).await;
+    assert_eq!(left["leaveRelay"], json!(true));
+    assert_eq!(
+        bob.ok("query { contacts { principalId } }", json!({}))
+            .await["contacts"],
+        json!([])
+    );
+    assert_eq!(bob.ok(REQUESTS, json!({})).await["dmRequests"], json!([]));
+
+    a.stop().await;
+    b.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

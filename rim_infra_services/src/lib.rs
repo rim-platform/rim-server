@@ -19,6 +19,8 @@ pub mod email;
 // above.
 pub mod escalation;
 pub mod file_storage;
+// pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
+// writer and sender tasks.
 pub mod host;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
@@ -48,6 +50,7 @@ pub mod presence;
 pub(crate) mod provider;
 pub(crate) mod read_state;
 pub mod registration_rate_limiter;
+// pub: the composition root (rim_server/src/app.rs) builds DefaultRelayService.
 pub mod relay;
 pub(crate) mod repos;
 pub(crate) mod request_auth;

@@ -34,18 +34,27 @@ impl ServerRepository for SeaOrmServerRepository {
     }
 
     async fn create_server(&self, name: &str) -> RepoResult<Server> {
+        // Only the columns a workspace sets; `kind` keeps its default and is not read back.
+        let id = ServerId::new();
+        let now = chrono::Utc::now();
         let new_server = server::ActiveModel {
-            id: Set(ServerId::new().into()),
+            id: Set(id.into()),
             name: Set(name.to_owned()),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
             ..Default::default()
         };
-
-        let new_server = server::Entity::insert(new_server)
-            .exec_with_returning(&self.db)
+        server::Entity::insert(new_server)
+            .exec_without_returning(&self.db)
             .await
             .map_err(map_db_err)?;
 
-        Ok(new_server.into())
+        Ok(Server {
+            id,
+            name: name.to_owned(),
+            created_at: now,
+            updated_at: now,
+        })
     }
 
     async fn find_by_name(&self, name: &str) -> RepoResult<Option<Server>> {
