@@ -346,6 +346,9 @@ pub fn build_test_provider(
         key_challenge_repo: Arc::new(
             rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyChallengeRepository::new(db.clone()),
         ),
+        device_link_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(db.clone()),
+        ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
