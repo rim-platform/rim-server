@@ -41,6 +41,7 @@ impl DefaultServerMemberService {
             member_role: member.member_role,
             joined_at: member.joined_at,
             timeout_until,
+            principal_id: user.principal_id.clone(),
         }
     }
 
