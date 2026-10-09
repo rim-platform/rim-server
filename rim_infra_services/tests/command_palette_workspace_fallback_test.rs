@@ -257,6 +257,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
                     member_role: rim_core::server_member::model::ServerMemberRole::Member,
                     joined_at: chrono::Utc::now(),
                     timeout_until: None,
+                    principal_id: None,
                 }])
             })
         });
