@@ -4,7 +4,9 @@ _Rebuilt 2026-10-04 after Jakub reset the direction; updated 2026-10-08 with the
 that merges the plugin platform and decentralization into five stages. Supersedes the
 2026-07-08 roadmap (incident wedge). See `docs/vision.md` for product principles,
 `docs/decisions/decentralization-2026-10-08.md` for the key-identity decentralization
-decision, and `docs/next-steps-2026-10-04.md` for the 2026-10-04 state of both repositories.
+decision, `docs/decisions/post-quantum-hybrid-2026-10-09.md` for hybrid post-quantum crypto,
+`docs/decisions/relay-proxied-workspaces-2026-10-09.md` for workspace traffic through the
+user's relay, and `docs/next-steps-2026-10-04.md` for the 2026-10-04 state of both repositories.
 The shipped-state ledger is at the end._
 
 ## Strategic Thesis — 2026-10-04
@@ -249,7 +251,9 @@ both encryption and relays depend on them.
    _Server foundation in progress:_ the `rim_identity` crate, key columns and tables,
    enrollment, device add and revoke, identity rotation and recovery, profile cards and
    challenge login (`docs/specs/key-identity-v1.md`). Still to come: key-only signup, QR
-   linking, the recovery phrase and the client.
+   linking, the recovery phrase, the client, and algorithm-agile key and signature formats so
+   an identity can later rotate to a hybrid Ed25519 + ML-DSA key
+   (`docs/decisions/post-quantum-hybrid-2026-10-09.md`).
 3. **E2EE v1 with MLS** (XL, Stage 4): OpenMLS on the Tauri side for DMs and private groups;
    channels stay plaintext. Every server feature that reads text gets a client replacement in
    encrypted conversations; plugins read messages only through the client message service under
@@ -257,17 +261,27 @@ both encryption and relays depend on them.
    notify, attachments are encrypted on the client, and the server accepts one MLS commit per
    epoch so racing commits cannot fork a group. MLS group state is never backed up: a new
    device joins each group fresh and reads older history from the 7.1 archive. Message
-   franking for reports is designed at the start of this stage.
+   franking for reports is designed at the start of this stage. Key agreement uses a hybrid
+   X25519 + ML-KEM-768 suite.
 4. **Relays and workspace hosts** (XL, Stage 5, three steps): rim-server gains relay and
    workspace-host roles and a signed server-to-server HTTP API (HTTP Message Signatures with
    replay protection and rotatable server keys); GraphQL stays the client contract.
    - **7.4a** Cross-server DMs and the request inbox.
-   - **7.4b** Remote workspace members and a client that talks to several hosts.
+   - **7.4b** Remote workspace members: the user's relay subscribes to each workspace host
+     with a delegation the user's device signed and forwards traffic both ways, so the client
+     keeps one endpoint.
    - **7.4c** The public relay `relay.rim.chat` with its runbook and abuse policy, where
      registering a key needs proof-of-work or an invite.
 
-   Clients connect directly to each workspace host for workspace traffic; relays carry only
-   DMs, the request inbox, profile cards and MLS key packages, never channel messages.
+   The client keeps one GraphQL endpoint and one WebSocket, to its own relay; the relay is an
+   untrusted courier for all its users' traffic, workspace traffic included. Every write
+   carries the user's device signature and is forwarded unchanged, the host signs its events
+   and the client verifies them against the host key pinned from the invite, and the host stays
+   the only authority and sequencer. Hosts accept any relay by default, with an optional
+   allow-list. A direct connection to a host is the fallback when the relay is unreachable.
+   Stage 5 ships after Stage 4, so DMs and private groups are ciphertext on relays; plaintext
+   channels are readable by the relay while queued. See
+   `docs/decisions/relay-proxied-workspaces-2026-10-09.md`.
 
 ### Architecture guardrails (apply from today)
 
@@ -366,6 +380,7 @@ and run it, which a decentralized product depends on more than a hosted one.
 | First run and docs | One first-run path that grows per stage: install a plugin (1), choose a drive (2), create a key and write down the phrase (3), pick a relay (5). Docs: plugin guide (1), self-host guide (2), all specs in `docs/specs/` | Every stage |
 | Testing | Plugin conformance suite (1); golden files for the archive format (2); crypto test vectors and an outside review (3, 4); a two-server docker compose test in CI (5); a version-skew test of a new client against the previous server release (from 3) | Per stage |
 | Open source and public specs | Others must be able to run rim-server and build clients, so the plugin protocol, archive format, profile card and server-to-server API are published specs. rim-ui and rim-cli need a license before anyone outside can run them (rim-server is Apache-2.0) | Before the first public release |
+| Post-quantum (hybrid) | Classical plus post-quantum together, never post-quantum alone: X25519 + ML-KEM-768 (FIPS 203) for MLS key agreement; Ed25519 + ML-DSA-44 (FIPS 204) for identity and device keys, profile cards, login proofs, MLS credentials and server-to-server signatures. Stage 3 formats carry an algorithm tag and room for multi-kilobyte keys and signatures. See `docs/decisions/post-quantum-hybrid-2026-10-09.md` | Formats in Stage 3, key agreement in Stage 4, signatures after Stage 4 |
 | Mobile | Out of scope; PWA after Stage 3 (Track 1.5); the cache and MLS code is a Rust crate a future Tauri mobile build can reuse | After Stage 3 |
 | rim-cli (Track 3.5) | `rim send`, `search`, `watch`, `macro run` with a host-local token; doubles as the GraphQL contract test | Side lane, any time |
 
@@ -460,9 +475,9 @@ Decision 1 (go on the first PRs) was answered "go" on 2026-10-08.
 | 15 | Mobile: PWA after Stage 3, or native later? | PWA / native | PWA |
 
 Still open from the decentralization design, none blocking before Stage 5: whether relays
-delete messages once the drive has them, whether a host accepts any relay or only approved
-ones, Matrix interop, and whether losing phrase, drive and devices together is an acceptable
-total loss (the plan assumes yes). The 2026-10-04 open decisions not listed above are
+delete messages once the drive has them, Matrix interop, and whether losing phrase, drive and
+devices together is an acceptable total loss (the plan assumes yes). A host accepts any relay
+by default, with an optional allow-list (decided 2026-10-09). The 2026-10-04 open decisions not listed above are
 settled: the master plan adopts sandboxed iframes for web plugins and DMs plus private groups
 for E2EE v1, Jakub confirmed the decentralization model (see the decision record), and the
 four-role ladder shipped in 1.2.

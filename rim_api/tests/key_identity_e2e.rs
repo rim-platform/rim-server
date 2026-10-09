@@ -18,7 +18,7 @@ use rim_core::auth::repository::SessionRepository;
 use rim_core::user::model::NewUser;
 use rim_core::user::repository::UserRepository;
 use rim_identity::testing::{TestIdentity, device_login, signing_key};
-use rim_identity::{KeyState, SignedStatement};
+use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
@@ -34,7 +34,7 @@ mutation Enroll($input: EnrollIdentityKeyInput!) {
     principalId
     keySeq
     keyLog { seq kind statement { payload signature } }
-    devices { deviceId name keySeq revokedAt }
+    devices { deviceId publicKey name keySeq revokedAt }
   }
 }"#;
 
@@ -69,9 +69,19 @@ fn password_login(username: &str) -> Request {
 }
 
 /// Enroll a password account, sign in with the device key, revoke the device, and check that
-/// the password and the revoked device no longer sign in.
+/// the password and the revoked device no longer sign in. Every statement is version 1.
 #[tokio::test]
 async fn enroll_then_key_login_then_revoke() {
+    enroll_login_revoke(StatementVersion::V1).await;
+}
+
+/// The same flow with version 2 statements: tagged keys and signatures.
+#[tokio::test]
+async fn enroll_then_key_login_then_revoke_v2() {
+    enroll_login_revoke(StatementVersion::V2).await;
+}
+
+async fn enroll_login_revoke(version: StatementVersion) {
     let ctx = TestCtx::new().await;
     let users = SeaOrmUserRepository::new(ctx.db.clone());
     let user = users
@@ -92,7 +102,7 @@ async fn enroll_then_key_login_then_revoke() {
     // The password signs in before enrollment.
     exec_ok(&schema, password_login("ada")).await;
 
-    let id = TestIdentity::new(1);
+    let id = TestIdentity::with_version(1, version);
     let inception = id.inception();
     let state = KeyState::from_inception(&inception).expect("inception");
     let device_id = Uuid::now_v7();
@@ -137,6 +147,16 @@ async fn enroll_then_key_login_then_revoke() {
     assert_eq!(
         enrolled["devices"][0]["deviceId"],
         json!(device_id.to_string())
+    );
+    // The API returns the device key tagged, whichever version certified it.
+    assert_eq!(
+        enrolled["devices"][0]["publicKey"],
+        json!(PublicKey::from(&device).to_string())
+    );
+    assert!(
+        enrolled["devices"][0]["publicKey"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("ed25519:"))
     );
 
     // The password no longer signs in.

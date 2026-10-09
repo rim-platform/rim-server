@@ -136,6 +136,7 @@ impl KeyIdentityRepository for SeaOrmKeyIdentityRepository {
             user_id: Set(device.user_id.into()),
             device_id: Set(device.device_id),
             public_key: Set(device.public_key),
+            key_hash: Set(device.key_hash),
             name: Set(device.name),
             cert_payload: Set(device.cert_payload),
             cert_signature: Set(device.cert_signature),

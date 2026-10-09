@@ -7,11 +7,11 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    #[sea_orm(unique_key = "uq_device_key_user_public_key")]
+    #[sea_orm(unique_key = "uq_device_key_user_key_hash")]
     pub user_id: Uuid,
     #[sea_orm(unique_key = "uq_device_key_user_device")]
     pub device_id: Uuid,
-    #[sea_orm(column_type = "Text", unique_key = "uq_device_key_user_public_key")]
+    #[sea_orm(column_type = "Text")]
     pub public_key: String,
     #[sea_orm(column_type = "Text")]
     pub name: String,
@@ -27,6 +27,11 @@ pub struct Model {
     pub revocation_payload: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub revocation_signature: Option<String>,
+    #[sea_orm(
+        column_type = "VarBinary(StringLen::None)",
+        unique_key = "uq_device_key_user_key_hash"
+    )]
+    pub key_hash: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
