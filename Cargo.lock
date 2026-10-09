@@ -4842,6 +4842,7 @@ dependencies = [
  "rim_core",
  "rim_identity",
  "rim_infra_db",
+ "rim_s2s",
  "rim_services",
  "scraper",
  "sea-orm",
@@ -4849,9 +4850,11 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

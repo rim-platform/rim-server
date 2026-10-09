@@ -20,6 +20,9 @@ serde = { version = "1", features = ["derive"] }
 uuid = { version = "1.19.0", features = ["v4", "v7"] }
 sea-orm = "2.0.0-rc.20"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+url = "2.5"
+thiserror = "2.0.17"
+rim_s2s = { path = "../rim_s2s" }
 scraper = "0.22"
 regex = "1"
 base64 = "0.22.1"
