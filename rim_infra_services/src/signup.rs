@@ -50,7 +50,12 @@ pub(crate) enum CheckedToken {
     WorkspaceInvite(Invite),
 }
 
-/// Check a username: 3 to 32 characters after trimming, ASCII letters, digits, `_` and `-`.
+/// Prefix reserved for people from other servers held here as remote users; local signups
+/// may not use it, in either case.
+pub(crate) const REMOTE_USERNAME_PREFIX: &str = "r_";
+
+/// Check a username: 3 to 32 characters after trimming, ASCII letters, digits, `_` and `-`,
+/// not starting with the remote users' `r_` prefix.
 ///
 /// # Errors
 /// `Validation` naming the rule that failed.
@@ -70,6 +75,14 @@ pub(crate) fn validate_username(username: &str) -> ServiceResult<()> {
             "username may only contain alphanumeric characters, underscores, or hyphens"
                 .to_string(),
         ));
+    }
+    if trimmed
+        .get(..REMOTE_USERNAME_PREFIX.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(REMOTE_USERNAME_PREFIX))
+    {
+        return Err(ServiceError::Validation(format!(
+            "usernames starting with {REMOTE_USERNAME_PREFIX} are reserved for people from other servers"
+        )));
     }
     Ok(())
 }
@@ -509,6 +522,17 @@ mod tests {
             validate_username("ali ce"),
             Err(ServiceError::Validation(_))
         ));
+        for reserved in ["r_alice", "R_alice", " r_x1 "] {
+            assert!(
+                matches!(
+                    validate_username(reserved),
+                    Err(ServiceError::Validation(_))
+                ),
+                "{reserved}"
+            );
+        }
+        assert!(validate_username("ra_alice").is_ok());
+        assert!(validate_username("r-alice").is_ok());
     }
 
     #[test]

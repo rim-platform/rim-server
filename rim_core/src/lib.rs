@@ -31,6 +31,7 @@ pub mod password_reset;
 pub mod pipeline;
 pub mod principal;
 pub mod repository;
+pub mod s2s;
 pub mod server;
 pub mod server_member;
 pub mod skill_profile;

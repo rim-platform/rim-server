@@ -174,6 +174,20 @@ impl PublicKey {
         sha256(self.to_string().as_bytes())
     }
 
+    /// Check a raw signature (no tag, no base64) over `message`, in this key's algorithm, with
+    /// the strict checks. For signature formats that carry the algorithm elsewhere, such as an
+    /// HTTP message signature's `alg` parameter.
+    pub fn verify_bytes(&self, message: &[u8], signature: &[u8]) -> IdentityResult<()> {
+        let signature = match self.0 {
+            KeyMaterial::Ed25519(_) => Signature::Ed25519(ed25519_dalek::Signature::from_bytes(
+                signature
+                    .try_into()
+                    .map_err(|_| IdentityError::BadEncoding("signature"))?,
+            )),
+        };
+        self.verify(message, &signature)
+    }
+
     /// Check `signature` over `message` with the strict checks that reject malleable
     /// signatures and small-order keys.
     pub(crate) fn verify(&self, message: &[u8], signature: &Signature) -> IdentityResult<()> {
@@ -380,6 +394,22 @@ mod tests {
         assert_eq!(
             Signature::decode_for(V1, &sig.encode_for(V1), &key),
             Ok(sig)
+        );
+    }
+
+    #[test]
+    fn verify_bytes_checks_raw_signatures_strictly() {
+        use ed25519_dalek::Signer;
+        let signing = SigningKey::from_bytes(&[7; 32]);
+        let sig = signing.sign(b"message").to_bytes();
+        assert_eq!(key().verify_bytes(b"message", &sig), Ok(()));
+        assert_eq!(
+            key().verify_bytes(b"other", &sig),
+            Err(IdentityError::BadSignature)
+        );
+        assert_eq!(
+            key().verify_bytes(b"message", &sig[..63]),
+            Err(IdentityError::BadEncoding("signature"))
         );
     }
 
