@@ -69,7 +69,6 @@ USER rim
 #   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
 #   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
 #   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
-#   RIM_BOOTSTRAP_TOKEN_TTL_SECONDS — Bootstrap token lifetime, at most 3600 (default: 900)
 #   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
 #   RIM_SMTP_HOST         — SMTP server; without it or RIM_SMTP_FROM mail is only logged
 #   RIM_SMTP_PORT         — SMTP port (default: 587)

@@ -97,11 +97,14 @@ has the key commands, rotation and recovery.
 ### The first account
 
 Signups are invite-only by default. Issue a single-use link for your own account; it works for
-15 minutes:
+7 days (`--expires-in-days` changes that):
 
 ```sh
-dc exec rim /app/rim-server bootstrap-user --email you@example.org --public-url https://rim.example.org
+dc exec rim /app/rim-server invite create --public-url https://rim.example.org
 ```
+
+`--email you@example.org` binds the link to that address: it then admits only a password signup
+with it, not a key-only one.
 
 Open the link it prints (`https://rim.example.org/join/…`) and sign up. For other people, a link
 for up to 50 signups that lasts up to 30 days:
@@ -236,6 +239,8 @@ production's. Record each drill: **FILL** where.
 - **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
   to `/data/audit.log`; `docs/operations/audit-retention.md` covers its rotation and
   `RIM_AUDIT_RETENTION_DAYS` for the audit table.
+- **Background jobs.** `docs/operations/background-jobs.md` lists what the server runs on a
+  timer, how often, and the setting that changes it.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.
 
 ## Optional features

@@ -43,7 +43,7 @@ The system is designed around clean boundaries between:
 - service contracts
 - default infrastructure implementations
 - transport adapters
-- runtime/bootstrap wiring
+- runtime startup wiring
 
 ### Extensibility First
 
@@ -159,7 +159,7 @@ Owns:
 
 - app/runtime assembly
 - HTTP wiring
-- request/session/bootstrap wiring
+- request/session/startup wiring
 
 It should stay focused on composition and request orchestration.
 

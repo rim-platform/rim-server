@@ -1,5 +1,4 @@
 pub mod audit;
-pub mod bootstrap_token;
 pub mod capability_registry;
 pub mod channel_lens;
 pub mod conversation;

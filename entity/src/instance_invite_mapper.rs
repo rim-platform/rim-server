@@ -12,6 +12,7 @@ impl From<instance_invite::Model> for InstanceInvite {
             max_uses: m.max_uses,
             use_count: m.use_count,
             revoked_at: m.revoked_at.map(Into::into),
+            email: m.email,
         }
     }
 }

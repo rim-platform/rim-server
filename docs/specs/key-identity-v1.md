@@ -250,14 +250,15 @@ session of the account but the caller's and answers how many.
 
 ### Key-only signup
 
-`signupWithKey(input: { username, displayName, keyLog, device, proof, bootstrapToken,
-instanceInviteToken, workspaceInviteToken })`, no session needed, creates an account from a key
+`signupWithKey(input: { username, displayName, keyLog, device, proof, instanceInviteToken,
+workspaceInviteToken })`, no session needed, creates an account from a key
 identity alone: no password, no email.
 
 1. The registration mode applies as for `signupWithInvite`. In invite-only mode exactly one
-   token is required, checked and consumed as by the password signup of its kind: a bootstrap
-   token or an instance invite creates an account with no workspace (`serverId` null), a
-   workspace invite also joins its server. In open mode no token may be given, and the signup
+   token is required, checked and consumed as by the password signup of its kind: an instance
+   invite creates an account with no workspace (`serverId` null), a workspace invite also joins
+   its server. An instance invite bound to an email address admits only a password signup with
+   that address, so it refuses a key-only signup with `VALIDATION`. In open mode no token may be given, and the signup
    counts against the same per-IP limit as an open password signup. A wrong number of tokens is
    `VALIDATION`.
 2. The identity is verified as at enrollment (rules 1 and 2): the whole log, at most 256
@@ -379,7 +380,6 @@ input SignupWithKeyInput {
   keyLog: [SignedStatementInput!]!
   device: SignedStatementInput!
   proof: SignedStatementInput!
-  bootstrapToken: String
   instanceInviteToken: String
   workspaceInviteToken: String
 }

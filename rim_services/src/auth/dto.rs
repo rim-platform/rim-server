@@ -57,10 +57,10 @@ pub struct RequestAuthResultDto {
     pub device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
 }
 
-/// Result of any signup path (bootstrap, instance-invite, open).
+/// Result of any signup path (instance invite, workspace invite, open).
 ///
-/// `server_id` is `Some` only when a workspace invite was used;
-/// bootstrap and instance-invite signups land in "no workspaces yet" state.
+/// `server_id` is `Some` only when a workspace invite was used; the other signups land in
+/// "no workspaces yet" state.
 #[derive(Debug, Clone)]
 pub struct SignupResultDto {
     pub user_id: UserId,
@@ -71,14 +71,8 @@ pub struct SignupResultDto {
 }
 
 /// Token type discriminant for the preview query.
-///
-/// `Bootstrap` and `Instance` both lead to "create your RIM account" copy on
-/// the frontend; they are now distinct so the frontend knows which input field
-/// to use on `signupWithInvite` (`bootstrapToken` vs `instanceInviteToken`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InviteTokenType {
-    /// Bootstrap token: "create your RIM account" flow via `bootstrapToken` input.
-    Bootstrap,
     /// Instance invite: "create your RIM account" flow via `instanceInviteToken` input.
     Instance,
     /// Workspace invite: "join workspace X" copy.
@@ -107,7 +101,7 @@ pub struct InviteTokenPreviewDto {
 /// The registration mode in effect for this deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationMode {
-    /// Default: signup requires a valid token (bootstrap, instance, or workspace invite).
+    /// Default: signup requires a valid token (instance or workspace invite).
     InviteOnly,
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,

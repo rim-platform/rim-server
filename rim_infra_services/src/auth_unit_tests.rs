@@ -4,12 +4,10 @@ mod tests {
 
     use chrono::{Duration, Utc};
     use rim_core::auth::model::{
-        BootstrapToken, BootstrapTokenId, InstanceInvite, InstanceInviteId, Invite, InviteId,
-        Session, SessionId,
+        InstanceInvite, InstanceInviteId, Invite, InviteId, Session, SessionId,
     };
     use rim_core::auth::repository::{
-        MockBootstrapTokenRepository, MockInstanceInviteRepository, MockInviteRepository,
-        MockSessionRepository,
+        MockInstanceInviteRepository, MockInviteRepository, MockSessionRepository,
     };
     use rim_core::conversation::model::{Conversation, ConversationId};
     use rim_core::conversation::repository::MockConversationRepository;
@@ -23,8 +21,7 @@ mod tests {
     use rim_core::user::repository::MockUserRepository;
     use rim_services::auth::command::{
         AcceptInviteCmd, CreateInviteCmd, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd,
-        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
-        SignupWithInstanceInviteCmd,
+        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
     use rim_services::{Actor, ServiceError};
@@ -39,10 +36,8 @@ mod tests {
         Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
     }
 
-    /// Build a complete set of mock repositories with the new registration repos included.
-    ///
-    /// The `bootstrap_token_repo` and `instance_invite_repo` are returned as separate values
-    /// so callers can configure expectations on them.
+    /// Build a complete set of mock repositories; the instance invite repository is passed
+    /// separately so callers can configure expectations on it.
     fn repos() -> (
         MockUserRepository,
         MockServerRepository,
@@ -61,7 +56,7 @@ mod tests {
         )
     }
 
-    /// Build `AuthRepos` from the six standard repos plus empty bootstrap/instance repos.
+    /// Build `AuthRepos` from the six standard repos plus an empty instance invite repo.
     fn make_auth_repos(
         user_repo: MockUserRepository,
         server_repo: MockServerRepository,
@@ -76,7 +71,6 @@ mod tests {
             server_member_repo: Arc::new(server_member_repo),
             session_repo: Arc::new(session_repo),
             invite_repo: Arc::new(invite_repo),
-            bootstrap_token_repo: Arc::new(MockBootstrapTokenRepository::new()),
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
@@ -86,7 +80,7 @@ mod tests {
         }
     }
 
-    /// Build `AuthRepos` with explicit bootstrap token and instance invite repos.
+    /// Build `AuthRepos` with an explicit instance invite repo.
     #[allow(clippy::too_many_arguments)]
     fn make_auth_repos_with_registration(
         user_repo: MockUserRepository,
@@ -95,7 +89,6 @@ mod tests {
         session_repo: MockSessionRepository,
         invite_repo: MockInviteRepository,
         conversation_repo: MockConversationRepository,
-        bootstrap_token_repo: MockBootstrapTokenRepository,
         instance_invite_repo: MockInstanceInviteRepository,
     ) -> AuthRepos {
         AuthRepos {
@@ -104,7 +97,6 @@ mod tests {
             server_member_repo: Arc::new(server_member_repo),
             session_repo: Arc::new(session_repo),
             invite_repo: Arc::new(invite_repo),
-            bootstrap_token_repo: Arc::new(bootstrap_token_repo),
             instance_invite_repo: Arc::new(instance_invite_repo),
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
@@ -151,21 +143,6 @@ mod tests {
         }
     }
 
-    /// Construct a valid bootstrap token in the future.
-    fn make_bootstrap_token(id: BootstrapTokenId) -> BootstrapToken {
-        let now = Utc::now();
-        BootstrapToken {
-            id,
-            email: "test@example.com".to_string(),
-            token_hash: "hash123".to_string(),
-            created_at: now,
-            expires_at: now + Duration::minutes(15),
-            used_at: None,
-            consumed_by_user_id: None,
-            revoked_at: None,
-        }
-    }
-
     /// Construct a valid instance invite in the future.
     fn make_instance_invite(id: InstanceInviteId, max_uses: i32, use_count: i32) -> InstanceInvite {
         let now = Utc::now();
@@ -178,6 +155,7 @@ mod tests {
             max_uses,
             use_count,
             revoked_at: None,
+            email: None,
         }
     }
 
@@ -806,7 +784,6 @@ mod tests {
         session_repo: MockSessionRepository,
         invite_repo: MockInviteRepository,
         conversation_repo: MockConversationRepository,
-        bootstrap_repo: MockBootstrapTokenRepository,
         instance_invite_repo: MockInstanceInviteRepository,
     ) -> DefaultAuthService {
         DefaultAuthService::new(
@@ -817,7 +794,6 @@ mod tests {
                 session_repo,
                 invite_repo,
                 conversation_repo,
-                bootstrap_repo,
                 instance_invite_repo,
             ),
             None,
@@ -828,182 +804,21 @@ mod tests {
         )
     }
 
-    // ── Test 1 ──────────────────────────────────────────────────────────────
-    /// A consumed bootstrap token (`used_at IS NOT NULL`) is rejected with `InvalidToken`.
-    #[tokio::test]
-    async fn bootstrap_token_single_use_enforced() {
-        let token_id = BootstrapTokenId::new();
-        let mut bt = make_bootstrap_token(token_id);
-        bt.used_at = Some(Utc::now()); // mark as already consumed
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt.clone())));
-
-        let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
-
-        let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
-                username: "alice".to_string(),
-                password: "s3cur3p4ss".to_string(),
-                email: "alice@example.com".to_string(),
-                display_name: None,
-            })
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, ServiceError::InvalidToken), "got: {err:?}");
-    }
-
-    // ── Test 2 ──────────────────────────────────────────────────────────────
-    /// A bootstrap token with `expires_at < now()` is rejected with `ExpiredToken`.
-    #[tokio::test]
-    async fn bootstrap_token_expired_rejected() {
-        let token_id = BootstrapTokenId::new();
-        let mut bt = make_bootstrap_token(token_id);
-        bt.expires_at = Utc::now() - Duration::seconds(1); // already expired
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt.clone())));
-
-        let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
-
-        let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
-                username: "alice".to_string(),
-                password: "s3cur3p4ss".to_string(),
-                email: "alice@example.com".to_string(),
-                display_name: None,
-            })
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, ServiceError::ExpiredToken), "got: {err:?}");
-    }
-
-    // ── Test 3 ──────────────────────────────────────────────────────────────
-    /// A revoked bootstrap token (`revoked_at IS NOT NULL`) returns `InvalidToken`,
-    /// NOT `ExpiredToken` — revocation must be indistinguishable from "not found".
-    #[tokio::test]
-    async fn bootstrap_token_revoked_rejected() {
-        let token_id = BootstrapTokenId::new();
-        let mut bt = make_bootstrap_token(token_id);
-        bt.revoked_at = Some(Utc::now());
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt.clone())));
-
-        let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
-
-        let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
-                username: "alice".to_string(),
-                password: "s3cur3p4ss".to_string(),
-                email: "alice@example.com".to_string(),
-                display_name: None,
-            })
-            .await
-            .unwrap_err();
-
-        // Must be InvalidToken, NOT ExpiredToken — spec §4.5 indistinguishability rule.
-        assert!(matches!(err, ServiceError::InvalidToken), "got: {err:?}");
-    }
-
-    // ── Test 4 ──────────────────────────────────────────────────────────────
-    /// A consumed bootstrap token collapses to `InvalidToken` (same code as missing).
-    /// This is test 3 from a different angle but spec explicitly calls it out.
-    #[tokio::test]
-    async fn bootstrap_token_consumed_rejected_indistinguishable_from_invalid() {
-        let token_id = BootstrapTokenId::new();
-        let mut bt = make_bootstrap_token(token_id);
-        bt.used_at = Some(Utc::now());
-        bt.consumed_by_user_id = Some(UserId::new());
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt.clone())));
-
-        let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
-
-        let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
-                username: "alice".to_string(),
-                password: "s3cur3p4ss".to_string(),
-                email: "alice@example.com".to_string(),
-                display_name: None,
-            })
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, ServiceError::InvalidToken), "got: {err:?}");
-    }
-
     // ── Test 5 ──────────────────────────────────────────────────────────────
-    /// Successful bootstrap token consumption creates a user with no server_member row.
+    /// A signup through an instance invite creates a user with no server_member row.
     #[tokio::test]
-    async fn bootstrap_token_creates_user_with_no_workspace() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+    async fn instance_invite_creates_user_with_no_workspace() {
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(|_, _| Ok(true));
+        signup_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1018,23 +833,15 @@ mod tests {
             .returning(move |new| Ok(make_session(session_id, new.user_id)));
 
         let (_, sr, mut smr, _, ir, cr) = repos();
-        // server_member::add_member must NEVER be called for bootstrap signup.
+        // server_member::add_member must NEVER be called for an instance invite signup.
         smr.expect_add_member().never();
 
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            session_repo,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc =
+            svc_with_registration(user_repo, sr, smr, session_repo, ir, cr, signup_invite_repo);
 
         let res = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
@@ -1046,7 +853,7 @@ mod tests {
         assert_eq!(res.user_id, user_id);
         assert!(
             res.server_id.is_none(),
-            "should have no server_id for bootstrap signup"
+            "should have no server_id for an instance invite signup"
         );
     }
 
@@ -1094,7 +901,6 @@ mod tests {
             session_repo,
             ir,
             cr,
-            MockBootstrapTokenRepository::new(),
             instance_invite_repo,
         );
 
@@ -1166,7 +972,6 @@ mod tests {
             session_repo,
             ir,
             cr,
-            MockBootstrapTokenRepository::new(),
             instance_invite_repo,
         );
 
@@ -1212,16 +1017,7 @@ mod tests {
             .returning(move |_| Ok(Some(invite.clone())));
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            MockBootstrapTokenRepository::new(),
-            instance_invite_repo,
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, instance_invite_repo);
 
         let err = svc
             .signup_with_instance_invite(SignupWithInstanceInviteCmd {
@@ -1251,16 +1047,7 @@ mod tests {
             .returning(move |_| Ok(Some(invite.clone())));
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            MockBootstrapTokenRepository::new(),
-            instance_invite_repo,
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, instance_invite_repo);
 
         let err = svc
             .signup_with_instance_invite(SignupWithInstanceInviteCmd {
@@ -1303,7 +1090,6 @@ mod tests {
             session_repo,
             ir,
             cr,
-            MockBootstrapTokenRepository::new(),
             MockInstanceInviteRepository::new(),
         );
 
@@ -1350,17 +1136,16 @@ mod tests {
     /// signup with username already taken returns `Conflict`.
     #[tokio::test]
     async fn signup_username_already_taken_returns_conflict() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let existing_id = UserId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(|_, _| Ok(true));
+        signup_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo
@@ -1368,20 +1153,11 @@ mod tests {
             .returning(move |_| Ok(Some(make_user(existing_id, "alice"))));
 
         let (_, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc = svc_with_registration(user_repo, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
         let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
@@ -1397,29 +1173,19 @@ mod tests {
     /// signup with password shorter than 8 chars returns `Validation`.
     #[tokio::test]
     async fn signup_password_too_short_returns_validation() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
         let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "short".to_string(), // < 8 chars — validation fires before email check
                 email: "alice@example.com".to_string(),
@@ -1456,11 +1222,6 @@ mod tests {
             revoked_at: None,
             role: rim_core::server_member::model::ServerMemberRole::Member,
         };
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(|_| Ok(None)); // not a bootstrap token
 
         let mut instance_invite_repo = MockInstanceInviteRepository::new();
         instance_invite_repo
@@ -1499,7 +1260,6 @@ mod tests {
             sess_r,
             invite_repo,
             cr,
-            bootstrap_repo,
             instance_invite_repo,
         );
 
@@ -1527,8 +1287,8 @@ mod tests {
         let invite_id = InstanceInviteId::new();
         let invite = make_instance_invite(invite_id, 5, 0);
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(|_| Ok(None));
 
@@ -1541,16 +1301,7 @@ mod tests {
         instance_invite_repo.expect_try_consume().never();
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            instance_invite_repo,
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, instance_invite_repo);
 
         let res = svc
             .preview_invite_token(PreviewInviteTokenQuery {
@@ -1566,77 +1317,24 @@ mod tests {
         assert!(res.workspace.is_none());
     }
 
-    // ── Test 18 ─────────────────────────────────────────────────────────────
-    /// `previewInviteToken` for a valid bootstrap token returns `Bootstrap` type
-    /// so the frontend can route to the `bootstrapToken` input field on
-    /// `signupWithInvite`. `expiresAt` is set; `workspace` is null.
-    #[tokio::test]
-    async fn preview_invite_token_bootstrap_returns_bootstrap_type() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
-        let expires_at = bt.expires_at;
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt.clone())));
-        // try_mark_used must NOT be called (read-only).
-        bootstrap_repo.expect_try_mark_used().never();
-
-        let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
-
-        let res = svc
-            .preview_invite_token(PreviewInviteTokenQuery {
-                token: "raw_boot_token".to_string(),
-                remote_ip: "1.2.3.4".to_string(),
-            })
-            .await
-            .unwrap();
-
-        use rim_services::auth::dto::InviteTokenType;
-        assert_eq!(res.token_type, InviteTokenType::Bootstrap);
-        assert_eq!(res.expires_at, Some(expires_at));
-        assert!(res.workspace.is_none());
-    }
-
     // ── Test 19 ─────────────────────────────────────────────────────────────
-    /// `previewInviteToken` on an expired bootstrap token returns `ExpiredToken`.
+    /// `previewInviteToken` on an expired instance invite returns `ExpiredToken`.
     #[tokio::test]
     async fn preview_invite_token_expired_returns_expired_token() {
-        let token_id = BootstrapTokenId::new();
-        let mut bt = make_bootstrap_token(token_id);
+        let mut bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         bt.expires_at = Utc::now() - Duration::seconds(1);
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
         let err = svc
             .preview_invite_token(PreviewInviteTokenQuery {
-                token: "raw_boot_token".to_string(),
+                token: "raw_invite_token".to_string(),
                 remote_ip: "1.2.3.4".to_string(),
             })
             .await
@@ -1652,15 +1350,13 @@ mod tests {
     async fn preview_invite_token_invalid_returns_invalid_token() {
         // Sub-case A: missing (no row in any table).
         {
-            let mut bt_repo = MockBootstrapTokenRepository::new();
-            bt_repo.expect_get_by_token_hash().returning(|_| Ok(None));
             let mut ii_repo = MockInstanceInviteRepository::new();
             ii_repo.expect_get_by_token_hash().returning(|_| Ok(None));
             let mut ir = MockInviteRepository::new();
             ir.expect_get_by_token_hash().returning(|_| Ok(None));
 
             let (ur, sr, smr, sess_r, _, cr) = repos();
-            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, bt_repo, ii_repo);
+            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, ii_repo);
 
             let err = svc
                 .preview_invite_token(PreviewInviteTokenQuery {
@@ -1675,28 +1371,17 @@ mod tests {
             );
         }
 
-        // Sub-case B: consumed bootstrap token.
+        // Sub-case B: used-up instance invite.
         {
-            let token_id = BootstrapTokenId::new();
-            let mut bt = make_bootstrap_token(token_id);
-            bt.used_at = Some(Utc::now());
+            let invite = make_instance_invite(InstanceInviteId::new(), 1, 1);
 
-            let mut bt_repo = MockBootstrapTokenRepository::new();
-            bt_repo
+            let mut ii_repo = MockInstanceInviteRepository::new();
+            ii_repo
                 .expect_get_by_token_hash()
-                .returning(move |_| Ok(Some(bt.clone())));
+                .returning(move |_| Ok(Some(invite.clone())));
 
             let (ur, sr, smr, sess_r, ir, cr) = repos();
-            let svc = svc_with_registration(
-                ur,
-                sr,
-                smr,
-                sess_r,
-                ir,
-                cr,
-                bt_repo,
-                MockInstanceInviteRepository::new(),
-            );
+            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, ii_repo);
 
             let err = svc
                 .preview_invite_token(PreviewInviteTokenQuery {
@@ -1717,15 +1402,13 @@ mod tests {
             let mut invite = make_instance_invite(invite_id, 1, 0);
             invite.revoked_at = Some(Utc::now());
 
-            let mut bt_repo = MockBootstrapTokenRepository::new();
-            bt_repo.expect_get_by_token_hash().returning(|_| Ok(None));
             let mut ii_repo = MockInstanceInviteRepository::new();
             ii_repo
                 .expect_get_by_token_hash()
                 .returning(move |_| Ok(Some(invite.clone())));
 
             let (ur, sr, smr, sess_r, ir, cr) = repos();
-            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, bt_repo, ii_repo);
+            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, ii_repo);
 
             let err = svc
                 .preview_invite_token(PreviewInviteTokenQuery {
@@ -1746,10 +1429,9 @@ mod tests {
     /// a 5-minute window; exactly 30 calls succeed.
     #[tokio::test]
     async fn preview_invite_token_rate_limited_after_threshold() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
 
-        let mut bt_repo = MockBootstrapTokenRepository::new();
+        let mut bt_repo = MockInstanceInviteRepository::new();
         bt_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
@@ -1758,16 +1440,7 @@ mod tests {
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
         let svc = DefaultAuthService::with_rate_limiters(
-            make_auth_repos_with_registration(
-                ur,
-                sr,
-                smr,
-                sess_r,
-                ir,
-                cr,
-                bt_repo,
-                MockInstanceInviteRepository::new(),
-            ),
+            make_auth_repos_with_registration(ur, sr, smr, sess_r, ir, cr, bt_repo),
             None,
             Duration::hours(1),
             noop_observers(),
@@ -1781,7 +1454,7 @@ mod tests {
         for i in 1..=30 {
             let res = svc
                 .preview_invite_token(PreviewInviteTokenQuery {
-                    token: "raw_boot_token".to_string(),
+                    token: "raw_invite_token".to_string(),
                     remote_ip: ip.to_string(),
                 })
                 .await;
@@ -1790,7 +1463,7 @@ mod tests {
 
         let err = svc
             .preview_invite_token(PreviewInviteTokenQuery {
-                token: "raw_boot_token".to_string(),
+                token: "raw_invite_token".to_string(),
                 remote_ip: ip.to_string(),
             })
             .await
@@ -1811,18 +1484,17 @@ mod tests {
     /// `display_name` must be stored as the trimmed input value.
     #[tokio::test]
     async fn signup_with_email_happy_path() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(|_, _| Ok(true));
+        signup_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1864,20 +1536,12 @@ mod tests {
             .returning(move |new| Ok(make_session(session_id, new.user_id)));
 
         let (_, sr, smr, _, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            session_repo,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc =
+            svc_with_registration(user_repo, sr, smr, session_repo, ir, cr, signup_invite_repo);
 
         let res = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 email: "  Foo@Bar.COM ".to_string(), // whitespace + mixed case
@@ -1896,16 +1560,15 @@ mod tests {
     /// return `ServiceError::EmailTaken`, verifying case-insensitive uniqueness.
     #[tokio::test]
     async fn signup_duplicate_email_returns_email_taken() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let existing_id = UserId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
         // try_mark_used must NOT be called when signup fails.
-        bootstrap_repo.expect_try_mark_used().never();
+        signup_invite_repo.expect_try_consume().never();
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -1916,20 +1579,11 @@ mod tests {
         user_repo.expect_create_user().never();
 
         let (_, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc = svc_with_registration(user_repo, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
         let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "bob".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 // Mixed-case version of the pre-seeded email; normalises to "x@y.zz".
@@ -1962,29 +1616,19 @@ mod tests {
         for bad_email in &bad_emails {
             // Each iteration builds a fresh service — we only need the validation to fire,
             // which happens before any repo calls.
-            let token_id = BootstrapTokenId::new();
-            let bt = make_bootstrap_token(token_id);
+            let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
 
-            let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-            bootstrap_repo
+            let mut signup_invite_repo = MockInstanceInviteRepository::new();
+            signup_invite_repo
                 .expect_get_by_token_hash()
                 .returning(move |_| Ok(Some(bt.clone())));
 
             let (ur, sr, smr, sess_r, ir, cr) = repos();
-            let svc = svc_with_registration(
-                ur,
-                sr,
-                smr,
-                sess_r,
-                ir,
-                cr,
-                bootstrap_repo,
-                MockInstanceInviteRepository::new(),
-            );
+            let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
             let err = svc
-                .signup_with_bootstrap(SignupWithBootstrapCmd {
-                    bootstrap_token: "raw_token".to_string(),
+                .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                    instance_invite_token: "raw_token".to_string(),
                     username: "alice".to_string(),
                     password: "s3cur3p4ss!".to_string(),
                     email: bad_email.to_string(),
@@ -2004,18 +1648,17 @@ mod tests {
     /// `display_name: None` falls back to `username` on the persisted user.
     #[tokio::test]
     async fn signup_displayname_omitted_falls_back_to_username() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(|_, _| Ok(true));
+        signup_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -2052,19 +1695,11 @@ mod tests {
             .returning(move |new| Ok(make_session(session_id, new.user_id)));
 
         let (_, sr, smr, _, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            session_repo,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc =
+            svc_with_registration(user_repo, sr, smr, session_repo, ir, cr, signup_invite_repo);
 
-        svc.signup_with_bootstrap(SignupWithBootstrapCmd {
-            bootstrap_token: "raw_token".to_string(),
+        svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
+            instance_invite_token: "raw_token".to_string(),
             username: "alice".to_string(),
             password: "s3cur3p4ss!".to_string(),
             email: "alice@example.com".to_string(),
@@ -2080,18 +1715,17 @@ mod tests {
     /// Must NOT return a `Validation` error — blank means "use my username."
     #[tokio::test]
     async fn signup_displayname_blank_falls_back_to_username() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(|_, _| Ok(true));
+        signup_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
@@ -2128,19 +1762,11 @@ mod tests {
             .returning(move |new| Ok(make_session(session_id, new.user_id)));
 
         let (_, sr, smr, _, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            session_repo,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc =
+            svc_with_registration(user_repo, sr, smr, session_repo, ir, cr, signup_invite_repo);
 
-        svc.signup_with_bootstrap(SignupWithBootstrapCmd {
-            bootstrap_token: "raw_token".to_string(),
+        svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
+            instance_invite_token: "raw_token".to_string(),
             username: "alice".to_string(),
             password: "s3cur3p4ss!".to_string(),
             email: "alice@example.com".to_string(),
@@ -2154,31 +1780,21 @@ mod tests {
     /// `display_name` of 81 chars (post-trim) returns `Validation`.
     #[tokio::test]
     async fn signup_displayname_too_long_returns_validation() {
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
+        let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
 
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        bootstrap_repo
+        let mut signup_invite_repo = MockInstanceInviteRepository::new();
+        signup_invite_repo
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(bt.clone())));
 
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
-            ur,
-            sr,
-            smr,
-            sess_r,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        );
+        let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
         let long_name = "x".repeat(81); // 81 chars — one over the 80-char limit
 
         let err = svc
-            .signup_with_bootstrap(SignupWithBootstrapCmd {
-                bootstrap_token: "raw_token".to_string(),
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
                 username: "alice".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
@@ -2190,100 +1806,6 @@ mod tests {
         assert!(
             matches!(err, ServiceError::Validation(ref m) if m.contains("display name")),
             "got: {err:?}"
-        );
-    }
-
-    // ── C1 hardening ────────────────────────────────────────────────────────
-    /// Simulate the double-spend race at the mock layer.
-    ///
-    /// `try_mark_used` returns `true` on the first call (token claimed) and
-    /// `false` on all subsequent calls (already consumed). Two concurrent
-    /// `signup_with_bootstrap` calls with the same raw token: exactly one must
-    /// succeed and the other must fail with `InvalidToken`.
-    ///
-    /// Note: this is a mock-layer test because the race itself happens inside
-    /// the DB (via the atomic UPDATE WHERE); the mock simulates the DB
-    /// serialisation outcome. The real concurrent-DB test requires the `db-tests`
-    /// feature and a live Postgres.
-    #[tokio::test]
-    async fn bootstrap_token_double_spend_rejected_by_atomic_mark_used() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let token_id = BootstrapTokenId::new();
-        let bt = make_bootstrap_token(token_id);
-        let user_id = UserId::new();
-        let session_id = SessionId::new();
-
-        // Counter shared across calls: first call gets true, subsequent get false.
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        let mut bootstrap_repo = MockBootstrapTokenRepository::new();
-        let bt_for_hash = bt.clone();
-        bootstrap_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(bt_for_hash.clone())));
-        bootstrap_repo
-            .expect_try_mark_used()
-            .returning(move |_, _| {
-                // First invocation wins the race; subsequent ones lose.
-                let prev = call_count_clone.fetch_add(1, Ordering::SeqCst);
-                Ok(prev == 0)
-            });
-
-        let mut user_repo = MockUserRepository::new();
-        user_repo.expect_find_by_username().returning(|_| Ok(None));
-        user_repo.expect_find_by_email().returning(|_| Ok(None));
-        user_repo
-            .expect_create_user()
-            .returning(move |new| Ok(make_user(user_id, &new.username)));
-
-        let mut session_repo = MockSessionRepository::new();
-        session_repo
-            .expect_create_session()
-            .returning(move |new| Ok(make_session(session_id, new.user_id)));
-
-        let (_, sr, smr, _, ir, cr) = repos();
-        let svc = Arc::new(svc_with_registration(
-            user_repo,
-            sr,
-            smr,
-            session_repo,
-            ir,
-            cr,
-            bootstrap_repo,
-            MockInstanceInviteRepository::new(),
-        ));
-
-        let cmd = || SignupWithBootstrapCmd {
-            bootstrap_token: "raw_token".to_string(),
-            username: "alice".to_string(),
-            password: "s3cur3p4ss!".to_string(),
-            email: "alice@example.com".to_string(),
-            display_name: None,
-        };
-
-        let svc1 = Arc::clone(&svc);
-        let svc2 = Arc::clone(&svc);
-        let (r1, r2) = tokio::join!(
-            svc1.signup_with_bootstrap(cmd()),
-            svc2.signup_with_bootstrap(cmd()),
-        );
-
-        // Exactly one must succeed, the other must return InvalidToken.
-        let successes = [r1.is_ok(), r2.is_ok()].iter().filter(|&&ok| ok).count();
-        let invalid_token_failures = [&r1, &r2]
-            .iter()
-            .filter(|r| matches!(r, Err(ServiceError::InvalidToken)))
-            .count();
-
-        assert_eq!(
-            successes, 1,
-            "exactly one signup must succeed; got r1={r1:?} r2={r2:?}"
-        );
-        assert_eq!(
-            invalid_token_failures, 1,
-            "exactly one signup must fail with InvalidToken; got r1={r1:?} r2={r2:?}"
         );
     }
 

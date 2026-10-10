@@ -35,7 +35,6 @@ fn sdl_declares_signup_with_key() {
         "keyLog: [SignedStatementInput!]!",
         "device: SignedStatementInput!",
         "proof: SignedStatementInput!",
-        "bootstrapToken: String",
         "instanceInviteToken: String",
         "workspaceInviteToken: String",
     ] {

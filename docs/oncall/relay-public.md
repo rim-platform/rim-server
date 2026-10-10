@@ -188,8 +188,8 @@ To let people in without the proof-of-work, give them a signup link:
 `rim-relay invite create --max-uses <1-50> --expires-in-days <1-30> --public-url https://<domain>`
 prints it on its first line (the token is shown once); `rim-relay invite list` shows each live
 link's use count and `rim-relay invite revoke <id>` ends one. For one person,
-`rim-relay bootstrap-user --email <their address> --public-url https://<domain>` gives a
-single-use link.
+`rim-relay invite create --email <their address> --public-url https://<domain>` gives a
+single-use link that admits only a password signup with that address.
 
 ## Monitoring
 
@@ -325,15 +325,14 @@ rim-relay franking-key show | rotate
 rim-relay principal block <principalId> --reason <text> | unblock <principalId> | list
 rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
 rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
-rim-relay invite create [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
-rim-relay bootstrap-user --email <address> --public-url https://<domain>
+rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
 rim-relay audit purge [--dry-run] [--older-than-days N]
 ```
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`),
 `relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
-`server_key.recovered`, `bootstrap_token_issued`, `instance_invite_issued` and
+`server_key.recovered`, `instance_invite_issued` and
 `instance_invite_revoked` (`issued_by` or `actor` `operator`). `audit purge` writes
 `audit.retention.purged` (`trigger` `cli`), the same event the daily purge writes; the purge, its
 export files and the logrotate setup for `/data/audit.log` are in
