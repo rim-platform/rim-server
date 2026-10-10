@@ -1,14 +1,9 @@
 use async_trait::async_trait;
-use tracing::info;
 
-use rim_services::message_thread::command::{
-    GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
-};
-use rim_services::message_thread::dto::{ThreadDto, ThreadPageCursor};
+use rim_services::message_thread::command::{GetThreadByRootMessageQuery, GetThreadQuery};
+use rim_services::message_thread::dto::ThreadDto;
 use rim_services::message_thread::service::ThreadService;
 use rim_services::{ServiceError, ServiceResult};
-
-use rim_core::repository::pagination::Page;
 
 use crate::ThreadRepos;
 use crate::util::{ConversationAccessRepos, ensure_conversation_member_access};
@@ -52,24 +47,6 @@ impl DefaultThreadService {
             created_at: thread.created_at,
             last_message_at: thread.last_message_at,
         })
-    }
-
-    fn to_dto_with_root(
-        &self,
-        thread: rim_core::message_thread::model::MessageThread,
-        server_id: rim_core::server::model::ServerId,
-        root: Option<&rim_core::message::model::Message>,
-    ) -> ThreadDto {
-        ThreadDto {
-            id: thread.id,
-            server_id,
-            conversation_id: thread.conversation_id,
-            root_message_id: thread.first_message_id,
-            root_author_id: root.map(|m| m.sent_by),
-            root_text: root.and_then(|m| m.text.clone()),
-            created_at: thread.created_at,
-            last_message_at: thread.last_message_at,
-        }
     }
 }
 
@@ -140,58 +117,5 @@ impl ThreadService for DefaultThreadService {
         }
 
         self.to_dto(thread, query.server_id).await
-    }
-
-    async fn list_threads(
-        &self,
-        query: ListThreadsQuery,
-    ) -> ServiceResult<Page<ThreadDto, ThreadPageCursor>> {
-        ensure_conversation_member_access(
-            ConversationAccessRepos::from_arcs(
-                &self.repos.server_member_repo,
-                &self.repos.conversation_repo,
-                &self.repos.conversation_member_repo,
-            ),
-            query.actor.user_id,
-            query.server_id,
-            query.conversation_id,
-        )
-        .await?;
-
-        let page = self
-            .repos
-            .message_thread_repo
-            .list_threads_for_conversation(
-                query.conversation_id,
-                query.limit,
-                query.dir,
-                query.cursor.map(Into::into),
-            )
-            .await?;
-
-        info!(
-            conversation_id = %query.conversation_id,
-            thread_count = page.items.len(),
-            "listed threads"
-        );
-
-        let root_ids = page
-            .items
-            .iter()
-            .filter_map(|t| t.first_message_id)
-            .collect::<Vec<_>>();
-        let roots = self.repos.message_repo.get_by_ids(&root_ids).await?;
-
-        let mut items = Vec::with_capacity(page.items.len());
-        for thread in page.items {
-            let root = thread.first_message_id.and_then(|id| roots.get(&id));
-            items.push(self.to_dto_with_root(thread, query.server_id, root));
-        }
-
-        Ok(Page::new(
-            items,
-            page.next.map(Into::into),
-            page.prev.map(Into::into),
-        ))
     }
 }

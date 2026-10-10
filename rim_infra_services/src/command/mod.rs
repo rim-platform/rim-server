@@ -282,7 +282,6 @@ impl CommandService for DefaultCommandService {
         let confirmation_kind = match &cmd.confirmation {
             None => "none",
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
-            Some(ConfirmationProof::OutOfBand { .. }) => "out_of_band",
         };
 
         let result = self.execute_command_inner(cmd).await;

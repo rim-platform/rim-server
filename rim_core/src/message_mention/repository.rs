@@ -4,7 +4,6 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::conversation::model::ConversationId;
 use crate::message::model::MessageId;
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -20,11 +19,4 @@ pub trait MessageMentionRepository: Send + Sync {
         &self,
         message_ids: &[MessageId],
     ) -> RepoResult<HashMap<MessageId, Vec<UserId>>>;
-
-    async fn get_messages_mentioning_user(
-        &self,
-        user_id: UserId,
-        conversation_ids: &[ConversationId],
-        limit: u32,
-    ) -> RepoResult<Vec<MessageId>>;
 }

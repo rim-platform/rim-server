@@ -46,12 +46,6 @@ pub struct ListUserMacrosQuery {
 }
 
 #[derive(Debug, Clone)]
-pub struct ListServerMacrosQuery {
-    pub actor: Actor,
-    pub server_id: ServerId,
-}
-
-#[derive(Debug, Clone)]
 pub struct GetMacroByNameQuery {
     pub actor: Actor,
     pub server_id: ServerId,

@@ -103,7 +103,7 @@ async fn attachments_resolvers_answer_feature_disabled() {
     )
     .await;
     assert_feature_disabled(
-        &format!(r#"{{ attachment(serverId: "{server}", attachmentId: "{id}") {{ id }} }}"#),
+        &format!(r#"mutation {{ deleteAttachment(input: {{ serverId: "{server}", attachmentId: "{id}" }}) }}"#),
         ServerFeature::Attachments,
     )
     .await;
@@ -147,13 +147,11 @@ async fn ai_command_resolvers_answer_feature_disabled() {
         ServerFeature::AiCommands,
     )
     .await;
-    for initiator in ["AGENT", "MCP"] {
-        assert_feature_disabled(
-            &format!(r#"mutation {{ executeCommand(input: {{ commandId: "chat.post_message", initiator: {initiator} }}) {{ status }} }}"#),
-            ServerFeature::AiCommands,
-        )
-        .await;
-    }
+    assert_feature_disabled(
+        r#"mutation { executeCommand(input: { commandId: "chat.post_message", initiator: AGENT }) { status } }"#,
+        ServerFeature::AiCommands,
+    )
+    .await;
     assert_feature_disabled(
         &format!(r#"mutation {{ executeMacro(input: {{ macroId: "{}", initiator: AGENT }}) {{ status }} }}"#, uuid::Uuid::now_v7()),
         ServerFeature::AiCommands,
@@ -235,7 +233,6 @@ async fn password_reset_answers_feature_disabled_only_while_email_is_disabled() 
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(MockKeybindService::new()),

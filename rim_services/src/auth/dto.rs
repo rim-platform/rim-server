@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use rim_core::auth::model::InstanceInviteId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
@@ -71,27 +70,6 @@ pub struct SignupResultDto {
     pub csrf_token: String,
 }
 
-/// Metadata about an instance invite, returned to admin callers.
-#[derive(Debug, Clone)]
-pub struct InstanceInviteDto {
-    pub id: InstanceInviteId,
-    /// `None` for an invite the operator issued from the command line.
-    pub created_by_user_id: Option<UserId>,
-    pub expires_at: DateTime<Utc>,
-    pub max_uses: i32,
-    pub use_count: i32,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Result of `create_instance_invite`, containing the raw token for display.
-#[derive(Debug, Clone)]
-pub struct CreateInstanceInviteResultDto {
-    pub invite: InstanceInviteDto,
-    /// The raw (unhashed) invite token. Shown to the admin exactly once.
-    pub invite_token: String,
-}
-
 /// Token type discriminant for the preview query.
 ///
 /// `Bootstrap` and `Instance` both lead to "create your RIM account" copy on
@@ -138,28 +116,3 @@ pub enum RegistrationMode {
     /// signup takes a token, as in invite-only mode.
     Pow { bits: u32 },
 }
-
-/// Zero-sized marker type carried through [`RegistrationContext`] as a GraphQL
-/// context data key for the `previewInviteToken` rate limiter.
-///
-/// The actual limiter is constructed inside `DefaultAuthService::new()` and is
-/// always present — "missing limiter" is a state the type system makes
-/// unrepresentable (spec §4.7 R2). This type exists for future-extensibility:
-/// a caller can swap in a custom limiter implementation by replacing this marker
-/// without changing the `RegistrationContext` shape.
-///
-/// [`RegistrationContext`]: rim_api::RegistrationContext
-#[derive(Debug, Clone, Default)]
-pub struct PreviewInviteRateLimiterToken;
-
-/// Zero-sized marker type carried through [`RegistrationContext`] as a GraphQL
-/// context data key for the open-mode signup rate limiter.
-///
-/// The actual limiter is constructed inside `DefaultAuthService::new()` and is
-/// always present (spec §6.3 R2). This type exists for future-extensibility:
-/// a caller can swap in a custom limiter implementation without changing the
-/// `RegistrationContext` shape.
-///
-/// [`RegistrationContext`]: rim_api::RegistrationContext
-#[derive(Debug, Clone, Default)]
-pub struct SignupRateLimiterToken;

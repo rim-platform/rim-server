@@ -38,7 +38,7 @@ async fn execute_command_mutation_returns_result() {
 /// captured value — if the resolver dropped the field, defaulted it
 /// silently, or mapped to the wrong variant, the assertion fires.
 ///
-/// Covers all 8 wire variants. Phase 4 audit-log + per-turn cap will
+/// Covers all 7 wire variants. Phase 4 audit-log + per-turn cap will
 /// read this field on the service side; this test pins the wire contract
 /// so a future GraphQL refactor can't quietly break the audit trail.
 #[tokio::test]
@@ -52,7 +52,6 @@ async fn execute_command_initiator_round_trips_through_graphql() {
         ("CONTEXT_MENU", CommandInitiator::ContextMenu),
         ("PLUGIN", CommandInitiator::Plugin),
         ("CLI", CommandInitiator::Cli),
-        ("MCP", CommandInitiator::Mcp),
     ];
 
     for (wire, expected) in cases {

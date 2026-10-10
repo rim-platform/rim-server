@@ -8,7 +8,7 @@ pub async fn index_graphiql() -> Result<HttpResponse> {
         .body(
             GraphiQLSource::build()
                 .endpoint("/api")
-                .subscription_endpoint("/api")
+                .subscription_endpoint("/api/ws")
                 .finish(),
         ))
 }

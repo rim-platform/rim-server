@@ -22,7 +22,6 @@ pub trait MacroRepository: Send + Sync {
         server_id: ServerId,
         user_id: UserId,
     ) -> RepoResult<Vec<MacroDef>>;
-    async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>>;
     async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
     async fn create(&self, new_macro: NewMacroDef) -> RepoResult<MacroDef>;
     async fn update(&self, id: MacroId, update: UpdateMacroDef) -> RepoResult<MacroDef>;

@@ -722,12 +722,6 @@ pub fn parse_response(
     })
 }
 
-/// Unpadded base64url of `bytes`; standard padded base64 is what `Content-Digest` and
-/// `Signature` carry, and the structured field serializer writes it.
-pub fn b64url(bytes: &[u8]) -> String {
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
 /// Padded standard base64 of `bytes`.
 pub fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
@@ -759,7 +753,7 @@ mod tests {
                 seq: 0,
             },
             signer,
-            nonce: b64url(&[7; NONCE_LEN]),
+            nonce: URL_SAFE_NO_PAD.encode([7; NONCE_LEN]),
         }
     }
 
@@ -1096,7 +1090,7 @@ mod tests {
         pending.verify(&f.signer.public_key()).expect("verify");
 
         // Another request's nonce.
-        let other_nonce = b64url(&[8; NONCE_LEN]);
+        let other_nonce = URL_SAFE_NO_PAD.encode([8; NONCE_LEN]);
         let other = RequestBinding {
             nonce: &other_nonce,
             ..binding

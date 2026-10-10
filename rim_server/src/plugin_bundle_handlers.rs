@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use actix_web::http::header;
 use actix_web::{HttpRequest, HttpResponse, web};
-use futures_util::StreamExt;
 use rim_core::server::model::ServerId;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::feature::service::FeatureGate;
@@ -16,6 +15,7 @@ use rim_services::workspace_plugin::{MAX_PLUGIN_BUNDLE_BYTES, PLUGIN_BUNDLE_MEDI
 use rim_services::{Actor, ServiceError};
 use sha2::{Digest, Sha256};
 
+use crate::body::{BodyError, read_bounded};
 use crate::file_handlers::{
     map_service_error_to_response, require_auth, require_csrf, require_feature,
 };
@@ -45,24 +45,21 @@ fn too_large() -> HttpResponse {
     }))
 }
 
-/// Read the whole body, hashing it as it arrives. `Err` with the response for a body over the
-/// limit or one that could not be read.
-async fn read_body(mut payload: web::Payload) -> Result<(Vec<u8>, String), HttpResponse> {
-    let mut hasher = Sha256::new();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = payload.next().await {
-        let chunk = chunk.map_err(|e| {
-            HttpResponse::BadRequest()
-                .json(serde_json::json!({"error": format!("read error: {e}")}))
+/// Read the whole body and its lowercase hex SHA-256. `Err` with the response for a body over
+/// the limit or one that could not be read.
+async fn read_body(
+    req: &HttpRequest,
+    payload: web::Payload,
+) -> Result<(Vec<u8>, String), HttpResponse> {
+    let bytes = read_bounded(req, payload, MAX_PLUGIN_BUNDLE_BYTES)
+        .await
+        .map_err(|e| match e {
+            BodyError::TooLarge => too_large(),
+            BodyError::Read => {
+                HttpResponse::BadRequest().json(serde_json::json!({"error": "read error"}))
+            }
         })?;
-        if bytes.len() + chunk.len() > MAX_PLUGIN_BUNDLE_BYTES {
-            return Err(too_large());
-        }
-        hasher.update(&chunk);
-        bytes.extend_from_slice(&chunk);
-    }
-    let sha256 = hasher
-        .finalize()
+    let sha256 = Sha256::digest(&bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -96,15 +93,7 @@ pub async fn handle_plugin_bundle_upload(
             "error": format!("a bundle is sent as {PLUGIN_BUNDLE_MEDIA_TYPE}")
         }));
     }
-    let declared_length = req
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok());
-    if declared_length.is_some_and(|len| len > MAX_PLUGIN_BUNDLE_BYTES) {
-        return too_large();
-    }
-    let (bytes, sha256) = match read_body(payload).await {
+    let (bytes, sha256) = match read_body(&req, payload).await {
         Ok(body) => body,
         Err(resp) => return resp,
     };

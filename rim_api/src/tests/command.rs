@@ -48,47 +48,6 @@ async fn commands_query_returns_command_definitions() {
 }
 
 #[tokio::test]
-async fn command_query_returns_single_command_definition() {
-    let actor = UserId::new();
-    let mut command = MockCommandService::new();
-    command.expect_get_command().returning(|_query| {
-        Box::pin(async {
-            Ok(Some(rim_services::command::dto::CommandDefinitionDto {
-                id: "chat.post_message".to_string(),
-                title: "Post Message".to_string(),
-                description: "desc".to_string(),
-                category: "Chat".to_string(),
-                source_kind: rim_services::command::dto::CommandSourceKindDto::BuiltIn,
-                execution_target: rim_services::command::dto::CommandExecutionTargetDto::Backend,
-                arguments: vec![],
-                required_context: vec![],
-                required_capabilities: vec!["chat.write".to_string()],
-                visible_in_palette: true,
-                visible_in_context_menus: false,
-                keybind_capable: false,
-                dangerous: false,
-                user_command_id: None,
-                nl_description: None,
-                intent_samples: vec![],
-                ai_callable: false,
-                sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
-                typed_verb: rim_services::command::verb::TypedVerb::Other,
-                rate_limit_per_minute: None,
-            }))
-        })
-    });
-
-    let schema = schema_with_command_mock(command);
-    let req = authed_request(
-        r#"query { command(commandId: "chat.post_message") { id category } }"#,
-        actor,
-    );
-
-    let res = schema.execute(req).await;
-    assert_no_errors(&res);
-}
-
-#[tokio::test]
 async fn commands_query_accepts_surface_and_context() {
     let actor = UserId::new();
     let mut command = MockCommandService::new();

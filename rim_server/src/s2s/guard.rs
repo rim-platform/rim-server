@@ -7,11 +7,10 @@ use actix_web::http::StatusCode;
 use actix_web::http::header::{HeaderName, HeaderValue};
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::Utc;
-use futures_util::StreamExt;
 use rim_identity::PublicKey;
 use rim_s2s::http_sig::{
-    IncomingRequest, NONCE_RETENTION_SECS, OutgoingResponse, PendingRequest, RIM_ORIGIN,
-    RIM_REQUEST_NONCE, RequestBinding, parse_request, request_nonce, sign_response,
+    IncomingRequest, NONCE_RETENTION_SECS, OutgoingResponse, RIM_ORIGIN, RIM_REQUEST_NONCE,
+    RequestBinding, parse_request, request_nonce, sign_response,
 };
 use rim_services::ServiceError;
 use rim_services::command::rate_limit::RateLimitDecision;
@@ -24,6 +23,7 @@ use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::body::{BodyError, read_bounded};
 use crate::metrics;
 use crate::s2s::S2sState;
 
@@ -134,8 +134,6 @@ impl Reply {
 /// A request whose signature, key, digest, nonce and rate checks all passed.
 pub(crate) struct Verified {
     pub(crate) peer: PeerKeysDto,
-    #[allow(dead_code)]
-    pub(crate) pending: PendingRequest,
     pub(crate) body: Vec<u8>,
 }
 
@@ -147,35 +145,6 @@ fn joined_header(req: &HttpRequest, name: &str) -> Option<String> {
         .map(str::trim)
         .collect();
     (!values.is_empty()).then(|| values.join(", "))
-}
-
-enum BodyError {
-    TooLarge,
-    Read,
-}
-
-async fn read_body(
-    req: &HttpRequest,
-    mut payload: web::Payload,
-    limit: usize,
-) -> Result<Vec<u8>, BodyError> {
-    let declared = req
-        .headers()
-        .get(actix_web::http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok());
-    if declared.is_some_and(|len| len > limit) {
-        return Err(BodyError::TooLarge);
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = payload.next().await {
-        let chunk = chunk.map_err(|_| BodyError::Read)?;
-        if body.len() + chunk.len() > limit {
-            return Err(BodyError::TooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 /// Sign `reply` with this server's current key, bound to the request.
@@ -256,18 +225,20 @@ async fn verify(
     } else {
         state.settings.max_body_bytes
     };
-    let body = read_body(req, payload, limit).await.map_err(|e| match e {
-        BodyError::TooLarge => Reply::error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "too_large",
-            "the request body is too large",
-        ),
-        BodyError::Read => Reply::error(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "the request body could not be read",
-        ),
-    })?;
+    let body = read_bounded(req, payload, limit)
+        .await
+        .map_err(|e| match e {
+            BodyError::TooLarge => Reply::error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "too_large",
+                "the request body is too large",
+            ),
+            BodyError::Read => Reply::error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "the request body could not be read",
+            ),
+        })?;
 
     let content_digest = joined_header(req, "content-digest");
     let content_type = joined_header(req, "content-type");
@@ -375,11 +346,7 @@ async fn verify(
         reply.retry_after = Some(retry_after_seconds.max(1));
         return Err(reply);
     }
-    Ok(Verified {
-        peer: keys,
-        pending,
-        body,
-    })
+    Ok(Verified { peer: keys, body })
 }
 
 async fn dispatch(

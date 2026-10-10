@@ -31,7 +31,6 @@ mod tests {
         UserCommandRepository {}
         #[async_trait]
         impl UserCommandRepository for UserCommandRepository {
-            async fn get_by_id(&self, id: UserCommandId) -> RepoResult<Option<UserCommand>>;
             async fn get_by_key_for_user(
                 &self,
                 owner_user_id: rim_core::user::model::UserId,

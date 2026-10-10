@@ -3,8 +3,8 @@ use chrono::{DateTime, Duration, Utc};
 use entity::message;
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS,
-    MlsCommit, MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    ClaimedKeyPackage, E2eeDevice, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
+    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
     MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
     NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
@@ -292,23 +292,6 @@ impl From<ReaddRow> for MlsReaddRequest {
 }
 
 #[derive(FromQueryResult)]
-struct FrankingKeyRow {
-    id: i32,
-    secret: Vec<u8>,
-    created_at: DateTimeWithTimeZone,
-}
-
-impl From<FrankingKeyRow> for FrankingKey {
-    fn from(row: FrankingKeyRow) -> Self {
-        Self {
-            id: row.id,
-            secret: zeroize::Zeroizing::new(row.secret),
-            created_at: row.created_at.into(),
-        }
-    }
-}
-
-#[derive(FromQueryResult)]
 struct FrankingRevisionRow {
     message_id: Uuid,
     revision: i32,
@@ -411,23 +394,6 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                        WHERE d.id = $1"#
                 ),
                 vec![id.into()],
-            )
-            .await?;
-        Ok(row.map(Into::into))
-    }
-
-    async fn find_device(
-        &self,
-        principal_id: &str,
-        device_id: Uuid,
-    ) -> RepoResult<Option<E2eeDevice>> {
-        let row: Option<DeviceRow> = self
-            .one(
-                &format!(
-                    r#"SELECT {DEVICE_COLUMNS} FROM device_key d JOIN "user" u ON u.id = d.user_id
-                       WHERE u.principal_id = $1 AND d.device_id = $2"#
-                ),
-                vec![principal_id.into(), device_id.into()],
             )
             .await?;
         Ok(row.map(Into::into))
@@ -1457,16 +1423,6 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                         created_at \
                  FROM message_franking_revision WHERE message_id = $1 ORDER BY revision",
                 vec![message.into()],
-            )
-            .await?;
-        Ok(rows.into_iter().map(Into::into).collect())
-    }
-
-    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
-        let rows: Vec<FrankingKeyRow> = self
-            .all(
-                "SELECT id, secret, created_at FROM franking_key ORDER BY id",
-                vec![],
             )
             .await?;
         Ok(rows.into_iter().map(Into::into).collect())

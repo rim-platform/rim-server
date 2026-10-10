@@ -9,12 +9,6 @@ pub enum AuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
 
-    #[error("invalid session")]
-    InvalidSession,
-
-    #[error("session expired")]
-    SessionExpired,
-
     #[error("password hashing error")]
     PasswordHash,
 }

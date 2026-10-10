@@ -3,16 +3,12 @@ use entity::message_thread;
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::{MessageThread, MessageThreadId};
-use rim_core::message_thread::repository::{MessageThreadRepository, ThreadCursor};
+use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoResult;
-use rim_core::repository::pagination::{Page, PageDir};
-use sea_orm::QuerySelect;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::collections::HashMap;
 
 use crate::DbHandle;
@@ -148,95 +144,5 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         }
 
         Ok(())
-    }
-
-    async fn list_threads_for_conversation(
-        &self,
-        conversation_id: ConversationId,
-        limit: u32,
-        dir: PageDir,
-        cursor: Option<ThreadCursor>,
-    ) -> RepoResult<Page<MessageThread, ThreadCursor>> {
-        let mut q = message_thread::Entity::find()
-            .filter(message_thread::Column::ConversationId.eq::<Uuid>(conversation_id.into()));
-
-        let has_cursor = cursor.is_some();
-        if let Some(cursor) = cursor {
-            let cursor_id: Uuid = cursor.thread_id.into();
-            let cursor_ts: DateTimeWithTimeZone = cursor.last_message_at.into();
-
-            let cond = match dir {
-                PageDir::Before => Condition::any()
-                    .add(message_thread::Column::LastMessageAt.gt(cursor_ts))
-                    .add(
-                        Condition::all()
-                            .add(message_thread::Column::LastMessageAt.eq(cursor_ts))
-                            .add(message_thread::Column::Id.gt(cursor_id)),
-                    ),
-                PageDir::After => Condition::any()
-                    .add(message_thread::Column::LastMessageAt.lt(cursor_ts))
-                    .add(
-                        Condition::all()
-                            .add(message_thread::Column::LastMessageAt.eq(cursor_ts))
-                            .add(message_thread::Column::Id.lt(cursor_id)),
-                    ),
-            };
-
-            q = q.filter(cond);
-        }
-
-        // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in the
-        // endpoint order, so fetch them nearest-first (reversed order) and flip the page back
-        // below; fetching in endpoint order would return the far end of the range and skip
-        // everything between it and the cursor (finding A-H1).
-        let fetch_reversed = has_cursor && dir == PageDir::Before;
-        q = if fetch_reversed {
-            q.order_by_asc(message_thread::Column::LastMessageAt)
-                .order_by_asc(message_thread::Column::Id)
-        } else {
-            q.order_by_desc(message_thread::Column::LastMessageAt)
-                .order_by_desc(message_thread::Column::Id)
-        };
-
-        let mut items = q
-            .limit((limit + 1) as u64)
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<MessageThread>>();
-
-        let has_more_in_dir = items.len() > limit as usize;
-        if has_more_in_dir {
-            items.truncate(limit as usize);
-        }
-        if fetch_reversed {
-            items.reverse();
-        }
-
-        // Fixed ordering: `last_message_at DESC, id DESC`.
-        let min = items.last().map(|t| ThreadCursor {
-            last_message_at: t.last_message_at,
-            thread_id: t.id,
-        });
-        let max = items.first().map(|t| ThreadCursor {
-            last_message_at: t.last_message_at,
-            thread_id: t.id,
-        });
-
-        let has_opposite = has_cursor && !items.is_empty();
-        let (next, prev) = match dir {
-            PageDir::After => (
-                has_more_in_dir.then_some(min).flatten(),
-                has_opposite.then_some(max).flatten(),
-            ),
-            PageDir::Before => (
-                has_more_in_dir.then_some(max).flatten(),
-                has_opposite.then_some(min).flatten(),
-            ),
-        };
-
-        Ok(Page::new(items, next, prev))
     }
 }

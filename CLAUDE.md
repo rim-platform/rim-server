@@ -147,7 +147,7 @@ The frontend uses this to generate TypeScript types via `@graphql-codegen`.
 - `#[derive(Enum)]` on Rust enums auto-converts variants to SCREAMING_SNAKE in GraphQL
   (e.g., Rust `Sev2` → GraphQL `SEV_2`, Rust `ActionItem` → GraphQL `ACTION_ITEM`)
 - `#[derive(SimpleObject)]` converts Rust `snake_case` fields to GraphQL `camelCase`
-- The `export_sdl()` function in `rim_api/src/lib.rs` builds the full schema for SDL export
+- `build_schema()` in `rim_api/src/lib.rs` builds the schema; `/api/sdl` serves its `sdl()`
 - GraphQL types live in `rim_api/src/types/<domain>.rs` (all re-exported from `rim_api/src/types/mod.rs`,
   so `crate::types::X` works everywhere) — check there for field names. Resolvers live in
   `rim_api/src/query/<domain>.rs` and `rim_api/src/mutation/<domain>.rs`, one `#[Object]` per domain,

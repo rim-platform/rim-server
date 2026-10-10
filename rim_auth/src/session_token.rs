@@ -3,21 +3,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use getrandom::fill;
 use sha2::{Digest, Sha256};
 
+/// Generate a session token: `rim_sess_` and 32 random bytes, base64url-nopad.
 pub fn generate_session_token() -> String {
-    let mut bytes = [0u8; 32];
-    if let Err(e) = fill(&mut bytes) {
-        // getrandom failure is an OS-level fault (entropy source unavailable).
-        // Log to the audit channel before unwinding so the failure is visible
-        // in forensics even if the logging worker guard drops during panic.
-        tracing::error!(
-            target: "audit",
-            error = %e,
-            "fatal: OS entropy source failed; cannot generate session token"
-        );
-        panic!("getrandom failed: {e}");
-    }
-    let token = URL_SAFE_NO_PAD.encode(bytes);
-    format!("rim_sess_{token}")
+    generate_token("rim_sess_")
+}
+
+/// Generate a bearer token: `prefix` and 32 random bytes, base64url-nopad. Only its SHA-256
+/// ([`hash_token`]) is ever persisted.
+pub fn generate_token(prefix: &str) -> String {
+    format!("{prefix}{}", random_b64url::<32>("token"))
 }
 
 /// Generate a key-login challenge nonce: 32 random bytes, base64url-nopad, no prefix. It is
@@ -35,6 +29,12 @@ pub fn generate_link_id() -> String {
 /// `N` bytes from the OS random generator, base64url-nopad. `what` names the value in the log
 /// line written before panicking when the entropy source fails.
 fn random_b64url<const N: usize>(what: &str) -> String {
+    URL_SAFE_NO_PAD.encode(random_bytes::<N>(what))
+}
+
+/// `N` bytes from the OS random generator. An entropy failure is an OS-level fault: it is
+/// logged to the audit channel, naming `what`, and then panics.
+pub(crate) fn random_bytes<const N: usize>(what: &str) -> [u8; N] {
     let mut bytes = [0u8; N];
     if let Err(e) = fill(&mut bytes) {
         tracing::error!(
@@ -44,7 +44,7 @@ fn random_b64url<const N: usize>(what: &str) -> String {
         );
         panic!("getrandom failed: {e}");
     }
-    URL_SAFE_NO_PAD.encode(bytes)
+    bytes
 }
 
 pub fn hash_token(token: &str) -> String {
@@ -86,6 +86,14 @@ mod tests {
             "expected at least 43 chars after prefix (256-bit base64url), got {}",
             after_prefix.len()
         );
+    }
+
+    #[test]
+    fn token_is_the_prefix_and_32_random_bytes_of_unpadded_base64url() {
+        let token = generate_token("rim_test_");
+        let random = token.strip_prefix("rim_test_").expect("prefix");
+        assert_eq!(URL_SAFE_NO_PAD.decode(random).map(|b| b.len()), Ok(32));
+        assert_ne!(token, generate_token("rim_test_"));
     }
 
     #[test]

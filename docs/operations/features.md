@@ -8,7 +8,7 @@ SMTP is not configured, which is how it already behaved.
 
 | Name | What it covers | Why it can be switched off |
 |---|---|---|
-| `attachments` | `POST /api/files/upload`, `GET /api/attachments/{id}/download` (and both when another relay forwards them), the `attachment` query and the `createAttachment`, `finalizeAttachment` and `deleteAttachment` mutations | Stored files cost disk and backups, and some instances must not hold files at all. Messages work without them. |
+| `attachments` | `POST /api/files/upload`, `GET /api/attachments/{id}/download` (and both when another relay forwards them) and the `createAttachment`, `finalizeAttachment` and `deleteAttachment` mutations | Stored files cost disk and backups, and some instances must not hold files at all. Messages work without them. |
 | `link_previews` | Fetching previews for links in new messages, and `Message.linkPreviews` (empty while off) | The server fetches URLs users post, which leaks the server's address to those sites and costs outbound traffic. |
 | `email` | Password reset mail, invite mail and notification digests | Some instances must not send mail at all. |
 | `custom_emoji` | The `customEmojis` query and the `createCustomEmoji` and `deleteCustomEmoji` mutations | Uploaded images are content the operator moderates and stores. |

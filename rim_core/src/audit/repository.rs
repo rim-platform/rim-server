@@ -60,8 +60,6 @@ pub struct AuditLogRange {
 pub trait AuditLogRepository: Send + Sync {
     async fn insert(&self, entry: AuditLogEntryRecord) -> RepoResult<()>;
     async fn list(&self, query: AuditLogListQuery) -> RepoResult<AuditLogPageRecord>;
-    /// Delete rows with `created_at < cutoff`. Returns the number of rows deleted.
-    async fn delete_older_than(&self, cutoff: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
     /// Count the rows with `created_at < cutoff` and find their oldest and newest timestamps.
     async fn range_older_than(
         &self,

@@ -99,7 +99,7 @@ Spec: `docs/specs/track-1-2-roles-and-moderation.md`.
   (`addConversationMembers`) and creating workspace invites: `FORBIDDEN`. Guests may open DMs.
 - A public channel the guest has not been added to behaves like a private channel: `NOT_FOUND`
   on every read and write, absent from `channels` (a guest's channel list is always the joined
-  list, whatever `joinedOnly` says), from `searchMessages` and from `myMentions`, and its realtime
+  list, whatever `joinedOnly` says), and from `searchMessages`, and its realtime
   events do not reach the guest.
 - `serverMembers` for a guest lists only themselves and the members of conversations they share;
   `ServerMember` lookups of anyone else are `NOT_FOUND`. The directory events `MemberJoined`,
@@ -306,22 +306,16 @@ This lets clients render the timeline normally while also knowing whether a time
 
 - Timeline messages: `ORDER BY sent_at DESC, id DESC`
 - Thread messages: `ORDER BY sent_at DESC, id DESC`
-- Threads: `ORDER BY last_message_at DESC, id DESC`
 - Inbox conversations: `ORDER BY last_activity_at DESC, id DESC`
 - Channels: `ORDER BY created_at ASC, id ASC` (filtered by `ChannelListFilter`: `joinedOnly`,
   `includeArchived`; both default to `false`)
 
 Cursor pagination uses overfetch (`limit + 1`) so `next` and `prev` reflect actual additional data, not page-size guesses.
 
-## Message References
+## Permalinks
 
-- The backend exposes message references/permalinks for both timeline messages and thread replies.
-- A message reference contains:
-  - workspace/server id
-  - conversation id
-  - message id
-  - optional thread id
-  - permalink path
-  - stable UI anchor
-- Timeline message references use a conversation message path.
-- Thread reply references use a thread message path.
+- A timeline message's permalink is
+  `/workspaces/{server}/conversations/{conversation}/messages/{message}`.
+- A thread reply's permalink is
+  `/workspaces/{server}/conversations/{conversation}/threads/{thread}/messages/{message}`.
+- The email digest links each message by its permalink.

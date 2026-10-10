@@ -308,19 +308,6 @@ impl PipelineService for DefaultPipelineService {
         Ok(pipeline.into())
     }
 
-    async fn get(&self, actor: Actor, pipeline_id: PipelineId) -> ServiceResult<PipelineDto> {
-        let pipeline = self
-            .repos
-            .pipeline_repo
-            .get_by_id(pipeline_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        self.ensure_member(pipeline.server_id, actor.user_id)
-            .await?;
-        Ok(pipeline.into())
-    }
-
     async fn list(&self, cmd: ListPipelinesCmd) -> ServiceResult<Vec<PipelineDto>> {
         self.ensure_member(cmd.server_id, cmd.actor.user_id).await?;
 
@@ -566,8 +553,8 @@ impl PipelineService for DefaultPipelineService {
                                 // initiate (e.g. webhook trigger). Tag as
                                 // `Plugin` because pipelines are config-
                                 // driven non-human automation — same
-                                // agentic-rate-limit class as agent and
-                                // MCP per `is_agentic()`. See Fury-handoff
+                                // agentic-rate-limit class as agent per
+                                // `is_agentic()`. See Fury-handoff
                                 // note in docs/security/ai-reframe-review
                                 // §8.4: if Fury adds a dedicated `Pipeline`
                                 // variant in Phase 2, update this site.
@@ -658,7 +645,7 @@ mod tests {
     use super::*;
     use rim_core::pipeline::model::{PipelineAction, PipelineTrigger, PipelineTriggerKind};
     use rim_core::repository::error::RepoResult;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
     use rim_services::Actor;
     use rim_services::events::MessageEventData;
@@ -686,7 +673,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait::async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
             async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;

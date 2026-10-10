@@ -1,4 +1,4 @@
-use async_graphql::{Enum, InputObject, Result, SimpleObject};
+use async_graphql::{Enum, InputObject, SimpleObject};
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CommandResultStatus {
@@ -94,17 +94,11 @@ impl From<rim_services::command::confirmation::ConfirmationChallengeDto> for Con
     }
 }
 
-/// GraphQL input for submitting a confirmation proof. Exactly one of
-/// `inBandToken` or `outOfBand` MUST be populated; submitting both or
-/// neither results in a `VALIDATION` error.
-///
-/// `outOfBand` is a Phase-1 placeholder for MCP-style consent flows
-/// (M5 / Phase 6); the server currently rejects it with
-/// `CONFIRMATION_FAILED { code: UNSUPPORTED }`.
+/// GraphQL input for submitting a confirmation proof: the token and args
+/// hash of the challenge a previous call returned.
 #[derive(InputObject, Clone, Debug)]
 pub struct ConfirmationProofInput {
-    pub in_band_token: Option<InBandTokenInput>,
-    pub out_of_band: Option<OutOfBandProofInput>,
+    pub in_band_token: InBandTokenInput,
 }
 
 #[derive(InputObject, Clone, Debug)]
@@ -113,42 +107,12 @@ pub struct InBandTokenInput {
     pub args_hash: String,
 }
 
-#[derive(InputObject, Clone, Debug)]
-pub struct OutOfBandProofInput {
-    pub request_id: String,
-}
-
 impl ConfirmationProofInput {
-    /// Convert the GraphQL input into the service-layer
-    /// [`rim_services::command::confirmation::ConfirmationProof`].
-    ///
-    /// **Oneof discipline (Widow §W3 closure):** if a caller submits
-    /// `confirmation: { ... }` they MUST populate exactly one variant.
-    /// Both populated → `VALIDATION` error. Both `None` → also a
-    /// `VALIDATION` error (caller should omit the `confirmation` field
-    /// entirely if they have no proof to submit; an empty proof object
-    /// is treated as a malformed request, not as "no proof", so an
-    /// attacker stamping `confirmation: {}` cannot silently burn a
-    /// token slot per request).
-    pub fn into_proof(
-        self,
-    ) -> Result<rim_services::command::confirmation::ConfirmationProof, async_graphql::Error> {
-        use rim_services::command::confirmation::ConfirmationProof as P;
-        match (self.in_band_token, self.out_of_band) {
-            (Some(_), Some(_)) => Err(async_graphql::Error::new(
-                "ConfirmationProofInput must populate exactly one of inBandToken / outOfBand",
-            )),
-            (None, None) => Err(async_graphql::Error::new(
-                "ConfirmationProofInput must populate exactly one of inBandToken / outOfBand; \
-                 omit the field entirely if you have no proof to submit",
-            )),
-            (Some(t), None) => Ok(P::InBandToken {
-                token: t.token,
-                args_hash: t.args_hash,
-            }),
-            (None, Some(o)) => Ok(P::OutOfBand {
-                request_id: o.request_id,
-            }),
+    /// The service-layer [`rim_services::command::confirmation::ConfirmationProof`].
+    pub fn into_proof(self) -> rim_services::command::confirmation::ConfirmationProof {
+        rim_services::command::confirmation::ConfirmationProof::InBandToken {
+            token: self.in_band_token.token,
+            args_hash: self.in_band_token.args_hash,
         }
     }
 }

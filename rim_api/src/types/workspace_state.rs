@@ -72,11 +72,3 @@ pub struct DeleteWorkspaceStateInput {
     pub key: String,
     pub scope: WorkspaceStateScopeGql,
 }
-
-#[derive(InputObject, Clone, Debug)]
-pub struct IncrementWorkspaceStateInput {
-    pub server_id: async_graphql::ID,
-    pub key: String,
-    pub scope: WorkspaceStateScopeGql,
-    pub delta: i64,
-}

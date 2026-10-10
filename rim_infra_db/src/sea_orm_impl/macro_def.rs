@@ -61,15 +61,6 @@ impl MacroRepository for SeaOrmMacroRepository {
         Ok(models.into_iter().map(Into::into).collect())
     }
 
-    async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>> {
-        let models = macro_def::Entity::find()
-            .filter(macro_def::Column::ServerId.eq::<Uuid>(server_id.into()))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(models.into_iter().map(Into::into).collect())
-    }
-
     async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64> {
         let count = macro_def::Entity::find()
             .filter(macro_def::Column::ServerId.eq::<Uuid>(server_id.into()))

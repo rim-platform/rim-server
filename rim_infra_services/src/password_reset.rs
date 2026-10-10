@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
 use rim_auth::password::hash_password;
-use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::repository::SessionRepository;
 use rim_core::password_reset::model::NewPasswordResetToken;
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
@@ -85,10 +85,7 @@ impl DefaultPasswordResetService {
     }
 
     fn generate_reset_token() -> String {
-        let t = generate_session_token();
-        t.strip_prefix("rim_sess_")
-            .map(|s| format!("rim_rst_{s}"))
-            .unwrap_or_else(|| format!("rim_rst_{t}"))
+        generate_token("rim_rst_")
     }
 
     /// Build the reset link as a path segment: `{public_base_url}/reset-password/{token}` — a

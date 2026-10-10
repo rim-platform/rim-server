@@ -1,7 +1,7 @@
 use async_graphql::{InputObject, Result, SimpleObject};
 use rim_core::repository::pagination::Page;
 
-use super::{Conversation, Message, SearchResultMessage, Thread};
+use super::{Conversation, Message, SearchResultMessage};
 
 #[derive(InputObject, Clone, Debug)]
 pub struct InboxCursorInput {
@@ -55,25 +55,6 @@ impl TryFrom<MessageCursorInput> for rim_services::message::dto::MessagePageCurs
             sent_at: value.sent_at,
             message_id: crate::ids::parse_uuid_id::<rim_core::message::model::MessageId>(
                 &value.message_id,
-            )?,
-        })
-    }
-}
-
-#[derive(InputObject, Clone, Debug)]
-pub struct ThreadCursorInput {
-    pub last_message_at: chrono::DateTime<chrono::Utc>,
-    pub thread_id: async_graphql::ID,
-}
-
-impl TryFrom<ThreadCursorInput> for rim_services::message_thread::dto::ThreadPageCursor {
-    type Error = async_graphql::Error;
-
-    fn try_from(value: ThreadCursorInput) -> Result<Self, Self::Error> {
-        Ok(Self {
-            last_message_at: value.last_message_at,
-            thread_id: crate::ids::parse_uuid_id::<rim_core::message_thread::model::MessageThreadId>(
-                &value.thread_id,
             )?,
         })
     }
@@ -194,38 +175,6 @@ pub struct SearchResultPage {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
-pub struct ThreadPage {
-    pub items: Vec<Thread>,
-    pub next: Option<ThreadCursorOutput>,
-    pub prev: Option<ThreadCursorOutput>,
-    pub page_info: PageInfo,
-}
-
-impl ThreadPage {
-    pub fn from_page(
-        page: Page<
-            rim_services::message_thread::dto::ThreadDto,
-            rim_services::message_thread::dto::ThreadPageCursor,
-        >,
-    ) -> Self {
-        let has_next = page.next.is_some();
-        let has_prev = page.prev.is_some();
-        Self {
-            items: page.items.into_iter().map(Into::into).collect(),
-            next: page.next.map(|c| ThreadCursorOutput {
-                last_message_at: c.last_message_at,
-                thread_id: async_graphql::ID(c.thread_id.to_string()),
-            }),
-            prev: page.prev.map(|c| ThreadCursorOutput {
-                last_message_at: c.last_message_at,
-                thread_id: async_graphql::ID(c.thread_id.to_string()),
-            }),
-            page_info: PageInfo { has_next, has_prev },
-        }
-    }
-}
-
-#[derive(SimpleObject, Clone, Debug)]
 pub struct InboxCursorOutput {
     pub last_activity_at: chrono::DateTime<chrono::Utc>,
     pub conversation_id: async_graphql::ID,
@@ -241,10 +190,4 @@ pub struct ChannelCursorOutput {
 pub struct MessageCursorOutput {
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub message_id: async_graphql::ID,
-}
-
-#[derive(SimpleObject, Clone, Debug)]
-pub struct ThreadCursorOutput {
-    pub last_message_at: chrono::DateTime<chrono::Utc>,
-    pub thread_id: async_graphql::ID,
 }

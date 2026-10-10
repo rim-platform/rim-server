@@ -16,7 +16,10 @@ use support::nodes::{Node, databases, start};
 use std::path::Path;
 
 use chrono::Utc;
+use rim_core::s2s::model::{PeerServer, PeerStatus};
+use rim_core::s2s::repository::PeerServerRepository;
 use rim_identity::SignedStatement;
+use rim_infra_db::sea_orm_impl::s2s::SeaOrmPeerServerRepository;
 use rim_infra_services::s2s::server_key;
 use rim_s2s::http_sig::{
     IncomingResponse, KeyId, OutgoingRequest, RequestBinding, new_nonce, parse_response,
@@ -35,6 +38,14 @@ async fn two_nodes() -> (Node, Node) {
     let a = start(&first, |_| {}).await;
     let b = start(&second, |_| {}).await;
     (a, b)
+}
+
+/// `server_id`'s pin on `node`, read from its database.
+async fn pin_of(node: &Node, server_id: &str) -> Option<PeerServer> {
+    SeaOrmPeerServerRepository::new(node.db.clone().into())
+        .find(server_id)
+        .await
+        .expect("find")
 }
 
 /// A request signed by hand, so tests can replay, tamper with and age it.
@@ -292,14 +303,7 @@ async fn b_pins_a_and_a_signed_ping_round_trips_both_ways() {
     assert_eq!(body["serverId"], a.id());
     assert_eq!(body["roles"], serde_json::json!(["host", "relay"]));
     // A pinned B from its Rim-Origin while verifying the request.
-    let b_at_a = a
-        .s2s
-        .state
-        .peers
-        .get(&b.id())
-        .await
-        .expect("get")
-        .expect("pinned");
+    let b_at_a = pin_of(&a, &b.id()).await.expect("pinned");
     assert_eq!(b_at_a.origin, b.origin);
 
     let back = client_ping(&a, &b).await;
@@ -391,7 +395,7 @@ async fn a_denied_peer_is_refused() {
     assert_eq!(answer.status, 403);
     let body: Value = serde_json::from_slice(&answer.body).expect("json");
     assert_eq!(error_code(&body), "peer_not_allowed");
-    assert!(a.s2s.state.peers.get(&b.id()).await.expect("get").is_none());
+    assert!(pin_of(&a, &b.id()).await.is_none());
     a.stop().await;
     b.stop().await;
 }
@@ -448,14 +452,7 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     // Signed at seq 1: A refetches B's log, sees the rotation and accepts it.
     let answer = client_ping(&b, &a).await;
     assert_eq!(answer.status, 200);
-    let b_at_a = a
-        .s2s
-        .state
-        .peers
-        .get(&b.id())
-        .await
-        .expect("get")
-        .expect("pinned");
+    let b_at_a = pin_of(&a, &b.id()).await.expect("pinned");
     assert_eq!(b_at_a.head_seq, 1);
 
     // The previous key still works during the grace period…
@@ -538,15 +535,8 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     assert_eq!(answer.status, 403);
     let body: Value = serde_json::from_slice(&answer.body).expect("json");
     assert_eq!(error_code(&body), "peer_forked");
-    let b_at_a = a
-        .s2s
-        .state
-        .peers
-        .get(&b.id())
-        .await
-        .expect("get")
-        .expect("pinned");
-    assert_eq!(b_at_a.status, "forked");
+    let b_at_a = pin_of(&a, &b.id()).await.expect("pinned");
+    assert_eq!(b_at_a.status, PeerStatus::Forked);
 
     // After an out-of-band check the operator resets the pin and B is pinned afresh.
     assert!(a.s2s.state.peers.reset(&b.id()).await.expect("reset"));

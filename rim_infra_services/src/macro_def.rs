@@ -20,8 +20,8 @@ use rim_services::command::service::CommandService;
 use rim_services::command::verb::TypedVerb;
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
-    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
-    ListUserMacrosQuery, SynthesizeMacroCommandsQuery, UpdateMacroCmd,
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
+    SynthesizeMacroCommandsQuery, UpdateMacroCmd,
 };
 use rim_services::macro_def::service::MacroService;
 use rim_services::{ServiceError, ServiceResult};
@@ -284,19 +284,6 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .list_for_user(query.server_id, query.actor.user_id)
-            .await?;
-
-        macros.into_iter().map(Self::to_dto).collect()
-    }
-
-    async fn list_server_macros(
-        &self,
-        query: ListServerMacrosQuery,
-    ) -> ServiceResult<Vec<MacroDto>> {
-        let macros = self
-            .repos
-            .macro_repo
-            .list_for_server(query.server_id)
             .await?;
 
         macros.into_iter().map(Self::to_dto).collect()
@@ -652,14 +639,13 @@ mod tests {
     use async_trait::async_trait;
     use rim_core::macro_def::repository::MacroRepository;
     use rim_core::repository::error::RepoResult;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
 
     mockall::mock! {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
             async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;
@@ -692,7 +678,6 @@ mod tests {
                 server_id: ServerId,
                 user_id: UserId,
             ) -> RepoResult<Vec<MacroDef>>;
-            async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>>;
             async fn count_for_user(
                 &self,
                 server_id: ServerId,

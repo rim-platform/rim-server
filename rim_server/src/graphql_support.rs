@@ -180,17 +180,6 @@ fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
     })
 }
 
-pub async fn extract_actor_and_session_id(
-    req: &HttpRequest,
-    request_authenticator: &dyn RequestAuthenticator,
-) -> rim_services::ServiceResult<(
-    Option<rim_core::user::model::UserId>,
-    Option<rim_core::auth::model::SessionId>,
-)> {
-    let result = extract_auth(req, request_authenticator).await?;
-    Ok((result.user_id, result.session_id))
-}
-
 /// The session cookie's user, session and the device the session is bound to.
 pub async fn extract_auth(
     req: &HttpRequest,
@@ -366,14 +355,14 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn extract_actor_and_session_id_returns_error_on_repo_failure() {
+    async fn extract_auth_returns_error_on_repo_failure() {
         let req = session_cookie_request("session-token");
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
             .withf(|token| *token == Some("session-token"))
             .return_once(|_| Box::pin(async { Err(rim_services::ServiceError::Unavailable) }));
 
-        let result = extract_actor_and_session_id(&req, &auth).await;
+        let result = extract_auth(&req, &auth).await;
 
         assert!(matches!(
             result,
@@ -382,20 +371,21 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn extract_actor_and_session_id_returns_anonymous_for_expired_session() {
+    async fn extract_auth_returns_anonymous_for_expired_session() {
         let req = session_cookie_request("session-token");
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
             .withf(|token| *token == Some("session-token"))
             .return_once(|_| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
 
-        let result = extract_actor_and_session_id(&req, &auth).await.unwrap();
+        let result = extract_auth(&req, &auth).await.unwrap();
 
-        assert_eq!(result, (None, None));
+        assert_eq!(result.user_id, None);
+        assert_eq!(result.session_id, None);
     }
 
     #[actix_web::test]
-    async fn extract_actor_and_session_id_returns_authenticated_actor() {
+    async fn extract_auth_returns_authenticated_actor() {
         let req = session_cookie_request("session-token");
         let user_id = UserId::new();
         let session_id = SessionId::new();
@@ -412,9 +402,10 @@ mod tests {
                 })
             });
 
-        let result = extract_actor_and_session_id(&req, &auth).await.unwrap();
+        let result = extract_auth(&req, &auth).await.unwrap();
 
-        assert_eq!(result, (Some(user_id), Some(session_id)));
+        assert_eq!(result.user_id, Some(user_id));
+        assert_eq!(result.session_id, Some(session_id));
     }
 
     #[test]

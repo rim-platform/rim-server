@@ -2,37 +2,9 @@ use crate::Actor;
 use crate::keybind::dto::{KeybindContextDto, KeybindScopeDto};
 
 #[derive(Debug, Clone)]
-pub struct ListKeybindsQuery {
-    pub actor: Actor,
-    pub scope: KeybindScopeDto,
-    pub workspace_id: Option<rim_core::server::model::WorkspaceId>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ListDefaultKeybindsQuery {
-    pub actor: Actor,
-}
-
-#[derive(Debug, Clone)]
 pub struct ResolveKeybindsQuery {
     pub actor: Actor,
     pub workspace_id: Option<rim_core::server::model::WorkspaceId>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolveKeybindQuery {
-    pub actor: Actor,
-    pub workspace_id: Option<rim_core::server::model::WorkspaceId>,
-    pub keystroke: String,
-    pub context: KeybindContextDto,
-}
-
-#[derive(Debug, Clone)]
-pub struct InspectKeybindLayersQuery {
-    pub actor: Actor,
-    pub workspace_id: Option<rim_core::server::model::WorkspaceId>,
-    pub keystroke: String,
-    pub context: KeybindContextDto,
 }
 
 #[derive(Debug, Clone)]

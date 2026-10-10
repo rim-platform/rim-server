@@ -1,9 +1,9 @@
-//! Instance invites: the terms every issuer is held to and the issuing itself, shared by
-//! `createInstanceInvite` and the operator's `rim_server invite` command.
+//! Instance invites: the terms every issuer is held to and the issuing itself, used by the
+//! operator's `rim_server invite` command.
 
 use chrono::{DateTime, Duration, Utc};
 
-use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::{InstanceInvite, NewInstanceInvite};
 use rim_core::auth::repository::InstanceInviteRepository;
 use rim_core::user::model::UserId;
@@ -25,10 +25,7 @@ pub struct IssuedInvite {
 
 /// A fresh raw invite token, `rim_iinv_` followed by the session token's random part.
 fn new_token() -> String {
-    let t = generate_session_token();
-    t.strip_prefix("rim_sess_")
-        .map(|s| format!("rim_iinv_{s}"))
-        .unwrap_or_else(|| format!("rim_iinv_{t}"))
+    generate_token("rim_iinv_")
 }
 
 /// The expiry and use count an invite gets: `expires_at` defaults to [`DEFAULT_TTL_DAYS`] from

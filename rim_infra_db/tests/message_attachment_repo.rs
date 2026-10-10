@@ -32,7 +32,6 @@ async fn add_get_and_list_attachments_for_message() {
             parent_message_id: None,
             sent_by: user.id,
             text: Some("t".to_string()),
-            attachments: vec![],
             forwarded_from_message_id: None,
         })
         .await
@@ -115,7 +114,6 @@ async fn get_attachments_for_messages_batch() {
             parent_message_id: None,
             sent_by: user.id,
             text: Some("msg1".to_string()),
-            attachments: vec![],
             forwarded_from_message_id: None,
         })
         .await
@@ -128,7 +126,6 @@ async fn get_attachments_for_messages_batch() {
             parent_message_id: None,
             sent_by: user.id,
             text: Some("msg2".to_string()),
-            attachments: vec![],
             forwarded_from_message_id: None,
         })
         .await

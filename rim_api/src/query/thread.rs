@@ -2,15 +2,13 @@ use async_graphql::*;
 use rim_services::Actor;
 use rim_services::message::command::ListThreadMessagesQuery;
 use rim_services::message::service::MessageService;
-use rim_services::message_thread::command::{
-    GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
-};
+use rim_services::message_thread::command::{GetThreadByRootMessageQuery, GetThreadQuery};
 use rim_services::message_thread::service::ThreadService;
 
 use crate::auth_context::require_actor;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
-use crate::types::{MessageCursorInput, MessagePage, Thread, ThreadCursorInput, ThreadPage};
+use crate::types::{MessageCursorInput, MessagePage, Thread};
 
 #[derive(Default)]
 pub(crate) struct ThreadQueries;
@@ -71,36 +69,6 @@ impl ThreadQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(t.map(Into::into))
-    }
-
-    async fn threads(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-        conversation_id: ID,
-        dir: PageDir,
-        cursor: Option<ThreadCursorInput>,
-        limit: i32,
-    ) -> Result<ThreadPage> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn ThreadService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-        let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
-
-        let page = svc
-            .list_threads(ListThreadsQuery {
-                actor: Actor::new(actor),
-                server_id,
-                conversation_id,
-                dir: dir.into(),
-                cursor: cursor.map(TryFrom::try_from).transpose()?,
-                limit: (limit.max(1) as u32).min(100),
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(ThreadPage::from_page(page))
     }
 
     #[allow(clippy::too_many_arguments)]

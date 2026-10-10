@@ -439,10 +439,6 @@ mod tests {
 
     #[async_trait]
     impl ServerMemberRepository for FakeServerMemberRepo {
-        async fn get_by_id(&self, _id: ServerMemberId) -> RepoResult<Option<ServerMember>> {
-            Ok(None)
-        }
-
         async fn get_member(
             &self,
             _server_id: ServerId,
@@ -511,10 +507,6 @@ mod tests {
 
         async fn create_server(&self, _name: &str) -> RepoResult<Server> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
-        }
-
-        async fn find_by_name(&self, _name: &str) -> RepoResult<Option<Server>> {
-            Ok(None)
         }
 
         async fn get_servers_for_user(&self, _user_id: UserId) -> RepoResult<Vec<Server>> {
@@ -813,13 +805,6 @@ mod tests {
     impl rim_core::conversation_member::repository::ConversationMemberRepository
         for FakeConversationMemberRepo
     {
-        async fn get_by_id(
-            &self,
-            _id: rim_core::conversation_member::model::ConversationMemberId,
-        ) -> RepoResult<Option<rim_core::conversation_member::model::ConversationMember>> {
-            Ok(None)
-        }
-
         async fn add_member(
             &self,
             _conversation_id: ConversationId,

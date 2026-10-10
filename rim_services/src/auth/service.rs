@@ -4,15 +4,13 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::auth::command::{
-    AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    ListInvitesQuery, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd, PreviewInviteTokenQuery,
-    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
     SignupWithInstanceInviteCmd,
 };
 use crate::auth::dto::{
-    AcceptInviteResultDto, CreateInstanceInviteResultDto, CreateInviteResultDto, InstanceInviteDto,
-    InviteDto, InviteTokenPreviewDto, JoinServerByInviteResultDto, LoginResultDto,
-    RequestAuthResultDto, SignupResultDto,
+    AcceptInviteResultDto, CreateInviteResultDto, InviteTokenPreviewDto,
+    JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto, SignupResultDto,
 };
 
 #[async_trait]
@@ -38,10 +36,6 @@ pub trait AuthService: Send + Sync {
         &self,
         cmd: JoinServerByInviteCmd,
     ) -> ServiceResult<JoinServerByInviteResultDto>;
-
-    async fn list_invites(&self, query: ListInvitesQuery) -> ServiceResult<Vec<InviteDto>>;
-
-    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<()>;
 
     /// Sign up using a CLI-issued bootstrap token.
     ///
@@ -110,61 +104,6 @@ pub trait AuthService: Send + Sync {
     /// }).await?;
     /// ```
     async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto>;
-
-    /// Issue a new instance invite.
-    ///
-    /// Requires the caller (`actor`) to be the `Owner` of at least one server
-    /// on this instance (placeholder gate — see spec §11.1).
-    ///
-    /// # Errors
-    /// - `PermissionDenied` — actor is not a workspace owner on any server.
-    /// - `Validation` — `expires_at` is in the past, or `max_uses` exceeds 50.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let result = auth.create_instance_invite(CreateInstanceInviteCmd {
-    ///     actor,
-    ///     expires_at: Some(Utc::now() + Duration::days(7)),
-    ///     max_uses: Some(5),
-    /// }).await?;
-    /// ```
-    async fn create_instance_invite(
-        &self,
-        cmd: CreateInstanceInviteCmd,
-    ) -> ServiceResult<CreateInstanceInviteResultDto>;
-
-    /// Revoke an existing instance invite.
-    ///
-    /// Requires the caller to be a workspace owner.
-    ///
-    /// # Errors
-    /// - `NotFound` — invite id does not exist.
-    /// - `PermissionDenied` — actor is not a workspace owner on any server.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// auth.revoke_instance_invite(RevokeInstanceInviteCmd {
-    ///     actor,
-    ///     invite_id,
-    /// }).await?;
-    /// ```
-    async fn revoke_instance_invite(&self, cmd: RevokeInstanceInviteCmd) -> ServiceResult<()>;
-
-    /// List all active (non-revoked) instance invites.
-    ///
-    /// Requires the caller to be a workspace owner (same gate as issuance).
-    ///
-    /// # Errors
-    /// - `PermissionDenied` — actor is not a workspace owner.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let invites = auth.list_instance_invites(actor).await?;
-    /// ```
-    async fn list_instance_invites(
-        &self,
-        actor: crate::Actor,
-    ) -> ServiceResult<Vec<InstanceInviteDto>>;
 
     /// Preview a registration token without consuming it.
     ///
