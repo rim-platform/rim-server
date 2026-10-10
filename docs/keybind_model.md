@@ -1,6 +1,6 @@
 # Keybind Model
 
-This document defines the Phase 0 keybind model for RIM.
+This document defines the keybind model for RIM.
 
 The keybind system is one of the core differentiators of the product. Keybinds should make both
 built-in and extended workflows fast to trigger without becoming a separate scripting system.
@@ -256,7 +256,7 @@ Possible later addition:
 
 That should only be added if explicit contexts prove insufficient.
 
-## Non-Goals For Phase 0
+## Non-Goals
 
 The keybind system should not become:
 

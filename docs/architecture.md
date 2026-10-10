@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the current architectural direction of RIM.
+This document describes the architecture of the RIM server.
 
 It is intentionally higher level than crate-specific implementation notes. The goal is to explain:
 
@@ -8,11 +8,11 @@ It is intentionally higher level than crate-specific implementation notes. The g
 - how the system is layered today
 - what each crate is responsible for
 - where state and behavior should live
-- how the system can evolve later without rewriting everything
+- which rules keep new features compatible with encryption and more than one server
 
 ## Product Framing
 
-RIM is a modern team chat app on steroids.
+RIM is a programmable communication workspace (`docs/vision.md`).
 
 Communication is the base surface, but the product is differentiated by:
 
@@ -30,8 +30,9 @@ Examples:
 - bind a custom workflow to a keybind
 - run a command chain without leaving the app
 
-Privacy and security are first-class principles. Optional E2EE is a later product phase, not a
-short-term shortcut.
+Privacy and security are first-class principles. DMs and private groups are end-to-end encrypted
+with MLS, a person is a key pair rather than an account on one server, and servers act as relays
+and workspace hosts for each other (`docs/specs/`).
 
 ## Architectural Principles
 
@@ -52,7 +53,7 @@ Developers should be able to:
 - implement their own repositories
 - implement their own services
 - build alternate API adapters
-- write plugins and integrations later
+- write plugins and integrations
 
 This means contracts and boundaries matter more than local convenience.
 
@@ -163,6 +164,24 @@ Owns:
 
 It should stay focused on composition and request orchestration.
 
+It is also the composition root (`app.rs`) and serves the transports that are not GraphQL:
+uploads and downloads, plugin bundles, health and metrics, the server-to-server routes and the
+relay's forwarding route. `CLAUDE.md` describes these two exceptions to the layer chain.
+
+### `rim_auth`, `rim_identity`, `rim_s2s`
+
+Leaf crates with no database or HTTP code:
+
+- `rim_auth`: password hashing, session and CSRF tokens.
+- `rim_identity`: verification of key identity statements (key logs, device certificates,
+  profile cards, login proofs, plugin manifests, MLS credentials).
+- `rim_s2s`: the server key log and `rims1_` ids, the signed descriptor, server-signed
+  statements and the RFC 9421 signature profile of the server-to-server transport.
+
+### `rim_logging`
+
+Structured JSON logging and the audit log file.
+
 ### `entity`
 
 Owns:
@@ -186,7 +205,7 @@ The persisted/core identifier still uses `ServerId`, but product terminology pre
 Today:
 
 - a server/workspace is the top-level shared container
-- members hold one of four roles (Track 1.2): `Owner`, `Moderator`, `Member` (default), `Guest`
+- members hold one of four roles: `Owner`, `Moderator`, `Member` (default), `Guest`
   (restricted to conversations they were added to). Moderation state — bans, timeouts and
   message reports — lives in `rim_core::moderation` (`ModerationRepository`) and is managed by
   `ModerationService` (`rim_infra_services/src/moderation.rs`), which also owns the shared
@@ -201,13 +220,13 @@ A conversation lives inside a server/workspace and represents one of:
 - DM
 - group chat
 
-Access rules (Track 1.1, `rim_infra_services/src/util.rs`): `ensure_conversation_member_access`
+Access rules (`rim_infra_services/src/util.rs`): `ensure_conversation_member_access`
 lets any workspace member read a public channel; private channels, DMs and groups need a
 `conversation_member` row (a private-channel non-member gets `NotFound`, a DM/group non-member
 `PermissionDenied`). `ensure_conversation_writable` adds the archive check
 (`ConversationArchived`) for every write path. See `docs/messaging.md`.
 
-Track 1.2 makes the gate role-aware: it loads the actor's `MemberStanding` (role plus any active
+The gate is role-aware: it loads the actor's `MemberStanding` (role plus any active
 timeout, `ServerMemberRepository::get_member_standing`) instead of a bare membership check. A
 `Guest` needs a `conversation_member` row even for a public channel (`NotFound` otherwise), and
 `ensure_conversation_writable` also refuses a timed-out member (`TimedOut`). Slow mode is
@@ -237,15 +256,10 @@ An attachment belongs to a message.
 
 ### Principal
 
-The system has a principal foundation for:
-
-- users
-- apps
-- bots
-- webhooks
-
-Today, runtime behavior is still mostly user-first, but the architecture is preparing for broader
-principal types.
+A principal is who acts. Every user with a key identity has a stable principal id (`rimp1_…`)
+that plugins and other servers see instead of a server-local id; a person from another server is
+a `user` row of kind `remote` keyed by that id. `Principal` and `PrincipalKind` in `rim_core` are
+the seam for further kinds such as bots, which do not exist yet.
 
 ### Command
 
@@ -255,7 +269,7 @@ Commands are the common execution unit across:
 - keybinds
 - context actions
 - user-defined workflows
-- future plugins/integrations
+- plugins and the AI agent
 
 Current backend state:
 
@@ -310,15 +324,9 @@ Plugins are extension packages that may contribute multiple extension points, su
 - automations
 - integrations
 
-Current architectural direction:
-
-- plugins are local/client runtime extensions
-- the local plugin host owns install/enable/disable and runtime behavior
-- the backend provides stable APIs and command surfaces plugins can call through the host
-- backend-managed plugin installation is not the default first-version architecture
-
-See also: `docs/local_plugin_host.md` (the desktop plugin host) and
-`docs/specs/plugin-protocol-v1.md` (the plugin process protocol).
+Plugins run in the client, never on the server. The client's plugin host owns installation,
+consent and runtime; the server keeps per-workspace registries of signed plugins and serves web
+plugin bundles. See `docs/plugin_model.md`.
 
 ### Context
 
@@ -393,45 +401,12 @@ The architecture should preserve visible trust boundaries between:
 - plugin behavior
 - integration behavior
 
-## Current Implementation State
+## Scaling Limits
 
-### Already Real
-
-- messaging core
-- thread model
-- attachment baseline
-- provider-based service composition
-- request authentication boundary
-- command backend slice
-- keybind persisted/shared backend slice
-- platform primitive skeletons
-
-### Intentionally Incomplete
-
-- client-side runtime keybind layer
-- desktop-local command execution runtime
-- plugin runtime/host
-- stronger capability enforcement
-- richer principal-aware runtime behavior
-- platform primitive persistence/execution
-
-## Future Evolution
-
-The current architecture is compatible with later splitting the system into more independent
-services or runtimes if needed.
-
-Possible future service/runtime seams include:
-
-- auth/session service
-- messaging service
-- command catalog/execution service
-- plugin/integration runtime service
-- notification/event service
-- search/indexing service
-- media/call service
-
-The current code is not deployed that way today, but the boundaries are intended to make that
-possible later.
+One server process holds some state in memory behind traits: the event broadcaster, the
+confirmation store, rate limiters, presence and typing. Some background jobs, such as the notification digest, assume one node. Running
+several nodes of one server needs those traits backed by shared stores first; new features must
+not depend on single-node semantics (`ROADMAP.md`, "Architecture guardrails").
 
 ## Contributor Rules
 
@@ -451,9 +426,5 @@ Avoid:
 - persistence details leaking into service contracts unnecessarily
 - runtime-local concerns being pushed into backend persistence just for convenience
 
-## Architecture Health Check
-
-At the current stage, the architecture is in a good place.
-
-The main subsystem to keep watching is the command/keybind/plugin substrate, because it is the most
-likely area to become too central or too hardcoded if not kept clean as new phases are implemented.
+Every new server feature also answers two questions: what it does when the message content is
+encrypted, and what it does when the people involved are on more than one server.
