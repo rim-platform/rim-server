@@ -13,8 +13,8 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::model::{
-        E2eeDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId,
-        MlsReaddRequest, MlsReaddRequestId, MlsWelcomeId,
+        E2eeDevice, FrankingRevision, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+        MlsKeyPackageId, MlsReaddRequest, MlsReaddRequestId, MlsWelcomeId,
     };
     use rim_core::e2ee::repository::E2eeRepository;
     use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
@@ -2013,6 +2013,69 @@ mod tests {
             .report_encrypted_message(report(&sent, fields, 2, &SERVER_KEY_2))
             .await
             .expect("the content the row committed to");
+    }
+
+    #[tokio::test]
+    async fn an_earlier_revision_stays_reportable_after_an_edit() {
+        let f = Fixture::new();
+        f.repo.state().devices.push(stored_device(&f.bob));
+        let franking_key = [0x60u8; 32];
+        let sent = br#"{"v":1,"type":"message","rev":0,"body":"abuse"}"#.to_vec();
+        let edited = br#"{"v":1,"type":"message","rev":1,"body":"nothing to see"}"#.to_vec();
+        let forged = br#"{"v":1,"type":"message","rev":0,"body":"never sent"}"#.to_vec();
+        let sent_at = Utc::now();
+        // The row holds the edit; the sent version is only a recorded revision.
+        let message = encrypted_message(&f, sent_at, &commitment(&franking_key, &edited), &[]);
+        let message_id = message.id;
+        f.messages.lock().unwrap().insert(message_id, message);
+        for (revision, content) in [(0, &sent), (1, &edited)] {
+            f.repo.state().revisions.push(FrankingRevision {
+                message_id,
+                revision,
+                franking_commitment: commitment(&franking_key, content).to_vec(),
+                sent_at_us: sent_at_us(sent_at),
+                sender_device_id: f.bob.device_id,
+                created_at: Utc::now(),
+            });
+        }
+        let fields = ReceiptFields {
+            message_id: message_id.into(),
+            conversation_id: f.conv.id.into(),
+            sender_user_id: f.bob.user.into(),
+            sender_device_id: f.bob.device_id,
+            sent_at_us: sent_at_us(sent_at),
+        };
+        let report = |actor: UserId, content: &[u8]| {
+            let c = commitment(&franking_key, content);
+            ReportEncryptedMessageCmd {
+                actor: Actor::new(actor),
+                server_id: f.server,
+                conversation_id: f.conv.id,
+                message_id,
+                reason: "abuse".to_string(),
+                content: b64(content),
+                franking_key: b64(&franking_key),
+                receipt: b64(&receipt(&SERVER_KEY_2, &fields, &c)),
+                receipt_key_id: 2,
+                sender_user_id: f.bob.user,
+                sender_device_id: f.bob.device_id,
+                sent_at_us: fields.sent_at_us.to_string(),
+            }
+        };
+        let err = f
+            .service
+            .report_encrypted_message(report(f.alice.user, &forged))
+            .await
+            .unwrap_err();
+        assert_eq!(validation(err), "the report does not match the message");
+        f.service
+            .report_encrypted_message(report(f.alice.user, &sent))
+            .await
+            .expect("the version the receiver saw before the edit");
+        assert_eq!(
+            f.reports.lock().unwrap()[0].2.as_ref().map(|r| &r.content),
+            Some(&sent)
+        );
     }
 
     #[tokio::test]

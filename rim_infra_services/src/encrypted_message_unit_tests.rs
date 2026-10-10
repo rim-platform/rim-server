@@ -547,6 +547,29 @@ mod tests {
             stored.encryption.expect("envelope").franking_commitment,
             vec![0x72; 32]
         );
+        // The sent version and the edit are both recorded, with the same send time.
+        let revisions: Vec<_> = f
+            .repo
+            .state()
+            .revisions
+            .iter()
+            .map(|r| {
+                (
+                    r.revision,
+                    r.franking_commitment.clone(),
+                    r.sent_at_us,
+                    r.sender_device_id,
+                )
+            })
+            .collect();
+        let sent_at = sent_at_us(stored.sent_at);
+        assert_eq!(
+            revisions,
+            vec![
+                (0, vec![0x71; 32], sent_at, f.alice.device_id),
+                (1, vec![0x72; 32], sent_at, f.alice.device_id),
+            ]
+        );
         assert!(
             f.mentions.lock().unwrap().is_empty(),
             "the edit mentions no one"

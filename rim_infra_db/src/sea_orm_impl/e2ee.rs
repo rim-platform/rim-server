@@ -3,11 +3,11 @@ use chrono::{DateTime, Duration, Utc};
 use entity::message;
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
-    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS,
+    MlsCommit, MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
-    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit, NewMlsGroup,
-    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
+    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -303,6 +303,29 @@ impl From<FrankingKeyRow> for FrankingKey {
         Self {
             id: row.id,
             secret: zeroize::Zeroizing::new(row.secret),
+            created_at: row.created_at.into(),
+        }
+    }
+}
+
+#[derive(FromQueryResult)]
+struct FrankingRevisionRow {
+    message_id: Uuid,
+    revision: i32,
+    franking_commitment: Vec<u8>,
+    sent_at_us: i64,
+    sender_device_id: Uuid,
+    created_at: DateTimeWithTimeZone,
+}
+
+impl From<FrankingRevisionRow> for FrankingRevision {
+    fn from(row: FrankingRevisionRow) -> Self {
+        Self {
+            message_id: row.message_id.into(),
+            revision: row.revision,
+            franking_commitment: row.franking_commitment,
+            sent_at_us: row.sent_at_us,
+            sender_device_id: row.sender_device_id,
             created_at: row.created_at.into(),
         }
     }
@@ -1307,6 +1330,37 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             return Err(RepoError::new(RepoErrorKind::NotFound));
         }
         self.message(id).await
+    }
+
+    async fn append_franking_revision(&self, revision: NewFrankingRevision) -> RepoResult<()> {
+        let message: Uuid = revision.message_id.into();
+        self.execute(
+            "INSERT INTO message_franking_revision \
+             (message_id, revision, franking_commitment, sent_at_us, sender_device_id) \
+             SELECT $1, COALESCE(max(revision) + 1, 0), $2, $3, $4 \
+             FROM message_franking_revision WHERE message_id = $1",
+            vec![
+                message.into(),
+                revision.franking_commitment.into(),
+                revision.sent_at_us.into(),
+                revision.sender_device_id.into(),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>> {
+        let message: Uuid = message_id.into();
+        let rows: Vec<FrankingRevisionRow> = self
+            .all(
+                "SELECT message_id, revision, franking_commitment, sent_at_us, sender_device_id, \
+                        created_at \
+                 FROM message_franking_revision WHERE message_id = $1 ORDER BY revision",
+                vec![message.into()],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {

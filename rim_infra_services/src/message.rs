@@ -18,7 +18,7 @@ const MAX_CHANGE_FEED_CONVERSATIONS: usize = 100;
 const MAX_CHANGE_FEED_TOTAL: u32 = 1000;
 
 use rim_core::conversation::model::Conversation;
-use rim_core::e2ee::model::NewEncryptedMessage;
+use rim_core::e2ee::model::{NewEncryptedMessage, NewFrankingRevision};
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::message::model::{Message, MessageEncryption, MessageId, NewMessage};
@@ -1946,6 +1946,14 @@ impl MessageService for DefaultMessageService {
                 }
                 _ => e.into(),
             })?;
+        e2ee_repo
+            .append_franking_revision(NewFrankingRevision {
+                message_id: message.id,
+                franking_commitment: envelope.aad.franking.to_vec(),
+                sent_at_us: sent_at_us(sent_at),
+                sender_device_id: device.device_id,
+            })
+            .await?;
         if let Some((thread, _)) = &thread {
             repos
                 .message_thread_repo
@@ -2102,6 +2110,15 @@ impl MessageService for DefaultMessageService {
                     franking_key_id,
                 },
             )
+            .await?;
+        // The earlier versions stay reportable.
+        e2ee_repo
+            .append_franking_revision(NewFrankingRevision {
+                message_id: msg.id,
+                franking_commitment: envelope.aad.franking.to_vec(),
+                sent_at_us: sent_at_us(msg.sent_at),
+                sender_device_id: device.device_id,
+            })
             .await?;
         // Edits replace the mention rows and notify no one again.
         let mentions =
