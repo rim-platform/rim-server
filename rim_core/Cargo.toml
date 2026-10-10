@@ -1,7 +1,11 @@
 [package]
 name = "rim_core"
+description = "RIM domain models, repository traits and typed ids"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 async-trait = "0.1.89"

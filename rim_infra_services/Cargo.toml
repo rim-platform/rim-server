@@ -1,7 +1,11 @@
 [package]
 name = "rim_infra_services"
+description = "Default implementations of the RIM services"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [features]
 infra-db-tests = []
