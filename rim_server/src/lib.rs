@@ -15,6 +15,7 @@ mod graphql_support;
 mod health;
 pub mod invite_cmd;
 pub(crate) mod metrics;
+pub(crate) mod origin;
 mod plugin_bundle_handlers;
 mod remote_handlers;
 mod s2s;

@@ -77,7 +77,7 @@ pub async fn serve(
         "Configuration loaded"
     );
     let enable_graphiql = config.enable_graphiql;
-    let cors_allowed_origin = config.cors_allowed_origin.clone();
+    let allowed_origins = crate::origin::AllowedOrigins::from_config(config);
     let handler_config = HandlerConfig {
         session_ttl_days: config.session_ttl_days,
         trust_forwarded_headers: config.trust_forwarded_headers(),
@@ -115,27 +115,7 @@ pub async fn serve(
         let schema = schema.clone();
         let handler_cfg = handler_config.clone();
 
-        let cors = match cors_allowed_origin {
-            Some(ref origin) => actix_cors::Cors::default()
-                .allowed_origin(origin)
-                .allowed_methods(vec!["GET", "POST", "OPTIONS"])
-                .allowed_headers(vec![
-                    "Content-Type",
-                    "Authorization",
-                    "x-csrf-token",
-                    "x-request-id",
-                ])
-                .supports_credentials()
-                .max_age(3600),
-            None => {
-                // No CORS origin configured: block all cross-origin requests.
-                // The browser will deny requests from any non-same-origin page
-                // because no Access-Control-Allow-Origin header is emitted.
-                actix_cors::Cors::default()
-                    .allowed_origin("https://0.0.0.0")
-                    .block_on_origin_mismatch(true)
-            }
-        };
+        let cors = allowed_origins.clone().cors();
 
         let mut api = web::scope("")
             .wrap(cors)
