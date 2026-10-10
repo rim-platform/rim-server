@@ -380,6 +380,85 @@ impl E2eeRepository for FakeE2ee {
         }))
     }
 
+    async fn claim_key_package_for_peer(
+        &self,
+        device_key_id: DeviceKeyId,
+        cipher_suite: i32,
+        one_time: bool,
+    ) -> RepoResult<Option<ClaimedKeyPackage>> {
+        let mut state = self.state();
+        let now = Utc::now();
+        let found = state.packages.iter_mut().find(|p| {
+            (one_time && Self::available(p, device_key_id, cipher_suite, now))
+                || (p.meta.device_key_id == device_key_id
+                    && p.meta.cipher_suite == cipher_suite
+                    && p.meta.last_resort
+                    && Self::usable(p, now))
+        });
+        Ok(found.map(|p| {
+            p.meta.claimed_at = Some(now);
+            if p.meta.last_resort {
+                p.claims += 1;
+            }
+            ClaimedKeyPackage {
+                id: p.meta.id,
+                device_key_id,
+                key_package_ref: p.meta.key_package_ref.clone(),
+                key_package: p.bytes.clone(),
+                last_resort: p.meta.last_resort,
+            }
+        }))
+    }
+
+    async fn store_claimed_key_package(
+        &self,
+        package: NewMlsKeyPackage,
+        claimed_by: DeviceKeyId,
+        conversation_id: ConversationId,
+        incarnation: i32,
+    ) -> RepoResult<()> {
+        let mut state = self.state();
+        let now = Utc::now();
+        state.packages.retain(|p| {
+            !(package.last_resort
+                && p.meta.last_resort
+                && p.meta.device_key_id == package.device_key_id
+                && p.meta.cipher_suite == package.cipher_suite
+                && p.meta.key_package_ref != package.key_package_ref)
+        });
+        if let Some(p) = state
+            .packages
+            .iter_mut()
+            .find(|p| p.meta.key_package_ref == package.key_package_ref)
+        {
+            p.meta.claimed_at = Some(now);
+            p.meta.claimed_by_device_key_id = Some(claimed_by);
+            p.meta.claimed_for_conversation_id = Some(conversation_id);
+            p.meta.claimed_for_incarnation = Some(incarnation);
+            p.claims += 1;
+            return Ok(());
+        }
+        state.packages.push(StoredPackage {
+            meta: MlsKeyPackage {
+                id: MlsKeyPackageId::new(),
+                user_id: package.user_id,
+                device_key_id: package.device_key_id,
+                cipher_suite: package.cipher_suite,
+                key_package_ref: package.key_package_ref,
+                last_resort: package.last_resort,
+                not_after: package.not_after,
+                created_at: now,
+                claimed_at: Some(now),
+                claimed_by_device_key_id: Some(claimed_by),
+                claimed_for_conversation_id: Some(conversation_id),
+                claimed_for_incarnation: Some(incarnation),
+            },
+            bytes: package.key_package,
+            claims: 1,
+        });
+        Ok(())
+    }
+
     async fn claim_last_resort_key_package(
         &self,
         device_key_id: DeviceKeyId,

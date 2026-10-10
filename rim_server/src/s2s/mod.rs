@@ -3,6 +3,7 @@
 //! root hands it the concrete services.
 
 pub(crate) mod discovery;
+pub(crate) mod forward;
 mod guard;
 mod roles;
 
@@ -11,7 +12,9 @@ use std::sync::Arc;
 
 use rim_infra_services::AlertRateLimiter;
 use rim_s2s::SharedIdentity;
-use rim_services::s2s::service::{PeerService, S2sNonceService};
+use rim_services::host::service::HostService;
+use rim_services::relay::service::RelayService;
+use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
 use crate::config::ServerRole;
 
@@ -39,4 +42,10 @@ pub struct S2sState {
     /// Requests per peer per minute.
     pub rate_limiter: Arc<AlertRateLimiter>,
     pub settings: Arc<S2sSettings>,
+    /// Sends signed requests to peers.
+    pub client: Arc<dyn S2sClient>,
+    /// This server as its users' relay.
+    pub relay: Arc<dyn RelayService>,
+    /// This server as the host of spaces with remote members.
+    pub host: Arc<dyn HostService>,
 }

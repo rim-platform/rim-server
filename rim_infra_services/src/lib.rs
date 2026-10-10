@@ -21,6 +21,9 @@ pub mod escalation;
 pub mod file_storage;
 /// Public for `rim_server`, which loads the key file at boot and runs `franking-key rotate`.
 pub mod franking_keys;
+// pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
+// writer and sender tasks.
+pub mod host;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
 pub(crate) mod key_auth;
@@ -49,6 +52,8 @@ pub mod presence;
 pub(crate) mod provider;
 pub(crate) mod read_state;
 pub mod registration_rate_limiter;
+// pub: the composition root (rim_server/src/app.rs) builds DefaultRelayService.
+pub mod relay;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;
@@ -132,6 +137,9 @@ mod e2ee_test_support;
 mod e2ee_unit_tests;
 
 #[cfg(test)]
+mod relay_unit_tests;
+
+#[cfg(test)]
 mod encrypted_message_unit_tests;
 
 pub use alert_rate_limiter::AlertRateLimiter;
@@ -145,7 +153,7 @@ pub use notification::NotificationRepos;
 pub use notification_preference::NotificationPreferenceRepos;
 pub use oncall::OnCallRepos;
 pub use pipeline::PipelineRepos;
-pub use provider::DefaultAppServiceProvider;
+pub use provider::{DefaultAppServiceProvider, FederationHooks};
 pub use registration_rate_limiter::RegistrationRateLimiter;
 pub use repos::{
     AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,

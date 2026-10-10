@@ -43,6 +43,7 @@ pub(crate) mod pipeline;
 pub(crate) mod platform;
 pub(crate) mod presence;
 pub(crate) mod profile;
+pub(crate) mod relay;
 pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod workspace;
@@ -59,6 +60,7 @@ pub struct Query(
     QueryGroup5,
     QueryGroup6,
     QueryGroup7,
+    QueryGroup8,
 );
 
 #[derive(MergedObject, Default)]
@@ -123,3 +125,6 @@ pub(crate) struct QueryGroup7(
     workspace_plugin::WorkspacePluginQueries,
     e2ee::E2eeQueries,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct QueryGroup8(relay::RelayQueries);

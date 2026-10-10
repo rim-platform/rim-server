@@ -4838,6 +4838,7 @@ dependencies = [
  "chrono-tz",
  "dashmap",
  "ed25519-dalek",
+ "futures-util",
  "getrandom 0.3.4",
  "hmac 0.12.1",
  "lettre",
@@ -4949,6 +4950,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]

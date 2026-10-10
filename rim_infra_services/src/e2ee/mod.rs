@@ -26,7 +26,7 @@ use rim_core::conversation::model::{Conversation, ConversationId, ConversationTy
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::model::{
-    E2eeDevice, MlsCommit, MlsDesiredDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    E2eeDevice, MlsCommit, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsRetention, NewMlsCommit, NewMlsGroup,
     NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
@@ -61,6 +61,8 @@ use rim_services::e2ee::{
     MAX_WELCOME_BYTES, MLS_ACTIVE_DAYS, PREFERRED_CIPHER_SUITE, mls_group_id, parse_mls_group_id,
 };
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
+use rim_services::host::dto::RemoteClaim;
+use rim_services::host::service::RemoteKeyPackages;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::e2ee::aad::{CommitAad, parse_commit};
@@ -177,6 +179,57 @@ pub(crate) fn ensure_encryptable(conversation: &Conversation) -> ServiceResult<(
 /// The start of the MLS-activity window.
 pub(crate) fn active_since(now: DateTime<Utc>) -> DateTime<Utc> {
     now - Duration::days(MLS_ACTIVE_DAYS)
+}
+
+/// A key package's bytes checked for a device: it parses, its suite is accepted, its credential
+/// is the device's `mls-key` statement over the leaf's signature key, and it expires in the
+/// future and within 90 days.
+fn check_device_key_package(
+    wire: &dyn MlsWire,
+    bytes: Vec<u8>,
+    device: &E2eeDevice,
+    principal_id: &str,
+    now: DateTime<Utc>,
+) -> Result<NewMlsKeyPackage, String> {
+    let device_key = rim_identity::PublicKey::parse(&device.public_key, "deviceKey")
+        .map_err(|e| e.to_string())?;
+    let info = wire.read_key_package(&bytes).map_err(|e| e.0)?;
+    if !ACCEPTED_CIPHER_SUITES.contains(&info.cipher_suite) {
+        return Err(format!(
+            "cipher suite {} is not accepted",
+            info.cipher_suite
+        ));
+    }
+    let statement = rim_identity::read_mls_credential(&info.credential_identity).map_err(|e| {
+        crate::util::log_statement_detail(&e);
+        e.to_string()
+    })?;
+    let mls_key = rim_identity::verify_mls_key(&device_key, &statement).map_err(|e| {
+        crate::util::log_statement_detail(&e);
+        format!("mls-key statement: {e}")
+    })?;
+    if mls_key.principal_id != principal_id || mls_key.device_id != device.device_id {
+        return Err("the mls-key statement names another device".to_string());
+    }
+    if mls_key.mls_key.key_bytes() != info.signature_key {
+        return Err("the leaf's signature key is not the mls-key statement's".to_string());
+    }
+    let not_after = i64::try_from(info.not_after)
+        .ok()
+        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+        .ok_or_else(|| "its lifetime is out of range".to_string())?;
+    if not_after <= now || not_after > now + MAX_KEY_PACKAGE_LIFETIME + KEY_PACKAGE_CLOCK_MARGIN {
+        return Err("it must expire in the future and within 90 days".to_string());
+    }
+    Ok(NewMlsKeyPackage {
+        user_id: device.user_id,
+        device_key_id: device.device_key_id,
+        cipher_suite: info.cipher_suite,
+        key_package_ref: info.key_package_ref,
+        key_package: bytes,
+        last_resort: info.last_resort,
+        not_after,
+    })
 }
 
 /// Decode a PrivateMessage of the expected content type.
@@ -334,6 +387,8 @@ pub struct DefaultE2eeService {
     one_time_claim_rate_limiter: RegistrationRateLimiter,
     /// Re-add requests per device and conversation.
     readd_rate_limiter: RegistrationRateLimiter,
+    /// Claims key packages of remote users' devices from their relays.
+    remote_key_packages: Option<Arc<dyn RemoteKeyPackages>>,
     /// Verifies franking receipts. `None` in unit tests that are not about reports; the
     /// composition root always wires it.
     franking_keys: Option<SharedFrankingKeys>,
@@ -388,11 +443,17 @@ impl DefaultE2eeService {
             one_time_claim_rate_limiter: RegistrationRateLimiter::new(86_400, 100),
             readd_rate_limiter: RegistrationRateLimiter::new(86_400, 3),
             franking_keys: None,
+            remote_key_packages: None,
         }
     }
 
     pub fn with_franking_keys(mut self, franking_keys: SharedFrankingKeys) -> Self {
         self.franking_keys = Some(franking_keys);
+        self
+    }
+
+    pub fn with_remote_key_packages(mut self, remote: Arc<dyn RemoteKeyPackages>) -> Self {
+        self.remote_key_packages = Some(remote);
         self
     }
 
@@ -544,6 +605,91 @@ impl DefaultE2eeService {
             return Ok(Some(IncarnationGround::NoDevicesLeft));
         }
         Ok(None)
+    }
+
+    /// Claim the targets that belong to remote users from their relays. Their packages are
+    /// checked like uploads and returned to store as claimed; the local targets are returned
+    /// for the usual claim.
+    #[allow(clippy::too_many_arguments)]
+    async fn claim_remote(
+        &self,
+        claimer: &E2eeDevice,
+        conversation: &Conversation,
+        incarnation: i32,
+        suite: i32,
+        targets: Vec<MlsDevice>,
+        packages: &mut Vec<NewMlsKeyPackage>,
+        claimed: &mut Vec<ClaimedKeyPackageDto>,
+    ) -> ServiceResult<Vec<MlsDevice>> {
+        let Some(remote) = &self.remote_key_packages else {
+            return Ok(targets);
+        };
+        let claimer_principal = claimer.principal_id.clone().ok_or_else(not_bound)?;
+        let mut by_user: Vec<(UserId, Vec<MlsDevice>)> = Vec::new();
+        for target in targets {
+            match by_user.iter_mut().find(|(u, _)| *u == target.user_id) {
+                Some((_, devices)) => devices.push(target),
+                None => by_user.push((target.user_id, vec![target])),
+            }
+        }
+        let now = Utc::now();
+        let mut local = Vec::new();
+        for (user_id, devices) in by_user {
+            let answer = remote
+                .claim(RemoteClaim {
+                    target_user_id: user_id,
+                    device_ids: devices.iter().map(|d| d.device_id).collect(),
+                    conversation_id: conversation.id,
+                    incarnation,
+                    claimer_principal_id: claimer_principal.clone(),
+                    claimer_device_id: claimer.device_id,
+                    cipher_suite: suite,
+                })
+                .await?;
+            let Some(answer) = answer else {
+                local.extend(devices);
+                continue;
+            };
+            for package in answer {
+                let Some(target) = devices.iter().find(|d| d.device_id == package.device_id) else {
+                    continue;
+                };
+                let Some(stored) = self
+                    .repos
+                    .e2ee_repo
+                    .get_device(target.device_key_id)
+                    .await?
+                else {
+                    continue;
+                };
+                match check_device_key_package(
+                    self.wire.as_ref(),
+                    package.key_package,
+                    &stored,
+                    &target.principal_id,
+                    now,
+                ) {
+                    Ok(checked) if checked.cipher_suite == suite => {
+                        claimed.push(ClaimedKeyPackageDto {
+                            user_id: target.user_id,
+                            principal_id: target.principal_id.clone(),
+                            device_id: target.device_id,
+                            key_package: checked.key_package.clone(),
+                            key_package_ref: checked.key_package_ref.clone(),
+                            last_resort: checked.last_resort,
+                        });
+                        packages.push(checked);
+                    }
+                    Ok(_) => {
+                        tracing::warn!(device_id = %target.device_id, "a relay handed out a key package of another suite")
+                    }
+                    Err(why) => {
+                        tracing::warn!(device_id = %target.device_id, why, "a relay handed out a key package that does not check")
+                    }
+                }
+            }
+        }
+        Ok(local)
     }
 
     /// Who may create a conversation's first group: any member of a DM; in a group the
@@ -1088,8 +1234,6 @@ impl E2eeService for DefaultE2eeService {
         let principal_id = device.principal_id.clone().ok_or_else(|| {
             ServiceError::Validation("this account has no key identity".to_string())
         })?;
-        let device_key = rim_identity::PublicKey::parse(&device.public_key, "deviceKey")
-            .map_err(ServiceError::internal)?;
         let now = Utc::now();
         let mut packages = Vec::with_capacity(cmd.key_packages.len());
         let mut refs = HashSet::new();
@@ -1099,63 +1243,18 @@ impl E2eeService for DefaultE2eeService {
                 |why: String| ServiceError::Validation(format!("key package {index}: {why}"));
             let bytes = decode_b64("keyPackage", text, MAX_KEY_PACKAGE_BYTES)
                 .map_err(|e| refused(e.to_string()))?;
-            let info = self
-                .wire
-                .read_key_package(&bytes)
-                .map_err(|e| refused(e.0))?;
-            if !ACCEPTED_CIPHER_SUITES.contains(&info.cipher_suite) {
-                return Err(refused(format!(
-                    "cipher suite {} is not accepted",
-                    info.cipher_suite
-                )));
-            }
-            let statement =
-                rim_identity::read_mls_credential(&info.credential_identity).map_err(|e| {
-                    crate::util::log_statement_detail(&e);
-                    refused(e.to_string())
-                })?;
-            let mls_key = rim_identity::verify_mls_key(&device_key, &statement).map_err(|e| {
-                crate::util::log_statement_detail(&e);
-                refused(format!("mls-key statement: {e}"))
-            })?;
-            if mls_key.principal_id != principal_id || mls_key.device_id != device.device_id {
-                return Err(refused(
-                    "the mls-key statement names another device".to_string(),
-                ));
-            }
-            if mls_key.mls_key.key_bytes() != info.signature_key {
-                return Err(refused(
-                    "the leaf's signature key is not the mls-key statement's".to_string(),
-                ));
-            }
-            let not_after = i64::try_from(info.not_after)
-                .ok()
-                .and_then(|secs| DateTime::from_timestamp(secs, 0))
-                .ok_or_else(|| refused("its lifetime is out of range".to_string()))?;
-            if not_after <= now
-                || not_after > now + MAX_KEY_PACKAGE_LIFETIME + KEY_PACKAGE_CLOCK_MARGIN
-            {
-                return Err(refused(
-                    "it must expire in the future and within 90 days".to_string(),
-                ));
-            }
-            if !refs.insert(info.key_package_ref.clone()) {
+            let package =
+                check_device_key_package(self.wire.as_ref(), bytes, &device, &principal_id, now)
+                    .map_err(refused)?;
+            if !refs.insert(package.key_package_ref.clone()) {
                 return Err(refused("it is uploaded twice".to_string()));
             }
-            if info.last_resort && !last_resort_suites.insert(info.cipher_suite) {
+            if package.last_resort && !last_resort_suites.insert(package.cipher_suite) {
                 return Err(refused(
                     "an upload carries one last-resort package per cipher suite".to_string(),
                 ));
             }
-            packages.push(NewMlsKeyPackage {
-                user_id: device.user_id,
-                device_key_id: device.device_key_id,
-                cipher_suite: info.cipher_suite,
-                key_package_ref: info.key_package_ref,
-                key_package: bytes,
-                last_resort: info.last_resort,
-                not_after,
-            });
+            packages.push(package);
         }
 
         let (scope, repos) = self.begin().await?;
@@ -1336,8 +1435,31 @@ impl E2eeService for DefaultE2eeService {
             targets.push(device_ref.device.clone());
         }
 
-        let (scope, repos) = self.begin().await?;
         let mut claimed = Vec::with_capacity(targets.len());
+        let mut remote_packages = Vec::new();
+        let targets = self
+            .claim_remote(
+                &device,
+                &conversation,
+                incarnation,
+                suite,
+                targets,
+                &mut remote_packages,
+                &mut claimed,
+            )
+            .await?;
+        let (scope, repos) = self.begin().await?;
+        for package in remote_packages {
+            repos
+                .e2ee_repo
+                .store_claimed_key_package(
+                    package,
+                    device.device_key_id,
+                    conversation.id,
+                    incarnation,
+                )
+                .await?;
+        }
         for target in targets {
             let target_key = target.device_key_id.to_string();
             let package = match readd_targets.get(&target.device_key_id) {

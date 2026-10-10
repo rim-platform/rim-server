@@ -19,6 +19,9 @@ pub struct Model {
     pub created_by: Option<Uuid>,
     pub slow_mode_seconds: i32,
     pub encrypted_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub predecessor_host: Option<String>,
+    pub predecessor_conversation_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

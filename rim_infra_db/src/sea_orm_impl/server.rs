@@ -10,6 +10,9 @@ use sea_orm::{ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, Rela
 use crate::DbHandle;
 use crate::error::map_db_err;
 
+/// `server.kind` of a workspace; the relay's direct space is never listed or found by name.
+const WORKSPACE_KIND: &str = "workspace";
+
 pub struct SeaOrmServerRepository {
     db: DbHandle,
 }
@@ -31,23 +34,33 @@ impl ServerRepository for SeaOrmServerRepository {
     }
 
     async fn create_server(&self, name: &str) -> RepoResult<Server> {
+        // Only the columns a workspace sets; `kind` keeps its default and is not read back.
+        let id = ServerId::new();
+        let now = chrono::Utc::now();
         let new_server = server::ActiveModel {
-            id: Set(ServerId::new().into()),
+            id: Set(id.into()),
             name: Set(name.to_owned()),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
             ..Default::default()
         };
-
-        let new_server = server::Entity::insert(new_server)
-            .exec_with_returning(&self.db)
+        server::Entity::insert(new_server)
+            .exec_without_returning(&self.db)
             .await
             .map_err(map_db_err)?;
 
-        Ok(new_server.into())
+        Ok(Server {
+            id,
+            name: name.to_owned(),
+            created_at: now,
+            updated_at: now,
+        })
     }
 
     async fn find_by_name(&self, name: &str) -> RepoResult<Option<Server>> {
         let res = server::Entity::find()
             .filter(server::Column::Name.eq(name.to_owned()))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -59,6 +72,7 @@ impl ServerRepository for SeaOrmServerRepository {
         let servers = server::Entity::find()
             .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
             .filter(server_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
             .all(&self.db)
             .await
             .map_err(map_db_err)?;

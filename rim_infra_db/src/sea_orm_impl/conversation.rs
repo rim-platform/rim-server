@@ -205,7 +205,15 @@ impl ConversationRepository for SeaOrmConversationRepository {
                         entity::sea_orm_active_enums::ConversationType::Group,
                     ])
                     .to_owned(),
-            );
+            )
+            // A conversation in the request inbox, or from a blocked creator, is not listed.
+            .filter(sea_orm::sea_query::Expr::cust_with_values(
+                format!(
+                    "NOT {}",
+                    crate::sea_orm_impl::relay::HIDDEN.replace("c.", "\"conversation\".")
+                ),
+                [sea_orm::Value::from(Uuid::from(user_id))],
+            ));
 
         let has_cursor = cursor.is_some();
         if let Some(cursor) = cursor {

@@ -11,12 +11,11 @@
 
 mod support;
 
-use std::net::TcpListener;
+use support::nodes::{Node, databases, start};
+
 use std::path::Path;
-use std::sync::Arc;
 
 use chrono::Utc;
-use migration::MigratorTrait;
 use rim_identity::SignedStatement;
 use rim_infra_services::s2s::server_key;
 use rim_s2s::http_sig::{
@@ -24,115 +23,12 @@ use rim_s2s::http_sig::{
     sign_request,
 };
 use rim_s2s::{
-    ServerIdentity, ServerKeyState, ServerRotationSigner, ServerSigner, sign_inception,
-    sign_rotation, verify_descriptor,
+    ServerKeyState, ServerRotationSigner, ServerSigner, sign_inception, sign_rotation,
+    verify_descriptor,
 };
-use rim_server::app::S2sRuntime;
-use rim_server::config::RIMConfig;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::Value;
-
-/// S2S tables, cleared before each test so every server boots a fresh identity.
-const S2S_TABLES: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, peer_server, \
-     s2s_nonce";
-
-/// A running server: its origin, data directory, database and S2S handles.
-struct Node {
-    origin: String,
-    data: tempfile::TempDir,
-    db: DatabaseConnection,
-    s2s: S2sRuntime,
-    handle: actix_web::dev::ServerHandle,
-    _shutdown: tokio::sync::watch::Sender<bool>,
-}
-
-impl Node {
-    fn identity(&self) -> Arc<ServerIdentity> {
-        self.s2s.state.identity.current()
-    }
-
-    fn id(&self) -> String {
-        self.identity().server_id().to_string()
-    }
-
-    async fn stop(self) {
-        self.handle.stop(false).await;
-    }
-}
-
-/// The second test database: the first one's name with `b` appended, created when missing.
-async fn second_database(first: &DatabaseConnection) -> String {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let (base, query) = match url.split_once('?') {
-        Some((base, query)) => (base.to_string(), format!("?{query}")),
-        None => (url.clone(), String::new()),
-    };
-    let (prefix, name) = base.rsplit_once('/').expect("database name");
-    let second = format!("{name}b");
-    let exists = first
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            "SELECT 1 AS one FROM pg_database WHERE datname = $1",
-            [second.clone().into()],
-        ))
-        .await
-        .expect("pg_database")
-        .is_some();
-    if !exists {
-        first
-            .execute_unprepared(&format!("CREATE DATABASE \"{second}\""))
-            .await
-            .expect("create the second test database");
-    }
-    format!("{prefix}/{second}{query}")
-}
-
-/// Both test databases, migrated, with their S2S tables empty.
-async fn databases() -> (String, String) {
-    let ctx = support::TestCtx::new().await;
-    ctx.conn
-        .execute_unprepared(S2S_TABLES)
-        .await
-        .expect("truncate");
-    let first = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let second = second_database(&ctx.conn).await;
-    let conn = Database::connect(&second).await.expect("second database");
-    migration::Migrator::up(&conn, None).await.expect("migrate");
-    conn.execute_unprepared(S2S_TABLES).await.expect("truncate");
-    (first, second)
-}
-
-async fn start(database_url: &str, tweak: impl FnOnce(&mut RIMConfig)) -> Node {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    let origin = format!("http://127.0.0.1:{port}");
-    let data = tempfile::tempdir().expect("data dir");
-    let mut config = RIMConfig {
-        server_host: "127.0.0.1".into(),
-        server_port: port,
-        database_url: database_url.into(),
-        data_dir: data.path().to_string_lossy().into_owned(),
-        public_base_url: Some(origin.clone()),
-        s2s_allow_http: Some(true),
-        s2s_allow_private_addresses: Some(true),
-        ..Default::default()
-    };
-    tweak(&mut config);
-    let running = rim_server::server::serve(&config, listener)
-        .await
-        .expect("serve");
-    let handle = running.server.handle();
-    tokio::spawn(running.server);
-    Node {
-        origin,
-        data,
-        db: Database::connect(database_url).await.expect("db"),
-        s2s: running.s2s,
-        handle,
-        _shutdown: running.shutdown_tx,
-    }
-}
 
 async fn two_nodes() -> (Node, Node) {
     let (first, second) = databases().await;
@@ -277,6 +173,7 @@ fn ping() -> S2sRequest {
         path: "/ping".into(),
         body: vec![],
         content_type: None,
+        headers: vec![],
     }
 }
 

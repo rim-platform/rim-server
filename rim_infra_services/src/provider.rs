@@ -12,7 +12,6 @@ use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::device_link::service::DeviceLinkService;
 use rim_services::escalation::scheduler::EscalationScheduler;
 use rim_services::escalation::service::EscalationPolicyService;
-use rim_services::events::EventObserver;
 use rim_services::events::Observers;
 use rim_services::incident::service::IncidentService;
 use rim_services::ingest_token::service::IngestTokenService;
@@ -45,6 +44,18 @@ use rim_services::workspace_state::service::WorkspaceStateService;
 use sea_orm::DatabaseConnection;
 
 use crate::repos::AppRepos;
+
+/// What the services need from this server's relay and host roles. Empty in tests that do not
+/// cross servers.
+#[derive(Clone, Default)]
+pub struct FederationHooks {
+    /// The relay's direct space.
+    pub direct_space_id: Option<rim_core::server::model::ServerId>,
+    /// Claims of remote users' key packages.
+    pub remote_key_packages: Option<Arc<dyn rim_services::host::service::RemoteKeyPackages>>,
+    /// Told when a local user's card or devices change.
+    pub relay_service: Option<Arc<dyn rim_services::relay::service::RelayService>>,
+}
 
 #[derive(Clone)]
 pub struct DefaultAppServiceProvider {
@@ -106,6 +117,7 @@ impl DefaultAppServiceProvider {
         escalation_scheduler: Arc<dyn EscalationScheduler>,
         key_login_audiences: Vec<String>,
         franking_keys: crate::franking_keys::SharedFrankingKeys,
+        federation: FederationHooks,
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
@@ -124,7 +136,7 @@ impl DefaultAppServiceProvider {
             .with_known_login_sources(known_login_sources.clone())
             .with_signup_rate_limiter(signup_rate_limiter.clone()),
         );
-        let key_auth = crate::key_auth::DefaultKeyAuthService::new(
+        let mut key_auth = crate::key_auth::DefaultKeyAuthService::new(
             repos.for_key_auth(),
             Some(db.clone()),
             session_ttl,
@@ -132,6 +144,9 @@ impl DefaultAppServiceProvider {
             observers.clone(),
             signup_rate_limiter,
         );
+        if let Some(relay) = &federation.relay_service {
+            key_auth = key_auth.with_relay_service(Arc::clone(relay));
+        }
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),
         );
@@ -145,13 +160,15 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&audit_log_repo),
                 Arc::clone(&capability_service),
             ));
-        let conversation_service: Arc<dyn ConversationService> = Arc::new(
-            crate::conversation::DefaultConversationService::new(
-                repos.for_conversation(),
-                observers.clone(),
-            )
-            .with_e2ee_repo(Arc::clone(&repos.e2ee_repo)),
-        );
+        let mut conversation_concrete = crate::conversation::DefaultConversationService::new(
+            repos.for_conversation(),
+            observers.clone(),
+        )
+        .with_e2ee_repo(Arc::clone(&repos.e2ee_repo));
+        if let Some(direct_space_id) = federation.direct_space_id {
+            conversation_concrete = conversation_concrete.with_direct_space(direct_space_id);
+        }
+        let conversation_service: Arc<dyn ConversationService> = Arc::new(conversation_concrete);
         let notification_service: Arc<dyn NotificationService> =
             Arc::new(crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
@@ -174,16 +191,19 @@ impl DefaultAppServiceProvider {
             )
             .with_moderation_repo(Arc::clone(&repos.moderation_repo)),
         );
-        let e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService> = Arc::new(
-            crate::e2ee::DefaultE2eeService::new(
-                repos.for_e2ee(),
-                Some(db.clone()),
-                Arc::clone(&mls_wire),
-                observers.clone(),
-            )
-            .with_audit_log_service(Arc::clone(&audit_log_service))
-            .with_franking_keys(franking_keys),
-        );
+        let mut e2ee_concrete = crate::e2ee::DefaultE2eeService::new(
+            repos.for_e2ee(),
+            Some(db.clone()),
+            Arc::clone(&mls_wire),
+            observers.clone(),
+        )
+        .with_audit_log_service(Arc::clone(&audit_log_service))
+        .with_franking_keys(franking_keys);
+        if let Some(remote) = &federation.remote_key_packages {
+            e2ee_concrete = e2ee_concrete.with_remote_key_packages(Arc::clone(remote));
+        }
+        let e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService> =
+            Arc::new(e2ee_concrete);
         let key_auth_service: Arc<dyn KeyAuthService> =
             Arc::new(key_auth.with_e2ee_service(Arc::clone(&e2ee_service)));
         let moderation_service: Arc<dyn ModerationService> = Arc::new(
@@ -209,8 +229,10 @@ impl DefaultAppServiceProvider {
         let read_state_observers = observers.clone();
         let incident_observers = observers.clone();
         let workspace_plugin_observers = observers.clone();
-        let ws_state_broadcaster = Arc::clone(observers.broadcaster());
-        let pipeline_broadcaster_clone = Arc::clone(observers.broadcaster());
+        let ws_state_broadcaster: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(observers.clone());
+        let pipeline_broadcaster_clone: Arc<dyn rim_services::events::Broadcaster> =
+            Arc::new(observers.clone());
         let message_reaction_service: Arc<dyn MessageReactionService> =
             Arc::new(crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),

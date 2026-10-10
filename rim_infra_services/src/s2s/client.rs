@@ -17,6 +17,9 @@ use url::Url;
 
 use crate::s2s::net::{NetError, check_url_host, http_client, read_limited};
 
+/// Response headers handed back with the answer, for the forward path.
+const FORWARDED_RESPONSE_HEADERS: &[&str] = &["rim-host-response", "rim-host-signature"];
+
 /// How long a signed request stays valid.
 const REQUEST_LIFETIME_SECS: i64 = 300;
 
@@ -148,6 +151,9 @@ impl S2sClient for DefaultS2sClient {
         if let Some(digest) = &signed.content_digest {
             builder = builder.header("content-digest", digest);
         }
+        for (name, value) in &request.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
         let response = builder
             .send()
             .await
@@ -155,6 +161,10 @@ impl S2sClient for DefaultS2sClient {
 
         let status = response.status().as_u16();
         let owned = |name: &str| header(&response, name).map(str::to_string);
+        let forwarded_headers: Vec<(String, String)> = FORWARDED_RESPONSE_HEADERS
+            .iter()
+            .filter_map(|name| owned(name).map(|value| ((*name).to_string(), value)))
+            .collect();
         let (digest, response_type, echoed, input, signature) = (
             owned("content-digest"),
             owned("content-type"),
@@ -214,6 +224,7 @@ impl S2sClient for DefaultS2sClient {
             content_type: response_type.unwrap_or_default(),
             body: response_body,
             key_seq: seq,
+            headers: forwarded_headers,
         })
     }
 }

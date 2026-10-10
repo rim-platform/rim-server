@@ -15,20 +15,27 @@ use tokio::sync::watch;
 use crate::config::{RIMConfig, ServerRole};
 use crate::s2s::{S2sSettings, S2sState};
 
+use rim_api::federation::FederationContext;
 use rim_core::s2s::repository::{PeerServerRepository, ServerIdentityRepository};
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::s2s::{
     SeaOrmPeerServerRepository, SeaOrmS2sNonceRepository, SeaOrmServerIdentityRepository,
 };
+use rim_infra_services::host::outbox::{HostEventWriter, OutboxSender, OutboxSink, RefusalCache};
+use rim_infra_services::host::{DIRECT_SPACE_NAME, DefaultHostService};
+use rim_infra_services::relay::{DefaultRelayService, RelaySettings};
 use rim_infra_services::s2s::server_key::{self, DescriptorSettings, KeyFiles};
 use rim_infra_services::s2s::{
     DefaultPeerService, DefaultS2sClient, DefaultS2sNonceService, HttpDiscoveryFetcher,
     S2sClientConfig,
 };
-use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
+use rim_infra_services::{AppRepos, DefaultAppServiceProvider, FederationHooks};
 use rim_s2s::{Endpoints, Limits, Registration, RegistrationMode, SharedIdentity};
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::host::service::{HostService, RemoteKeyPackages};
 use rim_services::provider::AppServiceProvider;
+use rim_services::relay::dto::RelayInfoDto;
+use rim_services::relay::service::RelayService;
 use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
 #[allow(dead_code)] // shutdown_tx is held to keep the watch channel open
@@ -57,6 +64,12 @@ pub struct AppRuntime {
 pub struct S2sRuntime {
     pub state: S2sState,
     pub client: Arc<dyn S2sClient>,
+    /// This server as its users' relay.
+    pub relay: Arc<DefaultRelayService>,
+    /// This server as the host of spaces with remote members.
+    pub host: Arc<DefaultHostService>,
+    /// The relay's direct space.
+    pub direct_space_id: rim_core::server::model::ServerId,
     pub key_files: KeyFiles,
     pub identity_repo: Arc<dyn ServerIdentityRepository>,
     pub descriptor_settings: DescriptorSettings,
@@ -126,7 +139,11 @@ fn descriptor_settings(
 }
 
 /// Load or create the server key, sign the descriptor, and wire peers, nonces and the client.
-async fn build_s2s(config: &RIMConfig, db: &DbHandle) -> std::io::Result<S2sRuntime> {
+async fn build_s2s(
+    config: &RIMConfig,
+    db: &DbHandle,
+    raw_db: &sea_orm::DatabaseConnection,
+) -> std::io::Result<S2sRuntime> {
     let role = config.server_role().map_err(io_error("RIM_ROLE"))?;
     let denied_peers = config
         .s2s_denied_peers()
@@ -188,8 +205,40 @@ async fn build_s2s(config: &RIMConfig, db: &DbHandle) -> std::io::Result<S2sRunt
         )
         .map_err(|e| io_error("server-to-server client")(e.to_string()))?,
     );
+    let repos = AppRepos::with_handle(db);
+    let direct_space_id = repos
+        .host_repo
+        .ensure_direct_space(DIRECT_SPACE_NAME)
+        .await
+        .map_err(|e| io_error("direct space")(e.to_string()))?;
+    let relay = Arc::new(DefaultRelayService::new(
+        repos.for_relay(),
+        Some(raw_db.clone()),
+        identity.clone(),
+        Arc::clone(&peers),
+        Arc::clone(&client),
+        RelaySettings {
+            queue_bytes_per_user: config.relay_queue_bytes_per_user(),
+            retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
+        },
+    ));
+    let host = Arc::new(DefaultHostService::new(
+        repos.for_host(),
+        Some(raw_db.clone()),
+        identity.clone(),
+        Arc::clone(&peers),
+        Arc::clone(&client),
+        direct_space_id,
+        config.s2s_device_rate_per_min(),
+    ));
     Ok(S2sRuntime {
+        relay: Arc::clone(&relay),
+        host: Arc::clone(&host),
+        direct_space_id,
         state: S2sState {
+            client: Arc::clone(&client),
+            relay,
+            host,
             identity,
             peers,
             nonces,
@@ -221,6 +270,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let raw_db = db.clone(); // Keep raw DatabaseConnection for UoW
+    let raw_db_for_tasks = raw_db.clone();
     let db: DbHandle = db.into();
 
     // Canonical repo constructor (mirrors the FL1 composition-root note in
@@ -253,9 +303,19 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // a real exploit.
     rim_infra_services::command::emit_ai_callable_inventory_audit();
 
+    let s2s = build_s2s(config, &db, &raw_db).await?;
+
     let broadcaster = InMemoryBroadcaster::new(1024);
     let broadcaster_arc: Arc<dyn Broadcaster> = Arc::new(broadcaster.clone());
-    let observers = Observers::new(broadcaster_arc);
+    // While server-to-server traffic is on, every event also reaches the outbox writer, which
+    // never drops one.
+    let mut observers = Observers::new(broadcaster_arc);
+    let mut outbox_events = None;
+    if s2s.state.settings.origin.is_some() {
+        let (sink, events) = OutboxSink::channel();
+        observers = observers.with_sink(Arc::new(sink));
+        outbox_events = Some(events);
+    }
     let observers_for_presence = Arc::new(observers.clone());
     let observers_for_schema = Arc::new(observers.clone());
 
@@ -302,7 +362,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let escalation_scheduler =
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
 
-    let s2s = build_s2s(config, &db).await?;
     let franking_key_file = config.franking_key_file();
     let franking_keys = rim_infra_services::franking_keys::load_or_create(
         &franking_key_file,
@@ -337,7 +396,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
         key_login_audiences,
         franking_keys.clone(),
+        FederationHooks {
+            direct_space_id: Some(s2s.direct_space_id),
+            remote_key_packages: Some(Arc::clone(&s2s.host) as Arc<dyn RemoteKeyPackages>),
+            relay_service: Some(Arc::clone(&s2s.relay) as Arc<dyn RelayService>),
+        },
     ));
+    s2s.host.set_e2ee_service(service_provider.e2ee_service());
 
     // Boot recovery (§6) — extracted into `rim_infra_services::escalation::recover_active_escalation_runs`
     // so it's independently db-testable without spinning up the whole app runtime.
@@ -527,10 +592,31 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
-    // Background task: delete expired server-to-server nonces and pick up a server key or
-    // franking key rotation made by the CLI, every minute.
+    // Background tasks: the outbox writer turns events into signed envelopes for relays, and
+    // the sender delivers each relay's outbox in order.
+    if let Some(events) = outbox_events {
+        let refusals = Arc::new(RefusalCache::default());
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let writer = HostEventWriter::new(
+            repos.for_host(),
+            Some(raw_db_for_tasks.clone()),
+            s2s.state.identity.clone(),
+            s2s.direct_space_id,
+            Arc::clone(&refusals),
+            Arc::clone(&wake),
+        )
+        .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>);
+        let sender = OutboxSender::new(repos.for_host(), Arc::clone(&s2s.client), refusals, wake);
+        tokio::spawn(writer.run(events, shutdown_tx.subscribe()));
+        tokio::spawn(sender.run(shutdown_tx.subscribe()));
+    }
+
+    // Background task: delete expired server-to-server nonces, queued items, requests, outbox
+    // rows and seen request seqs, pull what hosts queued, and pick up a server key or franking
+    // key rotation made by the CLI, every minute.
     {
         let s2s = s2s.clone();
+        let relay_repo = Arc::clone(&repos.relay_repo);
         let franking_keys = franking_keys.clone();
         let mut shutdown_rx5 = shutdown_tx.subscribe();
         tokio::spawn(async move {
@@ -556,6 +642,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                             Ok(false) => {}
                             Err(e) => tracing::error!(error = %format!("{e:#}"), "could not read the franking key file"),
                         }
+                        run_relay_cleanup(&s2s, relay_repo.as_ref()).await;
                     }
                     _ = shutdown_rx5.changed() => break,
                 }
@@ -616,6 +703,24 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             preview_rate_limiter,
             signup_rate_limiter,
         },
+        Some(FederationContext {
+            relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,
+            host: Arc::clone(&s2s.host) as Arc<dyn HostService>,
+            info: RelayInfoDto {
+                server_id: s2s.state.identity.current().server_id().to_string(),
+                roles: s2s
+                    .state
+                    .settings
+                    .role
+                    .roles()
+                    .into_iter()
+                    .map(|r| r.as_str().to_string())
+                    .collect(),
+                direct_space_id: s2s.direct_space_id,
+            },
+            relay_role: s2s.state.settings.role.runs(rim_s2s::Role::Relay),
+            host_role: s2s.state.settings.role.runs(rim_s2s::Role::Host),
+        }),
     );
     let request_authenticator = service_provider.request_authenticator();
 
@@ -635,6 +740,46 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         s2s,
         shutdown_tx,
     })
+}
+
+/// The relay and host parts of the per-minute cleanup: acked and expired items, orphaned
+/// envelopes, expired requests, outbox rows over 7 days and seen request seqs, then a pull of
+/// what each host's outbox holds above what was received from it.
+async fn run_relay_cleanup(
+    s2s: &S2sRuntime,
+    relay_repo: &dyn rim_core::relay::repository::RelayRepository,
+) {
+    match s2s.relay.cleanup().await {
+        Ok(done) => tracing::debug!(
+            acked_items = done.acked_items,
+            expired_items = done.expired_items,
+            orphan_envelopes = done.orphan_envelopes,
+            expired_requests = done.expired_requests,
+            "relay cleanup"
+        ),
+        Err(e) => tracing::error!(error = %e, "relay cleanup failed"),
+    }
+    match s2s.host.cleanup().await {
+        Ok(done) => tracing::debug!(
+            outbox_rows = done.outbox_rows,
+            seen_requests = done.seen_requests,
+            "host cleanup"
+        ),
+        Err(e) => tracing::error!(error = %e, "host cleanup failed"),
+    }
+    if s2s.state.settings.origin.is_none() {
+        return;
+    }
+    match relay_repo.inbound_peers().await {
+        Ok(peers) => {
+            for peer in peers {
+                if let Err(e) = s2s.relay.pull_outbox(peer.clone()).await {
+                    tracing::debug!(peer_server_id = %peer, error = %e, "could not pull a host's outbox");
+                }
+            }
+        }
+        Err(e) => tracing::error!(error = %e, "could not list hosts to pull from"),
+    }
 }
 
 /// How often expired notifications (older than 90 days) are purged: hourly.
