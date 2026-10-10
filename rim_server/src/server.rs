@@ -254,7 +254,7 @@ async fn graphql_handler(
 
         // Extract the remote IP for rate-limiting resolvers (e.g. previewInviteToken).
         //
-        // H1 hardening: trust X-Forwarded-For only when the operator has explicitly
+        // Trust X-Forwarded-For only when the operator has explicitly
         // set RIM_TRUST_FORWARDED_HEADERS=true, indicating a trusted reverse proxy
         // is the sole entry point. Without a proxy, clients can forge the header and
         // spoof their IP, defeating the per-IP rate limits.
