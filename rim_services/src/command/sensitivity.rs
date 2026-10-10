@@ -5,7 +5,7 @@
 //!
 //! 1. **UI-side modal masking** (Phase 4 `ConfirmCommandModal` renders
 //!    masked-by-default with optional reveal).
-//! 2. **Backend audit-log redaction** (Phase 4 `tracing::info!(target = "audit", …)`
+//! 2. **Backend audit-log redaction** (Phase 4 `tracing::info!(target: "audit", …)`
 //!    line and Phase 5 DB-backed `AuditLogService`).
 //!
 //! Both call sites import from here. Eliminates regex-drift risk (Widow N4)
@@ -285,7 +285,7 @@ pub fn mask_for_display(args: &serde_json::Value) -> serde_json::Value {
 }
 
 /// Audit-side entry point for redacting `ExecuteCommandCmd::args` immediately
-/// before it is emitted on the `target = "audit"` tracing line in
+/// before it is emitted on the `target: "audit"` tracing line in
 /// `command.rs::execute_command`.
 ///
 /// Today this is a thin alias over [`redact_for_audit`] (same key/value

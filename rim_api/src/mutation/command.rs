@@ -48,7 +48,7 @@ impl CommandMutations {
             None => {
                 if input.confirmed_dangerous == Some(true) {
                     tracing::warn!(
-                        target = "audit",
+                        target: "audit",
                         event = "deprecated_confirmed_dangerous_bool",
                         command_id = %input.command_id,
                         "client sent legacy confirmed_dangerous=true; ignoring (H1 closure). \

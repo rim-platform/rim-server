@@ -76,7 +76,7 @@ pub struct CommandServices {
         std::sync::Arc<dyn rim_services::notification::service::NotificationService>,
     /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
-    /// writes a structured row alongside the `tracing::info!(target="audit")`
+    /// writes a structured row alongside the `tracing::info!(target: "audit")`
     /// line. Both sinks are kept — the tracing line is for low-cardinality
     /// monitoring (grep/tail); the DB row is for queryable forensics.
     pub audit_log_service: Option<std::sync::Arc<dyn AuditLogService>>,

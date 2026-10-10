@@ -45,7 +45,7 @@ pub(super) fn collect_ai_callable_inventory(commands: &[CommandDefinitionDto]) -
 
 /// **F1 closure — startup audit emission.** Walks the current builtin
 /// command registry, computes the AI-callable inventory, and emits a
-/// `target = "audit"` tracing line so operators can confirm at boot which
+/// `target: "audit"` tracing line so operators can confirm at boot which
 /// commands the LLM surface can reach.
 ///
 /// Called from `rim_server::app::build_app_runtime` after the capability
@@ -54,7 +54,7 @@ pub fn emit_ai_callable_inventory_audit() {
     let commands = builtin_commands();
     let ai_callable_ids = collect_ai_callable_inventory(&commands);
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "ai_callable_inventory",
         count = ai_callable_ids.len(),
         commands = ?ai_callable_ids,

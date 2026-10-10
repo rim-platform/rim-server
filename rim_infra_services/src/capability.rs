@@ -172,7 +172,7 @@ impl CapabilityService for DefaultCapabilityService {
             Some(r) if r.retired_at.is_none() => r,
             _ => {
                 tracing::warn!(
-                    target = "audit",
+                    target: "audit",
                     event = "capability_check_unknown_key",
                     user_id = %actor.user_id,
                     workspace_id = ?workspace_id,
@@ -191,7 +191,7 @@ impl CapabilityService for DefaultCapabilityService {
         // None since membership is not meaningful for identity-only operations.
         if workspace_id.is_none() && !reg.is_self_scoped {
             tracing::warn!(
-                target = "audit",
+                target: "audit",
                 event = "capability_check_missing_workspace",
                 user_id = %actor.user_id,
                 capability = key,
@@ -207,7 +207,7 @@ impl CapabilityService for DefaultCapabilityService {
         // check is the only gate beyond the registry check today.
         if !self.membership_holds(actor, workspace_id).await? {
             tracing::warn!(
-                target = "audit",
+                target: "audit",
                 event = "capability_check_not_a_member",
                 user_id = %actor.user_id,
                 workspace_id = ?workspace_id,

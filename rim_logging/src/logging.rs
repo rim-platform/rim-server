@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
+use tracing_subscriber::Registry;
 use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -67,7 +69,7 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
         .with_filter(env_filter);
 
     // ── Audit sink: JSON to dedicated rolling file, filtered to
-    // `target = "audit"` events only. `rolling::never` rotates daily by
+    // `target: "audit"` events only. `rolling::never` rotates daily by
     // calendar date inside the chosen directory — a single file is fine
     // for Phase 4; logrotate / external retention takes over from there.
     //
@@ -78,21 +80,28 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
     let audit_dir = audit_log_dir();
     let file_appender = rolling::never(&audit_dir, DEFAULT_AUDIT_LOG_PATH);
     let (audit_writer, audit_guard) = tracing_appender::non_blocking(file_appender);
-    let audit_layer = tracing_subscriber::fmt::layer()
-        .json()
-        .with_timer(UtcTime::rfc_3339())
-        .with_target(true)
-        .with_writer(audit_writer)
-        .with_filter(filter_fn(|metadata| metadata.target() == AUDIT_TARGET));
 
     tracing_subscriber::registry()
+        .with(audit_layer(audit_writer))
         .with(general_layer)
-        .with(audit_layer)
         .try_init()?;
 
     Ok(LoggingHandle {
         _audit_guard: audit_guard,
     })
+}
+
+/// JSON layer that writes only events whose target is [`AUDIT_TARGET`] to `writer`.
+fn audit_layer<W>(writer: W) -> impl Layer<Registry>
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    tracing_subscriber::fmt::layer()
+        .json()
+        .with_timer(UtcTime::rfc_3339())
+        .with_target(true)
+        .with_writer(writer)
+        .with_filter(filter_fn(|metadata| metadata.target() == AUDIT_TARGET))
 }
 
 pub fn init_tracing_json() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
@@ -116,5 +125,106 @@ fn audit_log_dir() -> PathBuf {
             }
         }
         _ => PathBuf::from("."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::{AUDIT_TARGET, audit_layer};
+
+    /// In-memory writer shared between the audit layer and the test.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for SharedBuf {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("poisoned"))?
+                .extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn audit_layer_routes_by_target_not_by_field() {
+        let buf = SharedBuf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::registry().with(audit_layer(move || writer.clone()));
+        let field_value = AUDIT_TARGET;
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "audit", marker = "routed_by_target", "audit event");
+            tracing::info!(
+                target = field_value,
+                marker = "routed_by_field",
+                "not an audit event"
+            );
+        });
+
+        let out = String::from_utf8(buf.0.lock().expect("buffer lock").clone()).expect("utf8");
+        assert!(out.contains("routed_by_target"), "audit log: {out}");
+        assert!(!out.contains("routed_by_field"), "audit log: {out}");
+    }
+
+    /// Collects every `.rs` file under `dir`.
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(dir).expect("read dir");
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Fails on any audit target written as a field, which leaves the event on its module
+    /// target so it never reaches the audit log.
+    #[test]
+    fn no_audit_target_written_as_a_field() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(workspace).expect("read workspace") {
+            let src = entry.expect("dir entry").path().join("src");
+            if src.is_dir() {
+                rust_files(&src, &mut files);
+            }
+        }
+        assert!(
+            !files.is_empty(),
+            "no sources found under {}",
+            workspace.display()
+        );
+
+        let needle = "target=\"audit\"";
+        let mut offenders = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source");
+            for (idx, line) in text.lines().enumerate() {
+                let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+                if compact.contains(needle) {
+                    offenders.push(format!("{}:{}", file.display(), idx + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "write the audit target as `target: \"audit\"`, first in the macro:\n{}",
+            offenders.join("\n")
+        );
     }
 }
