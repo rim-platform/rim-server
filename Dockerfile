@@ -66,6 +66,24 @@ USER rim
 #   RIM_ROLE              — relay, host or both (default: both)
 #   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
 #   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
+#   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
+#   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
+#   RIM_BOOTSTRAP_TOKEN_TTL_SECONDS — Bootstrap token lifetime, at most 3600 (default: 900)
+#   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
+#   RIM_SMTP_HOST         — SMTP server; without it or RIM_SMTP_FROM mail is only logged
+#   RIM_SMTP_PORT         — SMTP port (default: 587)
+#   RIM_SMTP_USERNAME     — SMTP user name (default: none, unauthenticated)
+#   RIM_SMTP_PASSWORD     — SMTP password (default: none)
+#   RIM_SMTP_FROM         — From address, e.g. RIM <noreply@example.org>
+#   RIM_SMTP_TLS          — starttls, implicit or none (default: starttls)
+#   RIM_HOST_ALLOWED_RELAYS — Server ids allowed on host endpoints, comma-separated (default: any)
+#   RIM_S2S_DENIED_PEERS  — Server ids refused on every server-to-server endpoint, comma-separated
+#   RIM_S2S_PEER_RATE_PER_MIN — Server-to-server requests per peer per minute (default: 600)
+#   RIM_S2S_DEVICE_RATE_PER_MIN — Forwarded requests per device per minute (default: 120)
+#   RIM_S2S_SUBSCRIPTIONS_PER_PEER — Delegations one relay may hold on this host (default: 10000)
+#   RIM_S2S_MAX_BODY_BYTES — Largest server-to-server request body (default: 8388608)
+#   RIM_S2S_ALLOW_HTTP    — Allow server-to-server traffic over http when true; development only
+#   RIM_S2S_ALLOW_PRIVATE_ADDRESSES — Allow peers on private addresses when true; development only
 #   RIM_METRICS_ADDR      — ip:port of the Prometheus /metrics listener (default: off). In a
 #                           container bind 0.0.0.0:9090 and do not publish it: keep it on an
 #                           internal network, never behind the public proxy
