@@ -95,6 +95,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261010_010907_add_relay_abuse::Migration),
             Box::new(m20261010_143053_make_instance_invite_creator_optional::Migration),
             Box::new(m20261010_153941_add_command_audit_log_created_at_index::Migration),
+            Box::new(m20261010_184831_drop_incident_module::Migration),
         ]
     }
 }
@@ -177,3 +178,4 @@ mod m20261010_010132_add_remote_workspaces;
 mod m20261010_010907_add_relay_abuse;
 mod m20261010_143053_make_instance_invite_creator_optional;
 mod m20261010_153941_add_command_audit_log_created_at_index;
+mod m20261010_184831_drop_incident_module;

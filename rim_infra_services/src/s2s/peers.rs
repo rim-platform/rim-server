@@ -19,7 +19,7 @@ use rim_services::s2s::service::PeerService;
 use rim_services::{ServiceError, ServiceResult};
 use serde::Deserialize;
 
-use crate::alert_rate_limiter::AlertRateLimiter;
+use crate::keyed_rate_limiter::KeyedRateLimiter;
 use crate::s2s::net::{NetError, check_url_host, http_client, normalize_origin, read_limited};
 
 /// Path of the discovery document below an origin.
@@ -235,8 +235,8 @@ pub struct DefaultPeerService {
     repo: Arc<dyn PeerServerRepository>,
     fetcher: Arc<dyn DiscoveryFetcher>,
     allow_http: bool,
-    per_peer: AlertRateLimiter,
-    overall: AlertRateLimiter,
+    per_peer: KeyedRateLimiter,
+    overall: KeyedRateLimiter,
 }
 
 impl DefaultPeerService {
@@ -250,8 +250,8 @@ impl DefaultPeerService {
             repo,
             fetcher,
             allow_http,
-            per_peer: AlertRateLimiter::new(60, 1),
-            overall: AlertRateLimiter::new(60, 60),
+            per_peer: KeyedRateLimiter::new(60, 1),
+            overall: KeyedRateLimiter::new(60, 60),
         }
     }
 

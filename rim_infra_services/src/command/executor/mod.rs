@@ -3,11 +3,9 @@ mod chat;
 mod chat_messages;
 mod conversation;
 mod desktop_local;
-mod incident;
 mod member;
 mod moderation;
 mod notification;
-mod oncall;
 mod pin;
 mod reaction;
 mod state;
@@ -16,7 +14,6 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use rim_services::command::initiator::CommandInitiator;
 use rim_services::message::dto::MessageDto;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -24,21 +21,12 @@ use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto};
 
 /// Dispatches a resolved builtin command id to its domain executor.
-///
-/// `initiator` (C2 §3b) is only consumed by the `incident.ack` /
-/// `incident.escalate` arms, which thread it into
-/// [`rim_services::incident::command::AcknowledgeIncidentCmd`] /
-/// [`rim_services::incident::command::EscalateIncidentNowCmd`] so the
-/// service layer can append an agent-transcript timeline note when the
-/// initiator is agentic. Every other domain executor ignores it — this
-/// function does not change any other arm's signature.
 pub(super) async fn execute_builtin_command(
     services: &CommandServices,
     actor: Actor,
     command_id: &str,
     args: Option<Value>,
     context: Option<CommandContextDto>,
-    initiator: CommandInitiator,
 ) -> ServiceResult<CommandResultDto> {
     let args = require_object_args(args)?;
 
@@ -92,10 +80,6 @@ pub(super) async fn execute_builtin_command(
         "notifications.mark_all_read" => {
             notification::mark_all_read(services, actor, args, context).await
         }
-        "incident.ack" => incident::ack(services, actor, args, context, initiator).await,
-        "incident.escalate" => incident::escalate(services, actor, args, context, initiator).await,
-        "oncall.who" => oncall::who(services, actor, args, context).await,
-        "oncall.take_shift" => oncall::take_shift(services, actor, args, context).await,
         "state.get" => state::get(services, actor, args, context).await,
         "state.set" => state::set(services, actor, args, context).await,
         "state.delete" => state::delete(services, actor, args, context).await,
@@ -179,19 +163,6 @@ where
     let uuid = uuid::Uuid::parse_str(&raw)
         .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{key}`")))?;
     Ok(T::from(uuid))
-}
-
-/// Parse a required RFC 3339 timestamp string arg (e.g. `"2026-07-10T15:00:00Z"`) into a UTC
-/// `DateTime`. Used by `oncall.take_shift`, which takes an explicit override window rather than
-/// an invented default duration.
-pub(super) fn parse_rfc3339_arg(
-    map: &serde_json::Map<String, Value>,
-    key: &str,
-) -> ServiceResult<chrono::DateTime<chrono::Utc>> {
-    let raw = require_string_arg(map, key)?;
-    chrono::DateTime::parse_from_rfc3339(&raw)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .map_err(|_| ServiceError::Validation(format!("invalid RFC 3339 timestamp arg `{key}`")))
 }
 
 /// Resolve a `WorkspaceId`-typed argument with context fallback.

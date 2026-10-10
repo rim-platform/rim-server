@@ -1,7 +1,5 @@
 use async_graphql::{Enum, InputObject, Result, SimpleObject};
 
-use super::WorkspaceFeature;
-
 // ── GraphQL output enums (stable wire contract) ──────────────────────────
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -259,10 +257,6 @@ pub struct Command {
     /// Classification tier driving audit verbosity, mutating-call caps, and
     /// the UX confirm-modal placement.
     pub sensitivity: CommandSensitivity,
-    /// The optional workspace module this command belongs to (Track 0.4), or null when the
-    /// command is always available. The server already omits commands whose feature is off
-    /// from `commands`; this lets clients group or explain gated commands.
-    pub feature: Option<WorkspaceFeature>,
 }
 
 impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
@@ -285,7 +279,6 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
             intent_samples: value.intent_samples,
             ai_callable: value.ai_callable,
             sensitivity: value.sensitivity.into(),
-            feature: value.feature.map(Into::into),
         }
     }
 }

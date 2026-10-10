@@ -10,7 +10,7 @@ mod roles;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use rim_infra_services::AlertRateLimiter;
+use rim_infra_services::KeyedRateLimiter;
 use rim_s2s::SharedIdentity;
 use rim_services::host::service::HostService;
 use rim_services::relay::service::RelayService;
@@ -41,7 +41,7 @@ pub struct S2sState {
     pub peers: Arc<dyn PeerService>,
     pub nonces: Arc<dyn S2sNonceService>,
     /// Requests per peer per minute.
-    pub rate_limiter: Arc<AlertRateLimiter>,
+    pub rate_limiter: Arc<KeyedRateLimiter>,
     pub settings: Arc<S2sSettings>,
     /// Sends signed requests to peers.
     pub client: Arc<dyn S2sClient>,

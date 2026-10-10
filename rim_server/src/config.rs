@@ -57,23 +57,6 @@ pub struct RIMConfig {
     /// Controlled by `RIM_FORCE_SECURE_COOKIES=true`.
     pub force_secure_cookies: Option<bool>,
 
-    /// Max alert-ingest webhook requests accepted per ingest token per minute.
-    /// Default: 120. Controlled by `RIM_ALERT_RATE_LIMIT_PER_MIN`.
-    pub alert_rate_limit_per_min: Option<u32>,
-
-    /// Max accepted body size (bytes) for alert-ingest webhook requests.
-    /// Default: 262144 (256 KiB). Controlled by `RIM_ALERT_MAX_BODY_BYTES`.
-    pub alert_max_body_bytes: Option<usize>,
-
-    /// Ingest-token TTL in seconds. If unset, tokens don't expire (revocation only).
-    ///
-    /// `workspace_ingest_token` has no `expires_at` column (see
-    /// `m20260708_232445_create_workspace_ingest_token`) — this is a single, instance-wide
-    /// TTL applied at authentication time as `now - token.created_at > ttl`, not a per-token
-    /// persisted expiry. Enforced in `DefaultIngestTokenService::authenticate_token`.
-    /// Controlled by `RIM_INGEST_TOKEN_TTL_SECONDS`.
-    pub ingest_token_ttl_seconds: Option<u64>,
-
     // ── Track B3: transactional email (RIM_SMTP_*) ──────────────────────────
     //
     // SMTP is only enabled when both `smtp_host` and `smtp_from` are present (see
@@ -89,16 +72,9 @@ pub struct RIMConfig {
     pub smtp_from: Option<String>,
     /// `"starttls"` (default) | `"implicit"` | `"none"` (dev/localhost only).
     pub smtp_tls: Option<String>,
-    /// e.g. `https://rim.example.com`. Required to build clickable reset-password/invite/
-    /// incident links; without it, emails fall back to including the bare token/no link.
+    /// e.g. `https://rim.example.com`. Required to build clickable reset-password/invite
+    /// links; without it, emails fall back to including the bare token/no link.
     pub public_base_url: Option<String>,
-
-    /// Floor sleep duration (seconds) for the escalation timer driver task when no run is
-    /// currently armed. Default: 5. The driver actually `sleep`s until the next armed
-    /// deadline (a `sleep_until`-style wait, not fixed-interval polling) — this value is only a
-    /// floor for the "nothing armed" idle case, per §11. Controlled by
-    /// `RIM_ESCALATION_TIMER_RESOLUTION_SECS`.
-    pub escalation_timer_resolution_secs: Option<u64>,
 
     /// How often (seconds) the notification digest job looks for due digests (Track 1.3).
     /// Default: 900 (15 minutes); values below 60 are raised to 60. Controlled by
@@ -267,8 +243,6 @@ impl fmt::Debug for RIMConfig {
                 "force_secure_cookies",
                 &self.force_secure_cookies.unwrap_or(false),
             )
-            .field("alert_rate_limit_per_min", &self.alert_rate_limit_per_min())
-            .field("alert_max_body_bytes", &self.alert_max_body_bytes())
             .field("smtp_host", &self.smtp_host)
             .field("smtp_port", &self.smtp_port)
             .field("smtp_username", &self.smtp_username)
@@ -279,10 +253,6 @@ impl fmt::Debug for RIMConfig {
             .field("smtp_from", &self.smtp_from)
             .field("smtp_tls", &self.smtp_tls)
             .field("public_base_url", &self.public_base_url)
-            .field(
-                "escalation_timer_resolution_secs",
-                &self.escalation_timer_resolution_secs(),
-            )
             .field(
                 "notification_digest_interval_secs",
                 &self.notification_digest_interval_secs(),
@@ -329,9 +299,6 @@ impl Default for RIMConfig {
             open_registration: None,
             trust_forwarded_headers: None,
             force_secure_cookies: None,
-            alert_rate_limit_per_min: None,
-            alert_max_body_bytes: None,
-            ingest_token_ttl_seconds: None,
             smtp_host: None,
             smtp_port: None,
             smtp_username: None,
@@ -339,7 +306,6 @@ impl Default for RIMConfig {
             smtp_from: None,
             smtp_tls: None,
             public_base_url: None,
-            escalation_timer_resolution_secs: None,
             notification_digest_interval_secs: None,
             key_login_audiences: None,
             role: None,
@@ -500,41 +466,6 @@ impl RIMConfig {
         self.force_secure_cookies.unwrap_or(false)
     }
 
-    /// Max alert-ingest webhook requests accepted per ingest token per minute.
-    /// Defaults to 120 if unset.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let per_min = config.alert_rate_limit_per_min();
-    /// ```
-    pub fn alert_rate_limit_per_min(&self) -> u32 {
-        const DEFAULT: u32 = 120;
-        self.alert_rate_limit_per_min.unwrap_or(DEFAULT)
-    }
-
-    /// Max accepted body size (bytes) for alert-ingest webhook requests.
-    /// Defaults to 262144 (256 KiB) if unset.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let max_bytes = config.alert_max_body_bytes();
-    /// ```
-    pub fn alert_max_body_bytes(&self) -> usize {
-        const DEFAULT: usize = 262_144;
-        self.alert_max_body_bytes.unwrap_or(DEFAULT)
-    }
-
-    /// Ingest-token TTL, if the operator has opted into time-based expiry.
-    /// `None` means tokens never expire (revocation only) — the default.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let ttl = config.ingest_token_ttl_seconds();
-    /// ```
-    pub fn ingest_token_ttl_seconds(&self) -> Option<u64> {
-        self.ingest_token_ttl_seconds
-    }
-
     /// Resolve the SMTP configuration from `RIM_SMTP_*`. Returns `None` (fall back to
     /// `LogEmailSender`) unless both `smtp_host` and `smtp_from` are present — see
     /// `rim_infra_services::email::SmtpConfig::from_parts` and `docs/email.md`.
@@ -554,9 +485,9 @@ impl RIMConfig {
         )
     }
 
-    /// e.g. `https://rim.example.com`. Required to build clickable password-reset/invite/
-    /// incident links in transactional emails; without it, those emails fall back to a bare
-    /// token or no link (see `docs/email.md`).
+    /// e.g. `https://rim.example.com`. Required to build clickable password-reset/invite
+    /// links in transactional emails; without it, those emails fall back to a bare token or no
+    /// link (see `docs/email.md`).
     ///
     /// # Examples
     /// ```ignore
@@ -564,18 +495,6 @@ impl RIMConfig {
     /// ```
     pub fn public_base_url(&self) -> Option<String> {
         self.public_base_url.clone()
-    }
-
-    /// Floor sleep duration (seconds) for the escalation timer driver's idle case (nothing
-    /// currently armed). Defaults to 5 if unset.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let floor_secs = config.escalation_timer_resolution_secs();
-    /// ```
-    pub fn escalation_timer_resolution_secs(&self) -> u64 {
-        const DEFAULT: u64 = 5;
-        self.escalation_timer_resolution_secs.unwrap_or(DEFAULT)
     }
 
     /// Interval (seconds) of the notification digest job. Defaults to 900 (15 minutes); never
@@ -843,9 +762,6 @@ impl RIMConfig {
             .set_default("enable_graphiql", false)?
             .set_default("data_dir", "./data")?
             .set_default("max_workspace_storage_bytes", 1_073_741_824_i64)?
-            .set_default("alert_rate_limit_per_min", 120_i64)?
-            .set_default("alert_max_body_bytes", 262_144_i64)?
-            .set_default("escalation_timer_resolution_secs", 5_i64)?
             .set_default("notification_digest_interval_secs", 900_i64)?
             .set_default(
                 "s2s_peer_rate_per_min",
@@ -889,57 +805,6 @@ mod tests {
             version_line(),
             format!("rim-server {}", workspace_version())
         );
-    }
-
-    #[test]
-    fn alert_rate_limit_per_min_defaults_to_120_when_unset() {
-        let config = RIMConfig {
-            alert_rate_limit_per_min: None,
-            ..Default::default()
-        };
-        assert_eq!(config.alert_rate_limit_per_min(), 120);
-    }
-
-    #[test]
-    fn alert_rate_limit_per_min_returns_configured_value() {
-        let config = RIMConfig {
-            alert_rate_limit_per_min: Some(240),
-            ..Default::default()
-        };
-        assert_eq!(config.alert_rate_limit_per_min(), 240);
-    }
-
-    #[test]
-    fn alert_max_body_bytes_defaults_to_256kib_when_unset() {
-        let config = RIMConfig {
-            alert_max_body_bytes: None,
-            ..Default::default()
-        };
-        assert_eq!(config.alert_max_body_bytes(), 262_144);
-    }
-
-    #[test]
-    fn alert_max_body_bytes_returns_configured_value() {
-        let config = RIMConfig {
-            alert_max_body_bytes: Some(65_536),
-            ..Default::default()
-        };
-        assert_eq!(config.alert_max_body_bytes(), 65_536);
-    }
-
-    #[test]
-    fn ingest_token_ttl_seconds_defaults_to_none() {
-        let config = RIMConfig::default();
-        assert_eq!(config.ingest_token_ttl_seconds(), None);
-    }
-
-    #[test]
-    fn ingest_token_ttl_seconds_returns_configured_value() {
-        let config = RIMConfig {
-            ingest_token_ttl_seconds: Some(86_400),
-            ..Default::default()
-        };
-        assert_eq!(config.ingest_token_ttl_seconds(), Some(86_400));
     }
 
     #[test]

@@ -237,41 +237,16 @@ Each command should expose the following metadata.
 - `dangerous`
 - `supports_preview`
 - `supports_dry_run`
-- `feature` — the optional workspace module the command belongs to (see below), or none
-
-### `feature` (workspace feature gate, Track 0.4)
-
-`CommandDefinitionDto.feature: Option<WorkspaceFeature>` (GraphQL `Command.feature:
-WorkspaceFeature`, nullable) names the optional per-workspace module a command depends on.
-Today the only feature is `incidents` (GraphQL `INCIDENTS`), set on `incident.ack`,
-`incident.escalate`, `oncall.who` and `oncall.take_shift`. Every other builtin, every
-user-defined command and every macro has `feature = None` and is always available.
-
-- `list_commands` (and therefore `command_discover`, the AI surface and the keybind picker)
-  drops a command whose feature is off for `context.workspace_id`, with a single feature lookup
-  for the whole list. Without a workspace context, feature-gated commands are hidden: they
-  cannot run without one.
-- `execute_command` rejects a gated command with `ServiceError::FeatureDisabled` (GraphQL code
-  `FEATURE_DISABLED`, extension `feature: "incidents"`) when the feature is off for the
-  context's workspace or there is no workspace context. The gate (F1) runs after the capability
-  and confirmation gates and before the rate limiter, inside the audit wrapper, so the
-  rejection is audited and never consumes a rate-limit slot.
-- Nested dispatch hits the same gate: a user-command step or a pipe stage that reaches a gated
-  builtin fails with `FeatureDisabled`; a macro step goes through `execute_command` and fails
-  the same way.
 
 ### Timeout gate (T1, Track 1.2)
 
-Right after F1, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
+After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
 `Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
 when the actor is timed out in the context's workspace (`ModerationService::active_timeout`).
 `Safe` and `Sensitive` commands still run. The gate also runs on nested dispatch (user-command
 steps, pipe stages), before the rate limiter, inside the audit wrapper. Without a workspace
 context it has nothing to check; the services behind the command apply their own write gates
-anyway. Gate order: C1 capability → H1 confirmation → F1 feature → T1 timeout → R1 rate limit.
-
-Feature state is managed per workspace by its Owner (`setWorkspaceFeature`); see
-`docs/specs/track-0-4-optional-incident-module.md`.
+anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
 
 ## Arguments
 
