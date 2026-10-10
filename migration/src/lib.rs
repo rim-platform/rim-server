@@ -93,6 +93,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261010_002421_add_relay_delivery::Migration),
             Box::new(m20261010_010132_add_remote_workspaces::Migration),
             Box::new(m20261010_010907_add_relay_abuse::Migration),
+            Box::new(m20261010_143053_make_instance_invite_creator_optional::Migration),
         ]
     }
 }
@@ -173,3 +174,4 @@ mod m20261010_000142_add_message_franking_revision;
 mod m20261010_002421_add_relay_delivery;
 mod m20261010_010132_add_remote_workspaces;
 mod m20261010_010907_add_relay_abuse;
+mod m20261010_143053_make_instance_invite_creator_optional;

@@ -1370,7 +1370,7 @@ async fn pow_signups_are_accepted_refused_or_take_an_invite() {
         node.db.clone().into(),
     )
     .create(rim_core::auth::model::NewInstanceInvite {
-        created_by_user_id: ada_id,
+        created_by_user_id: Some(ada_id),
         token_hash: rim_auth::session_token::hash_token("rim_inv_grace"),
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         max_uses: 1,
@@ -1386,6 +1386,109 @@ async fn pow_signups_are_accepted_refused_or_take_an_invite() {
     )
     .await;
     assert!(body.get("errors").is_none(), "{body}");
+    node.stop().await;
+}
+
+/// The operator's `invite` command on `database_url`.
+async fn invite(database_url: &str, args: &[&str]) -> String {
+    rim_server::invite_cmd::run_with(
+        &operator_config(database_url),
+        args.iter().map(|a| a.to_string()),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("rim_server invite {args:?}: {e}"))
+}
+
+/// The token of the signup link `rim_server invite create` printed first.
+fn invite_token(created: &str) -> String {
+    let link = created.lines().next().expect("a link");
+    link.rsplit_once("/join/")
+        .expect("a join link")
+        .1
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pure_relays_operator_hands_out_signup_invites() {
+    let (first, _) = databases_with(RESET).await;
+    // Invite-only registration on a server that runs only the relay role: no one owns a
+    // workspace, so no one can issue an invite over GraphQL.
+    let node = start(&first, |c| c.role = Some("relay".to_string())).await;
+    let http = reqwest::Client::new();
+
+    let (body, _) = key_signup(&http, &node, "ada", &keys(21), json!({})).await;
+    assert!(body.get("errors").is_some(), "invite-only: {body}");
+
+    let created = invite(
+        &first,
+        &["create", "--max-uses", "1", "--public-url", &node.origin],
+    )
+    .await;
+    assert!(
+        created.starts_with(&format!("{}/join/rim_iinv_", node.origin)),
+        "{created}"
+    );
+    assert!(created.contains("issued by operator"), "{created}");
+    let token = invite_token(&created);
+    let (body, cookies) = key_signup(
+        &http,
+        &node,
+        "ada",
+        &keys(21),
+        json!({ "instanceInviteToken": token }),
+    )
+    .await;
+    assert!(body.get("errors").is_none(), "{body}");
+
+    // The invite is used up.
+    let (body, _) = key_signup(
+        &http,
+        &node,
+        "grace",
+        &keys(22),
+        json!({ "instanceInviteToken": token }),
+    )
+    .await;
+    assert!(body.get("errors").is_some(), "a used invite: {body}");
+    let listed = invite(&first, &["list"]).await;
+    assert!(listed.contains("used 1/1"), "{listed}");
+
+    // Ada owns no workspace here, so she cannot issue invites herself.
+    let session = cookies.get("rim_session").expect("session");
+    let csrf = cookies.get("rim_csrf").expect("csrf");
+    let refused: Value = http
+        .post(format!("{}/api", node.origin))
+        .header("cookie", format!("rim_session={session}; rim_csrf={csrf}"))
+        .header("x-csrf-token", csrf)
+        .json(&json!({ "query": "mutation { createInstanceInvite(input: {}) { inviteToken } }" }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(error_code(&refused), "FORBIDDEN", "{refused}");
+
+    // A revoked invite admits no one.
+    let created = invite(&first, &["create", "--max-uses", "5"]).await;
+    let id = created
+        .lines()
+        .nth(1)
+        .and_then(|line| line.split_whitespace().next())
+        .expect("the invite id")
+        .to_string();
+    assert!(invite(&first, &["revoke", &id]).await.contains(&id));
+    let (body, _) = key_signup(
+        &http,
+        &node,
+        "grace",
+        &keys(22),
+        json!({ "instanceInviteToken": invite_token(&created) }),
+    )
+    .await;
+    assert!(body.get("errors").is_some(), "a revoked invite: {body}");
+    assert!(!invite(&first, &["list"]).await.contains(&id));
+
     node.stop().await;
 }
 
