@@ -133,14 +133,21 @@ struct HolderRow {
     principal_id: String,
 }
 
-/// Whether conversation `c` stays out of user `$1`'s list: a pending or ignored request, or a
-/// blocked creator of a direct-space conversation.
-pub const HIDDEN: &str = r#"(EXISTS (SELECT 1 FROM relay_dm_request r
-        WHERE r.user_id = $1 AND r.conversation_id = c.id AND r.status <> 'accepted')
+/// SQL that is true when the conversation `conversation_id` stays out of the user `user_id`'s
+/// view: their request for it is pending or ignored, or they blocked the creator of a
+/// direct-space conversation. Both arguments are SQL expressions (a placeholder or a column).
+pub fn hidden(user_id: &str, conversation_id: &str) -> String {
+    format!(
+        r#"(EXISTS (SELECT 1 FROM relay_dm_request r
+        WHERE r.user_id = {user_id} AND r.conversation_id = {conversation_id}
+          AND r.status <> 'accepted')
     OR EXISTS (SELECT 1 FROM relay_block b
         JOIN "user" cu ON cu.principal_id = b.principal_id
-        JOIN server s ON s.id = c.server_id AND s.kind = 'direct'
-        WHERE b.user_id = $1 AND cu.id = c.created_by))"#;
+        JOIN conversation hc ON hc.id = {conversation_id} AND hc.created_by = cu.id
+        JOIN server s ON s.id = hc.server_id AND s.kind = 'direct'
+        WHERE b.user_id = {user_id}))"#
+    )
+}
 
 #[derive(FromQueryResult)]
 struct IdentityRow {
@@ -626,7 +633,7 @@ impl RelayRepository for SeaOrmRelayRepository {
         conversation_id: Uuid,
     ) -> RepoResult<bool> {
         self.flag(
-            &format!("SELECT {HIDDEN} AS flag FROM conversation c WHERE c.id = $2"),
+            &format!("SELECT {} AS flag", hidden("$1", "$2")),
             vec![uuid(user_id), conversation_id.into()],
         )
         .await
@@ -716,7 +723,9 @@ impl RelayRepository for SeaOrmRelayRepository {
             .all::<TextRow>(
                 "SELECT e.host_server_id AS value FROM relay_item i \
                  JOIN relay_envelope e ON e.id = i.envelope_id WHERE i.user_id = $1 \
-                 UNION SELECT host_server_id AS value FROM relay_dm_request WHERE user_id = $1",
+                 UNION SELECT host_server_id AS value FROM relay_dm_request WHERE user_id = $1 \
+                 UNION SELECT host_server_id AS value FROM relay_subscription \
+                 WHERE user_id = $1 AND status = 'active'",
                 vec![uuid(user_id)],
             )
             .await?

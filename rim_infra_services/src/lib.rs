@@ -55,6 +55,7 @@ pub(crate) mod read_state;
 pub mod registration_rate_limiter;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultRelayService.
 pub mod relay;
+pub mod remote_workspace;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;

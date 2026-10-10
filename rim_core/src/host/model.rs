@@ -1,8 +1,10 @@
-//! Stored host records: people from other servers, event streams, the outbox per relay, and
-//! the `seq` window of forwarded device requests.
+//! Stored host records: people from other servers, event streams, the outbox per relay, the
+//! `seq` window of forwarded device requests, and the delegations relays hold.
 
 use chrono::{DateTime, Utc};
 
+use crate::key_identity::model::DeviceKeyId;
+use crate::server::model::ServerId;
 use crate::server_member::model::ServerMemberRole;
 use crate::user::model::UserId;
 
@@ -76,4 +78,36 @@ pub enum SeqDecision {
     Replay {
         highest: i64,
     },
+}
+
+/// A delegation a host accepted, to store. It replaces the row for the same workspace, device
+/// and relay unless that one runs longer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDelegation {
+    pub workspace_id: ServerId,
+    pub user_id: UserId,
+    pub device_key_id: DeviceKeyId,
+    pub relay_server_id: String,
+    pub payload: String,
+    pub signature: String,
+    /// When the host stops honouring it: the earlier of the signed `expiresAt` and a day after
+    /// acceptance, by the host's clock.
+    pub expires_at: DateTime<Utc>,
+}
+
+/// What storing a delegation did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelegationStored {
+    /// Stored, replacing any earlier one.
+    Stored { expires_at: DateTime<Utc> },
+    /// An active delegation for the same workspace, device and relay runs longer and was kept.
+    Kept { expires_at: DateTime<Utc> },
+}
+
+impl DelegationStored {
+    pub fn expires_at(self) -> DateTime<Utc> {
+        match self {
+            Self::Stored { expires_at } | Self::Kept { expires_at } => expires_at,
+        }
+    }
 }

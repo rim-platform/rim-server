@@ -40,6 +40,7 @@ pub mod password_reset_token;
 pub mod pipeline;
 pub mod relay;
 pub mod relay_abuse;
+pub mod remote_workspace;
 pub mod s2s;
 pub mod server;
 pub mod server_member;

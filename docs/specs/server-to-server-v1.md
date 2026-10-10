@@ -232,7 +232,7 @@ Bodies are `{"error":"<code>","message":"…"}`.
 | 401 | `bad_signature` | Profile, clock, key, digest or signature |
 | 403 | `unknown_peer`, `peer_not_allowed`, `peer_forked`, `not_delegated`, `forbidden` | Peer not pinnable; denied or off the allow-list; forked; no delegation or card names the relay; action refused |
 | 404 | `not_found` | Unknown principal, space or conversation |
-| 409 | `replay` | Nonce seen; device request `seq` refused (`highestSeq` in the body) |
+| 409 | `replay`, `conflict` | Nonce seen; device request `seq` refused (`highestSeq` in the body); the action conflicts with stored state |
 | 413, 429 | `too_large`, `rate_limited` | Caps; `Retry-After` |
 | 500 | `internal` | The responder failed (its database, say); retry |
 | 503 | `role_disabled` | The endpoint belongs to a role this server does not run |
@@ -351,7 +351,7 @@ payload text) and `Rim-Device-Signature` (the tagged signature over
 | Field | Rule |
 |---|---|
 | `host` | The host's server id |
-| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
+| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `POST /api/files/avatar`, `GET /api/files/<path>`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
 | `seq` | Below 2⁵³, greater than every `seq` this device used with this host; clients use `max(previous + 1, Unix time in µs)` and persist it |
 | `bodySha256` | base64url(SHA-256(exact body bytes)); the empty body's hash for `GET` |
 
@@ -372,14 +372,14 @@ transport in `rim_server`, in the `file_handlers.rs` pattern); GraphQL is
 refuses a device request naming another principal or device than the session's or a revoked
 device (`FORBIDDEN`), and sends `<host s2s>/forward<path>` with the body byte for byte, the client's
 `Content-Type`, both device headers and its own signature. It returns the host's status, body,
-`Content-Type`, `Rim-Host-Response` and `Rim-Host-Signature` unchanged.
+`Content-Type`, `Rim-Host-Response`, `Rim-Host-Signature` and `Retry-After` unchanged.
 
 The host's `/s2s/v1/forward/…` checks the S2S signature, then the device request (a non-revoked
 device of a user here; `host` is its own id; method, path, body hash; `seq`), then that the relay
 may carry this user's traffic: it holds an active delegation of this device for a workspace here,
 or the user is a member of this host's direct space and the relay's origin is in their newest card
-(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, upload, download) as that user
-and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
+(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, attachment upload and download,
+avatar upload, stored-file download, plugin bundle download) as that user and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
 `relay:<serverId>:<principalId>` for forwarded requests.
 
 Every forwarded response carries `Rim-Host-Response` (base64url payload) and `Rim-Host-Signature`:
@@ -457,7 +457,9 @@ cursor per device (`relay_device_cursor`): each device's queue is its user's ite
 
 - **Push**: a subscription `relayStream(after: ID)` on the existing `/api/ws` yields items above
   `after`, then live ones: `{"type":"RelayItem","id":"981","hostServerId":"rims1_…","workspaceId":"…","envelope":{…}}`,
-  plus notices: `{"type":"DmRequestReceived","requestId":"<uuid>"}`, `RevocationAcked` and
+  plus notices: `{"type":"DmRequestReceived","requestId":"<uuid>"}`,
+  `{"type":"RevocationAcked","deviceId":"<uuid>","hostServerId":"rims1_…","ack":{"payload","signature"}}`
+  (the app checks the acknowledgement and refreshes `deviceRevocationStatus`) and
   `{"type":"QueueOverflow","spaces":[{"hostServerId":"rims1_…","workspaceId":"<uuid>"}]}`.
 - **Pull** `relayItems(after, limit)`; **ack** `ackRelayItems(upTo)` moves the session device's
   cursor. A newly linked device starts at the newest item and reads history from the host's feed
@@ -536,8 +538,9 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    `remoteMembers` and no `memberIds` makes a DM, more make a group; the app names every member
    this way, those on R_A included. The app creates a conversation with anyone on another relay
    only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
-   R_A refuses such a conversation unencrypted (`VALIDATION`), and an encrypted one when a member
-   has no MLS-active device. A person from another relay may create one too, through the forward
+   The server enforces this too: R_A refuses such a conversation unencrypted (`VALIDATION`,
+   "conversations with people on other servers are encrypted"), so relays only ever carry its
+   ciphertext, and refuses an encrypted one when a member has no MLS-active device. A person from another relay may create one too, through the forward
    path, naming R_A's members the same way.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
    `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"},"cipherSuite":79}`
@@ -589,8 +592,10 @@ items of any other conversation are refused.
 When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
 its creator is someone else, from another relay or not), the home files its own `DmInvite` for
 Bob through the same rule instead of delivering it. The invite and the conversation's events are
-held as above, and until Bob accepts, the conversation is left out of his `inboxConversations` and
-its events out of his `workspaceEvents`; ignoring keeps it out, and so does blocking its creator.
+held as above, and until Bob accepts, the conversation is left out of his `inboxConversations`,
+its events out of his `workspaceEvents`, and its notifications, mentions and unread messages out
+of his `myNotifications`, `myUnreadNotificationCount`, `myMentions`, `unreadCounts` and email
+digest; ignoring keeps it out, and so does blocking its creator.
 Once accepted it is an ordinary conversation of the space he uses directly.
 
 | Action | Effect |
@@ -617,7 +622,7 @@ Limits: 100 pending per recipient, 20 per sender principal per day per relay
 ```
 app ─────────────────────► relay R ─────────────────────────► host H
 remoteServer(origin)              GET /.well-known/rim-server               (pin H from the invite)
-remoteJoinChallenge(H, origin)    POST /s2s/v1/join/challenge → {challengeId, nonce, expiresAt}
+remoteJoinChallenge(H, origin, t) POST /s2s/v1/join/challenge → {challengeId, nonce, expiresAt, workspaceId}
 sign a login proof (audience = H's server id) and a delegation
 joinRemoteWorkspace(input)        POST /s2s/v1/join           → {workspaceId, userId, role, streamHeads}
 relayStream                  ◄─── POST /s2s/v1/deliver         (events)
@@ -625,15 +630,22 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
 
 1. The invite link is read like a device-link code: whitespace removed, at most 400 characters,
    split at the first four `:` after the scheme (the origin keeps its colons). The app pins H.
-2. The challenge is today's `keyLoginChallenge` (120 s, single use) over S2S. The device signs a
-   `login` statement with `audience` = H's server id, so the proof is good only at H and the relay
-   never vouches for the person.
+2. The challenge is today's `keyLoginChallenge` (120 s, single use) over S2S:
+   `POST /s2s/v1/join/challenge {"inviteToken"}` → `{"challengeId","nonce","expiresAt","workspaceId"}`.
+   The invite link carries no workspace id, and the delegation must name one, so H answers the
+   workspace the invite names, checked as `previewInviteToken` checks it and not used
+   (`404 not_found` for an unknown invite, `403 forbidden` for one revoked, used up or expired);
+   `workspaceId` is null without an invite. The device signs a `login` statement with
+   `audience` = H's server id, so the proof is good only at H and the relay never vouches for the
+   person.
 3. The device signs a delegation. R sends H `{"inviteToken","keyLog":[…],"devices":[{"certificate","revocation"}],"card","proof","delegation"}`.
 4. H verifies log, certificates, proof (claiming the challenge) and invite token (the rules of
    `joinServerByInvite`, bans included), creates or updates the remote user, adds the membership
    with the invite's role, stores devices and card, accepts the delegation, and answers
    `{"workspaceId","userId","role","streamHeads":{"w":17,"u:rimp1_…":0}}`. R records the
-   subscription; the app loads the space through the forward path.
+   subscription; the app loads the space through the forward path. The join carries no
+   `mlsActive`, so H marks devices it did not know inactive for encryption; R pushes the full
+   identity (`POST /identity`) right after the join, as it does for any host holding the person.
 
 A current member (an earlier join, or an existing local account on H) sends `inviteToken: null`.
 
@@ -646,7 +658,8 @@ A current member (an earlier join, or an existing local account on H) sends `inv
 
 Signed by the device key over `rim.delegation.v1\0 || payload`: "relay `relay` may receive this
 workspace's events for me and forward my device-signed requests to `host` until `expiresAt`". It
-never lets the relay act as the person; writes still need device signatures.
+never lets the relay act as the person; writes still need device signatures. `nonce` is 16 random
+bytes, unpadded base64url; the app issues delegations for exactly 24 hours from a whole second.
 
 A host accepts it (on `join` or `POST /s2s/v1/subscriptions`) when the signature verifies under a
 non-revoked device of the principal (an unknown device is fetched once from the presenting relay's
@@ -655,14 +668,28 @@ that relay's log with no `signer: recovery` rotation after it (an ordinary rotat
 delegations, a recovery kills them); the principal is a current, unbanned member of `workspaceId`;
 `scope` is `workspace`; `expiresAt − issuedAt ≤ 24 h` and `expiresAt` is ahead. It keeps it until
 `min(expiresAt, accepted_at + 24 h)` by its own clock, so a device clock cannot extend it. One row
-per (workspace, device, relay); a newer one replaces it.
+per (workspace, device, relay); a newer one replaces it unless the active row runs longer, so a
+relay replaying an older delegation cannot shorten or reset the one it holds.
 
 **Subscriptions.** `POST /s2s/v1/subscriptions {"delegations":[…]}` (at most 64) →
 `{"subscriptions":[{"workspaceId","status","expiresAt"}]}`, one entry per delegation in order,
-`status` `active` or `refused` with a `reason`. A relay's subscription for (user, workspace) lives
-while one of the user's devices has an active delegation there.
-`POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` ends it.
-Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent.
+`status` `active` or `refused` with a `reason` (`invalid_delegation`, `bad_signature`,
+`wrong_host`, `wrong_relay`, `relay_key`, `expired`, `unknown_device`, `revoked_device`,
+`not_member`, `banned`, `limited`); `workspaceId` is null for a delegation that cannot be read.
+`renewDelegations` answers these reasons and two of the relay's own, and logs the detail behind
+them. `host_unreachable`: the host could not be reached, failed, rate-limited the relay or gave an
+unreadable answer, and the relay keeps the subscription as it was. `host_refused`: the host refused
+the presentation as a whole, or refused a delegation for a reason outside this list.
+A relay's subscription for (user, workspace) lives while one of the user's devices has an active
+delegation there.
+`POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` (at most 64)
+ends the presenting relay's delegations for them → `{"cancelled":<n>}`.
+Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent;
+the departed member gets that `MemberLeft` on their `u:` stream, being no member of `w` any more.
+`join`, `join/challenge`, `subscriptions` and `subscriptions/cancel` are workspace host endpoints: a
+server running only `relay` answers `503 role_disabled`. `presence` and `revocations` are served by
+every role (a relay is the home of DMs). A relay delivers items of a workspace a user holds an
+active subscription to straight to the queue; the request inbox is for everything else.
 
 **Renewal.** An online device signs fresh delegations when the current ones have less than 6 hours
 left and sends them with `renewDelegations`; the relay presents them. When every device has been
@@ -672,8 +699,11 @@ revocation, as the relay decision requires. Rejected: a delegation for the whole
 relay key would reach every workspace there), and long-lived delegations with explicit revocation
 only (a hidden revocation would never end).
 
-**Presence.** The relay reports `POST /s2s/v1/presence {"updates":[{"principalId","online"}]}` for
-subscribed workspaces when a person's first WebSocket opens or the last closes (30 s debounce).
+**Presence.** The relay reports `POST /s2s/v1/presence {"updates":[{"principalId","online"}]}`
+(at most 64) → `{"applied":<n>}` to the hosts of the person's subscriptions when their first
+`relayStream` opens, and once the last has been closed for 30 s with none reopened. The host
+applies it in every workspace where the relay holds an active delegation of the person; a remote
+member's presence does not time out between reports.
 
 Members, roles, bans, timeouts, private channels, archive state, the plugin registry and bundles,
 search, notifications, the change feed and MLS sequencing stay the host's, checked by the same
@@ -699,9 +729,16 @@ t = 24 h  every delegation the revoked device signed has expired regardless
 
 The host verifies the revocation against its copy of the log (identity key, or the device itself),
 marks the device revoked, ends its delegations and direct sessions, raises `MlsMembershipChanged`
-where it is a group device, and acknowledges; a repeat gets the same acknowledgement.
+where it is a group device, and acknowledges; a repeat gets the same acknowledgement (`appliedAt`
+is when the device was first revoked there). A device it does not know is fetched once from the
+presenting relay; one it still does not know is `404 not_found`, and the relay stops sending to
+that host (`GAVE_UP`). The relay verifies each acknowledgement under the host's pinned key before
+recording it, and pushes
+`{"type":"RevocationAcked","deviceId","hostServerId","ack":{"payload","signature"}}` on
+`relayStream` to the person's devices online.
 `applyRemoteRevocation` is the same on the host's GraphQL, without a session and exempt from CSRF
-(it acts only on a fresh identity or device signature, like `loginWithKey`). The app verifies each
+(it acts only on a fresh identity or device signature, like `loginWithKey`), at most 20 attempts
+per IP per 15 minutes (`RATE_LIMITED` past them). The app verifies each
 acknowledgement against the pinned key and its revocation's hash, and names any host it could not
 reach: "<host> has not confirmed; the device keeps access to <workspace> until <time>", the
 delegation's expiry at most. The relay stops forwarding anything the revoked device signs as soon as
@@ -719,20 +756,28 @@ another origin).
   calls `keyLoginChallenge` and `loginWithKey` on the host with `audience` = the host's server id.
   The host finds the remote user and device (refreshing its copy from the person's relays first,
   carrying on if they are down) and issues a device-bound session valid **24 hours** for a remote
-  user. The app then uses the host's `/api` and `/api/ws` as a local client would, under a banner
-  "Connected directly to <host>".
+  user (the host waits up to 10 seconds for the relays). The app then uses the host's `/api` and
+  `/api/ws` as a local client would, under a banner "Connected directly to <host>". The account
+  mutations a remote user may not run are refused on that session too (`FORBIDDEN`).
+- **Meanwhile.** Events from the host's `workspaceEvents` carry no `seq`, so the app holds the
+  host's `RelayItem`s unapplied and unacknowledged while connected directly.
 - **Back.** It probes `relayInfo` every 60 seconds; after two successes it renews delegations,
-  reads `relayStream` from its last item, deduplicates by `(host, stream, seq)` and closes the
-  direct connections.
+  asks the host directly for the `streamHeads` of the streams it knows there and takes them as
+  their baseline, runs the held items and reads `relayStream` on from its last item,
+  deduplicating by `(host, stream, seq)`, and closes the direct connections.
 
 ## Switching relays
 
-1. `signupWithKey` on the new relay R2 with the same identity.
+1. `signupWithKey` on the new relay R2 with the same identity: the key log, this device's
+   certificate and a proof whose `audience` is R2's server id, sent directly (desktop) with a
+   session kept outside the webview; `loginWithKey` instead when an earlier attempt created it.
 2. Publish a card (version + 1) with `relays: [R2, R1]` to both; direct-space hosts deliver to both.
 3. Sign a delegation for R2 for every subscribed workspace, including those R1 hosts (a delegation
    may name a local member too), and `renewDelegations` on R2.
 4. Drain R1's `relayStream`; nothing new reaches R1 that does not also reach R2.
-5. If R1 will go away, create successors on R2 for conversations homed in R1's direct space.
+5. If R1 will go away, list the conversations homed in R1's direct space; once the app runs on R2
+   it creates their successors there (a successor is created by the app's session on its own
+   relay), with R1's direct space as a space elsewhere.
 6. Publish `relays: [R2]` and call `leaveRelay` on R1, which cancels its subscriptions at every host
    and deletes the person's queue, contacts and requests there (the `user` row stays: it may still
    be a member of spaces R1 hosts).
@@ -935,11 +980,12 @@ type RelayItemPage { items: [RelayItem!]!  hasMore: Boolean! }
 type DmRequest { id: ID!  fromPrincipalId: String!  card: SignedStatement!  hostServerId: String!
                  conversationId: ID!  heldItems: [RelayItem!]!  status: DmRequestStatus!
                  createdAt: DateTime!  expiresAt: DateTime! }
-type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: String!  expiresAt: DateTime }
+type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: String!  expiresAt: DateTime
+                          reason: String }                # status refused, from renewDelegations
 enum RevocationFanoutStatus { PENDING  ACKED  GAVE_UP }
 type RevocationFanout { hostServerId: String!  status: RevocationFanoutStatus!  ack: SignedStatement
                         attempts: Int! }
-type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime! }
+type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime!  workspaceId: ID }
 type RemoteJoinResult { hostServerId: String!  workspaceId: ID!  userId: ID!  role: String! }
 type StreamHead { stream: String!  seq: String! }                                    # host; decimal
 type ConversationPredecessor { hostServerId: String!  conversationId: ID! }
@@ -973,7 +1019,7 @@ type Mutation {
   unblockPrincipal(principalId: String!): Boolean!
   reportDmRequest(id: ID!, reason: String!): Boolean!
   ackRelayItems(upTo: ID!): Boolean!
-  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!): RemoteJoinChallenge!
+  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String): RemoteJoinChallenge!
   joinRemoteWorkspace(input: JoinRemoteWorkspaceInput!): RemoteJoinResult!
   renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!
   leaveRelay: Boolean!
@@ -983,8 +1029,11 @@ type Subscription { relayStream(after: ID): String! }                     # JSON
 ```
 
 Every new mutation but `applyRemoteRevocation` needs the CSRF header. A peer that cannot be reached
-is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error keeps its meaning
-(`FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`).
+is the new code `UPSTREAM_UNAVAILABLE` with `hostServerId`, the peer's server id. When only its
+origin is known (a relay URL from a card or contact that could not be pinned), `hostServerId` is
+null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`); `RATE_LIMITED`'s `retryAfterSeconds` is the peer's
+`Retry-After` (at most a day), or 60 when the peer sent none.
 
 ## Limits and audit
 
@@ -994,7 +1043,7 @@ is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
 | Deliver; outbox | 256 items and 8 MiB per request; 7 days |
 | Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay) |
-| Delegations | ≤ 24 h; 64 per request; 10,000 per relay per host |
+| Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender per day; 3 held items; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |

@@ -20,6 +20,8 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Bytes queued per local user; over it the oldest items are dropped |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | How long queued items and DM requests are kept |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device per minute: those a local user's device sends through `/api/remote/…`, and those a host accepts |
+| `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
+| `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
 | `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
@@ -61,10 +63,12 @@ Every event of a space with remote members becomes a signed host event (`host-ev
 notifications, mentions, read states, Welcomes, DM invites, and for a guest the directory events
 about them), `w` for other space-wide events, `e` for typing and presence. Each stream's `seq`
 counts from 1 without gaps; `e` has none. The host appends one outbox row per relay that should
-get the event (the relays the person's newest card lists, else the relay that served their
+get the event (for a workspace, the relays holding an active delegation of the person; for the
+direct space, the relays the person's newest card lists, else the relay that served their
 identity) and a sender delivers each relay's rows in order (`POST /s2s/v1/deliver`), backing off
 from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a person as unknown
-is not sent their events for 24 hours.
+is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
+forgets it, and with several nodes each node learns it from the relay on its own.
 
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
@@ -86,8 +90,10 @@ has no invite for are refused (`not_subscribed`), so a host cannot skip the inbo
 The same rule covers conversations of this server's own direct space whose creator is someone
 else: a person from another relay creating a DM with a local user through the forward path, or a
 local stranger. The server files its own invite for the local member; until they accept, the
-conversation is left out of their `inboxConversations` and its events out of their
-`workspaceEvents`, and its first events are held with the request. This needs
+conversation is left out of their `inboxConversations`, its events out of their
+`workspaceEvents`, and its notifications, mentions and unread counts out of the notification
+list, the bell, `myMentions`, `unreadCounts` and the email digest; its first events are held with
+the request. Everything appears once they accept. This needs
 server-to-server traffic to be on; with it off, conversations in the direct space are live at
 once.
 
@@ -116,9 +122,11 @@ cannot reach is `502 {"error":"upstream_unavailable","hostServerId":…}`.
 
 The host checks the S2S signature, the device request (a device of a user it holds, its own id,
 the method, path and body hash, the `seq` window), and that the relay may carry the user's
-traffic: the user is a member of its direct space and their newest card lists the relay's origin
-(`403 not_delegated` otherwise). It then runs GraphQL (`POST /api`), attachment downloads and
-uploads, or plugin bundle downloads as that user and device, with no session, and signs every
+traffic: the relay holds an active delegation of that device for a workspace the user is still a
+member of, or the user is a member of its direct space and their newest card lists the relay's
+origin (`403 not_delegated` otherwise). It then runs GraphQL (`POST /api`), attachment downloads and
+uploads, avatar uploads (`POST /api/files/avatar`), stored-file downloads (`GET /api/files/<path>`)
+or plugin bundle downloads as that user and device, with no session, and signs every
 answer, refusals included, with `Rim-Host-Response` and `Rim-Host-Signature`. Per-IP limits key
 on `relay:<serverId>:<principalId>`.
 
@@ -126,14 +134,53 @@ A device request's `seq` is accepted once: the host remembers accepted values fo
 minutes and until they fall below its window (5 minutes in microseconds under the device's
 highest), and refuses a repeat or a lower value with `409 {"error":"replay","highestSeq":…}`.
 
+### Workspaces with members from other servers
+
+A person whose relay is another server joins a workspace here through that relay. Their app gets
+a login challenge from this server (`POST /s2s/v1/join/challenge`, 120 seconds, single use),
+with the workspace its invite names, and
+signs it with this server's id as the audience, so the proof is good here only. It also signs a
+**delegation**: its relay may receive this workspace's events for the person and forward that
+device's signed requests here, for at most 24 hours. The relay presents both with the person's key
+log, devices and card (`POST /s2s/v1/join`). This server checks everything, joins the person by
+the invite exactly as `joinServerByInvite` does (bans included; a current member sends no invite),
+stores them as a remote user and keeps the delegation.
+
+A delegation is accepted when its device is a live device of the person, it names this server
+and the presenting relay, its relay key hash names a key of the relay's log that no recovery
+rotation replaced, the person is a current, unbanned member, and it runs at most 24 hours. It is
+kept until its expiry or a day after acceptance, whichever is first, one per workspace, device and
+relay. Relays renew them (`POST /s2s/v1/subscriptions`, at most 64 at a time, each accepted or
+refused with a reason) and cancel them (`POST /s2s/v1/subscriptions/cancel`). A workspace's events
+go to the relays holding an active delegation of a recipient; those relays may forward the
+device's requests. A kick or a ban ends the person's delegations once their `MemberLeft` is queued;
+a revoked device's delegations end with it.
+
+Relays report whether their users are online (`POST /s2s/v1/presence`); this server shows a remote
+member online in every workspace their relay holds a delegation for, until the relay reports them
+offline.
+
+A revocation of a remote member's device arrives from their relay (`POST /s2s/v1/revocations`) or
+straight from their app (`applyRemoteRevocation`). This server checks it against its copy of the
+person's key log, marks the device revoked, ends its delegations and sessions, removes it from
+encrypted groups, and answers a signed acknowledgement; a repeat gets the same one.
+
+When their relay is down, a remote member's desktop app may sign in here directly with its device
+key (`loginWithKey`, audience this server's id). This server first tries to refresh the person's
+identity from their relays, waiting up to 10 seconds, and issues a session of 24 hours. Account
+mutations stay refused on it.
+
 ### Cleanup and audit
 
 Every minute the server deletes acknowledged and expired items, envelopes no item uses, expired
-requests, outbox rows over 7 days and accepted `seq` values out of the window. Audit events (target
-`audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block, `server` for an
-operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
+requests, outbox rows over 7 days and accepted `seq` values out of the window, ends expired
+delegations and those of revoked devices or departed members, and marks this relay's expired
+subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit events
+(target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
+`server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
-`relay.registration_pow`, `relay.left` and `key_identity_adopted`.
+`relay.registration_pow`, `relay.left`, `key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
+`host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
 
 ### The public relay
 
@@ -193,7 +240,8 @@ Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A
-  conversation with someone on another relay must be `encrypted` (`VALIDATION` otherwise), and
+  conversation with someone on another relay must be `encrypted` (otherwise `VALIDATION`,
+  "conversations with people on other servers are encrypted"), and
   every member needs an MLS-active device. Any
   `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
   card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`
@@ -219,4 +267,59 @@ Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
   (`c:` its conversation, `u:` your principal). Apply a stream's events in `seq` order; on a gap,
   reconcile through the host (its change feed and `streamHeads(serverId, streams)` through the
   forward path).
-- `leaveRelay` deletes the caller's queue, requests, contacts and blocks on this relay.
+- `leaveRelay` cancels the caller's subscriptions at every host, then deletes their queue,
+  requests, contacts and blocks on this relay.
+
+### Joining a workspace on another host
+
+1. Read the invite link `rim-invite:1:<hostServerId>:<hostKeyHash>:<inviteToken>:<hostOrigin>`
+   and pin the host with `remoteServer(origin)`.
+2. `remoteJoinChallenge(hostServerId, hostOrigin, inviteToken)` returns
+   `{ challengeId nonce expiresAt workspaceId }`: `workspaceId` is the workspace the invite names
+   (the invite is looked up, not used), null without one. Sign a `login` statement over the
+   challenge with `audience` = the host's server id.
+3. Sign a delegation with the device key over `rim.delegation.v1\0 || payload`:
+
+   ```json
+   {"v":2,"type":"delegation","principalId":"rimp1_…","deviceId":"<uuid>","relay":"<relay server id>",
+    "relayKeyHash":"<hash of the relay's current key>","host":"<host server id>","workspaceId":"<uuid>",
+    "scope":"workspace","nonce":"<16 random bytes, base64url>","issuedAt":"…","expiresAt":"…"}
+   ```
+
+   `expiresAt` is at most 24 hours after `issuedAt`. `relayInfo` names the relay; its key hash is
+   in the relay's discovery document.
+4. `joinRemoteWorkspace(input: { hostServerId, hostOrigin, inviteToken, proof, delegation })`
+   returns `{ hostServerId workspaceId userId role }`; `inviteToken` is null for a current member.
+   The workspace is then used through `/api/remote/<hostServerId>/api`, and its events arrive on
+   `relayStream`.
+
+### Keeping delegations fresh
+
+- `remoteSubscriptions` lists `{ hostServerId workspaceId status expiresAt }` with `status`
+  `active`, `lapsed` (every delegation expired) or `ended` (cancelled).
+- When the current delegations have less than 6 hours left, an online device signs fresh ones and
+  sends them with `renewDelegations(delegations)`. Each entry of the answer is `active` with its
+  `expiresAt`, or `refused` with a `reason`: one of the host's (`not_member`, `expired`, …), or
+  `host_unreachable` (try again later; the subscription is unchanged) or `host_refused` (the host
+  turned the presentation down). The relay logs what lies behind the last two.
+- While a device has `relayStream` open, the hosts see the person online; 30 seconds after the last
+  stream closes they see them offline.
+
+### Revoking a device
+
+`revokeDeviceKey` on the relay also sends the revocation to every host and DM home holding the
+person, retrying at 10 s, 30 s, 1 min, 2 min, 5 min and then every 15 minutes for a day.
+`deviceRevocationStatus(deviceId)` lists `{ hostServerId status attempts ack }` per host, `status`
+`PENDING`, `ACKED` or `GAVE_UP`; `relayStream` pushes
+`{"type":"RevocationAcked","deviceId","hostServerId","ack":{"payload","signature"}}` as each host
+acknowledges. Check each `ack` (a `revocation-ack` statement) under the host's pinned key and its
+`revocationSha256` against the revocation. A host that has not acknowledged within 2 minutes gets
+the revocation from the app directly: `applyRemoteRevocation(revocation)` on the host's own `/api`
+needs no session and no CSRF header and returns the acknowledgement; an address may try it 20
+times in 15 minutes.
+
+### Signing in to a host directly
+
+When the relay is unreachable, the desktop app calls `keyLoginChallenge` and `loginWithKey` on the
+host's own `/api` with `audience` = the host's server id. The session lasts 24 hours; account
+mutations are refused on it (`FORBIDDEN`), as through the relay.

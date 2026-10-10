@@ -139,6 +139,7 @@ struct Item {
 struct Forwarded {
     status: u16,
     body: Value,
+    bytes: Vec<u8>,
     host_signed: bool,
 }
 
@@ -213,6 +214,22 @@ impl Person {
         sent_body: Option<Vec<u8>>,
         seq: Option<u64>,
     ) -> (Forwarded, u64) {
+        self.forward_typed(host, method, path, body, sent_body, seq, "application/json")
+            .await
+    }
+
+    /// [`Person::forward`] with a `POST` body of `content_type`.
+    #[allow(clippy::too_many_arguments)]
+    async fn forward_typed(
+        &mut self,
+        host: &Node,
+        method: &str,
+        path: &str,
+        body: Vec<u8>,
+        sent_body: Option<Vec<u8>>,
+        seq: Option<u64>,
+        content_type: &str,
+    ) -> (Forwarded, u64) {
         let seq = seq.unwrap_or_else(|| self.next_seq());
         let payload = device_request_payload(
             &self.principal(),
@@ -235,7 +252,7 @@ impl Person {
             "POST" => self
                 .http
                 .post(url)
-                .header("content-type", "application/json")
+                .header("content-type", content_type)
                 .body(sent_body.unwrap_or(body)),
             _ => self.http.get(url),
         };
@@ -282,6 +299,7 @@ impl Person {
             Forwarded {
                 status,
                 body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+                bytes: bytes.to_vec(),
                 host_signed,
             },
             seq,
@@ -1042,7 +1060,9 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
         .clone();
     assert_eq!(first.event["message"]["id"], json!(first_id.to_string()));
 
-    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox.
+    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox. Holding
+    // deliveries waits for the sender to finish, so no acknowledgement in flight resets it.
+    drained(&a).await;
     a.db.execute_unprepared(
         "UPDATE s2s_peer_delivery SET next_attempt_at = now() + interval '1 hour', failures = 9",
     )
@@ -1169,6 +1189,129 @@ async fn forwarded_requests_refuse_replays_tampering_and_relays_a_card_does_not_
     let (stranger, _) = bob.forward(&a, "POST", "/api", body, None, None).await;
     assert_eq!(stranger.status, 403);
     assert_eq!(stranger.body["error"], "not_delegated");
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// A multipart body with one file field.
+fn multipart_file(boundary: &str, filename: &str, content_type: &str, data: &[u8]) -> Vec<u8> {
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+         Content-Type: {content_type}\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avatars_upload_and_download_through_the_forward_path() {
+    const BOUNDARY: &str = "rim-test-boundary";
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let mut carol = sign_up(&b, "carol", 3).await;
+    alice.start_dm(&bob, &b, true).await;
+    bob.pending_request(&alice).await;
+    let multipart = format!("multipart/form-data; boundary={BOUNDARY}");
+
+    // Bob stores his avatar at Alice's server through his relay.
+    let png = b"\x89PNG\r\n\x1a\nbob";
+    let (uploaded, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.png", "image/png", png),
+            None,
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(uploaded.status, 200, "{}", uploaded.body);
+    assert!(uploaded.host_signed);
+    let bob_on_a = user_id(&a, &bob.principal()).await;
+    assert_eq!(
+        uploaded.body["path"],
+        json!(format!("avatars/{bob_on_a}/avatar.png"))
+    );
+
+    // Alice's avatar, stored on her own server, reaches Bob through the same path.
+    let alice_png = b"\x89PNG\r\n\x1a\nalice";
+    let stored: Value = alice
+        .http
+        .post(format!("{}/api/files/avatar", a.origin))
+        .header(
+            "cookie",
+            format!("rim_session={}; rim_csrf={}", alice.session, alice.csrf),
+        )
+        .header("x-csrf-token", &alice.csrf)
+        .header("content-type", &multipart)
+        .body(multipart_file(BOUNDARY, "me.png", "image/png", alice_png))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    let alice_path = format!("/api/files/{}", stored["path"].as_str().expect("path"));
+    let (downloaded, _) = bob
+        .forward(&a, "GET", &alice_path, Vec::new(), None, None)
+        .await;
+    assert_eq!(downloaded.status, 200);
+    assert!(downloaded.host_signed);
+    assert_eq!(downloaded.bytes, alice_png);
+    let (own, _) = bob
+        .forward(
+            &a,
+            "GET",
+            &format!("/api/files/avatars/{bob_on_a}/avatar.png"),
+            Vec::new(),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(own.bytes, png);
+
+    // Only avatars are served; a legacy upload path is gone.
+    let (denied, _) = bob
+        .forward(&a, "GET", "/api/files/other/x", Vec::new(), None, None)
+        .await;
+    assert_eq!(denied.status, 403);
+    assert!(denied.host_signed);
+    let (gone, _) = bob
+        .forward(&a, "GET", "/api/files/uploads/x", Vec::new(), None, None)
+        .await;
+    assert_eq!(gone.status, 410);
+
+    // A device request for another path than the one forwarded never reaches the handler.
+    let (replaced, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.png", "image/png", png),
+            Some(multipart_file(
+                BOUNDARY,
+                "me.png",
+                "image/png",
+                b"\x89PNGother",
+            )),
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(replaced.status, 403);
+    assert_eq!(replaced.body["error"], "forbidden");
+
+    // Carol is no one at Alice's server: the host refuses to run her requests.
+    let (stranger, _) = carol
+        .forward(&a, "GET", &alice_path, Vec::new(), None, None)
+        .await;
+    assert_eq!(stranger.status, 403);
+    assert_eq!(stranger.body["error"], "forbidden");
 
     a.stop().await;
     b.stop().await;
@@ -1377,6 +1520,33 @@ async fn listed(person: &Person, direct: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `person` sees of `conversation` in `direct`: its unread count, its notifications, and
+/// the notification bell's count.
+async fn signals(person: &Person, direct: &str, conversation: &str) -> (i64, usize, i64) {
+    let data = person
+        .ok(
+            "query($s: ID!) { unreadCounts(workspaceId: $s) { conversationId count } \
+             myNotifications(serverId: $s, dir: AFTER, limit: 50) { items { conversationId } } \
+             myUnreadNotificationCount(serverId: $s) }",
+            json!({ "s": direct }),
+        )
+        .await;
+    let unread = data["unreadCounts"]
+        .as_array()
+        .expect("counts")
+        .iter()
+        .find(|c| c["conversationId"] == json!(conversation))
+        .map_or(0, |c| c["count"].as_i64().expect("count"));
+    let notifications = data["myNotifications"]["items"]
+        .as_array()
+        .expect("notifications")
+        .iter()
+        .filter(|n| n["conversationId"] == json!(conversation))
+        .count();
+    let bell = data["myUnreadNotificationCount"].as_i64().expect("bell");
+    (unread, notifications, bell)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
     let (a, b) = relays().await;
@@ -1406,6 +1576,21 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     assert_eq!(code, "VALIDATION");
+    let message = alice
+        .post(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "encrypted": false,
+                "remoteMembers": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }],
+            } }),
+        )
+        .await["errors"][0]["message"]
+        .clone();
+    assert_eq!(
+        message,
+        "conversations with people on other servers are encrypted"
+    );
 
     let create_with_alice = json!({ "input": {
         "serverId": direct,
@@ -1428,6 +1613,73 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
     assert!(
         !listed(&alice, &direct).await.contains(&from_bob),
         "a request is not a live conversation"
+    );
+
+    // Bob writes before Alice decides: her notification is stored, but her unread count, her
+    // notifications and the bell leave the conversation out until she accepts.
+    let claimed = bob
+        .remote(
+            &a,
+            CLAIM,
+            json!({ "input": {
+                "serverId": direct,
+                "conversationId": from_bob,
+                "devices": [{ "principalId": alice.principal(), "deviceId": alice.device_id() }],
+            } }),
+        )
+        .await["claimMlsKeyPackages"]
+        .clone();
+    let alice_principal = alice.principal();
+    let (commit, welcome) = bob.mls.create_group(
+        from_bob.parse().expect("uuid"),
+        &[(
+            alice_principal.as_str(),
+            alice.device_id(),
+            claimed[0]["keyPackage"].as_str().expect("package"),
+        )],
+    );
+    bob.remote(
+        &a,
+        SUBMIT,
+        json!({ "input": {
+            "serverId": direct, "conversationId": from_bob, "incarnation": 1, "epoch": 0,
+            "cipherSuite": 0x004f, "commit": commit, "welcome": welcome,
+        } }),
+    )
+    .await;
+    bob.mls.merge_pending();
+    let message_id = Uuid::now_v7();
+    let envelope = bob.mls.encrypt(
+        message_id,
+        &content(message_id, 0, "hello", &[]),
+        [7; 32],
+        &[],
+    );
+    bob.remote(
+        &a,
+        SEND_ENCRYPTED,
+        json!({ "input": { "serverId": direct, "conversationId": from_bob, "messageId": message_id, "envelope": envelope } }),
+    )
+    .await;
+    let alice_id = user_id(&a, &alice.principal()).await;
+    eventually("Alice's notification row", || async {
+        let row = a
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS n FROM user_notification WHERE user_id = $1 AND message_id = $2",
+                [Uuid::from(alice_id).into(), message_id.into()],
+            ))
+            .await
+            .expect("query")
+            .expect("row");
+        (row.try_get::<i64>("", "n").expect("n") == 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        signals(&alice, &direct, &from_bob).await,
+        (0, 0, 0),
+        "a pending request adds no unread count and no notification"
     );
 
     // Dave, her contact, starts one too: it is live at once.
@@ -1455,6 +1707,11 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     assert!(listed(&alice, &direct).await.contains(&from_bob));
+    assert_eq!(
+        signals(&alice, &direct, &from_bob).await,
+        (1, 1, 1),
+        "an accepted conversation counts"
+    );
 
     a.stop().await;
     b.stop().await;

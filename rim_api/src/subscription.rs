@@ -8,6 +8,7 @@ use rim_core::user::model::UserId;
 use rim_services::events::WorkspaceEvent;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::presence::PresenceService;
+use rim_services::remote_workspace::service::WorkspaceRelayService;
 
 use crate::broadcast::InMemoryBroadcaster;
 
@@ -33,6 +34,39 @@ impl<S> Drop for DisconnectGuardStream<S> {
     fn drop(&mut self) {
         tracing::info!(user_id = %self.user_id, "WS subscription stream dropped, marking user offline");
         self.presence.mark_offline(self.user_id);
+    }
+}
+
+/// A relay stream that tells the relay when it opens and when it closes, so the hosts of the
+/// user's workspaces learn whether they are online.
+struct RelayStreamPresence<S> {
+    inner: Pin<Box<S>>,
+    workspaces: Arc<dyn WorkspaceRelayService>,
+    user_id: UserId,
+}
+
+impl<S> RelayStreamPresence<S> {
+    fn new(inner: S, workspaces: Arc<dyn WorkspaceRelayService>, user_id: UserId) -> Self {
+        workspaces.stream_opened(user_id);
+        Self {
+            inner: Box::pin(inner),
+            workspaces,
+            user_id,
+        }
+    }
+}
+
+impl<S: Stream> Stream for RelayStreamPresence<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl<S> Drop for RelayStreamPresence<S> {
+    fn drop(&mut self) {
+        self.workspaces.stream_closed(self.user_id);
     }
 }
 
@@ -147,7 +181,8 @@ impl Subscription {
     /// Host events queued for the session's device on this relay, above `after` (the device's
     /// cursor when omitted), then live ones, as JSON strings:
     /// `{"type":"RelayItem","id","hostServerId","workspaceId","envelope"}`, and the
-    /// `DmRequestReceived` and `QueueOverflow` notices.
+    /// `DmRequestReceived`, `QueueOverflow` and `RevocationAcked` notices. While one is open
+    /// the hosts of the user's workspaces see them online.
     async fn relay_stream(
         &self,
         ctx: &Context<'_>,
@@ -161,14 +196,16 @@ impl Subscription {
                 }),
             );
         }
-        let relay = Arc::clone(&crate::federation::relay(ctx)?.relay);
+        let federation = crate::federation::relay(ctx)?;
+        let relay = Arc::clone(&federation.relay);
+        let workspaces = Arc::clone(&federation.workspace_relay);
         let mut after = after
             .as_ref()
             .map(crate::query::relay::parse_item_id)
             .transpose()?;
         let user_id = caller.actor.user_id;
         let mut notices = relay.subscribe();
-        Ok(async_stream::stream! {
+        let stream = async_stream::stream! {
             loop {
                 loop {
                     let page = match relay.relay_items(caller, after, RELAY_STREAM_PAGE).await {
@@ -204,7 +241,8 @@ impl Subscription {
                     }
                 }
             }
-        })
+        };
+        Ok(RelayStreamPresence::new(stream, workspaces, user_id))
     }
 }
 

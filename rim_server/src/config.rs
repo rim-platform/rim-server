@@ -138,6 +138,10 @@ pub struct RIMConfig {
     /// `RIM_S2S_DEVICE_RATE_PER_MIN`.
     pub s2s_device_rate_per_min: Option<u32>,
 
+    /// Active delegations one relay may hold on this host. Default 10,000. Controlled by
+    /// `RIM_S2S_SUBSCRIPTIONS_PER_PEER`.
+    pub s2s_subscriptions_per_peer: Option<u32>,
+
     /// Bytes queued per local user before the oldest items are dropped. Default 256 MiB.
     /// Controlled by `RIM_RELAY_QUEUE_BYTES_PER_USER`.
     pub relay_queue_bytes_per_user: Option<i64>,
@@ -278,6 +282,10 @@ impl fmt::Debug for RIMConfig {
             .field("s2s_allow_http", &self.s2s_allow_http())
             .field("registration_pow_bits", &self.registration_pow_bits)
             .field("quotas", &self.quotas())
+            .field(
+                "s2s_subscriptions_per_peer",
+                &self.s2s_subscriptions_per_peer(),
+            )
             .finish()
     }
 }
@@ -321,6 +329,7 @@ impl Default for RIMConfig {
             s2s_allow_private_addresses: None,
             s2s_allow_http: None,
             s2s_device_rate_per_min: None,
+            s2s_subscriptions_per_peer: None,
             relay_queue_bytes_per_user: None,
             relay_retention_days: None,
             registration_pow_bits: None,
@@ -658,6 +667,10 @@ impl RIMConfig {
 
     pub fn s2s_device_rate_per_min(&self) -> u32 {
         self.s2s_device_rate_per_min.unwrap_or(120).max(1)
+    }
+
+    pub fn s2s_subscriptions_per_peer(&self) -> u32 {
+        self.s2s_subscriptions_per_peer.unwrap_or(10_000).max(1)
     }
 
     pub fn relay_queue_bytes_per_user(&self) -> i64 {

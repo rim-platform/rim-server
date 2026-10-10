@@ -325,6 +325,25 @@ impl ServerKeyState {
     }
 }
 
+/// Hashes of the server keys in a log that a delegation may name: every key with no
+/// `signer: recovery` rotation after it. An ordinary rotation keeps the keys before it; a
+/// recovery drops them all.
+pub fn delegable_key_hashes(entries: &[SignedStatement]) -> StatementResult<Vec<String>> {
+    let (first, rest) = entries
+        .split_first()
+        .ok_or_else(|| StatementError::invalid("server key log is empty"))?;
+    let mut state = ServerKeyState::from_inception(first)?;
+    let mut hashes = vec![key_hash(&state.server_key)];
+    for entry in rest {
+        state = state.apply(entry)?;
+        if state.head_signer() == Some(ServerRotationSigner::Recovery) {
+            hashes.clear();
+        }
+        hashes.push(key_hash(&state.server_key));
+    }
+    Ok(hashes)
+}
+
 /// How a fetched server key log relates to a pinned one, compared payload by payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogRelation {
@@ -497,6 +516,44 @@ mod tests {
         let (log, _) = log();
         let long = vec![log[0].clone(); MAX_LOG_ENTRIES + 1];
         assert!(ServerKeyState::replay(&long).is_err());
+    }
+
+    #[test]
+    fn delegable_keys_survive_a_server_rotation_but_not_a_recovery() {
+        let (log, state) = log();
+        assert_eq!(
+            delegable_key_hashes(&log).expect("hashes"),
+            vec![key_hash(&state.server_key)]
+        );
+        let rotation = sign_rotation(
+            &state,
+            &signer(1),
+            ServerRotationSigner::Server,
+            &signer(3).public_key(),
+            &state.recovery_key,
+            at(),
+        );
+        let rotated = state.apply(&rotation).expect("rotate");
+        let mut longer = log.clone();
+        longer.push(rotation);
+        assert_eq!(
+            delegable_key_hashes(&longer).expect("hashes"),
+            vec![key_hash(&state.server_key), key_hash(&rotated.server_key)]
+        );
+        let recovery = sign_rotation(
+            &rotated,
+            &signer(2),
+            ServerRotationSigner::Recovery,
+            &signer(4).public_key(),
+            &signer(5).public_key(),
+            at(),
+        );
+        longer.push(recovery);
+        assert_eq!(
+            delegable_key_hashes(&longer).expect("hashes"),
+            vec![key_hash(&signer(4).public_key())]
+        );
+        assert!(delegable_key_hashes(&[]).is_err());
     }
 
     #[test]
