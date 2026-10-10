@@ -79,6 +79,7 @@ pub async fn serve(
         force_secure_cookies: config.force_secure_cookies(),
     };
 
+    let metrics_addr = config.metrics_addr().map_err(std::io::Error::other)?;
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
@@ -97,6 +98,9 @@ pub async fn serve(
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
+    if let Some(addr) = metrics_addr {
+        crate::metrics::start(addr, runtime.db.clone(), shutdown_tx.subscribe())?;
+    }
 
     let server = HttpServer::new(move || {
         let schema = schema.clone();
@@ -182,6 +186,7 @@ pub async fn serve(
         // Server-to-server routes sit outside CORS: peers send no `Origin`, and the discovery
         // document is readable from any origin.
         App::new()
+            .wrap(actix_web::middleware::from_fn(crate::metrics::record_http))
             .service(
                 web::resource("/.well-known/rim-server")
                     .route(web::get().to(crate::s2s::discovery::handle)),
