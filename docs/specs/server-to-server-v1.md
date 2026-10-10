@@ -993,8 +993,10 @@ type Subscription { relayStream(after: ID): String! }                     # JSON
 ```
 
 Every new mutation but `applyRemoteRevocation` needs the CSRF header. A peer that cannot be reached
-is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error keeps its meaning
-(`FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`).
+is the new code `UPSTREAM_UNAVAILABLE` with `hostServerId`, the peer's server id. When only its
+origin is known (a relay URL from a card or contact that could not be pinned), `hostServerId` is
+null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`).
 
 ## Limits and audit
 

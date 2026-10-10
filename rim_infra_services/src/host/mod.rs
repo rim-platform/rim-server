@@ -95,9 +95,7 @@ pub struct DefaultHostService {
 }
 
 fn upstream(server_id: &str) -> ServiceError {
-    ServiceError::UpstreamUnavailable {
-        host_server_id: server_id.to_string(),
-    }
+    ServiceError::upstream(server_id)
 }
 
 impl DefaultHostService {
