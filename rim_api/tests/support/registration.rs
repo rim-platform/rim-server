@@ -73,7 +73,7 @@ pub async fn seed_instance_invite(
     let max_uses = opts.max_uses.unwrap_or(1);
     let invite = repo
         .create(NewInstanceInvite {
-            created_by_user_id: created_by,
+            created_by_user_id: Some(created_by),
             token_hash: hash_token(raw_token),
             expires_at,
             max_uses,

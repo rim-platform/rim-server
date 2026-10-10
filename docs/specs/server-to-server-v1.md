@@ -314,8 +314,13 @@ since login and member lookups assume one row per name.
 Remote users may not run mutations that change the account rather than a space (`FORBIDDEN`, `not
 available to remote members`): `login`, `logout`, `signup*`, `enrollIdentityKey`, `addDeviceKey`,
 `revokeDeviceKey`, `rotateIdentityKey`, `publishProfileCard`, `logoutOtherSessions`, password and
-email mutations, `updateProfile`, `createServer`, ingest token and bot mutations. Identity changes
-arrive by `POST /identity` and `POST /revocations`.
+email mutations, `createServer`, ingest token and bot mutations. Identity changes arrive by `POST
+/identity` and `POST /revocations`.
+
+`updateMyProfile` sets what the host stores per member and the card does not carry: the avatar
+(uploaded with `POST /api/files/avatar` on the forward path, then named by `avatarUrl`), status
+text and bio. A `displayName` in it is `FORBIDDEN` (`a remote member's display name comes from
+their profile card`); the name changes with the next card the host receives.
 
 ## Statements added by this document
 

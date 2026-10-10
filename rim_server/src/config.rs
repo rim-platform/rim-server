@@ -10,6 +10,9 @@ pub struct RIMConfig {
     pub server_port: u16,
 
     pub database_url: String,
+    /// Largest number of Postgres connections the server's pool opens
+    /// (`RIM_DATABASE_MAX_CONNECTIONS`); unset keeps the driver's default of 10.
+    pub database_max_connections: Option<u32>,
 
     pub session_ttl_days: u32,
 
@@ -239,6 +242,7 @@ impl fmt::Debug for RIMConfig {
             .field("server_host", &self.server_host)
             .field("server_port", &self.server_port)
             .field("database_url", &"[REDACTED]")
+            .field("database_max_connections", &self.database_max_connections)
             .field("session_ttl_days", &self.session_ttl_days)
             .field("enable_graphiql", &self.enable_graphiql)
             .field("cors_allowed_origin", &self.cors_allowed_origin)
@@ -301,6 +305,7 @@ impl Default for RIMConfig {
             server_host: "0.0.0.0".to_string(),
             server_port: 8080,
             database_url: "".to_string(),
+            database_max_connections: None,
             session_ttl_days: 30,
             enable_graphiql: false,
             cors_allowed_origin: None,
@@ -349,6 +354,19 @@ impl Default for RIMConfig {
 }
 
 impl RIMConfig {
+    /// Connect the server's pool to `DATABASE_URL`, capped at `RIM_DATABASE_MAX_CONNECTIONS` when
+    /// it is set.
+    ///
+    /// # Errors
+    /// The driver's error when Postgres cannot be reached.
+    pub async fn connect_database(&self) -> Result<sea_orm::DatabaseConnection, sea_orm::DbErr> {
+        let mut options = sea_orm::ConnectOptions::new(self.database_url.clone());
+        if let Some(max) = self.database_max_connections {
+            options.max_connections(max.max(1));
+        }
+        sea_orm::Database::connect(options).await
+    }
+
     /// Resolve the bootstrap token TTL.
     ///
     /// Returns the configured value capped at 3600 seconds. If the configured

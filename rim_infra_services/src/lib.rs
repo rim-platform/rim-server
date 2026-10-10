@@ -26,6 +26,9 @@ pub mod franking_keys;
 pub mod host;
 pub(crate) mod incident;
 pub(crate) mod ingest_token;
+/// Public for `rim_server`, whose `invite` command issues, lists and revokes the operator's
+/// instance invites.
+pub mod instance_invite;
 pub(crate) mod key_auth;
 pub(crate) mod keybind;
 pub(crate) mod link_preview;

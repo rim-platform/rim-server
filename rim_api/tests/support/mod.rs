@@ -116,7 +116,43 @@ pub async fn db_conn() -> DatabaseConnection {
         let _ = MIGRATED.set(());
     }
 
+    close_when_the_test_ends(&conn);
     conn
+}
+
+/// Closes a test's pool once the test's runtime shuts down, which drops its tasks. Services
+/// built over the pool keep it alive, so without this its connections would stay open for the
+/// rest of the test binary.
+struct ClosePoolOnDrop(Option<DatabaseConnection>);
+
+impl Drop for ClosePoolOnDrop {
+    fn drop(&mut self) {
+        let Some(conn) = self.0.take() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async move {
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), conn.close_by_ref())
+                        .await;
+            });
+        });
+    }
+}
+
+/// Close `conn` when the runtime of the test that opened it ends.
+fn close_when_the_test_ends(conn: &DatabaseConnection) {
+    let guard = ClosePoolOnDrop(Some(conn.clone()));
+    tokio::spawn(async move {
+        let _guard = guard;
+        std::future::pending::<()>().await;
+    });
 }
 
 /// Reset all relevant tables between tests.

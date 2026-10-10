@@ -171,7 +171,7 @@ mod tests {
         let now = Utc::now();
         InstanceInvite {
             id,
-            created_by_user_id: UserId::new(),
+            created_by_user_id: Some(UserId::new()),
             token_hash: "invite_hash".to_string(),
             created_at: now,
             expires_at: now + Duration::days(7),

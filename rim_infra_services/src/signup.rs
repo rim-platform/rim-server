@@ -473,7 +473,7 @@ mod tests {
     fn instance_invite(expires_in: Duration, revoked: bool) -> InstanceInvite {
         InstanceInvite {
             id: InstanceInviteId::new(),
-            created_by_user_id: UserId::new(),
+            created_by_user_id: Some(UserId::new()),
             token_hash: hash_token("raw"),
             expires_at: Utc::now() + expires_in,
             max_uses: 1,

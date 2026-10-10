@@ -75,7 +75,8 @@ pub struct SignupResultDto {
 #[derive(Debug, Clone)]
 pub struct InstanceInviteDto {
     pub id: InstanceInviteId,
-    pub created_by_user_id: UserId,
+    /// `None` for an invite the operator issued from the command line.
+    pub created_by_user_id: Option<UserId>,
     pub expires_at: DateTime<Utc>,
     pub max_uses: i32,
     pub use_count: i32,
