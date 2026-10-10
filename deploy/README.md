@@ -56,6 +56,24 @@ docker compose -f deploy/compose.relay.yml exec rim /app/rim-server server-key s
 
 The descriptor in the discovery document says `"registration":{"mode":"pow","powBits":24}`.
 
+## Health
+
+The server answers two probes on its own port, without a session. Caddy does not proxy them,
+so they are reachable from inside the compose network only:
+
+- `GET /healthz` answers 200 with `{"status":"ok","version":"…"}` while the process serves
+  requests. The image's `HEALTHCHECK` uses it.
+- `GET /readyz` answers 200 when the database answers, no migration is pending and the server
+  key file and franking key file are readable. Otherwise it answers 503 with `"status":"fail"`
+  and the failing checks named under `checks`; the log says why each one failed. The `rim`
+  service's compose healthcheck uses it.
+
+```sh
+docker compose -f deploy/compose.relay.yml ps rim          # healthy once /readyz passes
+docker compose -f deploy/compose.relay.yml exec rim curl -s http://localhost:8080/readyz
+docker compose -f deploy/compose.relay.yml exec rim /app/rim-server --version
+```
+
 ## The operator's commands
 
 The CLI is `/app/rim-server` inside the `rim` container and reads the same environment:
