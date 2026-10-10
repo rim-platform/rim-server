@@ -102,8 +102,7 @@ need an enterprise platform with thousands of pre-built integrations.
 See `docs/competitive-analysis.md` for the full analysis.
 
 Summary: No competing team-chat product combines a command palette, custom keybinds,
-macro commands, and client-side plugins. See
-`docs/research/competitive-landscape-2026-04-29.md`.
+macro commands, and client-side plugins.
 
 | Feature               | Slack | Discord | Mattermost | Zulip | Element | RIM   |
 |-----------------------|-------|---------|------------|-------|---------|-------|

@@ -16,8 +16,6 @@ This document describes the current v0 backend contract for conversations, messa
 
 ## Channel Visibility And Membership (Track 1.1)
 
-Spec: `docs/specs/track-1-1-private-channels.md`.
-
 - **Public channels** (`isPrivate = false`) are readable by every workspace member, joined or not
   (except guests, see Roles And Moderation below).
   Joining (`joinChannel`) adds a `conversation_member` row; joined channels are what the sidebar
@@ -68,8 +66,6 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   and searchable by whoever could read them before.
 
 ## Roles And Moderation (Track 1.2)
-
-Spec: `docs/specs/track-1-2-roles-and-moderation.md`.
 
 ### Roles
 
@@ -182,7 +178,7 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
 
 ## Notification Rules (Track 1.3)
 
-The server decides, once per message, who is told about it (`docs/specs/track-1-3-notification-rules.md`).
+The server decides, once per message, who is told about it.
 For every recipient it stores a notification (the inbox, the bell badge and the email digest) and
 sends that user a private `NotificationDue` event; clients only render what the server decided.
 Sound and preview stay device-local client settings.
