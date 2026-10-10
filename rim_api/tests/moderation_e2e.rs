@@ -322,14 +322,9 @@ async fn seed_capabilities(ctx: &TestCtx) {
             ctx.db.clone(),
         );
     for spec in rim_infra_services::capability::builtin_capabilities() {
-        repo.upsert_if_missing(
-            spec.id,
-            rim_core::capability::model::CapabilitySourceKind::Builtin,
-            None,
-            spec.is_self_scoped,
-        )
-        .await
-        .expect("seed capability");
+        repo.upsert_if_missing(spec.id, spec.is_self_scoped)
+            .await
+            .expect("seed capability");
     }
 }
 

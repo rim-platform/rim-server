@@ -16,12 +16,8 @@ use crate::{Actor, ServiceResult};
 ///    `capability_registry` table AND not be retired. Unknown / retired keys
 ///    deny by default — eliminates the "type a typo, get a free pass" failure
 ///    mode Widow named.
-/// 2. **Holder leg** (evaluated when leg 1 passes): for `Builtin`-source
-///    capabilities, the actor must be a member of `workspace_id` (when
-///    supplied — see below). For `Plugin`-source capabilities, the actor
-///    must hold an explicit grant from the plugin's grant store. Phase 1
-///    ships only the workspace-membership half; the plugin-grant store
-///    lands in Phase 5, so plugin-source caps deny everywhere until then.
+/// 2. **Holder leg** (evaluated when leg 1 passes): the actor must be a
+///    member of `workspace_id` (when supplied — see below).
 ///
 /// `workspace_id` is `Option<ServerId>` rather than required because some
 /// commands (e.g. `auth.who_am_i`) legitimately have no workspace context.

@@ -17,11 +17,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------- Stage 3: Builder (compile dependencies, then source) -------------
 FROM chef AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Cook dependencies first (cached unless Cargo.toml/Cargo.lock change)
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
@@ -34,7 +29,7 @@ RUN cargo build --release -p rim_server -p migration
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 curl \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security
@@ -58,7 +53,8 @@ USER rim
 #   RIM_SERVER_HOST       — Bind address (default: 0.0.0.0)
 #   RIM_SERVER_PORT       — Listen port (default: 8080)
 #   RUST_LOG              — Log filter, e.g. info or rim_server=debug (default: info)
-#   RIM_CORS_ALLOWED_ORIGIN — CORS origin (optional)
+#   RIM_CORS_ALLOWED_ORIGIN — one browser origin accepted besides the server's own (optional);
+#                           the own origin is RIM_PUBLIC_BASE_URL's, else the request's Host
 #   RIM_DATA_DIR          — Data directory (default: ./data)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
 #   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the
@@ -71,6 +67,24 @@ USER rim
 #   RIM_ROLE              — relay, host or both (default: both)
 #   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
 #   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
+#   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
+#   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
+#   RIM_BOOTSTRAP_TOKEN_TTL_SECONDS — Bootstrap token lifetime, at most 3600 (default: 900)
+#   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
+#   RIM_SMTP_HOST         — SMTP server; without it or RIM_SMTP_FROM mail is only logged
+#   RIM_SMTP_PORT         — SMTP port (default: 587)
+#   RIM_SMTP_USERNAME     — SMTP user name (default: none, unauthenticated)
+#   RIM_SMTP_PASSWORD     — SMTP password (default: none)
+#   RIM_SMTP_FROM         — From address, e.g. RIM <noreply@example.org>
+#   RIM_SMTP_TLS          — starttls, implicit or none (default: starttls)
+#   RIM_HOST_ALLOWED_RELAYS — Server ids allowed on host endpoints, comma-separated (default: any)
+#   RIM_S2S_DENIED_PEERS  — Server ids refused on every server-to-server endpoint, comma-separated
+#   RIM_S2S_PEER_RATE_PER_MIN — Server-to-server requests per peer per minute (default: 600)
+#   RIM_S2S_DEVICE_RATE_PER_MIN — Forwarded requests per device per minute (default: 120)
+#   RIM_S2S_SUBSCRIPTIONS_PER_PEER — Delegations one relay may hold on this host (default: 10000)
+#   RIM_S2S_MAX_BODY_BYTES — Largest server-to-server request body (default: 8388608)
+#   RIM_S2S_ALLOW_HTTP    — Allow server-to-server traffic over http when true; development only
+#   RIM_S2S_ALLOW_PRIVATE_ADDRESSES — Allow peers on private addresses when true; development only
 #   RIM_METRICS_ADDR      — ip:port of the Prometheus /metrics listener (default: off). In a
 #                           container bind 0.0.0.0:9090 and do not publish it: keep it on an
 #                           internal network, never behind the public proxy

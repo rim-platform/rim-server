@@ -64,8 +64,9 @@ services:
       # The https origin clients and other servers reach this server at. Left out of
       # deploy/.env it follows RIM_DOMAIN; set empty, server-to-server traffic is off.
       RIM_PUBLIC_BASE_URL: ${RIM_PUBLIC_BASE_URL-https://${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}}
-      # The web client's own origin; its requests carry it as Origin.
-      RIM_CORS_ALLOWED_ORIGIN: ${RIM_CORS_ALLOWED_ORIGIN:-https://${RIM_DOMAIN}}
+      # The server accepts its own origin, RIM_PUBLIC_BASE_URL's, without configuration. One
+      # more origin may be allowed, such as a client served from another domain:
+      # RIM_CORS_ALLOWED_ORIGIN: https://app.example.org
       # Server key, recovery key (until moved offline), franking keys and uploads.
       RIM_DATA_DIR: /data
       RIM_STORAGE_LOCAL_PATH: /data/uploads
@@ -86,6 +87,15 @@ services:
       RIM_SMTP_PASSWORD:
       RIM_SMTP_FROM:
       RIM_SMTP_TLS:
+      RIM_ENABLE_GRAPHIQL:
+      RIM_BOOTSTRAP_TOKEN_TTL_SECONDS:
+      RIM_NOTIFICATION_DIGEST_INTERVAL_SECS:
+      RIM_HOST_ALLOWED_RELAYS:
+      RIM_S2S_PEER_RATE_PER_MIN:
+      RIM_S2S_SUBSCRIPTIONS_PER_PEER:
+      RIM_S2S_MAX_BODY_BYTES:
+      RIM_S2S_ALLOW_HTTP:
+      RIM_S2S_ALLOW_PRIVATE_ADDRESSES:
       # Days command audit rows are kept; older ones are exported to /data/audit-exports and
       # deleted daily. Unset keeps them forever.
       # RIM_AUDIT_RETENTION_DAYS: 365
