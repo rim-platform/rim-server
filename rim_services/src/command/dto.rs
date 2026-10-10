@@ -83,12 +83,10 @@ pub struct CommandDefinitionDto {
     pub dangerous: bool,
     pub user_command_id: Option<UserCommandId>,
 
-    // --- AI Agent reframe Phase 1 (§3.1) ----------------------------------
+    // --- AI agent metadata ------------------------------------------------
     /// Optional natural-language description used by the AI Agent when it
     /// surfaces this command as a tool. Falls back to `description` when
-    /// `None` — at Phase 1 rollout every built-in sets this to `None` and
-    /// non-AI-callable commands will continue to use the palette `description`
-    /// verbatim. A command opts in to AI surfacing by setting
+    /// `None`. A command opts in to AI surfacing by setting
     /// `ai_callable: true` alongside a populated `nl_description`.
     ///
     /// Passed through [`crate::command::sanitize::sanitize_nl_text`] at
@@ -108,8 +106,8 @@ pub struct CommandDefinitionDto {
     /// unless this field is `true`, regardless of other metadata.
     pub ai_callable: bool,
 
-    /// Sensitivity tier used for audit verbosity, mutating-call caps, and
-    /// default confirmation/modal placement. See
+    /// Sensitivity tier driving the confirmation policy and the client agent's
+    /// mutating-call cap, and recorded on the audit line. See
     /// [`crate::command::sensitivity::CommandSensitivityDto`]. Orthogonal
     /// to `dangerous`: `dangerous: true` always requires confirmation
     /// regardless of tier.
@@ -122,7 +120,7 @@ pub struct CommandDefinitionDto {
 
     /// Maximum calls per actor per 60-second sliding window. `None` means
     /// unlimited. Enforced by the rate-limit gate in `execute_command` AFTER
-    /// capability + confirmation gates. Single-node only in Phase 5.
+    /// capability + confirmation gates. Single-node: each process counts on its own.
     pub rate_limit_per_minute: Option<u32>,
 }
 
@@ -133,12 +131,12 @@ pub enum CommandResultStatusDto {
     /// The command is `dangerous: true` and the caller did not submit a
     /// matching [`crate::command::confirmation::ConfirmationProof`].
     /// `CommandResultDto::confirmation_required` carries the challenge
-    /// the frontend must show. Closes H1.
+    /// the frontend must show.
     ConfirmationRequired,
 }
 
 impl CommandResultStatusDto {
-    /// Stable, lowercase string used in audit log lines (Phase 4 P4-A1).
+    /// Stable, lowercase string used in audit log lines.
     /// Mirrors the `CommandInitiator::as_audit_str` shape — operators grep
     /// for `result_status=success` / `result_status=error` etc.
     pub fn as_audit_str(self) -> &'static str {
@@ -199,7 +197,7 @@ impl CommandDefinitionDto {
     /// Returns `true` when this command requires a `ConfirmationProof` given
     /// the supplied initiator.
     ///
-    /// Policy (P6-M2, Fury §3.5 + §3.11):
+    /// Policy:
     /// - `dangerous: true` always requires confirmation, regardless of initiator.
     /// - `sensitivity >= Mutating` AND `initiator.is_agentic()` requires
     ///   confirmation — agents must not silently mutate state.  Human initiators
@@ -211,8 +209,8 @@ impl CommandDefinitionDto {
     ///   agentic paths.
     ///
     /// This is the **single source of truth** for the confirmation gate
-    /// predicate.  `execute_command` and `execute_macro` both consult this
-    /// helper so the policy cannot drift.
+    /// predicate. `execute_command` consults it for every call, including each
+    /// step a macro or pipeline runs, so the policy cannot drift.
     pub fn requires_confirmation_for_initiator(
         &self,
         initiator: super::initiator::CommandInitiator,
@@ -269,8 +267,8 @@ impl UserCommandDto {
             keybind_capable,
             dangerous,
             user_command_id: Some(self.id),
-            // User-defined commands are human-only at Phase 1. Phase 5
-            // surfaces Skill Macros as a separate AI path.
+            // User-defined commands are never AI-callable; macros reach the
+            // agent through their own synthesized definitions.
             nl_description: None,
             intent_samples: vec![],
             ai_callable: false,

@@ -19,7 +19,7 @@ pub struct ConversationDto {
     pub is_private: bool,
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: Option<UserId>,
-    /// Slow-mode interval in seconds, `0` when off (Track 1.2).
+    /// Slow-mode interval in seconds, `0` when off.
     pub slow_mode_seconds: i32,
     /// When the conversation became end-to-end encrypted.
     pub encrypted_at: Option<chrono::DateTime<chrono::Utc>>,

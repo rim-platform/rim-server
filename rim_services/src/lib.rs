@@ -85,8 +85,8 @@ pub enum ServiceError {
     /// The submitted [`crate::command::confirmation::ConfirmationProof`]
     /// was unknown, expired, single-use-consumed, or args-mismatched.
     /// Caller should re-issue the dangerous command (server will return
-    /// a fresh challenge), present the modal again, and retry. Used by
-    /// the H1 (TOCTOU) gate.
+    /// a fresh challenge), present the modal again, and retry. Returned
+    /// by the gate that binds a proof to the exact args it confirmed.
     #[error("confirmation proof is stale; please re-confirm")]
     ConfirmationStale,
 
@@ -106,29 +106,29 @@ pub enum ServiceError {
 
     /// The presented registration token was not found, has already been used,
     /// or has been revoked. Deliberately indistinguishable across all three
-    /// conditions so an attacker cannot probe token state (§4.5).
+    /// conditions so an attacker cannot probe token state.
     #[error("invalid or unknown token")]
     InvalidToken,
 
     /// The presented registration token exists but its `expires_at` is in the
     /// past. Returning a distinct code here is acceptable — expiry is not
-    /// exploitable and the FE needs to surface a "link expired" message (§4.5).
+    /// exploitable and the client shows a "link expired" message.
     #[error("token has expired")]
     ExpiredToken,
 
     /// The signup email address is already associated with an existing user
     /// (case-insensitive comparison). Deliberately distinguishable from the
     /// generic `CONFLICT` code so the frontend can highlight the email field
-    /// specifically (spec §13.5).
+    /// specifically.
     #[error("email already in use")]
     EmailTaken,
 
-    /// The conversation is archived and therefore read-only (Track 1.1). Returned by every
+    /// The conversation is archived and therefore read-only. Returned by every
     /// write path into a conversation (messages, reactions, pins, topic, attachments, typing). Surfaced as the `CONVERSATION_ARCHIVED` GraphQL error code.
     #[error("conversation is archived")]
     ConversationArchived,
 
-    /// The actor is timed out in this workspace until `until` (Track 1.2): writes (messages,
+    /// The actor is timed out in this workspace until `until`: writes (messages,
     /// reactions, pins, topic, attachments, joins, invites, conversation creation and Mutating
     /// commands) are refused while reads continue. Surfaced as the `TIMED_OUT` GraphQL error
     /// code with an `until` extension.
