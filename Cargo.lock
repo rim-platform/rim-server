@@ -4915,6 +4915,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "http 1.4.2",
+ "migration",
  "mime_guess",
  "rim_api",
  "rim_auth",
