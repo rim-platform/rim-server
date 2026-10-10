@@ -46,6 +46,15 @@ pub struct AuditLogPageRecord {
     pub has_prev_page: bool,
 }
 
+/// The audit rows older than a cutoff: how many there are and the oldest and newest
+/// `created_at` among them (both `None` when there are none).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditLogRange {
+    pub count: u64,
+    pub oldest: Option<chrono::DateTime<chrono::Utc>>,
+    pub newest: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
 pub trait AuditLogRepository: Send + Sync {
@@ -53,4 +62,25 @@ pub trait AuditLogRepository: Send + Sync {
     async fn list(&self, query: AuditLogListQuery) -> RepoResult<AuditLogPageRecord>;
     /// Delete rows with `created_at < cutoff`. Returns the number of rows deleted.
     async fn delete_older_than(&self, cutoff: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
+    /// Count the rows with `created_at < cutoff` and find their oldest and newest timestamps.
+    async fn range_older_than(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<AuditLogRange>;
+    /// Up to `limit` rows with `created_at < cutoff`, oldest first in `(created_at, id)` order,
+    /// starting after the `after` key when given.
+    async fn list_older_than(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        after: Option<(chrono::DateTime<chrono::Utc>, uuid::Uuid)>,
+        limit: u32,
+    ) -> RepoResult<Vec<AuditLogEntryRecord>>;
+    /// Delete up to `limit` of the oldest rows with `created_at < cutoff` whose
+    /// `(created_at, id)` is at most `up_to`, in one statement. Returns the number deleted.
+    async fn delete_older_than_batch(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        up_to: (chrono::DateTime<chrono::Utc>, uuid::Uuid),
+        limit: u32,
+    ) -> RepoResult<u64>;
 }

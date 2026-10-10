@@ -28,7 +28,8 @@ alias rim-sql='docker compose -f deploy/compose.relay.yml exec -T postgres psql 
 | Server recovery key | offline only, "The server recovery key" | its own copies |
 | Franking keys | `/data/franking-key.json` | with every dump |
 | Uploads (avatars) | `/data/uploads` | with every dump |
-| Audit log | `/data/audit.log`, and every audit event on stdout too | with every dump |
+| Audit log | `/data/audit.log`, and every audit event on stdout too; rotated by logrotate (`docs/operations/audit-retention.md`) | with every dump |
+| Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS` | with every dump |
 | TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
 
 ## Keys
@@ -313,10 +314,14 @@ rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
 rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
 rim-relay invite create [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
 rim-relay bootstrap-user --email <address> --public-url https://<domain>
+rim-relay audit purge [--dry-run] [--older-than-days N]
 ```
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`),
 `relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
 `server_key.recovered`, `bootstrap_token_issued`, `instance_invite_issued` and
-`instance_invite_revoked` (`issued_by` or `actor` `operator`).
+`instance_invite_revoked` (`issued_by` or `actor` `operator`). `audit purge` writes
+`audit.retention.purged` (`trigger` `cli`), the same event the daily purge writes; the purge, its
+export files and the logrotate setup for `/data/audit.log` are in
+`docs/operations/audit-retention.md`.

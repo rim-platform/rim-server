@@ -4995,6 +4995,7 @@ dependencies = [
  "chrono-tz",
  "dashmap",
  "ed25519-dalek",
+ "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "hmac 0.12.1",

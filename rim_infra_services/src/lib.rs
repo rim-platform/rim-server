@@ -1,5 +1,8 @@
 pub mod alert_rate_limiter;
 pub(crate) mod audit;
+/// Public for `rim_server`, whose composition root starts the daily purge and whose
+/// `audit purge` command runs it once.
+pub mod audit_retention;
 // pub(crate) promoted to pub: DefaultAuthService is re-exported below for integration tests
 // (signup_txn_regression) that construct the service directly against a live database.
 pub mod auth;
