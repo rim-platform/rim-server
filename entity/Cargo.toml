@@ -1,7 +1,11 @@
 [package]
 name = "entity"
+description = "SeaORM entities for the RIM database schema and their domain mappers"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "mock", "with-chrono", "with-json"] }

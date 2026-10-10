@@ -1,7 +1,11 @@
 [package]
 name = "rim_identity"
+description = "Verification of RIM key identity statements"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 # `zeroize` wipes the GHASH key; `aes` is listed only to turn on its `zeroize` feature, which
