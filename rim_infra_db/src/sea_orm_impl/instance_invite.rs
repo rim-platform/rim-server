@@ -63,7 +63,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     /// # Examples
     /// ```ignore
     /// let invite = repo.create(NewInstanceInvite {
-    ///     created_by_user_id: actor.user_id,
+    ///     created_by_user_id: Some(actor.user_id),
     ///     token_hash: hash_token(&raw),
     ///     expires_at: Utc::now() + Duration::days(7),
     ///     max_uses: 1,
@@ -72,7 +72,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     async fn create(&self, invite: NewInstanceInvite) -> RepoResult<InstanceInvite> {
         let active_model = instance_invite::ActiveModel {
             id: Set(InstanceInviteId::new().into()),
-            created_by_user_id: Set(invite.created_by_user_id.into()),
+            created_by_user_id: Set(invite.created_by_user_id.map(Into::into)),
             token_hash: Set(invite.token_hash),
             expires_at: Set(invite.expires_at.into()),
             max_uses: Set(invite.max_uses),

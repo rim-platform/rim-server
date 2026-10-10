@@ -11,6 +11,7 @@ pub mod config;
 mod file_handlers;
 pub mod franking_key_cmd;
 mod graphql_support;
+pub mod invite_cmd;
 mod plugin_bundle_handlers;
 mod remote_handlers;
 mod s2s;

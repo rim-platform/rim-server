@@ -66,12 +66,15 @@ rim-relay server-key show
 rim-relay principal block rimp1_… --reason "spam wave 2026-11-02"
 rim-relay peer block rims1_…
 rim-relay abuse-reports list --open
+rim-relay invite create --max-uses 10 --expires-in-days 7 --public-url https://relay.example.org
 rim-relay bootstrap-user --email ops@example.org --public-url https://relay.example.org
 ```
 
-`bootstrap-user` prints a single-use signup link. Its token works as a registration token in
-`signupWithKey`, so it is also how the operator lets someone in without the proof-of-work: one
-link per person. (`createInstanceInvite` needs the owner of a workspace, and a relay has none.)
+`invite create` prints a signup link whose token works as a registration token in
+`signupWithKey`, so it is how the operator lets people in without the proof-of-work: up to 50
+signups per link, for at most 30 days. `invite list` shows the live ones with their use counts and
+`invite revoke <id>` ends one. `bootstrap-user` prints a single-use link for one address.
+(`createInstanceInvite` in the app needs the owner of a workspace, and a relay has none.)
 
 ## Updating
 

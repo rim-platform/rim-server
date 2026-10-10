@@ -139,7 +139,8 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
 #[derive(SimpleObject, Clone, Debug)]
 pub struct InstanceInviteGql {
     pub id: async_graphql::ID,
-    pub created_by_user_id: async_graphql::ID,
+    /// The user who issued it; null for an invite the operator issued from the command line.
+    pub created_by_user_id: Option<async_graphql::ID>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub max_uses: i32,
     pub use_count: i32,
@@ -151,7 +152,7 @@ impl From<rim_services::auth::dto::InstanceInviteDto> for InstanceInviteGql {
     fn from(dto: rim_services::auth::dto::InstanceInviteDto) -> Self {
         Self {
             id: dto.id.to_string().into(),
-            created_by_user_id: dto.created_by_user_id.to_string().into(),
+            created_by_user_id: dto.created_by_user_id.map(|id| id.to_string().into()),
             expires_at: dto.expires_at,
             max_uses: dto.max_uses,
             use_count: dto.use_count,

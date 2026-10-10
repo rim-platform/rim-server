@@ -201,8 +201,10 @@ starts with that many zero bits. The work is bound to this server and one princi
 checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP
 and are audited as `relay.registration_pow`. Password signups take a token, as in invite-only
 mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
-answers `POW`. To let someone in without the work, issue a single-use link with
-`rim_server bootstrap-user`.
+answers `POW`. To let people in without the work, the operator issues a signup link with
+`rim_server invite create [--max-uses N] [--expires-in-days D]` (`invite list`, `invite revoke
+<id>`), which needs no account or workspace and so works with `RIM_ROLE=relay`, or a single-use
+link with `rim_server bootstrap-user`.
 
 **Quotas** per local user are the `RIM_RELAY_*` settings above with
 `RIM_RELAY_QUEUE_BYTES_PER_USER`; the public relay keeps 64 MiB of queue per user. The
