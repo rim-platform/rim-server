@@ -298,7 +298,7 @@ impl DefaultPeerService {
         match self.repo.insert(pin).await {
             Ok(peer) => {
                 tracing::info!(
-                    target = "audit",
+                    target: "audit",
                     event = "s2s.peer_pinned",
                     peer_server_id = %peer.server_id,
                     head_seq = peer.head_seq,
@@ -354,7 +354,7 @@ impl DefaultPeerService {
                     .is_some()
                 {
                     tracing::info!(
-                        target = "audit",
+                        target: "audit",
                         event = "s2s.peer_rotated",
                         peer_server_id = %peer.server_id,
                         from_seq = peer.head_seq,
@@ -370,7 +370,7 @@ impl DefaultPeerService {
                     .await
                     .map_err(failed)?;
                 tracing::error!(
-                    target = "audit",
+                    target: "audit",
                     event = "s2s.peer_forked",
                     peer_server_id = %peer.server_id,
                     pinned_seq = peer.head_seq,
@@ -525,7 +525,7 @@ impl PeerService for DefaultPeerService {
         let existed = self.repo.delete(server_id).await?;
         if existed {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "s2s.peer_reset",
                 peer_server_id = %server_id,
                 "forgot a peer server's pin"
@@ -558,7 +558,7 @@ impl PeerService for DefaultPeerService {
             });
         }
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = if blocked { "s2s.peer_blocked" } else { "s2s.peer_unblocked" },
             peer_server_id = %server_id,
             "an operator {} a peer server",

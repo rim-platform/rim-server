@@ -111,6 +111,9 @@ pub async fn serve(
     let shutdown_tx = runtime.shutdown_tx;
     if let Some(addr) = metrics_addr {
         crate::metrics::start(addr, runtime.db.clone(), shutdown_tx.subscribe())?;
+        rim_infra_services::metrics::set_audit_retention_days(
+            config.audit_retention_days().ok().flatten(),
+        );
     }
     let db = runtime.db;
 

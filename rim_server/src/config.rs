@@ -189,6 +189,10 @@ pub struct RIMConfig {
     /// `host:port` of the Prometheus listener serving `GET /metrics`; unset turns metrics off.
     /// Controlled by `RIM_METRICS_ADDR`.
     pub metrics_addr: Option<String>,
+
+    /// Days command audit log rows are kept before the daily purge exports and deletes them;
+    /// unset keeps them forever. 1 to 3650. Controlled by `RIM_AUDIT_RETENTION_DAYS`.
+    pub audit_retention_days: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -303,6 +307,7 @@ impl fmt::Debug for RIMConfig {
                 &self.s2s_subscriptions_per_peer(),
             )
             .field("metrics_addr", &self.metrics_addr)
+            .field("audit_retention_days", &self.audit_retention_days)
             .finish()
     }
 }
@@ -357,6 +362,7 @@ impl Default for RIMConfig {
             relay_forwards_per_user_per_day: None,
             relay_dm_requests_per_day: None,
             metrics_addr: None,
+            audit_retention_days: None,
         }
     }
 }
@@ -760,6 +766,24 @@ impl RIMConfig {
                 .parse()
                 .map(Some)
                 .map_err(|_| format!("RIM_METRICS_ADDR={addr} is not an ip:port address")),
+        }
+    }
+
+    /// `RIM_AUDIT_RETENTION_DAYS`; `None` keeps audit rows forever.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is outside 1 to 3650.
+    pub fn audit_retention_days(&self) -> Result<Option<u32>, String> {
+        use rim_infra_services::audit_retention::{MAX_RETENTION_DAYS, MIN_RETENTION_DAYS};
+        match self.audit_retention_days {
+            None => Ok(None),
+            Some(days) if (MIN_RETENTION_DAYS..=MAX_RETENTION_DAYS).contains(&days) => {
+                Ok(Some(days))
+            }
+            Some(days) => Err(format!(
+                "RIM_AUDIT_RETENTION_DAYS={days} is outside {MIN_RETENTION_DAYS} to \
+                 {MAX_RETENTION_DAYS}; unset it to keep audit rows forever"
+            )),
         }
     }
 
@@ -1253,5 +1277,45 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.notification_digest_interval_secs(), 60);
+    }
+
+    #[test]
+    fn audit_retention_is_off_when_unset_and_refuses_values_outside_the_range() {
+        assert_eq!(RIMConfig::default().audit_retention_days(), Ok(None));
+        for days in [1, 90, 3650] {
+            let config = RIMConfig {
+                audit_retention_days: Some(days),
+                ..Default::default()
+            };
+            assert_eq!(config.audit_retention_days(), Ok(Some(days)));
+        }
+        for days in [0, 3651] {
+            let config = RIMConfig {
+                audit_retention_days: Some(days),
+                ..Default::default()
+            };
+            let err = config.audit_retention_days().unwrap_err();
+            assert!(err.contains("RIM_AUDIT_RETENTION_DAYS"), "{err}");
+        }
+    }
+
+    #[test]
+    fn audit_retention_days_is_read_from_its_variable_and_a_non_number_is_refused() {
+        let parse = |value: &str| {
+            Config::builder()
+                .set_override("server_host", "127.0.0.1")
+                .and_then(|b| b.set_override("server_port", 8090))
+                .and_then(|b| b.set_override("database_url", "postgres://localhost/rim"))
+                .and_then(|b| b.set_override("session_ttl_days", 30))
+                .and_then(|b| b.set_override("enable_graphiql", false))
+                .and_then(|b| b.set_override("data_dir", "./data"))
+                .and_then(|b| b.set_override("audit_retention_days", value))
+                .and_then(|b| b.build())
+                .and_then(|c| c.try_deserialize::<RIMConfig>())
+        };
+        let config = parse("90").expect("a number parses");
+        assert_eq!(config.audit_retention_days(), Ok(Some(90)));
+        assert!(parse("ninety").is_err());
+        assert!(parse("-1").is_err());
     }
 }

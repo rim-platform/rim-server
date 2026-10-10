@@ -192,7 +192,7 @@ fn signature_status(log: &[StatementText], key_seq: u32) -> ServiceResult<Plugin
 /// The audit fields of an entry: never the statement text.
 fn audit(event: &str, actor_id: UserId, entry: &WorkspacePlugin, message: &str) {
     info!(
-        target = "audit",
+        target: "audit",
         event,
         server_id = %entry.server_id,
         actor_id = %actor_id,

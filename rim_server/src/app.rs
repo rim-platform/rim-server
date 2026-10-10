@@ -317,6 +317,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let mut key_login_audiences = config
         .key_login_audiences()
         .map_err(std::io::Error::other)?;
+    let audit_retention_days = config
+        .audit_retention_days()
+        .map_err(std::io::Error::other)?;
     let db = config
         .connect_database()
         .await
@@ -470,7 +473,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     {
         Ok(armed) => {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "escalation_boot_recovery",
                 armed_count = armed,
                 "re-armed active escalation runs on boot (§6)"
@@ -735,6 +738,24 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
+    // Background task: export and delete command audit rows older than
+    // `RIM_AUDIT_RETENTION_DAYS`, a minute after boot and then daily.
+    if let Some(days) = audit_retention_days {
+        let repo: Arc<dyn rim_core::audit::repository::AuditLogRepository> = Arc::new(
+            rim_infra_db::sea_orm_impl::audit::SeaOrmAuditLogRepository::new(
+                raw_db_for_tasks.clone().into(),
+            ),
+        );
+        let export_dir =
+            rim_infra_services::audit_retention::export_dir(std::path::Path::new(&config.data_dir));
+        tokio::spawn(rim_infra_services::audit_retention::run_daily(
+            repo,
+            days,
+            export_dir,
+            shutdown_tx.subscribe(),
+        ));
+    }
+
     let message_attachment_service = service_provider.message_attachment_service();
     let moderation_service = service_provider.moderation_service();
     let ingest_token_service = service_provider.ingest_token_service();
@@ -764,14 +785,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     if registration_mode == crate::config::RegistrationMode::Open {
         tracing::warn!(
-            target = "audit",
+            target: "audit",
             "RIM_OPEN_REGISTRATION=true: open registration mode is active; \
              instance accepts signups without invitation"
         );
     }
     if let crate::config::RegistrationMode::Pow { bits } = registration_mode {
         tracing::warn!(
-            target = "audit",
+            target: "audit",
             pow_bits = bits,
             open_registration_ignored = config.open_registration.unwrap_or(false),
             "RIM_REGISTRATION_POW_BITS is set: key-only signups need a proof-of-work or a token"
@@ -960,7 +981,7 @@ async fn seed_builtin_capabilities(
         .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
     }
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "capability_registry_seeded",
         count = specs.len(),
         "seeded builtin capabilities into registry (Phase 1 §3.3)"

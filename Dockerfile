@@ -74,6 +74,8 @@ USER rim
 #   RIM_METRICS_ADDR      — ip:port of the Prometheus /metrics listener (default: off). In a
 #                           container bind 0.0.0.0:9090 and do not publish it: keep it on an
 #                           internal network, never behind the public proxy
+#   RIM_AUDIT_RETENTION_DAYS — days command audit rows are kept, 1-3650 (default: forever); older
+#                           rows are exported to $RIM_DATA_DIR/audit-exports and deleted daily
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

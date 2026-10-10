@@ -1,6 +1,8 @@
 use rim_logging::{LoggingHandle, init_tracing_json};
 use rim_server::server::start_server;
-use rim_server::{abuse_cmd, bootstrap_cmd, config, franking_key_cmd, invite_cmd, server_key_cmd};
+use rim_server::{
+    abuse_cmd, audit_cmd, bootstrap_cmd, config, franking_key_cmd, invite_cmd, server_key_cmd,
+};
 
 fn initialize() -> Option<LoggingHandle> {
     // Avoid panicking if logger is already initialized (tests, embedding, etc.).
@@ -26,7 +28,7 @@ async fn main() {
     }
 
     // Bind the logging handle for the entire lifetime of `main` — must
-    // outlive every `tracing::info!(target = "audit", …)` emit and
+    // outlive every `tracing::info!(target: "audit", …)` emit and
     // remain alive until after any error is printed so the final log
     // lines are flushed before the process exits.
     let _logging_handle = initialize();
@@ -39,6 +41,7 @@ async fn main() {
             "franking-key" => Some(franking_key_cmd::run(args)),
             "principal" | "abuse-reports" => Some(abuse_cmd::run(&subcmd, args).await),
             "invite" => Some(invite_cmd::run(args).await),
+            "audit" => Some(audit_cmd::run(args).await),
             _ => None,
         };
         if let Some(code) = exit_code {
@@ -49,14 +52,14 @@ async fn main() {
     let config = match config::load_config() {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(target = "audit", error = %e, "fatal: failed to load configuration");
+            tracing::error!(target: "audit", error = %e, "fatal: failed to load configuration");
             eprintln!("fatal: failed to load configuration: {e}");
             std::process::exit(1);
         }
     };
 
     if let Err(e) = start_server(&config).await {
-        tracing::error!(target = "audit", error = %e, "fatal: server exited with error");
+        tracing::error!(target: "audit", error = %e, "fatal: server exited with error");
         eprintln!("fatal: server exited with error: {e}");
         std::process::exit(1);
     }
