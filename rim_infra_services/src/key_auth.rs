@@ -943,7 +943,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         let display_name = signup::normalize_display_name(cmd.display_name.as_deref(), username)?;
 
         let token = match &cmd.token {
-            Some(token) => Some(signup::check_token(&self.repos.signup, token).await?),
+            Some(token) => Some(signup::check_token(&self.repos.signup, token, None).await?),
             None => None,
         };
         let PresentedIdentity {

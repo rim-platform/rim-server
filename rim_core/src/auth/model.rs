@@ -7,7 +7,6 @@ use crate::user::model::UserId;
 
 model_id!(SessionId);
 model_id!(InviteId);
-model_id!(BootstrapTokenId);
 model_id!(InstanceInviteId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,31 +58,6 @@ pub struct NewInvite {
     pub role: ServerMemberRole,
 }
 
-/// A one-time bootstrap token issued by the CLI.
-///
-/// The raw token is never stored; only the SHA-256 hash is persisted.
-/// Authenticity is established by hash lookup (§3.3 of the registration spec).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BootstrapToken {
-    pub id: BootstrapTokenId,
-    /// Informational email baked in at issuance. Not a hard constraint on signup.
-    pub email: String,
-    pub token_hash: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub used_at: Option<DateTime<Utc>>,
-    pub consumed_by_user_id: Option<UserId>,
-    pub revoked_at: Option<DateTime<Utc>>,
-}
-
-/// Fields required to persist a new bootstrap token.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewBootstrapToken {
-    pub email: String,
-    pub token_hash: String,
-    pub expires_at: DateTime<Utc>,
-}
-
 /// An instance-level invite that lets a stranger create an account.
 ///
 /// Unlike workspace invites, instance invites are not bound to any workspace.
@@ -99,6 +73,8 @@ pub struct InstanceInvite {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// The only address a signup through this invite may use, lowercased; `None` admits any.
+    pub email: Option<String>,
 }
 
 /// Fields required to persist a new instance invite.
@@ -109,4 +85,6 @@ pub struct NewInstanceInvite {
     pub token_hash: String,
     pub expires_at: DateTime<Utc>,
     pub max_uses: i32,
+    /// The address the invite is bound to, lowercased; `None` admits any.
+    pub email: Option<String>,
 }

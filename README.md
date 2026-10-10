@@ -20,7 +20,7 @@ Tauri v2 desktop client lives in the separate `rim-ui` repository.
 
 - **Communication core** — workspaces, channels, DMs/groups, threads, attachments, reactions,
   pins, mentions, read state, presence, typing, link previews, custom emoji, Postgres full-text
-  search, invite-only registration with operator bootstrap, password reset, SMTP email.
+  search, invite-only registration with operator invites, password reset, SMTP email.
 - **Programmable runtime** — command registry with typed args and sensitivity tiers, user
   commands, macros with piping, keybinds, workspace state (KV + TTL + events), pipelines, lenses.
 - **AI operator** — chat, navigation and workspace-state commands exposed to the agent, gated by
@@ -59,7 +59,7 @@ export DATABASE_URL='postgres://postgres:postgres@localhost:5432/testdb'
 sea migrate up
 
 # Issue a single-use signup link for the first (operator) account
-cargo run -p rim_server -- bootstrap-user --email you@example.com
+cargo run -p rim_server -- invite create
 
 # Run the server (GraphQL at /api, WebSocket at /api/ws, SDL at /api/sdl)
 cargo run -p rim_server

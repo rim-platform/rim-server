@@ -67,6 +67,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     ///     token_hash: hash_token(&raw),
     ///     expires_at: Utc::now() + Duration::days(7),
     ///     max_uses: 1,
+    ///     email: None,
     /// }).await?;
     /// ```
     async fn create(&self, invite: NewInstanceInvite) -> RepoResult<InstanceInvite> {
@@ -76,6 +77,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
             token_hash: Set(invite.token_hash),
             expires_at: Set(invite.expires_at.into()),
             max_uses: Set(invite.max_uses),
+            email: Set(invite.email),
             ..Default::default()
         };
 

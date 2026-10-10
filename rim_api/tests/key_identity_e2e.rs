@@ -15,20 +15,20 @@ use uuid::Uuid;
 use chrono::Utc;
 use rim_api::auth_context::RemoteIp;
 use rim_auth::password::hash_password;
-use rim_core::auth::repository::{BootstrapTokenRepository, SessionRepository};
+use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::{NewUser, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
 use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
-use rim_infra_db::sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository;
+use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
-use support::registration::seed_bootstrap_token;
+use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
 const PASSWORD: &str = "correct horse battery";
@@ -386,14 +386,14 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
     );
 }
 
-/// Invite-only mode with a bootstrap token: the token is consumed and the account starts with
-/// no workspace, as for `signupWithInvite`.
+/// Invite-only mode with an operator's instance invite: the invite is spent and the account
+/// starts with no workspace, as for `signupWithInvite`.
 #[tokio::test]
-async fn invite_only_signup_with_key_and_bootstrap_token() {
+async fn invite_only_signup_with_key_and_operator_invite() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let raw_token = "test_bootstrap_token_key_signup_abcdefgh";
-    let token_id = seed_bootstrap_token(
+    let raw_token = "test_operator_invite_key_signup_abcdefgh";
+    let invite_id = seed_operator_invite(
         &ctx.db,
         raw_token,
         Utc::now() + chrono::Duration::minutes(15),
@@ -410,7 +410,7 @@ async fn invite_only_signup_with_key_and_bootstrap_token() {
         "admin",
         &id,
         24,
-        json!({ "bootstrapToken": raw_token }),
+        json!({ "instanceInviteToken": raw_token }),
     )
     .await;
     let data = exec_ok(&schema, request).await;
@@ -422,13 +422,12 @@ async fn invite_only_signup_with_key_and_bootstrap_token() {
         .expect("uuid")
         .into();
 
-    let token = SeaOrmBootstrapTokenRepository::new(ctx.db.clone())
-        .get_by_id(token_id)
+    let invite = SeaOrmInstanceInviteRepository::new(ctx.db.clone())
+        .get_by_id(invite_id)
         .await
-        .expect("get token")
-        .expect("token");
-    assert!(token.used_at.is_some());
-    assert_eq!(token.consumed_by_user_id, Some(user_id));
+        .expect("get invite")
+        .expect("invite");
+    assert_eq!(invite.use_count, 1);
 
     let user = SeaOrmUserRepository::new(ctx.db.clone())
         .get_by_id(user_id)
@@ -443,7 +442,10 @@ async fn invite_only_signup_with_key_and_bootstrap_token() {
         .get_servers_for_user(user_id)
         .await
         .expect("list memberships");
-    assert!(servers.is_empty(), "bootstrap signup joins no workspace");
+    assert!(
+        servers.is_empty(),
+        "an instance invite signup joins no workspace"
+    );
 }
 
 /// A second account may not take a principal id another account here holds.

@@ -165,7 +165,6 @@ pub async fn reset_db(conn: &DatabaseConnection) {
 TRUNCATE TABLE
   session,
   key_challenge,
-  bootstrap_token,
   instance_invite,
   invite,
   server_member,
@@ -373,7 +372,6 @@ pub fn build_test_provider_with(
     use std::sync::Arc;
 
     use rim_infra_db::sea_orm_impl::{
-        bootstrap_token::SeaOrmBootstrapTokenRepository,
         instance_invite::SeaOrmInstanceInviteRepository, invite::SeaOrmInviteRepository,
         keybind::SeaOrmKeybindRepository, server::SeaOrmServerRepository,
         server_member::SeaOrmServerMemberRepository, session::SeaOrmSessionRepository,
@@ -387,7 +385,6 @@ pub fn build_test_provider_with(
 
     // Wire up all repos.
     let repos = AppRepos {
-        bootstrap_token_repo: Arc::new(SeaOrmBootstrapTokenRepository::new(db.clone())),
         instance_invite_repo: Arc::new(SeaOrmInstanceInviteRepository::new(db.clone())),
         channel_lens_repo: Arc::new(
             rim_infra_db::sea_orm_impl::channel_lens::SeaOrmChannelLensRepository::new(db.clone()),

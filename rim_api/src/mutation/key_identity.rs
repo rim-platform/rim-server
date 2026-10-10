@@ -172,7 +172,6 @@ impl KeyIdentityMutations {
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
         let (token, proof_of_work) = key_signup_credential(
             mode,
-            input.bootstrap_token,
             input.instance_invite_token,
             input.workspace_invite_token,
             input.proof_of_work,
@@ -214,7 +213,6 @@ impl KeyIdentityMutations {
 /// `VALIDATION` when what is given does not fit the mode.
 fn key_signup_credential(
     mode: &RegistrationMode,
-    bootstrap_token: Option<String>,
     instance_invite_token: Option<String>,
     workspace_invite_token: Option<String>,
     proof_of_work: Option<String>,
@@ -224,9 +222,7 @@ fn key_signup_credential(
 )> {
     let invalid =
         |message: &str| Err(Error::new(message).extend_with(|_, e| e.set("code", "VALIDATION")));
-    let any_token = bootstrap_token.is_some()
-        || instance_invite_token.is_some()
-        || workspace_invite_token.is_some();
+    let any_token = instance_invite_token.is_some() || workspace_invite_token.is_some();
     match (mode, proof_of_work) {
         (RegistrationMode::Pow { .. }, Some(_)) if any_token => {
             invalid("give a registration token or proofOfWork, not both")
@@ -237,12 +233,7 @@ fn key_signup_credential(
         }
         (_, Some(_)) => invalid("proofOfWork is only taken in pow registration mode"),
         (_, None) => Ok((
-            registration_token(
-                mode,
-                bootstrap_token,
-                instance_invite_token,
-                workspace_invite_token,
-            )?,
+            registration_token(mode, instance_invite_token, workspace_invite_token)?,
             None,
         )),
     }
@@ -262,42 +253,35 @@ mod tests {
     fn pow_mode_takes_a_token_or_a_proof_of_work() {
         let mode = RegistrationMode::Pow { bits: 24 };
         assert_eq!(
-            key_signup_credential(&mode, None, None, None, Some("AAAAAAAAkaM".into())).unwrap(),
+            key_signup_credential(&mode, None, None, Some("AAAAAAAAkaM".into())).unwrap(),
             (None, Some("AAAAAAAAkaM".into()))
         );
         assert_eq!(
-            key_signup_credential(&mode, None, Some("i".into()), None, None).unwrap(),
+            key_signup_credential(&mode, Some("i".into()), None, None).unwrap(),
             (Some(SignupToken::InstanceInvite("i".into())), None)
         );
         assert!(
             message(key_signup_credential(
                 &mode,
-                None,
                 Some("i".into()),
                 None,
                 Some("n".into())
             ))
             .contains("not both")
         );
-        assert!(message(key_signup_credential(&mode, None, None, None, None)).contains("required"));
+        assert!(message(key_signup_credential(&mode, None, None, None)).contains("required"));
     }
 
     #[test]
     fn other_modes_refuse_a_proof_of_work() {
         for mode in [RegistrationMode::Open, RegistrationMode::InviteOnly] {
             assert!(
-                message(key_signup_credential(
-                    &mode,
-                    None,
-                    None,
-                    None,
-                    Some("n".into())
-                ))
-                .contains("pow registration mode")
+                message(key_signup_credential(&mode, None, None, Some("n".into())))
+                    .contains("pow registration mode")
             );
         }
         assert_eq!(
-            key_signup_credential(&RegistrationMode::Open, None, None, None, None).unwrap(),
+            key_signup_credential(&RegistrationMode::Open, None, None, None).unwrap(),
             (None, None)
         );
     }

@@ -1,16 +1,17 @@
 //! CLI subcommands for the operator's instance invites, which admit a signup when registration
 //! is invite-only or proof-of-work. They need no account and no workspace, so they work on a
-//! server that runs only the relay role.
+//! server that runs only the relay role, and on a fresh server to create its first account.
 //!
 //! ```text
-//! rim_server invite create [--max-uses <1-50>] [--expires-in-days <1-30>] [--public-url <url>]
+//! rim_server invite create [--email <address>] [--max-uses <1-50>] [--expires-in-days <1-30>]
+//!                          [--public-url <url>]
 //! rim_server invite list
 //! rim_server invite revoke <invite-id>
 //! ```
 //!
 //! `create` prints the signup link (`<public url>/join/<token>`) on its first line; the token is
-//! shown once and only its hash is stored. Exit code 0 on success, 1 on any error, 2 on a usage
-//! error.
+//! shown once and only its hash is stored. With `--email` the invite admits only a password
+//! signup with that address. Exit code 0 on success, 1 on any error, 2 on a usage error.
 
 use std::fmt::Write as _;
 
@@ -19,18 +20,19 @@ use rim_core::auth::model::{InstanceInvite, InstanceInviteId};
 use rim_core::auth::repository::InstanceInviteRepository;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
-use rim_infra_services::instance_invite::{MAX_TTL_DAYS, issue};
+use rim_infra_services::instance_invite::{InviteTerms, MAX_TTL_DAYS, issue};
 use uuid::Uuid;
 
 use crate::config::RIMConfig;
 
-const USAGE: &str = "usage: rim_server invite create [--max-uses <1-50>] \
+const USAGE: &str = "usage: rim_server invite create [--email <address>] [--max-uses <1-50>] \
      [--expires-in-days <1-30>] [--public-url <url>] | invite list | invite revoke <invite-id>";
 
 /// A parsed subcommand.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Create {
+        email: Option<String>,
         max_uses: Option<i32>,
         expires_in_days: Option<i64>,
         public_url: Option<String>,
@@ -55,11 +57,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
     let action = args.next().ok_or(USAGE)?;
     let command = match action.as_str() {
         "create" => {
+            let mut email = None;
             let mut max_uses = None;
             let mut expires_in_days = None;
             let mut public_url = None;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
+                    "--email" => email = Some(value(&flag, &mut args)?),
                     "--max-uses" => {
                         max_uses = Some(number(&flag, &value(&flag, &mut args)?)?);
                     }
@@ -77,6 +81,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
                 }
             }
             return Ok(Command::Create {
+                email,
                 max_uses,
                 expires_in_days,
                 public_url,
@@ -156,9 +161,10 @@ fn describe(out: &mut String, invite: &InstanceInvite) {
     let issuer = invite
         .created_by_user_id
         .map_or("operator".to_string(), |id| format!("user {id}"));
+    let admits = invite.email.as_deref().unwrap_or("anyone");
     let _ = writeln!(
         out,
-        "{}  used {}/{}  expires {}  {state}  issued by {issuer}",
+        "{}  used {}/{}  expires {}  {state}  admits {admits}  issued by {issuer}",
         invite.id,
         invite.use_count,
         invite.max_uses,
@@ -186,6 +192,7 @@ async fn execute_on(
     let mut out = String::new();
     match command {
         Command::Create {
+            email,
             max_uses,
             expires_in_days,
             public_url,
@@ -194,8 +201,11 @@ async fn execute_on(
             let issued = issue(
                 repo,
                 None,
-                expires_in_days.map(|days| now + Duration::days(days)),
-                max_uses,
+                InviteTerms {
+                    expires_at: expires_in_days.map(|days| now + Duration::days(days)),
+                    max_uses,
+                    email,
+                },
                 now,
             )
             .await
@@ -205,6 +215,7 @@ async fn execute_on(
                 event = "instance_invite_issued",
                 instance_invite_id = %issued.invite.id,
                 issued_by = "operator",
+                email_bound = issued.invite.email.is_some(),
                 "instance invite issued via CLI"
             );
             let _ = writeln!(
@@ -263,6 +274,7 @@ mod tests {
         assert_eq!(
             parse(args(&["create"])),
             Ok(Command::Create {
+                email: None,
                 max_uses: None,
                 expires_in_days: None,
                 public_url: None
@@ -271,6 +283,8 @@ mod tests {
         assert_eq!(
             parse(args(&[
                 "create",
+                "--email",
+                "ops@example.com",
                 "--max-uses",
                 "5",
                 "--expires-in-days",
@@ -279,6 +293,7 @@ mod tests {
                 "https://relay.example"
             ])),
             Ok(Command::Create {
+                email: Some("ops@example.com".to_string()),
                 max_uses: Some(5),
                 expires_in_days: Some(30),
                 public_url: Some("https://relay.example".to_string())
@@ -298,6 +313,7 @@ mod tests {
         assert!(parse(args(&[])).is_err());
         assert!(parse(args(&["delete"])).is_err());
         assert!(parse(args(&["create", "--max-uses"])).is_err());
+        assert!(parse(args(&["create", "--email"])).is_err());
         assert!(parse(args(&["create", "--max-uses", "many"])).is_err());
         assert!(parse(args(&["create", "--expires-in-days", "0"])).is_err());
         assert!(parse(args(&["create", "--expires-in-days", "31"])).is_err());
@@ -338,6 +354,7 @@ mod tests {
                 max_uses: new.max_uses,
                 use_count: 0,
                 revoked_at: None,
+                email: new.email,
             };
             if let Ok(mut slot) = seen.lock() {
                 *slot = Some(invite.clone());
@@ -352,6 +369,7 @@ mod tests {
 
         let out = execute_on(
             Command::Create {
+                email: None,
                 max_uses: Some(3),
                 expires_in_days: Some(2),
                 public_url: None,
@@ -374,6 +392,59 @@ mod tests {
         assert_eq!(invite.created_by_user_id, None);
         assert_eq!(invite.max_uses, 3);
         assert!(out.contains("issued by operator"), "{out}");
+        assert!(out.contains("admits anyone"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn create_binds_the_invite_to_an_email_and_list_shows_it() {
+        let mut repo = MockInstanceInviteRepository::new();
+        repo.expect_create()
+            .withf(|new| new.email.as_deref() == Some("ops@example.com") && new.max_uses == 1)
+            .returning(|new| {
+                Ok(InstanceInvite {
+                    id: InstanceInviteId::new(),
+                    created_by_user_id: None,
+                    token_hash: new.token_hash,
+                    created_at: Utc::now(),
+                    expires_at: new.expires_at,
+                    max_uses: new.max_uses,
+                    use_count: 0,
+                    revoked_at: None,
+                    email: new.email,
+                })
+            });
+        let out = execute_on(
+            Command::Create {
+                email: Some("Ops@Example.com".to_string()),
+                max_uses: None,
+                expires_in_days: None,
+                public_url: None,
+            },
+            &RIMConfig::default(),
+            &repo,
+        )
+        .await
+        .expect("created");
+        assert!(out.contains("admits ops@example.com"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn create_refuses_a_malformed_email() {
+        let mut repo = MockInstanceInviteRepository::new();
+        repo.expect_create().never();
+        let err = execute_on(
+            Command::Create {
+                email: Some("not an address".to_string()),
+                max_uses: None,
+                expires_in_days: None,
+                public_url: None,
+            },
+            &RIMConfig::default(),
+            &repo,
+        )
+        .await
+        .expect_err("refused");
+        assert!(err.contains("email"), "{err}");
     }
 
     #[tokio::test]

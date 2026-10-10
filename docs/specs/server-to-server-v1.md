@@ -77,7 +77,7 @@ keyHash  = base64url(SHA-256(tagged key text))          (as device_key.key_hash)
   the file, and writes the recovery seed to `<RIM_DATA_DIR>/server-recovery-key.txt` (0600) as
   `rim-server-recovery:1:<base64url>`, logging a warning at every start while it exists ("move the
   server recovery key offline").
-- **CLI** (S5-1, beside `bootstrap_cmd.rs`): `rim_server server-key show`, `server-key rotate` (a
+- **CLI** (S5-1, beside `invite_cmd.rs`): `rim_server server-key show`, `server-key rotate` (a
   `signer: server` rotation; the old seed is overwritten after the entry commits),
   `server-key recover --recovery-key-file F [--new-recovery-key]`. The new seed is written to
   `<key file>.next` (0600) before its entry commits and moved over the key file after; a start
@@ -802,8 +802,8 @@ History is on the devices and the drive, keys on the devices, spaces on their ho
 
 The public relay (`relay.rim.chat` is its working name; the domain is not registered yet, and
 every mention of it here and in the runbook is a placeholder) runs the stock image with
-`RIM_ROLE=relay`. In `pow` mode `signupWithKey` takes a registration token (bootstrap, instance
-invite or workspace invite, as in invite-only mode) or `proofOfWork`, not both: an 8-byte nonce
+`RIM_ROLE=relay`. In `pow` mode `signupWithKey` takes a registration token (instance invite or
+workspace invite, as in invite-only mode) or `proofOfWork`, not both: an 8-byte nonce
 (unpadded base64url) such that
 
 ```

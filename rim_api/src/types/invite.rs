@@ -8,7 +8,7 @@ use async_graphql::SimpleObject;
 /// Variants appear in the SDL as `INVITE_ONLY`, `OPEN` and `POW`.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum RegistrationModeGql {
-    /// Default: signup requires a valid token (bootstrap, instance, or workspace invite).
+    /// Default: signup requires a valid token (instance or workspace invite).
     InviteOnly,
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,
@@ -31,17 +31,9 @@ impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
 
 /// GraphQL enum for the type of an invite token, used by `InviteTokenPreview`.
 ///
-/// `BOOTSTRAP` and `INSTANCE` both trigger the "create your RIM account" form
-/// copy on the frontend, but they are distinct so the frontend knows which input
-/// field to populate on `signupWithInvite`:
-/// - `BOOTSTRAP` → use `bootstrapToken`
-/// - `INSTANCE`  → use `instanceInviteToken`
-///
 /// Mirrors [`rim_services::auth::dto::InviteTokenType`].
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum InviteTokenTypeGql {
-    /// Bootstrap token: routes to `bootstrapToken` input on `signupWithInvite`.
-    Bootstrap,
     /// Instance invite: routes to `instanceInviteToken` input on `signupWithInvite`.
     Instance,
     /// Workspace invite: join-a-workspace flow.
@@ -52,7 +44,6 @@ impl From<rim_services::auth::dto::InviteTokenType> for InviteTokenTypeGql {
     fn from(t: rim_services::auth::dto::InviteTokenType) -> Self {
         use rim_services::auth::dto::InviteTokenType as D;
         match t {
-            D::Bootstrap => Self::Bootstrap,
             D::Instance => Self::Instance,
             D::Workspace => Self::Workspace,
         }
@@ -83,7 +74,7 @@ impl From<rim_services::auth::dto::WorkspaceInvitePreviewDto> for WorkspaceInvit
 /// Read-only preview of a registration token.
 ///
 /// Does NOT consume the token. Workspace-invite previews carry server and
-/// inviter info; instance/bootstrap previews are minimal (§4.7).
+/// inviter info; instance-invite previews are minimal.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct InviteTokenPreviewGql {
     pub token_type: InviteTokenTypeGql,
@@ -106,7 +97,7 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
 /// Payload returned from `signupWithInvite`.
 ///
 /// `server_id` is `Some` only when a `workspaceInviteToken` was used;
-/// bootstrap and instance-invite paths land in "no workspaces yet" state.
+/// the instance-invite and open paths land in "no workspaces yet" state.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SignupWithInvitePayloadGql {
     pub user_id: async_graphql::ID,
