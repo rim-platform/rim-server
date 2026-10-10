@@ -1283,6 +1283,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finding_14_revocation_is_disclosed_only_after_the_challenge_and_audience() {
+        let h = harness();
+        let e = h.enroll(1).await;
+        let revocation = e.id.revoke_device(&e.state, e.device_id);
+        h.svc
+            .revoke_device(RevokeDeviceKeyCmd {
+                actor: Actor::new(e.user_id),
+                revocation: payload(revocation),
+            })
+            .await
+            .unwrap();
+
+        // Another server's audience.
+        let err = h
+            .login(&e, e.device_id, &e.device, "evil.example.com")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+
+        // A challenge that was never issued.
+        let unknown = payload(device_login(
+            &e.device,
+            &e.state,
+            e.device_id,
+            Uuid::now_v7(),
+            "bm90LXRoZS1ub25jZQ",
+            AUDIENCE,
+        ));
+        let cmd = |proof: &SignedPayload| LoginWithKeyCmd {
+            proof: proof.clone(),
+            remote_ip: IP.to_string(),
+        };
+        let err = h.svc.login_with_key(cmd(&unknown)).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+
+        // A valid proof is told about the revocation once; replaying it is not.
+        let challenge = h
+            .svc
+            .issue_challenge(IssueKeyChallengeCmd {
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap();
+        let valid = payload(device_login(
+            &e.device,
+            &e.state,
+            e.device_id,
+            challenge.challenge_id.into(),
+            &challenge.nonce,
+            AUDIENCE,
+        ));
+        let err = h.svc.login_with_key(cmd(&valid)).await.unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+        let err = h.svc.login_with_key(cmd(&valid)).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn a_device_can_revoke_itself_but_not_another() {
         let h = harness();
         let e = h.enroll(1).await;

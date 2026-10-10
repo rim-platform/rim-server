@@ -291,13 +291,17 @@ identity alone: no password, no email.
    meantime refuses the login), creates a session bound to the device, records the device's
    `lastUsedAt`, and sets the same session and CSRF cookies as `login`.
 5. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
-   device, which is `FORBIDDEN` so the client can tell the person to link the device again.
+   device, which is `FORBIDDEN` so the client can tell the person to link the device again. A
+   proof is valid here only when it passes every check of step 3: revocation is looked at after
+   the audience and the challenge (which the attempt uses up), so an old proof, a replayed one or
+   one made for another server never shows whether the device was revoked.
    Failed attempts are limited to 20 per IP per 15 minutes; successful logins do not count.
 
 **Accepted audiences** come from `RIM_KEY_LOGIN_AUDIENCES` (comma-separated `host[:port]`).
 When it is unset, the host of `RIM_PUBLIC_BASE_URL` is used; when that is unset too,
-`localhost:PORT` and `127.0.0.1:PORT` (development only). The server logs the list at start-up.
-A host behind a proxy on a public name must set one of the two variables.
+`localhost:PORT` and `127.0.0.1:PORT`, but only when `RIM_SERVER_HOST` is `localhost` or a
+loopback address: a server bound to any other address (`0.0.0.0` included) with neither variable
+set refuses to start, with a message naming both. The server logs the list at start-up.
 
 `keyLoginChallenge`, `loginWithKey` and `signupWithKey` are exempt from the CSRF header check,
 because they are used without a session; `loginWithKey` and `signupWithKey` only act on a fresh
@@ -399,7 +403,10 @@ type Mutation {
 ```
 
 Malformed or unverifiable statements fail with code `VALIDATION` and a short reason such as
-`signature does not verify` or `key log entry has seq 2, expected 1`.
+`signature does not verify` or `key log entry has seq 2, expected 1`. A payload that is not JSON
+of the statement's shape (unknown, duplicate or missing fields, wrong types) is refused with the
+fixed reason `statement payload is not valid`; the JSON parser's own message goes to the server
+log only.
 
 `keyLog` needs no session. The log is public (every server a person uses holds it), and a person
 who lost every device needs its head (`seq` and the hash of the last payload) to sign a recovery
