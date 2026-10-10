@@ -141,7 +141,8 @@ requests, outbox rows over 7 days and accepted `seq` values out of the window. A
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A
-  conversation with someone on another relay must be `encrypted` (`VALIDATION` otherwise), and
+  conversation with someone on another relay must be `encrypted` (otherwise `VALIDATION`,
+  "conversations with people on other servers are encrypted"), and
   every member needs an MLS-active device. Any
   `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
   card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`

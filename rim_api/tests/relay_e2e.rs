@@ -1361,6 +1361,21 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     assert_eq!(code, "VALIDATION");
+    let message = alice
+        .post(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "encrypted": false,
+                "remoteMembers": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }],
+            } }),
+        )
+        .await["errors"][0]["message"]
+        .clone();
+    assert_eq!(
+        message,
+        "conversations with people on other servers are encrypted"
+    );
 
     let create_with_alice = json!({ "input": {
         "serverId": direct,
