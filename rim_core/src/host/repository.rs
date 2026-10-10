@@ -5,7 +5,8 @@ use mockall::automock;
 
 use crate::conversation::model::ConversationId;
 use crate::host::model::{
-    NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember, SeqDecision, UserKind,
+    DelegationStored, NewDelegation, NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember,
+    SeqDecision, UserKind,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
@@ -146,4 +147,74 @@ pub trait HostRepository: Send + Sync {
     /// Forget accepted `seq`s past their time that have also fallen below their device's
     /// window. Returns how many.
     async fn purge_request_seen(&self, now: DateTime<Utc>, window: i64) -> RepoResult<u64>;
+}
+
+/// Delegations relays hold for members' devices: one row per workspace, device and relay. A
+/// delegation is active while it has not ended and has not expired; a relay receives a
+/// workspace's events for a member, and forwards their device's requests, while it holds an
+/// active one.
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait DelegationRepository: Send + Sync {
+    /// Store a delegation, replacing the row for its workspace, device and relay unless that
+    /// row is active and runs longer.
+    async fn store(
+        &self,
+        delegation: NewDelegation,
+        now: DateTime<Utc>,
+    ) -> RepoResult<DelegationStored>;
+
+    /// Active delegations a relay holds here.
+    async fn count_active_for_relay(
+        &self,
+        relay_server_id: &str,
+        now: DateTime<Utc>,
+    ) -> RepoResult<i64>;
+
+    /// Whether a relay holds an active delegation of the device for a workspace the device's
+    /// user is still a member of.
+    async fn device_delegated(
+        &self,
+        device_key_id: DeviceKeyId,
+        relay_server_id: &str,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
+    /// Members of a workspace, local or remote, with an active delegation there.
+    async fn delegated_members(
+        &self,
+        workspace_id: ServerId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<Vec<RemoteMember>>;
+
+    /// The relays holding an active delegation of each user for a workspace.
+    async fn delegated_relays(
+        &self,
+        workspace_id: ServerId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<Vec<(UserId, String)>>;
+
+    /// The workspaces where a relay holds an active delegation of the user.
+    async fn delegated_workspaces(
+        &self,
+        user_id: UserId,
+        relay_server_id: &str,
+        now: DateTime<Utc>,
+    ) -> RepoResult<Vec<ServerId>>;
+
+    /// End a user's delegations for a workspace; only those for `relay_server_id` when given.
+    /// Returns how many.
+    async fn end_for_user<'a>(
+        &self,
+        workspace_id: ServerId,
+        user_id: UserId,
+        relay_server_id: Option<&'a str>,
+    ) -> RepoResult<u64>;
+
+    /// End every delegation a device signed. Returns how many.
+    async fn end_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64>;
+
+    /// End delegations that expired, whose device was revoked, or whose user is no longer a
+    /// member of the workspace. Returns how many.
+    async fn end_lapsed(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 }
