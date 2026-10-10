@@ -18,6 +18,8 @@ pub struct RemoteJoinChallenge {
     pub challenge_id: ID,
     pub nonce: String,
     pub expires_at: DateTime<Utc>,
+    /// The workspace the invite names, for the delegation; null without an invite.
+    pub workspace_id: Option<ID>,
 }
 
 impl From<JoinChallengeDto> for RemoteJoinChallenge {
@@ -26,6 +28,7 @@ impl From<JoinChallengeDto> for RemoteJoinChallenge {
             challenge_id: ID(dto.challenge_id.to_string()),
             nonce: dto.nonce,
             expires_at: dto.expires_at,
+            workspace_id: dto.workspace_id.map(|id| ID(id.to_string())),
         }
     }
 }

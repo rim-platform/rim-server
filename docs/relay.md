@@ -127,7 +127,8 @@ highest), and refuses a repeat or a lower value with `409 {"error":"replay","hig
 ### Workspaces with members from other servers
 
 A person whose relay is another server joins a workspace here through that relay. Their app gets
-a login challenge from this server (`POST /s2s/v1/join/challenge`, 120 seconds, single use) and
+a login challenge from this server (`POST /s2s/v1/join/challenge`, 120 seconds, single use),
+with the workspace its invite names, and
 signs it with this server's id as the audience, so the proof is good here only. It also signs a
 **delegation**: its relay may receive this workspace's events for the person and forward that
 device's signed requests here, for at most 24 hours. The relay presents both with the person's key
@@ -211,8 +212,10 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 
 1. Read the invite link `rim-invite:1:<hostServerId>:<hostKeyHash>:<inviteToken>:<hostOrigin>`
    and pin the host with `remoteServer(origin)`.
-2. `remoteJoinChallenge(hostServerId, hostOrigin)` returns `{ challengeId nonce expiresAt }`. Sign
-   a `login` statement over it with `audience` = the host's server id.
+2. `remoteJoinChallenge(hostServerId, hostOrigin, inviteToken)` returns
+   `{ challengeId nonce expiresAt workspaceId }`: `workspaceId` is the workspace the invite names
+   (the invite is looked up, not used), null without one. Sign a `login` statement over the
+   challenge with `audience` = the host's server id.
 3. Sign a delegation with the device key over `rim.delegation.v1\0 || payload`:
 
    ```json

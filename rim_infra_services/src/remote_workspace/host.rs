@@ -426,9 +426,35 @@ impl DefaultWorkspaceHost {
 
 #[async_trait]
 impl WorkspaceHostService for DefaultWorkspaceHost {
-    async fn join_challenge(&self, peer_server_id: String) -> ServiceResult<JoinChallengeDto> {
+    async fn join_challenge(
+        &self,
+        peer_server_id: String,
+        invite_token: Option<String>,
+    ) -> ServiceResult<JoinChallengeDto> {
         tracing::debug!(peer_server_id = %peer_server_id, "issuing a join challenge");
         let now = Utc::now();
+        let workspace_id = match invite_token {
+            Some(token) => {
+                let invite = self
+                    .repos
+                    .invite_repo
+                    .get_by_token_hash(&hash_token(&token))
+                    .await?
+                    .ok_or(ServiceError::NotFound)?;
+                if invite.revoked_at.is_some() || invite.use_count >= invite.max_uses {
+                    return Err(ServiceError::Forbidden(
+                        "the invite is no longer valid".to_string(),
+                    ));
+                }
+                if invite.expires_at.is_some_and(|at| at < now) {
+                    return Err(ServiceError::Forbidden(
+                        "the invite has expired".to_string(),
+                    ));
+                }
+                Some(invite.server_id.into())
+            }
+            None => None,
+        };
         if let Err(e) = self.repos.key_challenge_repo.delete_expired(now).await {
             warn!(error = %e, "could not delete expired key challenges");
         }
@@ -441,6 +467,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             challenge_id: challenge.id.into(),
             nonce: challenge.nonce,
             expires_at: challenge.expires_at,
+            workspace_id,
         })
     }
 

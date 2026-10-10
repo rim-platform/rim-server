@@ -17,8 +17,8 @@ use rim_services::ServiceError;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::relay::dto::{DeliverRequest, IdentityDocument, PeerClaimRequest};
 use rim_services::remote_workspace::dto::{
-    CancelRequest, JoinRequest, PresenceRequest, RevocationAnswer, RevocationRequest,
-    SubscriptionsAnswer, SubscriptionsRequest,
+    CancelRequest, JoinChallengeRequest, JoinRequest, PresenceRequest, RevocationAnswer,
+    RevocationRequest, SubscriptionsAnswer, SubscriptionsRequest,
 };
 use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
 use serde::de::DeserializeOwned;
@@ -457,7 +457,17 @@ async fn dispatch(
             }
         }
         Endpoint::Forward => crate::s2s::forward::run(state, req, verified).await,
-        Endpoint::JoinChallenge => answer(state.workspace_host.join_challenge(peer).await),
+        Endpoint::JoinChallenge => {
+            match body_as::<JoinChallengeRequest>(&verified.body, "join challenge request") {
+                Ok(request) => answer(
+                    state
+                        .workspace_host
+                        .join_challenge(peer, request.invite_token)
+                        .await,
+                ),
+                Err(reply) => reply,
+            }
+        }
         Endpoint::Join => match body_as::<JoinRequest>(&verified.body, "join") {
             Ok(request) => answer(state.workspace_host.join(peer, request).await),
             Err(reply) => reply,

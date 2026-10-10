@@ -605,7 +605,7 @@ audit event `relay.dm_request_reported`, and a pending request is ignored.
 ```
 app ─────────────────────► relay R ─────────────────────────► host H
 remoteServer(origin)              GET /.well-known/rim-server               (pin H from the invite)
-remoteJoinChallenge(H, origin)    POST /s2s/v1/join/challenge → {challengeId, nonce, expiresAt}
+remoteJoinChallenge(H, origin, t) POST /s2s/v1/join/challenge → {challengeId, nonce, expiresAt, workspaceId}
 sign a login proof (audience = H's server id) and a delegation
 joinRemoteWorkspace(input)        POST /s2s/v1/join           → {workspaceId, userId, role, streamHeads}
 relayStream                  ◄─── POST /s2s/v1/deliver         (events)
@@ -613,9 +613,14 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
 
 1. The invite link is read like a device-link code: whitespace removed, at most 400 characters,
    split at the first four `:` after the scheme (the origin keeps its colons). The app pins H.
-2. The challenge is today's `keyLoginChallenge` (120 s, single use) over S2S. The device signs a
-   `login` statement with `audience` = H's server id, so the proof is good only at H and the relay
-   never vouches for the person.
+2. The challenge is today's `keyLoginChallenge` (120 s, single use) over S2S:
+   `POST /s2s/v1/join/challenge {"inviteToken"}` → `{"challengeId","nonce","expiresAt","workspaceId"}`.
+   The invite link carries no workspace id, and the delegation must name one, so H answers the
+   workspace the invite names, checked as `previewInviteToken` checks it and not used
+   (`404 not_found` for an unknown invite, `403 forbidden` for one revoked, used up or expired);
+   `workspaceId` is null without an invite. The device signs a `login` statement with
+   `audience` = H's server id, so the proof is good only at H and the relay never vouches for the
+   person.
 3. The device signs a delegation. R sends H `{"inviteToken","keyLog":[…],"devices":[{"certificate","revocation"}],"card","proof","delegation"}`.
 4. H verifies log, certificates, proof (claiming the challenge) and invite token (the rules of
    `joinServerByInvite`, bans included), creates or updates the remote user, adds the membership
@@ -931,7 +936,7 @@ type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: Strin
 enum RevocationFanoutStatus { PENDING  ACKED  GAVE_UP }
 type RevocationFanout { hostServerId: String!  status: RevocationFanoutStatus!  ack: SignedStatement
                         attempts: Int! }
-type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime! }
+type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime!  workspaceId: ID }
 type RemoteJoinResult { hostServerId: String!  workspaceId: ID!  userId: ID!  role: String! }
 type StreamHead { stream: String!  seq: String! }                                    # host; decimal
 type ConversationPredecessor { hostServerId: String!  conversationId: ID! }
@@ -964,7 +969,7 @@ type Mutation {
   unblockPrincipal(principalId: String!): Boolean!
   reportDmRequest(id: ID!, reason: String!): Boolean!
   ackRelayItems(upTo: ID!): Boolean!
-  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!): RemoteJoinChallenge!
+  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String): RemoteJoinChallenge!
   joinRemoteWorkspace(input: JoinRemoteWorkspaceInput!): RemoteJoinResult!
   renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!
   leaveRelay: Boolean!
