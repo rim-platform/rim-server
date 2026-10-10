@@ -3590,6 +3590,7 @@ version = "0.1.0"
 dependencies = [
  "sea-orm-migration",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5036,9 +5037,9 @@ name = "rim_logging"
 version = "0.1.0"
 dependencies = [
  "dotenvy",
+ "tempfile",
  "tracing",
  "tracing-appender",
- "tracing-log",
  "tracing-subscriber",
 ]
 

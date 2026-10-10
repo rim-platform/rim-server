@@ -50,9 +50,6 @@ pub struct LoggingHandle {
 pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
     dotenv().ok();
 
-    // Capture `log::info!` etc. and route into tracing.
-    tracing_log::LogTracer::init()?;
-
     // ── General sink: JSON to stdout, env-filter (default INFO).
     // Captures EVERY event including audit ones — operators get audit
     // visibility in the unified log too. The audit-only file sink below
@@ -68,10 +65,8 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
         .with_span_list(true)
         .with_filter(env_filter);
 
-    // ── Audit sink: JSON to dedicated rolling file, filtered to
-    // `target: "audit"` events only. `rolling::never` rotates daily by
-    // calendar date inside the chosen directory — a single file is fine
-    // for Phase 4; logrotate / external retention takes over from there.
+    // ── Audit sink: JSON to one `audit.log` file, filtered to `target: "audit"` events only.
+    // `rolling::never` never rotates; logrotate or external retention takes over from there.
     //
     // `non_blocking` keeps the audit emit off the request hot path: the
     // tracing call enqueues a serialized line and a background worker
@@ -81,6 +76,8 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
     let file_appender = rolling::never(&audit_dir, DEFAULT_AUDIT_LOG_PATH);
     let (audit_writer, audit_guard) = tracing_appender::non_blocking(file_appender);
 
+    // `try_init` also installs the `log` bridge, so `log::info!` lines reach tracing; a second
+    // bridge would make it fail and leave the audit writer unowned.
     tracing_subscriber::registry()
         .with(audit_layer(audit_writer))
         .with(general_layer)
