@@ -1,0 +1,17 @@
+# TLS for the public relay; certificates come from Let's Encrypt for RIM_DOMAIN.
+{$RIM_DOMAIN} {
+	# The forward path carries bodies up to 32 MiB.
+	request_body {
+		max_size 32MiB
+	}
+
+	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
+	@rim path /api /api/* /s2s/v1/* /.well-known/rim-server
+	handle @rim {
+		reverse_proxy rim:8080
+	}
+
+	handle {
+		respond 404
+	}
+}
