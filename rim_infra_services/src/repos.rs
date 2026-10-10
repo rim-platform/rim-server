@@ -12,15 +12,7 @@ use rim_core::conversation_read_state::repository::ConversationReadStateReposito
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::device_link::repository::DeviceLinkRepository;
 use rim_core::e2ee::repository::E2eeRepository;
-use rim_core::escalation::repository::{
-    ConversationEscalationPolicyRepository, EscalationPolicyRepository, EscalationRunRepository,
-    EscalationStepRepository,
-};
 use rim_core::host::repository::{DelegationRepository, HostRepository};
-use rim_core::incident::repository::{
-    IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
-};
-use rim_core::ingest_token::repository::IngestTokenRepository;
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::keybind::repository::KeybindRepository;
 use rim_core::link_preview::repository::LinkPreviewRepository;
@@ -34,18 +26,12 @@ use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
-use rim_core::oncall::repository::{
-    OnCallOverrideRepository, OnCallScheduleRepository, RotationLayerRepository,
-    RotationParticipantRepository,
-};
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::skill_profile::repository::SkillProfileRepository;
 use rim_core::user::repository::UserRepository;
-use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_core::workspace_plugin::repository::WorkspacePluginRepository;
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_infra_db::DbHandle;
@@ -76,23 +62,9 @@ pub struct AppRepos {
     pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
     pub link_preview_repo: Arc<dyn LinkPreviewRepository>,
     pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
-    pub incident_repo: Arc<dyn IncidentRepository>,
-    pub incident_phase_repo: Arc<dyn IncidentPhaseRepository>,
-    pub incident_message_tag_repo: Arc<dyn IncidentMessageTagRepository>,
-    pub ingest_token_repo: Arc<dyn IngestTokenRepository>,
-    pub skill_profile_repo: Arc<dyn SkillProfileRepository>,
     pub workspace_state_repo: Arc<dyn WorkspaceStateRepository>,
     pub pipeline_repo: Arc<dyn PipelineRepository>,
     pub capability_registry_repo: Arc<dyn CapabilityRegistryRepository>,
-    pub on_call_schedule_repo: Arc<dyn OnCallScheduleRepository>,
-    pub rotation_layer_repo: Arc<dyn RotationLayerRepository>,
-    pub rotation_participant_repo: Arc<dyn RotationParticipantRepository>,
-    pub on_call_override_repo: Arc<dyn OnCallOverrideRepository>,
-    pub escalation_policy_repo: Arc<dyn EscalationPolicyRepository>,
-    pub escalation_step_repo: Arc<dyn EscalationStepRepository>,
-    pub conversation_escalation_policy_repo: Arc<dyn ConversationEscalationPolicyRepository>,
-    pub escalation_run_repo: Arc<dyn EscalationRunRepository>,
-    pub workspace_feature_repo: Arc<dyn WorkspaceFeatureRepository>,
     pub moderation_repo: Arc<dyn ModerationRepository>,
     pub notification_repo: Arc<dyn NotificationRepository>,
     pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
@@ -577,60 +549,6 @@ impl AppRepos {
         }
     }
 
-    pub fn for_incident(&self) -> crate::incident::IncidentRepos {
-        crate::incident::IncidentRepos {
-            incident_repo: Arc::clone(&self.incident_repo),
-            incident_phase_repo: Arc::clone(&self.incident_phase_repo),
-            incident_message_tag_repo: Arc::clone(&self.incident_message_tag_repo),
-            conversation_repo: Arc::clone(&self.conversation_repo),
-            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
-            server_member_repo: Arc::clone(&self.server_member_repo),
-            user_repo: Arc::clone(&self.user_repo),
-            escalation_run_repo: Arc::clone(&self.escalation_run_repo),
-            escalation_policy_repo: Arc::clone(&self.escalation_policy_repo),
-            escalation_step_repo: Arc::clone(&self.escalation_step_repo),
-            conversation_escalation_policy_repo: Arc::clone(
-                &self.conversation_escalation_policy_repo,
-            ),
-            on_call_schedule_repo: Arc::clone(&self.on_call_schedule_repo),
-            rotation_layer_repo: Arc::clone(&self.rotation_layer_repo),
-            rotation_participant_repo: Arc::clone(&self.rotation_participant_repo),
-            on_call_override_repo: Arc::clone(&self.on_call_override_repo),
-            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
-        }
-    }
-
-    pub fn for_escalation_policy(&self) -> crate::escalation::EscalationPolicyRepos {
-        crate::escalation::EscalationPolicyRepos {
-            escalation_policy_repo: Arc::clone(&self.escalation_policy_repo),
-            escalation_step_repo: Arc::clone(&self.escalation_step_repo),
-            conversation_escalation_policy_repo: Arc::clone(
-                &self.conversation_escalation_policy_repo,
-            ),
-            server_member_repo: Arc::clone(&self.server_member_repo),
-            conversation_repo: Arc::clone(&self.conversation_repo),
-            on_call_schedule_repo: Arc::clone(&self.on_call_schedule_repo),
-            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
-        }
-    }
-
-    pub fn for_ingest_token(&self) -> crate::ingest_token::IngestTokenRepos {
-        crate::ingest_token::IngestTokenRepos {
-            ingest_token_repo: Arc::clone(&self.ingest_token_repo),
-            conversation_repo: Arc::clone(&self.conversation_repo),
-            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
-            server_member_repo: Arc::clone(&self.server_member_repo),
-            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
-        }
-    }
-
-    pub fn for_workspace_feature(&self) -> crate::workspace_feature::WorkspaceFeatureRepos {
-        crate::workspace_feature::WorkspaceFeatureRepos {
-            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
-            server_member_repo: Arc::clone(&self.server_member_repo),
-        }
-    }
-
     pub fn for_workspace_state(&self) -> crate::workspace_state::WorkspaceStateRepos {
         crate::workspace_state::WorkspaceStateRepos {
             workspace_state_repo: Arc::clone(&self.workspace_state_repo),
@@ -648,17 +566,6 @@ impl AppRepos {
     pub fn for_request_auth(&self) -> RequestAuthRepos {
         RequestAuthRepos {
             session_repo: Arc::clone(&self.session_repo),
-        }
-    }
-
-    pub fn for_oncall(&self) -> crate::oncall::OnCallRepos {
-        crate::oncall::OnCallRepos {
-            on_call_schedule_repo: Arc::clone(&self.on_call_schedule_repo),
-            rotation_layer_repo: Arc::clone(&self.rotation_layer_repo),
-            rotation_participant_repo: Arc::clone(&self.rotation_participant_repo),
-            on_call_override_repo: Arc::clone(&self.on_call_override_repo),
-            server_member_repo: Arc::clone(&self.server_member_repo),
-            workspace_feature_repo: Arc::clone(&self.workspace_feature_repo),
         }
     }
 
@@ -754,23 +661,6 @@ impl AppRepos {
             custom_emoji_repo: Arc::new(
                 sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(handle.clone()),
             ),
-            incident_repo: Arc::new(sea_orm_impl::incident::SeaOrmIncidentRepository::new(
-                handle.clone(),
-            )),
-            incident_phase_repo: Arc::new(
-                sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(handle.clone()),
-            ),
-            incident_message_tag_repo: Arc::new(
-                sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            ingest_token_repo: Arc::new(
-                sea_orm_impl::ingest_token::SeaOrmIngestTokenRepository::new(handle.clone()),
-            ),
-            skill_profile_repo: Arc::new(
-                sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(handle.clone()),
-            ),
             workspace_state_repo: Arc::new(
                 sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(handle.clone()),
             ),
@@ -779,45 +669,6 @@ impl AppRepos {
             )),
             capability_registry_repo: Arc::new(
                 sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            on_call_schedule_repo: Arc::new(
-                sea_orm_impl::on_call_schedule::SeaOrmOnCallScheduleRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            rotation_layer_repo: Arc::new(
-                sea_orm_impl::on_call_rotation_layer::SeaOrmRotationLayerRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            rotation_participant_repo: Arc::new(
-                sea_orm_impl::on_call_rotation_participant::SeaOrmRotationParticipantRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            on_call_override_repo: Arc::new(
-                sea_orm_impl::on_call_override::SeaOrmOnCallOverrideRepository::new(handle.clone()),
-            ),
-            escalation_policy_repo: Arc::new(
-                sea_orm_impl::escalation_policy::SeaOrmEscalationPolicyRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            escalation_step_repo: Arc::new(
-                sea_orm_impl::escalation_step::SeaOrmEscalationStepRepository::new(handle.clone()),
-            ),
-            conversation_escalation_policy_repo: Arc::new(
-                sea_orm_impl::conversation_escalation_policy::SeaOrmConversationEscalationPolicyRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            escalation_run_repo: Arc::new(
-                sea_orm_impl::escalation_run::SeaOrmEscalationRunRepository::new(handle.clone()),
-            ),
-            workspace_feature_repo: Arc::new(
-                sea_orm_impl::workspace_feature::SeaOrmWorkspaceFeatureRepository::new(
                     handle.clone(),
                 ),
             ),
@@ -833,9 +684,9 @@ impl AppRepos {
             key_challenge_repo: Arc::new(
                 sea_orm_impl::key_identity::SeaOrmKeyChallengeRepository::new(handle.clone()),
             ),
-            device_link_repo: Arc::new(
-                sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(handle.clone()),
-            ),
+            device_link_repo: Arc::new(sea_orm_impl::device_link::SeaOrmDeviceLinkRepository::new(
+                handle.clone(),
+            )),
             workspace_plugin_repo: Arc::new(
                 sea_orm_impl::workspace_plugin::SeaOrmWorkspacePluginRepository::new(
                     handle.clone(),
@@ -854,13 +705,11 @@ impl AppRepos {
                 sea_orm_impl::remote_workspace::SeaOrmDelegationRepository::new(handle.clone()),
             ),
             subscription_repo: Arc::new(
-                sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(
-                    handle.clone(),
-                ),
+                sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(handle.clone()),
             ),
-            relay_abuse_repo: Arc::new(
-                sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(handle.clone()),
-            ),
+            relay_abuse_repo: Arc::new(sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(
+                handle.clone(),
+            )),
         }
     }
 }

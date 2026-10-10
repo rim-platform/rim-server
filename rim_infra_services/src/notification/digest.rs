@@ -1,6 +1,5 @@
 //! The notification email digest and retention jobs (Track 1.3). The composition root
-//! (`rim_server/src/app.rs`) drives them on a timer next to the escalation driver, under the same
-//! single-scheduler-node assumption; the jobs themselves are plain async methods behind
+//! (`rim_server/src/app.rs`) drives them on a timer, assuming a single scheduler node; the jobs themselves are plain async methods behind
 //! [`NotificationJobs`] so they are testable without a scheduler.
 //!
 //! Digest selection: a user with digest `hourly`/`daily` in a workspace gets one email when

@@ -28,7 +28,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.cycle_recent_activity".to_string(),
@@ -51,7 +50,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.open_settings".to_string(),
@@ -78,7 +76,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.open_search".to_string(),
@@ -108,7 +105,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.search_in_channel".to_string(),
@@ -137,7 +133,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.open_marketplace".to_string(),
@@ -167,7 +162,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.open_agent".to_string(),
@@ -190,7 +184,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.toggle_sidebar".to_string(),
@@ -219,7 +212,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Toggle,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.focus_composer".to_string(),
@@ -242,7 +234,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.focus_message_list".to_string(),
@@ -265,7 +256,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.navigate_to_channel".to_string(),
@@ -305,7 +295,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.navigate_to_dm".to_string(),
@@ -328,7 +317,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.switch_workspace".to_string(),
@@ -367,7 +355,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.previous_channel".to_string(),
@@ -396,7 +383,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.next_channel".to_string(),
@@ -425,7 +411,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.next_unread_channel".to_string(),
@@ -454,7 +439,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Navigate,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.close_panel".to_string(),
@@ -483,7 +467,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Close,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.reopen_last_thread".to_string(),
@@ -512,7 +495,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Open,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "workspace.reload_commands".to_string(),
@@ -535,7 +517,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Execute,
             rate_limit_per_minute: None,
-            feature: None,
         },
     ]
 }
