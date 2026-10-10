@@ -71,7 +71,7 @@ New tables (one migration, `sea migrate generate add_moderation`):
 - `server_ban (server_id, user_id, reason text null, banned_by uuid, created_at, expires_at
   timestamptz null)`, primary key `(server_id, user_id)`. A banned user is removed from the
   workspace on ban; every join path (`accept_invite`, `join_server_by_invite`,
-  `signup_with_invite`, owner-added, bootstrap excluded) refuses with `PermissionDenied` while
+  `signup_with_invite`, owner-added) refuses with `PermissionDenied` while
   a non-expired ban exists; `unban` deletes the row.
 - `server_member_timeout (server_id, user_id, until timestamptz, reason text null, set_by
   uuid, created_at)`, primary key `(server_id, user_id)`. While `until > now()`, the user's

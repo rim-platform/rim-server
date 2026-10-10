@@ -6,16 +6,11 @@
 /// requests; the helper handles the hash so tests read like the real call site.
 use chrono::{DateTime, Utc};
 use rim_auth::session_token::hash_token;
-use rim_core::auth::model::{
-    BootstrapTokenId, InstanceInviteId, InviteId, NewBootstrapToken, NewInstanceInvite, NewInvite,
-};
-use rim_core::auth::repository::{
-    BootstrapTokenRepository, InstanceInviteRepository, InviteRepository,
-};
+use rim_core::auth::model::{InstanceInviteId, InviteId, NewInstanceInvite, NewInvite};
+use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository;
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
 
@@ -27,30 +22,35 @@ pub struct SeedInstanceInviteOpts {
     pub expires_at: Option<DateTime<Utc>>,
     /// Maximum number of uses.  Defaults to `1` when `None`.
     pub max_uses: Option<i32>,
+    /// The only address the invite admits; any when `None`.
+    pub email: Option<String>,
 }
 
-/// Insert a `bootstrap_token` row for the given raw token and return its id.
+/// Insert a single-use operator `instance_invite` row (what `rim_server invite create` stores)
+/// for the given raw token and return its id.
 ///
 /// Hashes `raw_token` with SHA-256 before inserting.  The caller must supply
 /// `raw_token` when submitting the `signupWithInvite` GraphQL mutation.
 ///
 /// # Panics
 /// Panics if the database insert fails.
-pub async fn seed_bootstrap_token(
+pub async fn seed_operator_invite(
     db: &DbHandle,
     raw_token: &str,
     expires_at: DateTime<Utc>,
-) -> BootstrapTokenId {
-    let repo = SeaOrmBootstrapTokenRepository::new(db.clone());
-    let token = repo
-        .create(NewBootstrapToken {
-            email: "test@example.com".to_string(),
+) -> InstanceInviteId {
+    let repo = SeaOrmInstanceInviteRepository::new(db.clone());
+    let invite = repo
+        .create(NewInstanceInvite {
+            created_by_user_id: None,
             token_hash: hash_token(raw_token),
             expires_at,
+            max_uses: 1,
+            email: None,
         })
         .await
-        .expect("seed_bootstrap_token: insert failed");
-    token.id
+        .expect("seed_operator_invite: insert failed");
+    invite.id
 }
 
 /// Insert an `instance_invite` row for the given raw token and return its id.
@@ -77,6 +77,7 @@ pub async fn seed_instance_invite(
             token_hash: hash_token(raw_token),
             expires_at,
             max_uses,
+            email: opts.email,
         })
         .await
         .expect("seed_instance_invite: insert failed");

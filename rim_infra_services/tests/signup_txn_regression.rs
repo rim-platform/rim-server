@@ -6,7 +6,6 @@
 //! the enclosing transaction commits.
 //!
 //! Covered paths:
-//! - [`signup_with_bootstrap`] — bootstrap-token signup
 //! - [`signup_with_instance_invite`] — instance-invite signup
 //! - [`signup_open`] — open-mode signup
 //!
@@ -28,22 +27,16 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use rim_auth::session_token::hash_token;
-use rim_core::auth::model::NewBootstrapToken;
 use rim_core::auth::model::NewInstanceInvite;
-use rim_core::auth::repository::{
-    BootstrapTokenRepository, InstanceInviteRepository, SessionRepository,
-};
+use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::DbHandle;
-use rim_infra_db::sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository;
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_services::AppRepos;
 use rim_infra_services::auth::DefaultAuthService;
-use rim_services::auth::command::{
-    SignupOpenCmd, SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
-};
+use rim_services::auth::command::{SignupOpenCmd, SignupWithInstanceInviteCmd};
 use rim_services::auth::service::AuthService;
 use rim_services::events::{NoopBroadcaster, Observers};
 
@@ -69,94 +62,15 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
 }
 
 // ---------------------------------------------------------------------------
-// signup_with_bootstrap — FK regression
+// Rollback on conflict
 // ---------------------------------------------------------------------------
-
-/// Verify that `signup_with_bootstrap` commits user, session, and token-used
-/// atomically without hitting the `fk-session-user` FK constraint.
-///
-/// This is the direct reproduction of the bug reported in Jakub's first-user
-/// testing: the session INSERT was running on a non-transactional connection
-/// and could not see the uncommitted user row.
-#[tokio::test]
-async fn signup_with_bootstrap_commits_user_session_and_token_atomically() {
-    let db = support::db_conn().await;
-    support::reset_db(&db).await;
-
-    // Seed a bootstrap token directly via the repo so we have a valid token_hash.
-    let handle = DbHandle::Connection(db.clone());
-    let bt_repo = SeaOrmBootstrapTokenRepository::new(handle.clone());
-    let raw_token = "rim_boot_test_atomicity_token_bootstrap";
-    let token_hash = hash_token(raw_token);
-    let bt = bt_repo
-        .create(NewBootstrapToken {
-            email: "test@example.com".to_string(),
-            token_hash: token_hash.clone(),
-            expires_at: Utc::now() + Duration::hours(1),
-        })
-        .await
-        .expect("failed to create bootstrap token");
-
-    let svc = build_auth_service(db.clone());
-    let result = svc
-        .signup_with_bootstrap(SignupWithBootstrapCmd {
-            bootstrap_token: raw_token.to_string(),
-            username: "bootstrapuser".to_string(),
-            password: "password1234".to_string(),
-            email: "test@example.com".to_string(),
-            display_name: None,
-        })
-        .await;
-
-    let dto = result.expect("signup_with_bootstrap must succeed without FK violation");
-
-    // --- (a) user row exists and IDs match ---
-    let user_repo = SeaOrmUserRepository::new(handle.clone());
-    let user = user_repo
-        .find_by_username("bootstrapuser")
-        .await
-        .expect("user query failed")
-        .expect("user row must exist after commit");
-    assert_eq!(
-        user.id, dto.user_id,
-        "returned user_id must match the persisted row"
-    );
-
-    // --- (b) session row exists, FK is valid ---
-    let sess_repo = SeaOrmSessionRepository::new(handle.clone());
-    let sess = sess_repo
-        .get_by_id(dto.session.session_id)
-        .await
-        .expect("session query failed")
-        .expect("session row must exist after commit");
-    assert_eq!(
-        sess.user_id, user.id,
-        "session.user_id must reference the committed user row"
-    );
-
-    // --- (c) bootstrap token is marked used ---
-    let bt_after = bt_repo
-        .get_by_id(bt.id)
-        .await
-        .expect("bootstrap token query failed")
-        .expect("bootstrap token must still exist");
-    assert!(
-        bt_after.used_at.is_some(),
-        "bootstrap token must be marked used after successful signup"
-    );
-    assert_eq!(
-        bt_after.consumed_by_user_id,
-        Some(user.id),
-        "consumed_by_user_id must point to the new user"
-    );
-}
 
 /// Verify that a failed signup (duplicate username) does NOT leave orphaned rows.
 ///
 /// When `create_user_in_txn` returns `Conflict`, the transaction rolls back and
-/// neither the user, the session, nor the token-consumed update must land.
+/// neither the user, the session, nor the invite's use must land.
 #[tokio::test]
-async fn signup_with_bootstrap_rolls_back_on_conflict() {
+async fn signup_with_instance_invite_rolls_back_on_conflict() {
     let db = support::db_conn().await;
     support::reset_db(&db).await;
 
@@ -175,22 +89,23 @@ async fn signup_with_bootstrap_rolls_back_on_conflict() {
         .await
         .expect("pre-create user failed");
 
-    let bt_repo = SeaOrmBootstrapTokenRepository::new(handle.clone());
-    let raw_token = "rim_boot_test_rollback_token";
-    let token_hash = hash_token(raw_token);
-    let bt = bt_repo
-        .create(NewBootstrapToken {
-            email: "new@example.com".to_string(),
-            token_hash,
+    let ii_repo = SeaOrmInstanceInviteRepository::new(handle.clone());
+    let raw_token = "rim_iinv_test_rollback_token";
+    let invite = ii_repo
+        .create(NewInstanceInvite {
+            created_by_user_id: None,
+            token_hash: hash_token(raw_token),
             expires_at: Utc::now() + Duration::hours(1),
+            max_uses: 1,
+            email: None,
         })
         .await
-        .expect("failed to create bootstrap token");
+        .expect("failed to create instance invite");
 
     let svc = build_auth_service(db.clone());
     let result = svc
-        .signup_with_bootstrap(SignupWithBootstrapCmd {
-            bootstrap_token: raw_token.to_string(),
+        .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+            instance_invite_token: raw_token.to_string(),
             username: "collidinguser".to_string(), // conflict
             password: "password1234".to_string(),
             email: "new@example.com".to_string(),
@@ -203,15 +118,15 @@ async fn signup_with_bootstrap_rolls_back_on_conflict() {
         "signup must fail on username collision, got Ok"
     );
 
-    // Bootstrap token must NOT have been consumed (txn rolled back).
-    let bt_after = bt_repo
-        .get_by_id(bt.id)
+    // The invite must NOT have been spent (txn rolled back).
+    let after = ii_repo
+        .get_by_id(invite.id)
         .await
-        .expect("bootstrap token query failed")
-        .expect("bootstrap token must still exist");
-    assert!(
-        bt_after.used_at.is_none(),
-        "bootstrap token must NOT be marked used after a rolled-back signup"
+        .expect("instance invite query failed")
+        .expect("instance invite must still exist");
+    assert_eq!(
+        after.use_count, 0,
+        "the invite must NOT be spent by a rolled-back signup"
     );
 
     // Exactly one user row (the pre-created one).
@@ -263,6 +178,7 @@ async fn signup_with_instance_invite_commits_atomically() {
             token_hash,
             expires_at: Utc::now() + Duration::hours(1),
             max_uses: 1,
+            email: None,
         })
         .await
         .expect("failed to create instance invite");
@@ -364,51 +280,6 @@ async fn signup_open_commits_user_and_session_atomically() {
 // Concurrent-revoke regression — C1-class race on the revoke path
 // ---------------------------------------------------------------------------
 
-/// Two concurrent revokes of the same bootstrap token: exactly one caller must
-/// observe `affected == 1` ("did revoke") and the other must observe
-/// `affected == 0` ("already revoked"). Revoke-side analog of the C1
-/// atomic-claim test.
-#[tokio::test]
-async fn concurrent_bootstrap_token_revoke_exactly_one_wins() {
-    let db = support::db_conn().await;
-    support::reset_db(&db).await;
-
-    let handle = DbHandle::Connection(db.clone());
-    let repo = SeaOrmBootstrapTokenRepository::new(handle.clone());
-
-    let bt = repo
-        .create(NewBootstrapToken {
-            email: "race@example.com".to_string(),
-            token_hash: hash_token("rim_boot_race_token"),
-            expires_at: Utc::now() + Duration::hours(1),
-        })
-        .await
-        .expect("create token failed");
-
-    let r1 = SeaOrmBootstrapTokenRepository::new(handle.clone());
-    let r2 = SeaOrmBootstrapTokenRepository::new(handle.clone());
-    let id = bt.id;
-
-    let (a, b) = tokio::join!(
-        r1.revoke_returning_affected(id),
-        r2.revoke_returning_affected(id),
-    );
-    let a = a.expect("revoke a failed");
-    let b = b.expect("revoke b failed");
-
-    assert_eq!(
-        a + b,
-        1,
-        "exactly one revoker must report rows_affected == 1; got a={a}, b={b}"
-    );
-
-    let after = repo.get_by_id(id).await.unwrap().expect("token must exist");
-    assert!(
-        after.revoked_at.is_some(),
-        "token must be revoked after race"
-    );
-}
-
 /// Two concurrent revokes of the same instance invite: exactly one caller must
 /// observe `affected == 1` and the other `affected == 0`.
 #[tokio::test]
@@ -437,6 +308,7 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
             token_hash: hash_token("rim_iinv_race_token"),
             expires_at: Utc::now() + Duration::hours(1),
             max_uses: 1,
+            email: None,
         })
         .await
         .expect("create invite failed");

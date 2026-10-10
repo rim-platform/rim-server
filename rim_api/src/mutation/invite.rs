@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
     AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, SignupOpenCmd, SignupToken,
-    SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
+    SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::auth::service::AuthService;
@@ -18,7 +18,7 @@ use crate::types::SignupWithInvitePayloadGql;
 pub(crate) struct InviteMutations;
 
 /// The registration token a signup presents, under the deployment's mode: exactly one of the
-/// three in invite-only and pow mode, none in open mode. Shared by `signupWithInvite` and
+/// two in invite-only and pow mode, none in open mode. Shared by `signupWithInvite` and
 /// `signupWithKey` (which in pow mode may give a proof-of-work instead, see
 /// `key_signup_credential`).
 ///
@@ -26,12 +26,10 @@ pub(crate) struct InviteMutations;
 /// `VALIDATION` when the number of tokens does not fit the mode.
 pub(crate) fn registration_token(
     mode: &RegistrationMode,
-    bootstrap_token: Option<String>,
     instance_invite_token: Option<String>,
     workspace_invite_token: Option<String>,
 ) -> Result<Option<SignupToken>> {
     let tokens: Vec<SignupToken> = [
-        bootstrap_token.map(SignupToken::Bootstrap),
         instance_invite_token.map(SignupToken::InstanceInvite),
         workspace_invite_token.map(SignupToken::WorkspaceInvite),
     ]
@@ -108,8 +106,8 @@ impl InviteMutations {
 
     /// Unified signup mutation for all token-based and open-mode registration paths.
     ///
-    /// In invite-only mode, exactly one of `bootstrapToken`, `instanceInviteToken`,
-    /// or `workspaceInviteToken` must be supplied.
+    /// In invite-only mode, exactly one of `instanceInviteToken` or `workspaceInviteToken`
+    /// must be supplied.
     /// In open mode, all token fields must be absent.
     ///
     /// On success, sets session and CSRF cookies via `AuthIntent`.
@@ -122,7 +120,6 @@ impl InviteMutations {
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
         let token = registration_token(
             mode,
-            input.bootstrap_token,
             input.instance_invite_token,
             input.workspace_invite_token,
         )?;
@@ -132,24 +129,6 @@ impl InviteMutations {
         let email = input.email.trim().to_lowercase();
 
         let (user_id, server_id, session_token, csrf_token) = match token {
-            Some(SignupToken::Bootstrap(raw)) => {
-                let res = auth
-                    .signup_with_bootstrap(SignupWithBootstrapCmd {
-                        bootstrap_token: raw,
-                        username: input.username,
-                        password: input.password,
-                        email,
-                        display_name: input.display_name,
-                    })
-                    .await
-                    .map_err(map_service_error)?;
-                (
-                    res.user_id,
-                    res.server_id,
-                    res.session_token,
-                    res.csrf_token,
-                )
-            }
             Some(SignupToken::InstanceInvite(raw)) => {
                 let res = auth
                     .signup_with_instance_invite(SignupWithInstanceInviteCmd {
@@ -270,7 +249,6 @@ pub struct SignupWithInviteInput {
     /// when absent or blank after trim.
     pub display_name: Option<String>,
     pub password: String,
-    pub bootstrap_token: Option<String>,
     pub instance_invite_token: Option<String>,
     pub workspace_invite_token: Option<String>,
 }
@@ -290,20 +268,16 @@ mod tests {
     fn invite_only_mode_takes_exactly_one_token() {
         let mode = RegistrationMode::InviteOnly;
         assert_eq!(
-            registration_token(&mode, Some("b".into()), None, None).unwrap(),
-            Some(SignupToken::Bootstrap("b".into()))
-        );
-        assert_eq!(
-            registration_token(&mode, None, Some("i".into()), None).unwrap(),
+            registration_token(&mode, Some("i".into()), None).unwrap(),
             Some(SignupToken::InstanceInvite("i".into()))
         );
         assert_eq!(
-            registration_token(&mode, None, None, Some("w".into())).unwrap(),
+            registration_token(&mode, None, Some("w".into())).unwrap(),
             Some(SignupToken::WorkspaceInvite("w".into()))
         );
         for err in [
-            registration_token(&mode, None, None, None).unwrap_err(),
-            registration_token(&mode, Some("b".into()), Some("i".into()), None).unwrap_err(),
+            registration_token(&mode, None, None).unwrap_err(),
+            registration_token(&mode, Some("i".into()), Some("w".into())).unwrap_err(),
         ] {
             assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
             assert!(err.message.contains("exactly one token"));
@@ -314,18 +288,18 @@ mod tests {
     fn pow_mode_takes_one_token_for_a_password_signup() {
         let mode = RegistrationMode::Pow { bits: 24 };
         assert_eq!(
-            registration_token(&mode, None, Some("i".into()), None).unwrap(),
+            registration_token(&mode, Some("i".into()), None).unwrap(),
             Some(SignupToken::InstanceInvite("i".into()))
         );
-        let err = registration_token(&mode, None, None, None).unwrap_err();
+        let err = registration_token(&mode, None, None).unwrap_err();
         assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
     }
 
     #[test]
     fn open_mode_takes_no_token() {
         let mode = RegistrationMode::Open;
-        assert_eq!(registration_token(&mode, None, None, None).unwrap(), None);
-        let err = registration_token(&mode, None, None, Some("w".into())).unwrap_err();
+        assert_eq!(registration_token(&mode, None, None).unwrap(), None);
+        let err = registration_token(&mode, None, Some("w".into())).unwrap_err();
         assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
         assert!(err.message.contains("must not be supplied"));
     }

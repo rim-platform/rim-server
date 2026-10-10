@@ -9,6 +9,8 @@ use rim_core::auth::repository::InstanceInviteRepository;
 use rim_core::user::model::UserId;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::auth::DefaultAuthService;
+
 /// Lifetime of an invite issued without an expiry.
 pub const DEFAULT_TTL_DAYS: i64 = 7;
 /// Longest lifetime an invite may have.
@@ -59,19 +61,33 @@ pub fn terms(
     Ok((expires_at, max_uses))
 }
 
-/// Store a new invite under [`terms`], issued by `created_by` (`None`: the operator).
+/// What an invite admits, besides its expiry and use count.
+#[derive(Debug, Clone, Default)]
+pub struct InviteTerms {
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_uses: Option<i32>,
+    /// The only address a signup through the invite may use.
+    pub email: Option<String>,
+}
+
+/// Store a new invite under [`terms`], issued by `created_by` (`None`: the operator). An email
+/// binding is checked like a signup's address and stored trimmed and lowercased.
 ///
 /// # Errors
-/// [`ServiceError::Validation`] when the terms are out of range; the repository's error when
-/// storing fails.
+/// [`ServiceError::Validation`] when the terms are out of range or the email is malformed; the
+/// repository's error when storing fails.
 pub async fn issue(
     repo: &dyn InstanceInviteRepository,
     created_by: Option<UserId>,
-    expires_at: Option<DateTime<Utc>>,
-    max_uses: Option<i32>,
+    invite_terms: InviteTerms,
     now: DateTime<Utc>,
 ) -> ServiceResult<IssuedInvite> {
-    let (expires_at, max_uses) = terms(expires_at, max_uses, now)?;
+    let (expires_at, max_uses) = terms(invite_terms.expires_at, invite_terms.max_uses, now)?;
+    let email = invite_terms
+        .email
+        .as_deref()
+        .map(DefaultAuthService::validate_email)
+        .transpose()?;
     let token = new_token();
     let invite = repo
         .create(NewInstanceInvite {
@@ -79,6 +95,7 @@ pub async fn issue(
             token_hash: hash_token(&token),
             expires_at,
             max_uses,
+            email,
         })
         .await?;
     Ok(IssuedInvite { invite, token })
@@ -128,7 +145,10 @@ mod tests {
         let mut repo = MockInstanceInviteRepository::new();
         repo.expect_create()
             .withf(|new| {
-                new.created_by_user_id.is_none() && new.max_uses == 3 && new.token_hash.len() == 64
+                new.created_by_user_id.is_none()
+                    && new.max_uses == 3
+                    && new.token_hash.len() == 64
+                    && new.email.is_none()
             })
             .returning(|new| {
                 Ok(InstanceInvite {
@@ -140,12 +160,21 @@ mod tests {
                     max_uses: new.max_uses,
                     use_count: 0,
                     revoked_at: None,
+                    email: new.email,
                 })
             });
 
-        let issued = issue(&repo, None, None, Some(3), now())
-            .await
-            .expect("issued");
+        let issued = issue(
+            &repo,
+            None,
+            InviteTerms {
+                max_uses: Some(3),
+                ..Default::default()
+            },
+            now(),
+        )
+        .await
+        .expect("issued");
         assert!(issued.token.starts_with("rim_iinv_"));
         assert_eq!(issued.invite.token_hash, hash_token(&issued.token));
         assert_eq!(issued.invite.created_by_user_id, None);
@@ -155,9 +184,52 @@ mod tests {
     async fn out_of_range_terms_store_nothing() {
         let mut repo = MockInstanceInviteRepository::new();
         repo.expect_create().never();
-        assert!(matches!(
-            issue(&repo, None, None, Some(51), now()).await,
-            Err(ServiceError::Validation(_))
-        ));
+        for invite_terms in [
+            InviteTerms {
+                max_uses: Some(51),
+                ..Default::default()
+            },
+            InviteTerms {
+                email: Some("not an address".to_string()),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                issue(&repo, None, invite_terms, now()).await,
+                Err(ServiceError::Validation(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_email_binding_is_stored_lowercased() {
+        let mut repo = MockInstanceInviteRepository::new();
+        repo.expect_create()
+            .withf(|new| new.email.as_deref() == Some("ops@example.com"))
+            .returning(|new| {
+                Ok(InstanceInvite {
+                    id: InstanceInviteId::new(),
+                    created_by_user_id: None,
+                    token_hash: new.token_hash,
+                    created_at: now(),
+                    expires_at: new.expires_at,
+                    max_uses: new.max_uses,
+                    use_count: 0,
+                    revoked_at: None,
+                    email: new.email,
+                })
+            });
+        let issued = issue(
+            &repo,
+            None,
+            InviteTerms {
+                email: Some(" Ops@Example.COM ".to_string()),
+                ..Default::default()
+            },
+            now(),
+        )
+        .await
+        .expect("issued");
+        assert_eq!(issued.invite.email.as_deref(), Some("ops@example.com"));
     }
 }

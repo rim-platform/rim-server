@@ -19,7 +19,7 @@ use chrono::Utc;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::registration::{seed_bootstrap_token, seed_workspace_invite};
+use support::registration::{seed_operator_invite, seed_workspace_invite};
 
 // ── Test 13 ──────────────────────────────────────────────────────────────────
 
@@ -237,32 +237,32 @@ async fn query_preview_invite_token_workspace_happy_path() {
 
 // ── Test 15 ──────────────────────────────────────────────────────────────────
 
-/// Verify `signupWithInvite` end-to-end using a bootstrap token.
+/// Verify `signupWithInvite` end-to-end using an operator's single-use instance invite, the
+/// one `rim_server invite create` issues for a fresh server's first account.
 ///
-/// Seeds a `bootstrap_token` row, submits `mutation { signupWithInvite(...) }`,
+/// Seeds an `instance_invite` row, submits `mutation { signupWithInvite(...) }`,
 /// and asserts:
 /// 1. `userId` is non-null.
-/// 2. `serverId` is null (bootstrap signup lands in "no workspaces yet" state).
-/// 3. The `bootstrap_token` row has `used_at IS NOT NULL` after the mutation.
-/// 4. `consumed_by_user_id` matches the returned `userId`.
-/// 5. There is no `server_member` row for the created user.
+/// 2. `serverId` is null (the account lands in "no workspaces yet" state).
+/// 3. The invite's one use is spent.
+/// 4. There is no `server_member` row for the created user.
 #[tokio::test]
-async fn mutation_signup_with_invite_bootstrap_happy_path() {
+async fn mutation_signup_with_invite_operator_invite_happy_path() {
     let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
-    let raw_token = "test_bootstrap_token_e2e_abcdefghijk";
+    let raw_token = "test_operator_invite_e2e_abcdefghijk";
     let expires_at = Utc::now() + chrono::Duration::minutes(15);
-    let token_id = seed_bootstrap_token(&ctx.db, raw_token, expires_at).await;
+    let invite_id = seed_operator_invite(&ctx.db, raw_token, expires_at).await;
 
     let mutation = format!(
         r#"mutation {{
             signupWithInvite(input: {{
-                username: "newuser_bootstrap_e2e",
-                email: "newuser_bootstrap_e2e@test.example.com",
+                username: "newuser_operator_e2e",
+                email: "newuser_operator_e2e@test.example.com",
                 password: "ValidPass123!",
-                bootstrapToken: "{raw_token}"
+                instanceInviteToken: "{raw_token}"
             }}) {{
                 userId
                 serverId
@@ -273,7 +273,7 @@ async fn mutation_signup_with_invite_bootstrap_happy_path() {
     let res = schema.execute(Request::new(&mutation)).await;
     assert!(
         res.errors.is_empty(),
-        "signupWithInvite bootstrap: unexpected errors: {:?}",
+        "signupWithInvite operator invite: unexpected errors: {:?}",
         res.errors
     );
 
@@ -286,38 +286,24 @@ async fn mutation_signup_with_invite_bootstrap_happy_path() {
         .expect("userId must be a non-null string");
     assert!(!user_id_str.is_empty(), "userId must be non-empty");
 
-    // serverId must be null — bootstrap user has no workspace.
+    // serverId must be null — the new account has no workspace.
     assert!(
         json["signupWithInvite"]["serverId"].is_null(),
-        "serverId must be null for bootstrap signup, got: {:?}",
+        "serverId must be null for an instance invite signup, got: {:?}",
         json["signupWithInvite"]["serverId"]
     );
 
-    // ── Verify bootstrap_token row was consumed ────────────────────────────
+    // ── Verify the invite's one use was spent ─────────────────────────────
     {
-        use rim_core::auth::repository::BootstrapTokenRepository;
-        use rim_infra_db::sea_orm_impl::bootstrap_token::SeaOrmBootstrapTokenRepository;
+        use rim_core::auth::repository::InstanceInviteRepository;
+        use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 
-        let repo = SeaOrmBootstrapTokenRepository::new(ctx.db.clone());
-        let token_row = repo
-            .get_by_id(token_id)
+        let invite = SeaOrmInstanceInviteRepository::new(ctx.db.clone())
+            .get_by_id(invite_id)
             .await
             .expect("repo lookup failed")
-            .expect("bootstrap_token row must exist");
-
-        assert!(
-            token_row.used_at.is_some(),
-            "used_at must be set after successful signup"
-        );
-
-        let consumed_uid = token_row
-            .consumed_by_user_id
-            .expect("consumed_by_user_id must be set");
-        assert_eq!(
-            consumed_uid.to_string(),
-            user_id_str,
-            "consumed_by_user_id must match the returned userId"
-        );
+            .expect("instance_invite row must exist");
+        assert_eq!(invite.use_count, 1, "the signup must spend the invite");
     }
 
     // ── Verify no server_member row exists for the new user ──────────────────
@@ -344,37 +330,29 @@ async fn mutation_signup_with_invite_bootstrap_happy_path() {
         let cnt = rows.first().map(|r| r.cnt).unwrap_or(0);
         assert_eq!(
             cnt, 0,
-            "bootstrap signup must not create any server_member row"
+            "an instance invite signup must not create any server_member row"
         );
     }
 }
 
 // ── Test 40 ──────────────────────────────────────────────────────────────────
 
-/// Verify `previewInviteToken` returns `BOOTSTRAP` for tokens found in the
-/// `bootstrap_token` table.
-///
-/// This is the resolver-level assertion that the `BOOTSTRAP` enum value flows
-/// correctly through the GraphQL SDL from service layer → resolver → wire.
-/// The frontend uses this to route via the `bootstrapToken` input field on
-/// `signupWithInvite` rather than `instanceInviteToken`.
-///
-/// Also verifies that `INSTANCE` is still returned for tokens in the
-/// `instance_invite` table, keeping the two paths distinct.
+/// Verify `previewInviteToken` returns `INSTANCE` for an operator's invite and for one a user
+/// issued: both are rows in the `instance_invite` table.
 #[tokio::test]
-async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
+async fn query_preview_invite_token_returns_instance_for_every_instance_invite() {
     let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
-    // ── Bootstrap token → BOOTSTRAP ───────────────────────────────────────
-    let raw_bootstrap_token = "test_preview_bootstrap_type_token_abcdef";
+    // ── Operator invite → INSTANCE ────────────────────────────────────────
+    let raw_operator_token = "test_preview_operator_type_token_abcdef";
     let expires_at = Utc::now() + chrono::Duration::minutes(30);
-    let _token_id = seed_bootstrap_token(&ctx.db, raw_bootstrap_token, expires_at).await;
+    let _invite_id = seed_operator_invite(&ctx.db, raw_operator_token, expires_at).await;
 
     let query = format!(
         r#"query {{
-            previewInviteToken(token: "{raw_bootstrap_token}") {{
+            previewInviteToken(token: "{raw_operator_token}") {{
                 tokenType
                 expiresAt
                 workspace {{
@@ -386,7 +364,7 @@ async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
     let res = schema.execute(Request::new(&query)).await;
     assert!(
         res.errors.is_empty(),
-        "previewInviteToken bootstrap: unexpected errors: {:?}",
+        "previewInviteToken operator invite: unexpected errors: {:?}",
         res.errors
     );
     let json = res
@@ -395,21 +373,21 @@ async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
         .expect("data must be JSON-serialisable");
     assert_eq!(
         json["previewInviteToken"]["tokenType"],
-        serde_json::json!("BOOTSTRAP"),
-        "bootstrap token must surface as BOOTSTRAP, not INSTANCE"
+        serde_json::json!("INSTANCE"),
+        "an operator invite must surface as INSTANCE"
     );
     assert!(
         json["previewInviteToken"]["workspace"].is_null(),
-        "workspace must be null for BOOTSTRAP token"
+        "workspace must be null for an instance invite"
     );
     assert!(
         !json["previewInviteToken"]["expiresAt"].is_null(),
-        "expiresAt must be set for BOOTSTRAP token"
+        "expiresAt must be set for an instance invite"
     );
 
-    // ── Instance invite token → INSTANCE (unchanged) ──────────────────────
+    // ── User-issued instance invite → INSTANCE ────────────────────────────
     use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
-    let owner = ctx.create_user("preview_bootstrap_type_owner").await;
+    let owner = ctx.create_user("preview_instance_type_owner").await;
     let raw_instance_token = "test_preview_instance_type_token_abcdef";
     let _iinv_id = seed_instance_invite(
         &ctx.db,
@@ -443,6 +421,62 @@ async fn query_preview_invite_token_bootstrap_returns_bootstrap_type() {
     );
 }
 
+/// An email-bound instance invite admits a password signup with its address only: another
+/// address is a `VALIDATION` error that leaves the invite unspent, and the bound address, in
+/// any case, signs up.
+#[tokio::test]
+async fn mutation_signup_with_an_email_bound_invite_admits_only_its_address() {
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let owner = ctx.create_user("email_bound_invite_owner").await;
+    let raw_token = "test_email_bound_invite_token_abcdef";
+    seed_instance_invite(
+        &ctx.db,
+        owner.id,
+        raw_token,
+        SeedInstanceInviteOpts {
+            email: Some("ops@example.com".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let signup = |email: &str| {
+        format!(
+            r#"mutation {{
+                signupWithInvite(input: {{
+                    username: "email_bound_user",
+                    email: "{email}",
+                    password: "ValidPass123!",
+                    instanceInviteToken: "{raw_token}"
+                }}) {{
+                    userId
+                }}
+            }}"#
+        )
+    };
+
+    let refused = schema
+        .execute(Request::new(signup("someone@example.com")))
+        .await;
+    assert_eq!(refused.errors.len(), 1, "{:?}", refused.errors);
+    let code = refused.errors[0]
+        .extensions
+        .as_ref()
+        .and_then(|e| e.get("code"))
+        .cloned();
+    assert_eq!(
+        code,
+        Some(async_graphql::Value::String("VALIDATION".to_string()))
+    );
+
+    let admitted = schema
+        .execute(Request::new(signup("Ops@Example.com")))
+        .await;
+    assert!(admitted.errors.is_empty(), "{:?}", admitted.errors);
+}
+
 // ── Test 39 ──────────────────────────────────────────────────────────────────
 
 /// Verify that submitting `signupWithInvite` **without** the required `email`
@@ -461,7 +495,7 @@ async fn mutation_signup_with_invite_missing_email_rejected_by_schema() {
         signupWithInvite(input: {
             username: "schema_test_user",
             password: "ValidPass123!",
-            bootstrapToken: "does_not_matter"
+            instanceInviteToken: "does_not_matter"
         }) {
             userId
         }

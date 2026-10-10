@@ -71,12 +71,11 @@ pub async fn db_conn() -> DatabaseConnection {
 
 /// Truncate all application tables so each test starts from a clean slate.
 ///
-/// This includes `bootstrap_token` and `instance_invite` which are not in the
-/// `rim_infra_db` truncate list (those tests don't need them).
+/// This includes `instance_invite`, which is not in the `rim_infra_db` truncate list (those
+/// tests don't need it).
 pub async fn reset_db(conn: &DatabaseConnection) {
     let sql = r#"
 TRUNCATE TABLE
-  bootstrap_token,
   instance_invite,
   conversation_member,
   message_attachment,

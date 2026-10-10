@@ -190,7 +190,7 @@ A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
 
 **Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
 registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
-token (bootstrap, instance invite or workspace invite) or `proofOfWork`: an 8-byte nonce,
+token (instance invite or workspace invite) or `proofOfWork`: an 8-byte nonce,
 unpadded base64url, such that
 
 ```
@@ -202,9 +202,9 @@ checking it is one hash. Proof-of-work signups also count against the open-signu
 and are audited as `relay.registration_pow`. Password signups take a token, as in invite-only
 mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
 answers `POW`. To let people in without the work, the operator issues a signup link with
-`rim_server invite create [--max-uses N] [--expires-in-days D]` (`invite list`, `invite revoke
-<id>`), which needs no account or workspace and so works with `RIM_ROLE=relay`, or a single-use
-link with `rim_server bootstrap-user`.
+`rim_server invite create [--email A] [--max-uses N] [--expires-in-days D]` (`invite list`,
+`invite revoke <id>`), which needs no account or workspace and so works with `RIM_ROLE=relay`. A
+link created with `--email` admits only a password signup with that address.
 
 **Quotas** per local user are the `RIM_RELAY_*` settings above with
 `RIM_RELAY_QUEUE_BYTES_PER_USER`; the public relay keeps 64 MiB of queue per user. The

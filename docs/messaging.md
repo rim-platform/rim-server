@@ -49,7 +49,7 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   server-side only and never serialized, so the WebSocket JSON is unchanged.
 - Existing workspace members became members of every existing channel when the Track 1.1
   migration ran, so the joined list did not start empty. A user who joins the workspace later
-  (invite acceptance, join by invite, owner adding them, bootstrap, server creation — all through
+  (invite acceptance, join by invite, owner adding them, server creation — all through
   `util::add_workspace_member`) is joined to every public, unarchived channel at that moment;
   private and archived channels are not joined.
 - Unread counts (`unreadCounts`) and `markAllAsRead` cover only conversations the user is a

@@ -96,13 +96,14 @@ rim-relay principal block rimp1_… --reason "spam wave 2026-11-02"
 rim-relay peer block rims1_…
 rim-relay abuse-reports list --open
 rim-relay invite create --max-uses 10 --expires-in-days 7 --public-url https://relay.example.org
-rim-relay bootstrap-user --email ops@example.org --public-url https://relay.example.org
+rim-relay invite create --email ops@example.org --public-url https://relay.example.org
 ```
 
 `invite create` prints a signup link whose token works as a registration token in
 `signupWithKey`, so it is how the operator lets people in without the proof-of-work: up to 50
 signups per link, for at most 30 days. `invite list` shows the live ones with their use counts and
-`invite revoke <id>` ends one. `bootstrap-user` prints a single-use link for one address.
+`invite revoke <id>` ends one. With `--email` the link admits only a password signup with that
+address.
 
 `audit purge --dry-run` counts the command audit rows past `RIM_AUDIT_RETENTION_DAYS` and
 `audit purge` exports them to `/data/audit-exports/` and deletes them; with the variable set the

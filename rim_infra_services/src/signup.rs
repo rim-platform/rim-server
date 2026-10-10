@@ -8,10 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 
 use rim_auth::csrf::generate_csrf_token;
 use rim_auth::session_token::{generate_session_token, hash_token};
-use rim_core::auth::model::{BootstrapToken, InstanceInvite, Invite, NewSession, Session};
-use rim_core::auth::repository::{
-    BootstrapTokenRepository, InstanceInviteRepository, InviteRepository, SessionRepository,
-};
+use rim_core::auth::model::{InstanceInvite, Invite, NewSession, Session};
+use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository, SessionRepository};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::moderation::repository::ModerationRepository;
@@ -32,7 +30,6 @@ use crate::util::{add_workspace_member, ensure_not_banned};
 /// built from the transaction's handle.
 #[derive(Clone)]
 pub struct SignupRepos {
-    pub bootstrap_token_repo: Arc<dyn BootstrapTokenRepository>,
     pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
@@ -45,7 +42,6 @@ pub struct SignupRepos {
 /// A registration token that passed its checks before the transaction, to be claimed inside it.
 #[derive(Debug, Clone)]
 pub(crate) enum CheckedToken {
-    Bootstrap(BootstrapToken),
     InstanceInvite(InstanceInvite),
     WorkspaceInvite(Invite),
 }
@@ -142,19 +138,18 @@ pub(crate) fn check_open_signup_rate(
 }
 
 /// Look a registration token up and check it is still usable, outside any transaction.
+/// `email` is the normalised address the account signs up with, `None` for a key-only signup.
 ///
 /// # Errors
-/// As [`check_bootstrap_token`], [`check_instance_invite`] and [`check_workspace_invite`].
+/// As [`check_instance_invite`] and [`check_workspace_invite`].
 pub(crate) async fn check_token(
     repos: &SignupRepos,
     token: &SignupToken,
+    email: Option<&str>,
 ) -> ServiceResult<CheckedToken> {
     Ok(match token {
-        SignupToken::Bootstrap(raw) => CheckedToken::Bootstrap(
-            check_bootstrap_token(repos.bootstrap_token_repo.as_ref(), raw).await?,
-        ),
         SignupToken::InstanceInvite(raw) => CheckedToken::InstanceInvite(
-            check_instance_invite(repos.instance_invite_repo.as_ref(), raw).await?,
+            check_instance_invite(repos.instance_invite_repo.as_ref(), raw, email).await?,
         ),
         SignupToken::WorkspaceInvite(raw) => CheckedToken::WorkspaceInvite(
             check_workspace_invite(repos.invite_repo.as_ref(), raw).await?,
@@ -162,36 +157,18 @@ pub(crate) async fn check_token(
     })
 }
 
-/// The bootstrap token `raw`, if it is unused, unrevoked and unexpired.
-///
-/// # Errors
-/// `InvalidToken` when unknown, used or revoked (indistinguishable on purpose),
-/// `ExpiredToken` when expired.
-pub(crate) async fn check_bootstrap_token(
-    repo: &dyn BootstrapTokenRepository,
-    raw: &str,
-) -> ServiceResult<BootstrapToken> {
-    let token = repo
-        .get_by_token_hash(&hash_token(raw))
-        .await?
-        .ok_or(ServiceError::InvalidToken)?;
-    if token.used_at.is_some() || token.revoked_at.is_some() {
-        return Err(ServiceError::InvalidToken);
-    }
-    if token.expires_at < Utc::now() {
-        return Err(ServiceError::ExpiredToken);
-    }
-    Ok(token)
-}
-
-/// The instance invite `raw`, if it is unrevoked and unexpired. Whether uses remain is decided
+/// The instance invite `raw`, if it is unrevoked, unexpired and, when bound to an address,
+/// presented with that address (compared trimmed and case-insensitively). `email` is `None` for
+/// a key-only signup, which an email-bound invite does not admit. Whether uses remain is decided
 /// when it is claimed.
 ///
 /// # Errors
-/// `InvalidToken` when unknown or revoked, `ExpiredToken` when expired.
+/// `InvalidToken` when unknown or revoked, `ExpiredToken` when expired, `Validation` when the
+/// invite is bound to another address or the signup has none.
 pub(crate) async fn check_instance_invite(
     repo: &dyn InstanceInviteRepository,
     raw: &str,
+    email: Option<&str>,
 ) -> ServiceResult<InstanceInvite> {
     let invite = repo
         .get_by_token_hash(&hash_token(raw))
@@ -202,6 +179,20 @@ pub(crate) async fn check_instance_invite(
     }
     if invite.expires_at < Utc::now() {
         return Err(ServiceError::ExpiredToken);
+    }
+    if let Some(bound) = &invite.email {
+        let matches = email.is_some_and(|email| email.trim().eq_ignore_ascii_case(bound.trim()));
+        if !matches {
+            tracing::info!(
+                target: "audit",
+                event = "instance_invite_email_mismatch",
+                instance_invite_id = %invite.id,
+                "signup refused: the instance invite is bound to another email address"
+            );
+            return Err(ServiceError::Validation(
+                "this invite admits only the email address it was issued for".to_string(),
+            ));
+        }
     }
     Ok(invite)
 }
@@ -235,8 +226,8 @@ pub(crate) async fn check_workspace_invite(
 /// for the other kinds (the account starts with no workspace).
 ///
 /// # Errors
-/// - Bootstrap token and instance invite: `InvalidToken` when another request claimed it since
-///   the check (the double-spend race; the caller's transaction rolls back).
+/// - Instance invite: `InvalidToken` when it was used up since the check (the double-spend
+///   race; the caller's transaction rolls back).
 /// - Workspace invite: `PermissionDenied` when the user is banned there or the invite was used
 ///   up since the check.
 pub(crate) async fn claim_token(
@@ -245,23 +236,6 @@ pub(crate) async fn claim_token(
     user_id: UserId,
 ) -> ServiceResult<Option<ServerId>> {
     match token {
-        CheckedToken::Bootstrap(token) => {
-            // Atomic try-mark: of two requests claiming the token, only one wins.
-            if !repos
-                .bootstrap_token_repo
-                .try_mark_used(token.id, user_id)
-                .await?
-            {
-                tracing::info!(
-                    target: "audit",
-                    event = "bootstrap_token_double_spend_rejected",
-                    bootstrap_token_id = %token.id,
-                    "bootstrap token already consumed by concurrent request"
-                );
-                return Err(ServiceError::InvalidToken);
-            }
-            Ok(None)
-        }
         CheckedToken::InstanceInvite(invite) => {
             if !repos.instance_invite_repo.try_consume(invite.id).await? {
                 // Exhausted since we last checked — treat as invalid.
@@ -300,16 +274,6 @@ pub(crate) fn announce_claimed(
     observers: &Observers,
 ) {
     match token {
-        CheckedToken::Bootstrap(token) => {
-            tracing::info!(
-                target: "audit",
-                event = "bootstrap_token_consumed",
-                bootstrap_token_id = %token.id,
-                consumed_by_user_id = %user_id,
-                "bootstrap token consumed"
-            );
-            tracing::info!(user_id = %user_id, "user created via bootstrap token");
-        }
         CheckedToken::InstanceInvite(invite) => {
             tracing::info!(
                 target: "audit",
@@ -420,10 +384,9 @@ pub(crate) async fn create_session(
 mod tests {
     use std::sync::Mutex;
 
-    use rim_core::auth::model::{BootstrapTokenId, InstanceInviteId, InviteId, SessionId};
+    use rim_core::auth::model::{InstanceInviteId, InviteId, SessionId};
     use rim_core::auth::repository::{
-        MockBootstrapTokenRepository, MockInstanceInviteRepository, MockInviteRepository,
-        MockSessionRepository,
+        MockInstanceInviteRepository, MockInviteRepository, MockSessionRepository,
     };
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
@@ -447,26 +410,12 @@ mod tests {
 
     fn repos() -> SignupRepos {
         SignupRepos {
-            bootstrap_token_repo: Arc::new(MockBootstrapTokenRepository::new()),
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             invite_repo: Arc::new(MockInviteRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::new()),
-        }
-    }
-
-    fn bootstrap_token(expires_in: Duration, used: bool) -> BootstrapToken {
-        BootstrapToken {
-            id: BootstrapTokenId::new(),
-            token_hash: hash_token("raw"),
-            email: "admin@example.com".to_string(),
-            expires_at: Utc::now() + expires_in,
-            used_at: used.then(Utc::now),
-            consumed_by_user_id: None,
-            revoked_at: None,
-            created_at: Utc::now(),
         }
     }
 
@@ -480,6 +429,7 @@ mod tests {
             use_count: 0,
             revoked_at: revoked.then(Utc::now),
             created_at: Utc::now(),
+            email: None,
         }
     }
 
@@ -566,34 +516,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_token_bootstrap_outcomes() {
-        for (token, expected) in [
-            (Some(bootstrap_token(Duration::minutes(5), false)), None),
-            (
-                Some(bootstrap_token(Duration::minutes(5), true)),
-                Some("InvalidToken"),
-            ),
-            (
-                Some(bootstrap_token(Duration::minutes(-5), false)),
-                Some("ExpiredToken"),
-            ),
-            (None, Some("InvalidToken")),
-        ] {
-            let mut repo = MockBootstrapTokenRepository::new();
-            repo.expect_get_by_token_hash()
-                .returning(move |_| Ok(token.clone()));
-            let mut r = repos();
-            r.bootstrap_token_repo = Arc::new(repo);
-            let res = check_token(&r, &SignupToken::Bootstrap("raw".to_string())).await;
-            match expected {
-                None => assert!(matches!(res, Ok(CheckedToken::Bootstrap(_)))),
-                Some("InvalidToken") => assert!(matches!(res, Err(ServiceError::InvalidToken))),
-                Some(_) => assert!(matches!(res, Err(ServiceError::ExpiredToken))),
-            }
-        }
-    }
-
-    #[tokio::test]
     async fn check_token_instance_invite_outcomes() {
         for (invite, expected) in [
             (Some(instance_invite(Duration::minutes(5), false)), None),
@@ -612,11 +534,34 @@ mod tests {
                 .returning(move |_| Ok(invite.clone()));
             let mut r = repos();
             r.instance_invite_repo = Arc::new(repo);
-            let res = check_token(&r, &SignupToken::InstanceInvite("raw".to_string())).await;
+            let res = check_token(&r, &SignupToken::InstanceInvite("raw".to_string()), None).await;
             match expected {
                 None => assert!(matches!(res, Ok(CheckedToken::InstanceInvite(_)))),
                 Some("InvalidToken") => assert!(matches!(res, Err(ServiceError::InvalidToken))),
                 Some(_) => assert!(matches!(res, Err(ServiceError::ExpiredToken))),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_email_bound_instance_invite_admits_only_its_address() {
+        for (email, admitted) in [
+            (Some("ops@example.com"), true),
+            (Some(" Ops@Example.COM "), true),
+            (Some("other@example.com"), false),
+            (None, false),
+        ] {
+            let mut repo = MockInstanceInviteRepository::new();
+            repo.expect_get_by_token_hash().returning(|_| {
+                let mut invite = instance_invite(Duration::minutes(5), false);
+                invite.email = Some("ops@example.com".to_string());
+                Ok(Some(invite))
+            });
+            let res = check_instance_invite(&repo, "raw", email).await;
+            if admitted {
+                assert!(res.is_ok(), "{email:?}");
+            } else {
+                assert!(matches!(res, Err(ServiceError::Validation(_))), "{email:?}");
             }
         }
     }
@@ -637,29 +582,11 @@ mod tests {
                 .returning(move |_| Ok(invite.clone()));
             let mut r = repos();
             r.invite_repo = Arc::new(repo);
-            let res = check_token(&r, &SignupToken::WorkspaceInvite("raw".to_string())).await;
+            let res = check_token(&r, &SignupToken::WorkspaceInvite("raw".to_string()), None).await;
             match expected {
                 None => assert!(matches!(res, Ok(CheckedToken::WorkspaceInvite(_)))),
                 Some("NotFound") => assert!(matches!(res, Err(ServiceError::NotFound))),
                 Some(_) => assert!(matches!(res, Err(ServiceError::PermissionDenied))),
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn claim_token_bootstrap_refuses_a_double_spend() {
-        for claimed in [true, false] {
-            let mut repo = MockBootstrapTokenRepository::new();
-            repo.expect_try_mark_used()
-                .returning(move |_, _| Ok(claimed));
-            let mut r = repos();
-            r.bootstrap_token_repo = Arc::new(repo);
-            let token = CheckedToken::Bootstrap(bootstrap_token(Duration::minutes(5), false));
-            let res = claim_token(&r, &token, UserId::new()).await;
-            if claimed {
-                assert_eq!(res.unwrap(), None);
-            } else {
-                assert!(matches!(res, Err(ServiceError::InvalidToken)));
             }
         }
     }
@@ -741,7 +668,7 @@ mod tests {
         let observers = Observers::new(Arc::clone(&seen) as Arc<dyn Broadcaster>);
         let user_id = UserId::new();
         announce_claimed(
-            &CheckedToken::Bootstrap(bootstrap_token(Duration::minutes(5), false)),
+            &CheckedToken::InstanceInvite(instance_invite(Duration::minutes(5), false)),
             user_id,
             "alice",
             &observers,

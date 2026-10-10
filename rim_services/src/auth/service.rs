@@ -5,8 +5,7 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::auth::command::{
     AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
-    SignupWithInstanceInviteCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
 };
 use crate::auth::dto::{
     AcceptInviteResultDto, CreateInviteResultDto, InviteTokenPreviewDto,
@@ -37,31 +36,7 @@ pub trait AuthService: Send + Sync {
         cmd: JoinServerByInviteCmd,
     ) -> ServiceResult<JoinServerByInviteResultDto>;
 
-    /// Sign up using a CLI-issued bootstrap token.
-    ///
-    /// Consumes the token in the same transaction as user creation.
-    /// On success the user has no workspace membership.
-    ///
-    /// # Errors
-    /// - `InvalidToken` — token not found, already used, or revoked.
-    /// - `ExpiredToken` — token exists but is past `expires_at`.
-    /// - `Conflict` — username already taken.
-    /// - `Validation` — username or password fails validation rules.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let result = auth.signup_with_bootstrap(SignupWithBootstrapCmd {
-    ///     bootstrap_token: raw_token,
-    ///     username: "alice".into(),
-    ///     password: "s3cur3p4ss".into(),
-    /// }).await?;
-    /// ```
-    async fn signup_with_bootstrap(
-        &self,
-        cmd: SignupWithBootstrapCmd,
-    ) -> ServiceResult<SignupResultDto>;
-
-    /// Sign up using an admin-issued instance invite token.
+    /// Sign up using an operator-issued instance invite token.
     ///
     /// Atomically consumes one use slot and creates the user.
     /// On success the user has no workspace membership.
@@ -70,7 +45,8 @@ pub trait AuthService: Send + Sync {
     /// - `InvalidToken` — token not found, exhausted, or revoked.
     /// - `ExpiredToken` — token exists but is past `expires_at`.
     /// - `Conflict` — username already taken.
-    /// - `Validation` — username or password fails validation rules.
+    /// - `Validation` — username or password fails validation rules, or the invite is bound
+    ///   to another email address.
     ///
     /// # Examples
     /// ```ignore
@@ -107,8 +83,7 @@ pub trait AuthService: Send + Sync {
 
     /// Preview a registration token without consuming it.
     ///
-    /// Rate-limited at 30 req / 5 min / IP. Checks bootstrap tokens,
-    /// instance invites, and workspace invites in that order.
+    /// Rate-limited at 30 req / 5 min / IP. Checks instance invites, then workspace invites.
     ///
     /// # Errors
     /// - `InvalidToken` — token not found, consumed, or revoked.
