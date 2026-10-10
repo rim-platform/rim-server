@@ -7,9 +7,15 @@
 	}
 
 	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
-	@rim path /api /api/* /s2s/* /.well-known/* /healthz /readyz
+	@rim path /api /api/* /s2s/* /.well-known/*
 	handle @rim {
 		reverse_proxy rim:8080
+	}
+
+	# The probes stay on the compose network; the client's fallback page must not answer them.
+	@probes path /healthz /readyz
+	handle @probes {
+		respond 404
 	}
 
 	handle {

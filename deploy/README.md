@@ -69,8 +69,8 @@ The descriptor in the discovery document says `"registration":{"mode":"pow","pow
 
 ## Health
 
-The server answers two probes on its own port, without a session. The relay's Caddy does not
-proxy them, so they are reachable from inside the compose network only:
+The server answers two probes on its own port, without a session. Caddy does not proxy them,
+so they are reachable from inside the compose network only:
 
 - `GET /healthz` answers 200 with `{"status":"ok","version":"…"}` while the process serves
   requests. The image's `HEALTHCHECK` uses it.
