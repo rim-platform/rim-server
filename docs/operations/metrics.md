@@ -135,6 +135,13 @@ the database when the listener starts and every 30 seconds after; a read that fa
 | `rim_audit_rows_purged_total` | counter | | Command audit rows the daily retention purge deleted (`docs/operations/audit-retention.md`). |
 | `rim_audit_retention_days` | gauge | | `RIM_AUDIT_RETENTION_DAYS`, set at boot; `0` when rows are kept forever. |
 
+### Scheduled purges
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_attachments_cleaned_total` | counter | | Attachment uploads the daily cleanup marked failed because they never completed (`docs/operations/background-jobs.md`). |
+| `rim_workspace_state_purged_total` | counter | | Expired workspace state entries the hourly purge deleted. |
+
 ## Example alert rules
 
 Readiness is checked from outside, by probing `/readyz` on the API port with the Prometheus

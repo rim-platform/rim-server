@@ -693,6 +693,28 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     }
 
     let message_attachment_service = service_provider.message_attachment_service();
+
+    // Background tasks: mark stale attachment uploads failed daily and delete expired workspace
+    // state hourly, each first a few minutes after boot.
+    tokio::spawn(
+        rim_infra_services::scheduled_purges::run_attachment_cleanup(
+            Arc::clone(&message_attachment_service),
+            shutdown_tx.subscribe(),
+        ),
+    );
+    let workspace_state_repo: Arc<
+        dyn rim_core::workspace_state::repository::WorkspaceStateRepository,
+    > = Arc::new(
+        rim_infra_db::sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(
+            raw_db_for_tasks.clone().into(),
+        ),
+    );
+    tokio::spawn(
+        rim_infra_services::scheduled_purges::run_workspace_state_purge(
+            workspace_state_repo,
+            shutdown_tx.subscribe(),
+        ),
+    );
     let moderation_service = service_provider.moderation_service();
     let plugin_bundle_service = service_provider.plugin_bundle_service();
 

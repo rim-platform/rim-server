@@ -18,6 +18,10 @@ pub const RELAY_QUEUE_BYTES: &str = "rim_relay_queue_bytes";
 pub const AUDIT_ROWS_PURGED: &str = "rim_audit_rows_purged_total";
 /// The configured audit retention in days, 0 when rows are kept forever.
 pub const AUDIT_RETENTION_DAYS: &str = "rim_audit_retention_days";
+/// Stale attachment uploads the daily cleanup marked failed.
+pub const ATTACHMENTS_CLEANED: &str = "rim_attachments_cleaned_total";
+/// Expired workspace state entries the hourly purge deleted.
+pub const WORKSPACE_STATE_PURGED: &str = "rim_workspace_state_purged_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -51,6 +55,16 @@ pub fn describe() {
         Unit::Count,
         "Days audit log rows are kept before the purge; 0 keeps them forever."
     );
+    describe_counter!(
+        ATTACHMENTS_CLEANED,
+        Unit::Count,
+        "Stale attachment uploads the daily cleanup marked failed."
+    );
+    describe_counter!(
+        WORKSPACE_STATE_PURGED,
+        Unit::Count,
+        "Expired workspace state entries the hourly purge deleted."
+    );
 }
 
 /// Count one request the limiter named `limiter` refused.
@@ -66,6 +80,16 @@ pub fn pow_rejected() {
 /// Count `n` audit log rows the retention purge deleted.
 pub fn audit_rows_purged(n: u64) {
     counter!(AUDIT_ROWS_PURGED).increment(n);
+}
+
+/// Count `n` stale attachment uploads the cleanup marked failed.
+pub fn attachments_cleaned(n: u64) {
+    counter!(ATTACHMENTS_CLEANED).increment(n);
+}
+
+/// Count `n` expired workspace state entries the purge deleted.
+pub fn workspace_state_purged(n: u64) {
+    counter!(WORKSPACE_STATE_PURGED).increment(n);
 }
 
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.

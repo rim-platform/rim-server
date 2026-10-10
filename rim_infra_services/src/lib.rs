@@ -61,6 +61,9 @@ pub mod remote_workspace;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;
+/// Public for `rim_server`, whose composition root runs the stale-attachment cleanup and the
+/// workspace-state expiry purge.
+pub mod scheduled_purges;
 pub(crate) mod secret_file;
 pub(crate) mod server;
 pub(crate) mod server_member;
