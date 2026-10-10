@@ -1,6 +1,6 @@
 [package]
 name = "rim_server"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,7 @@ async-graphql = "7.0.17"
 async-graphql-parser = "7.0.17"
 tracing = "0.1.41"
 uuid = { version = "1.19.0", features = ["v7"] }
-tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros", "fs"] }
 futures-util = "0.3"
 actix-multipart = "0.7"
 serde_json = "1"
@@ -38,6 +38,7 @@ base64 = "0.22.1"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 migration = { path = "../migration" }
+async-trait = "0.1.89"
 
 [dev-dependencies]
 rim_services = { path = "../rim_services", features = ["mocks"] }

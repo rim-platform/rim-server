@@ -12,6 +12,7 @@ pub mod config;
 mod file_handlers;
 pub mod franking_key_cmd;
 mod graphql_support;
+mod health;
 pub mod invite_cmd;
 pub(crate) mod metrics;
 mod plugin_bundle_handlers;

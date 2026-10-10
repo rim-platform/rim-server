@@ -15,3 +15,7 @@ members = [
     "rim_infra_services",
 ]
 
+# The one release version every crate carries; `rim-server --version`, `/healthz` and
+# `serverInfo.version` report it.
+[workspace.package]
+version = "0.1.0"

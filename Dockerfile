@@ -76,6 +76,14 @@ USER rim
 #                           internal network, never behind the public proxy
 #   RIM_AUDIT_RETENTION_DAYS — days command audit rows are kept, 1-3650 (default: forever); older
 #                           rows are exported to $RIM_DATA_DIR/audit-exports and deleted daily
+#
+# Probes, unauthenticated, on RIM_SERVER_PORT:
+#   GET /healthz          — 200 {"status":"ok","version":…} while the process runs
+#   GET /readyz           — 200 when the database answers, no migration is pending and the
+#                           server and franking key files are readable; else 503 naming the
+#                           failing checks
+#
+# `/app/rim-server --version` prints the release version.
 
 ENV RIM_SERVER_HOST=0.0.0.0 \
     RIM_SERVER_PORT=8080 \
@@ -84,9 +92,9 @@ ENV RIM_SERVER_HOST=0.0.0.0 \
 
 EXPOSE 8080
 
-# /api accepts only POST. A query (not a mutation) needs no session and no CSRF token.
+# Liveness: /healthz answers 200 while the process serves requests. Readiness (database,
+# pending migrations, key files) is /readyz; the compose files probe that one.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS -X POST -H 'Content-Type: application/json' \
-        --data '{"query":"{__typename}"}' http://localhost:8080/api || exit 1
+    CMD curl -fsS http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["/app/rim-server"]

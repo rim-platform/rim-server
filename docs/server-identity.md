@@ -24,6 +24,9 @@ Back the key file up with the database: the database without the file cannot sig
 without the database is a key nobody can prove belongs to this server id. Never copy the key file
 to another deployment; two servers with one key are one server to everyone else.
 
+While the server runs, `GET /readyz` answers 503 with the `serverKey` check failed when the key
+file cannot be opened for reading, and `frankingKey` likewise for the franking key file.
+
 ## First start
 
 With neither a key file nor a key log, the server creates a server key and a recovery key, signs
