@@ -105,30 +105,6 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             is_private,
             member_user_ids,
             ..
-        }
-        | WorkspaceEvent::IncidentDeclared {
-            conversation_type,
-            is_private,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::IncidentUpdated {
-            conversation_type,
-            is_private,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::EscalationStepFired {
-            conversation_type,
-            is_private,
-            member_user_ids,
-            ..
-        }
-        | WorkspaceEvent::IncidentAcknowledged {
-            conversation_type,
-            is_private,
-            member_user_ids,
-            ..
         } => conversation_event_visible(
             conversation_type,
             *is_private || is_guest,
@@ -239,8 +215,6 @@ mod tests {
     use super::*;
     use crate::events::MessageEventData;
     use rim_core::conversation::model::ConversationId;
-    use rim_core::escalation::model::EscalationPolicyId;
-    use rim_core::incident::model::IncidentId;
     use rim_core::message::model::MessageId;
     use rim_core::message_thread::model::MessageThreadId;
     use rim_core::server::model::ServerId;
@@ -421,48 +395,9 @@ mod tests {
                 workspace_id,
                 conversation_id,
                 message_id: MessageId::new(),
-                conversation_type: t.clone(),
-                is_private,
-                member_user_ids: m.clone(),
-            },
-            WorkspaceEvent::IncidentDeclared {
-                workspace_id,
-                conversation_id,
-                conversation_type: t.clone(),
-                incident_id: IncidentId::new(),
-                severity: None,
-                title: "outage".to_string(),
-                member_user_ids: m.clone(),
-                is_private,
-            },
-            WorkspaceEvent::IncidentUpdated {
-                workspace_id,
-                conversation_id,
-                conversation_type: t.clone(),
-                incident_id: IncidentId::new(),
-                status: "resolved".to_string(),
-                member_user_ids: m.clone(),
-                is_private,
-            },
-            WorkspaceEvent::EscalationStepFired {
-                workspace_id,
-                conversation_id,
-                conversation_type: t.clone(),
-                incident_id: IncidentId::new(),
-                escalation_policy_id: EscalationPolicyId::new(),
-                step_index: 0,
-                target_user_ids: vec![],
-                member_user_ids: m.clone(),
-                is_private,
-            },
-            WorkspaceEvent::IncidentAcknowledged {
-                workspace_id,
-                conversation_id,
                 conversation_type: t,
-                incident_id: IncidentId::new(),
-                acknowledged_by: UserId::new(),
-                member_user_ids: m,
                 is_private,
+                member_user_ids: m,
             },
         ]
     }
@@ -488,7 +423,7 @@ mod tests {
     fn visibility_fixture_covers_every_conversation_scoped_variant() {
         assert_eq!(
             conversation_scoped_events("Channel", false, vec![]).len(),
-            15
+            11
         );
     }
 
