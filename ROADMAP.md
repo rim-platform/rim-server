@@ -181,8 +181,7 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
    `SetState`, conditional branches, run history and retries.
 4. **Bot-registered commands** (M): a bot registers palette commands backed by its webhook,
    with typed args and sensitivity tiers like builtins.
-5. **RIM CLI v1** (M): `rim send`, `rim search`, `rim watch`, `rim macro run`. Design in
-   `docs/design/cli-v1-design-2026-04-22.md`. Doubles as the GraphQL contract test.
+5. **RIM CLI v1** (M): `rim send`, `rim search`, `rim watch`, `rim macro run`. Doubles as the GraphQL contract test.
 6. **MCP bridge** (M): MCP servers install as plugins; RIM exposes itself as an MCP server so
    external agents drive the registry under `OutOfBand` confirmations.
 

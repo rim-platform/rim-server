@@ -89,7 +89,7 @@ RIM should support the following command sources.
 - Stable and documented.
 - Usually available in the command palette.
 
-Channel builtins (Track 1.1, `docs/specs/track-1-1-private-channels.md`). Apart from the read-only
+Channel builtins (`docs/messaging.md`, Channel Visibility And Membership). Apart from the read-only
 `chat.list_channels` (`Safe`, `chat.read`), all are `Backend`, `Mutating`, `chat.write`, palette-
 and keybind-visible. `conversation_id`
 falls back to the focused conversation (`context.conversation_id`). Authorization (membership,
@@ -107,7 +107,7 @@ never do more than the user it acts for.
 | `chat.unarchive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
 | `chat.remove_conversation_member` | `server_id`, `conversation_id`, `user_id` | no | yes | Owner/Moderator, or yourself; confirmation required |
 
-Moderation builtins (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`). All are
+Moderation builtins. All are
 `Backend` and `Mutating`; the `admin.*` ones require `admin.manage_members`, the `chat.*` ones
 `chat.write`. They call `ModerationService`, which enforces the roles (Owner/Moderator, who may
 target whom) and writes the moderation audit row (`docs/messaging.md`, Roles And Moderation), so
@@ -125,7 +125,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
 
-Notification builtins (Track 1.3, `docs/specs/track-1-3-notification-rules.md`). All are
+Notification builtins (`docs/messaging.md`, Notification Rules). All are
 `Backend`, `Mutating`, palette- and keybind-visible, AI-callable, in category `Notifications`,
 and need **no capability**: like `chat.mark_as_read` they change only the caller's own state.
 They call `NotificationService`, which requires workspace membership (and, for the level, read
