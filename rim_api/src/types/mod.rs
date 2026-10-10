@@ -30,6 +30,7 @@ pub(crate) mod pipeline;
 pub(crate) mod platform;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
+pub(crate) mod server_info;
 pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod user;
@@ -131,6 +132,7 @@ pub use remote_workspace::{
     JoinRemoteWorkspaceInput, RemoteJoinChallenge, RemoteJoinResult, RemoteSubscription,
     RevocationFanout, RevocationFanoutStatus,
 };
+pub use server_info::{API_VERSION, ServerInfo};
 pub use skill_profile::{FeatureUsage, SkillProfileGql, SkillTier};
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
