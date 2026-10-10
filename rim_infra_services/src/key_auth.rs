@@ -19,6 +19,7 @@ use rim_core::key_identity::model::{
     DeviceKey, KeyLogEntry, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
 };
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
+use rim_core::relay::repository::RelayAbuseRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::user::model::{NewUser, NewUserKeyIdentity, UserId};
 use rim_core::user::repository::UserRepository;
@@ -43,6 +44,7 @@ use rim_services::key_auth::service::KeyAuthService;
 use rim_services::relay::service::RelayService;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::quota::Quotas;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::signup::{self, SignupRepos};
@@ -73,6 +75,8 @@ pub struct KeyAuthRepos {
     /// Whether a user holding a principal is someone from another server, whom a key-only
     /// signup turns into a local user.
     pub host_repo: Arc<dyn HostRepository>,
+    /// Principals this server refuses.
+    pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
 }
 
 /// An audience as compared: a server id (`rims1_…`) as it is, since base64url is
@@ -106,6 +110,11 @@ pub struct DefaultKeyAuthService {
     e2ee_service: Option<Arc<dyn rim_services::e2ee::service::E2eeService>>,
     /// Told when a user's card or devices change, so hosts holding them get the new identity.
     relay_service: Option<Arc<dyn RelayService>>,
+    /// This server's id, which a proof-of-work signup is bound to. `None` in unit tests that
+    /// do not sign up in `pow` mode.
+    server_id: Option<String>,
+    /// Devices and card size per user.
+    quotas: Quotas,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -237,7 +246,65 @@ impl DefaultKeyAuthService {
             observers,
             e2ee_service: None,
             relay_service: None,
+            server_id: None,
+            quotas: Quotas::default(),
         }
+    }
+
+    /// The server id proof-of-work signups are bound to.
+    pub fn with_server_id(mut self, server_id: String) -> Self {
+        self.server_id = Some(server_id);
+        self
+    }
+
+    pub fn with_quotas(mut self, quotas: Quotas) -> Self {
+        self.quotas = quotas;
+        self
+    }
+
+    /// `Forbidden` when an operator blocked `principal_id` on this server, with an audit
+    /// event naming `action`.
+    async fn ensure_not_blocked(&self, principal_id: &str, action: &str) -> ServiceResult<()> {
+        if self
+            .repos
+            .relay_abuse_repo
+            .is_principal_blocked(principal_id)
+            .await?
+        {
+            info!(
+                target = "audit",
+                event = "relay.blocked_principal_refused",
+                principal_id = %principal_id,
+                action,
+                "refused a principal blocked on this server"
+            );
+            return Err(ServiceError::Forbidden(
+                "this key identity is blocked on this server".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check a key-only signup's proof-of-work: its hash over this server's id, the log's
+    /// inception and the nonce has `bits` leading zero bits.
+    fn check_proof_of_work(
+        &self,
+        key_log: &[SignedPayload],
+        nonce: &str,
+        bits: u32,
+    ) -> ServiceResult<()> {
+        let server_id = self.server_id.as_deref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!(
+                "proof-of-work registration needs this server's id"
+            ))
+        })?;
+        let inception = key_log
+            .first()
+            .ok_or_else(|| ServiceError::Validation("the key log is empty".to_string()))?;
+        rim_s2s::pow::check_pow(server_id, &inception.payload, nonce, bits).map_err(|e| {
+            info!(reason = %e, pow_bits = bits, "refused a signup's proof-of-work");
+            ServiceError::Validation(e.to_string())
+        })
     }
 
     pub fn with_relay_service(mut self, relay_service: Arc<dyn RelayService>) -> Self {
@@ -581,6 +648,8 @@ impl DefaultKeyAuthService {
             );
             return Err(ServiceError::PermissionDenied);
         }
+        self.ensure_not_blocked(&login.principal_id, "login")
+            .await?;
         Ok((user_id, device))
     }
 }
@@ -702,6 +771,8 @@ impl KeyAuthService for DefaultKeyAuthService {
             proof,
             entries,
         } = self.verify_presented(&cmd.key_log, &cmd.device, &cmd.proof)?;
+        self.ensure_not_blocked(&state.principal_id, "enroll")
+            .await?;
 
         let (scope, repos) = self.begin().await?;
         Self::consume_proof_challenge(&repos, &proof).await?;
@@ -750,23 +821,36 @@ impl KeyAuthService for DefaultKeyAuthService {
     #[instrument(name = "key_auth.signup_with_key", skip_all, fields(username = %cmd.username))]
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto> {
         // The same mode rules as `signupWithInvite`, checked here too so the service never
-        // relies on the resolver alone.
-        match (&cmd.registration_mode, &cmd.token) {
-            (RegistrationMode::InviteOnly, None) => {
-                return Err(ServiceError::Validation(
-                    "exactly one token is required in invite-only mode".to_string(),
-                ));
+        // relies on the resolver alone. In pow mode a proof-of-work stands in for the token.
+        let refuse = |why: &str| Err(ServiceError::Validation(why.to_string()));
+        let pow_bits = match (&cmd.registration_mode, &cmd.token, &cmd.proof_of_work) {
+            (RegistrationMode::Pow { .. }, Some(_), Some(_)) => {
+                return refuse("give a registration token or proofOfWork, not both");
             }
-            (RegistrationMode::Open, Some(_)) => {
-                return Err(ServiceError::Validation(
-                    "tokens must not be supplied in open registration mode".to_string(),
-                ));
+            (RegistrationMode::Pow { .. }, None, None) => {
+                return refuse("a registration token or proofOfWork is required");
             }
-            (RegistrationMode::Open, None) => {
+            (RegistrationMode::Pow { bits }, None, Some(nonce)) => {
                 signup::check_open_signup_rate(&self.signup_rate_limiter, &cmd.remote_ip)?;
+                self.check_proof_of_work(&cmd.key_log, nonce, *bits)?;
+                Some(*bits)
             }
-            (RegistrationMode::InviteOnly, Some(_)) => {}
-        }
+            (RegistrationMode::Pow { .. }, Some(_), None) => None,
+            (_, _, Some(_)) => {
+                return refuse("proofOfWork is only taken in pow registration mode");
+            }
+            (RegistrationMode::InviteOnly, None, None) => {
+                return refuse("exactly one token is required in invite-only mode");
+            }
+            (RegistrationMode::Open, Some(_), None) => {
+                return refuse("tokens must not be supplied in open registration mode");
+            }
+            (RegistrationMode::Open, None, None) => {
+                signup::check_open_signup_rate(&self.signup_rate_limiter, &cmd.remote_ip)?;
+                None
+            }
+            (RegistrationMode::InviteOnly, Some(_), None) => None,
+        };
         let username = cmd.username.as_str();
         signup::validate_username(username)?;
         let display_name = signup::normalize_display_name(cmd.display_name.as_deref(), username)?;
@@ -781,6 +865,8 @@ impl KeyAuthService for DefaultKeyAuthService {
             proof,
             entries,
         } = self.verify_presented(&cmd.key_log, &cmd.device, &cmd.proof)?;
+        self.ensure_not_blocked(&state.principal_id, "signup")
+            .await?;
 
         let (scope, repos) = self.begin().await?;
         Self::consume_proof_challenge(&repos, &proof).await?;
@@ -856,9 +942,18 @@ impl KeyAuthService for DefaultKeyAuthService {
         repos.key_identity_repo.touch_device(device.id).await?;
         Self::commit(scope).await?;
 
-        match &token {
-            Some(token) => signup::announce_claimed(token, user.id, username, &self.observers),
-            None => info!(
+        match (&token, pow_bits) {
+            (Some(token), _) => signup::announce_claimed(token, user.id, username, &self.observers),
+            (None, Some(bits)) => info!(
+                target = "audit",
+                event = "relay.registration_pow",
+                user_id = %user.id,
+                principal_id = %state.principal_id,
+                pow_bits = bits,
+                remote_ip = %cmd.remote_ip,
+                "user created via a proof-of-work signup"
+            ),
+            (None, None) => info!(
                 target = "audit",
                 event = "signup_open_success",
                 user_id = %user.id,
@@ -895,6 +990,19 @@ impl KeyAuthService for DefaultKeyAuthService {
         let (scope, repos) = self.begin().await?;
         let state = Self::lock_and_load(&repos, user_id).await?;
         let cert = verify_device_cert(&state, &to_statement(&cmd.device)).map_err(invalid)?;
+        let active = repos
+            .key_identity_repo
+            .list_devices(user_id)
+            .await?
+            .iter()
+            .filter(|d| d.revoked_at.is_none())
+            .count();
+        if active >= self.quotas.devices_per_user {
+            return Err(ServiceError::Validation(format!(
+                "an account keeps at most {} devices; revoke one first",
+                self.quotas.devices_per_user
+            )));
+        }
         let device = insert_device(&repos, new_device(user_id, &cert, &cmd.device)).await?;
         Self::commit(scope).await?;
         info!(
@@ -1061,6 +1169,12 @@ impl KeyAuthService for DefaultKeyAuthService {
         cmd: PublishProfileCardCmd,
     ) -> ServiceResult<ProfileCardDto> {
         let user_id = cmd.actor.user_id;
+        if cmd.card.payload.len() > self.quotas.card_max_bytes {
+            return Err(ServiceError::Validation(format!(
+                "a profile card is at most {} bytes",
+                self.quotas.card_max_bytes
+            )));
+        }
         let (scope, repos) = self.begin().await?;
         let state = Self::lock_and_load(&repos, user_id).await?;
         let card = verify_profile_card(&state, &to_statement(&cmd.card)).map_err(invalid)?;

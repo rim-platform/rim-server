@@ -12,6 +12,7 @@
 //! - [`http_sig`]: signature bases, signing and verifying requests and responses.
 //! - [`SharedIdentity`]: this server's key, log and descriptor, shared by everything that
 //!   signs.
+//! - [`pow`]: the proof-of-work a relay in `pow` registration mode asks of key-only signups.
 
 pub mod descriptor;
 mod error;
@@ -19,6 +20,7 @@ pub mod host;
 pub mod http_sig;
 mod identity;
 mod key_log;
+pub mod pow;
 mod signer;
 pub mod statement;
 #[cfg(test)]

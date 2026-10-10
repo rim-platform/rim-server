@@ -5,9 +5,12 @@
 //! rim_server server-key rotate
 //! rim_server server-key recover --recovery-key-file <file> [--new-recovery-key]
 //! rim_server peer reset <server-id>
+//! rim_server peer block <server-id>
+//! rim_server peer unblock <server-id>
 //! ```
 //!
-//! A running server picks up a rotation or recovery within a minute. Exit code 0 on success,
+//! A running server picks up a rotation or recovery within a minute, and a peer block or
+//! unblock at its next request. Exit code 0 on success,
 //! 1 on any error, 2 on a usage error.
 
 use std::path::PathBuf;
@@ -18,11 +21,13 @@ use rim_infra_db::sea_orm_impl::s2s::{SeaOrmPeerServerRepository, SeaOrmServerId
 use rim_infra_services::s2s::server_key::{self, LoadedKey};
 use rim_infra_services::s2s::{DefaultPeerService, HttpDiscoveryFetcher};
 use rim_s2s::key_hash;
+use rim_services::s2s::dto::PeerBlockChange;
 use rim_services::s2s::service::PeerService;
 use sea_orm::Database;
 
 const USAGE: &str = "usage: rim_server server-key show | server-key rotate | \
-     server-key recover --recovery-key-file <file> [--new-recovery-key] | peer reset <server-id>";
+     server-key recover --recovery-key-file <file> [--new-recovery-key] | \
+     peer reset|block|unblock <server-id>";
 
 /// A parsed subcommand.
 #[derive(Debug, PartialEq, Eq)]
@@ -35,6 +40,10 @@ enum Command {
     },
     PeerReset {
         server_id: String,
+    },
+    PeerBlock {
+        server_id: String,
+        blocked: bool,
     },
 }
 
@@ -62,12 +71,20 @@ fn parse(group: &str, mut args: impl Iterator<Item = String>) -> Result<Command,
                 new_recovery_key,
             });
         }
-        ("peer", "reset") => {
-            let server_id = args.next().ok_or("peer reset requires a server id")?;
+        ("peer", action @ ("reset" | "block" | "unblock")) => {
+            let server_id = args
+                .next()
+                .ok_or_else(|| format!("peer {action} requires a server id"))?;
             if !rim_s2s::is_server_id(&server_id) {
                 return Err(format!("{server_id} is not a server id"));
             }
-            Command::PeerReset { server_id }
+            match action {
+                "reset" => Command::PeerReset { server_id },
+                _ => Command::PeerBlock {
+                    server_id,
+                    blocked: action == "block",
+                },
+            }
         }
         _ => return Err(USAGE.to_string()),
     };
@@ -151,22 +168,58 @@ async fn run_command(command: Command) -> Result<(), String> {
             }
         }
         Command::PeerReset { server_id } => {
-            let fetcher = HttpDiscoveryFetcher::new(config.s2s_allow_private_addresses())
+            let existed = peers(&config, handle)?
+                .reset(&server_id)
+                .await
                 .map_err(|e| e.to_string())?;
-            let peers = DefaultPeerService::new(
-                Arc::new(SeaOrmPeerServerRepository::new(handle)),
-                Arc::new(fetcher),
-                config.s2s_allow_http(),
-            );
-            let existed = peers.reset(&server_id).await.map_err(|e| e.to_string())?;
             if existed {
                 println!("forgot {server_id}; its next request pins it afresh");
             } else {
                 println!("{server_id} was not pinned");
             }
         }
+        Command::PeerBlock { server_id, blocked } => {
+            let change = peers(&config, handle)?
+                .set_blocked(&server_id, blocked)
+                .await
+                .map_err(|e| e.to_string())?;
+            match (change, blocked) {
+                (PeerBlockChange::Changed, true) => {
+                    println!("blocked {server_id}; it is refused both ways from now on");
+                }
+                (PeerBlockChange::Changed, false) => println!("unblocked {server_id}"),
+                (PeerBlockChange::Unchanged, true) => println!("{server_id} was blocked already"),
+                (PeerBlockChange::Unchanged, false) => println!("{server_id} was not blocked"),
+                (PeerBlockChange::Forked, _) => {
+                    return Err(format!(
+                        "{server_id} is refused as forked; `peer reset` it after checking with \
+                         its operator"
+                    ));
+                }
+                (PeerBlockChange::NotPinned, _) => {
+                    return Err(format!(
+                        "{server_id} is not pinned; add it to RIM_S2S_DENIED_PEERS to refuse it \
+                         before it first connects"
+                    ));
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// The peer service the `peer` commands run on.
+fn peers(
+    config: &crate::config::RIMConfig,
+    handle: DbHandle,
+) -> Result<DefaultPeerService, String> {
+    let fetcher = HttpDiscoveryFetcher::new(config.s2s_allow_private_addresses())
+        .map_err(|e| e.to_string())?;
+    Ok(DefaultPeerService::new(
+        Arc::new(SeaOrmPeerServerRepository::new(handle)),
+        Arc::new(fetcher),
+        config.s2s_allow_http(),
+    ))
 }
 
 #[cfg(test)]
@@ -206,6 +259,20 @@ mod tests {
                 server_id: id.to_string()
             })
         );
+        assert_eq!(
+            parse("peer", args(&["block", id])),
+            Ok(Command::PeerBlock {
+                server_id: id.to_string(),
+                blocked: true,
+            })
+        );
+        assert_eq!(
+            parse("peer", args(&["unblock", id])),
+            Ok(Command::PeerBlock {
+                server_id: id.to_string(),
+                blocked: false,
+            })
+        );
     }
 
     #[test]
@@ -215,6 +282,8 @@ mod tests {
         assert!(parse("server-key", args(&["recover"])).is_err());
         assert!(parse("server-key", args(&["recover", "--bogus"])).is_err());
         assert!(parse("peer", args(&["reset", "relay.example"])).is_err());
+        assert!(parse("peer", args(&["block"])).is_err());
+        assert!(parse("peer", args(&["unblock", "relay.example"])).is_err());
         assert!(parse("peer", args(&["forget", "x"])).is_err());
     }
 }

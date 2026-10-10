@@ -19,8 +19,9 @@ use crate::types::{CreateInstanceInvitePayloadGql, InstanceInviteGql, SignupWith
 pub(crate) struct InviteMutations;
 
 /// The registration token a signup presents, under the deployment's mode: exactly one of the
-/// three in invite-only mode, none in open mode. Shared by `signupWithInvite` and
-/// `signupWithKey`.
+/// three in invite-only and pow mode, none in open mode. Shared by `signupWithInvite` and
+/// `signupWithKey` (which in pow mode may give a proof-of-work instead, see
+/// `key_signup_credential`).
 ///
 /// # Errors
 /// `VALIDATION` when the number of tokens does not fit the mode.
@@ -41,6 +42,9 @@ pub(crate) fn registration_token(
     let message = match mode {
         RegistrationMode::InviteOnly if tokens.len() != 1 => {
             "exactly one token is required in invite-only mode"
+        }
+        RegistrationMode::Pow { .. } if tokens.len() != 1 => {
+            "exactly one token is required for a password signup in pow registration mode"
         }
         RegistrationMode::Open if !tokens.is_empty() => {
             "tokens must not be supplied in open registration mode"
@@ -383,6 +387,17 @@ mod tests {
             assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
             assert!(err.message.contains("exactly one token"));
         }
+    }
+
+    #[test]
+    fn pow_mode_takes_one_token_for_a_password_signup() {
+        let mode = RegistrationMode::Pow { bits: 24 };
+        assert_eq!(
+            registration_token(&mode, None, Some("i".into()), None).unwrap(),
+            Some(SignupToken::InstanceInvite("i".into()))
+        );
+        let err = registration_token(&mode, None, None, None).unwrap_err();
+        assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
     }
 
     #[test]

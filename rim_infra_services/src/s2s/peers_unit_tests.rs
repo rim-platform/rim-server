@@ -121,6 +121,22 @@ impl PeerServerRepository for MemoryPeers {
             .is_some())
     }
 
+    async fn replace_status(
+        &self,
+        server_id: &str,
+        from: PeerStatus,
+        to: PeerStatus,
+    ) -> RepoResult<bool> {
+        let mut peers = self.peers.lock().expect("lock");
+        Ok(match peers.get_mut(server_id) {
+            Some((peer, _)) if peer.status == from => {
+                peer.status = to;
+                true
+            }
+            _ => false,
+        })
+    }
+
     async fn delete(&self, server_id: &str) -> RepoResult<bool> {
         Ok(self.peers.lock().expect("lock").remove(server_id).is_some())
     }

@@ -7,6 +7,8 @@ mod tests {
     use chrono::{DateTime, Duration, Utc};
     use uuid::Uuid;
 
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use rim_auth::session_token::hash_token;
     use rim_core::auth::model::{BootstrapToken, BootstrapTokenId, Invite, InviteId};
     use rim_core::auth::model::{NewSession, Session, SessionId};
@@ -69,6 +71,8 @@ mod tests {
         device_hashes: Vec<Vec<u8>>,
         /// Users created through `UserRepository::create_user` (signups), as inserted.
         created: HashMap<UserId, NewUser>,
+        /// Principals an operator blocked on this server.
+        blocked: HashSet<String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -591,6 +595,7 @@ mod tests {
             key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
             signup,
             host_repo: Arc::new(local_users_only()),
+            relay_abuse_repo: Arc::new(operator_blocks(&state)),
         };
         let svc = DefaultKeyAuthService::new(
             repos,
@@ -605,6 +610,17 @@ mod tests {
             RegistrationRateLimiter::new(3600, limits.failure),
         );
         Harness { state, svc }
+    }
+
+    /// Operator blocks as `State::blocked` holds them.
+    fn operator_blocks(state: &Shared) -> rim_core::relay::repository::MockRelayAbuseRepository {
+        let state = Arc::clone(state);
+        let mut abuse = rim_core::relay::repository::MockRelayAbuseRepository::new();
+        abuse.expect_is_principal_blocked().returning(move |p| {
+            let blocked = state.lock().unwrap().blocked.contains(p);
+            Box::pin(async move { Ok(blocked) })
+        });
+        abuse
     }
 
     /// A host repository where every user is local.
@@ -1853,6 +1869,7 @@ mod tests {
             proof: p.proof.clone(),
             registration_mode: mode,
             token,
+            proof_of_work: None,
             remote_ip: IP.to_string(),
         }
     }
@@ -2291,5 +2308,248 @@ mod tests {
             [WorkspaceEvent::MemberJoined { workspace_id, user_id, username }]
                 if *workspace_id == server_id && *user_id == res.user_id && username == "ada"
         ));
+    }
+
+    // ── Public relay: proof-of-work, operator blocks, quotas ─────────────────────────────
+
+    /// The relay of known-answer vector A.1, which vector A.8's proof-of-work names.
+    const A8_RELAY: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
+    const A8_INCEPTION: &str = r#"{"v":2,"type":"inception","seq":0,"identityKey":"ed25519:iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w","recoveryKey":"ed25519:1i8Bah79Hk_feT60LNhEceG6nwzwTRKHtcxx9hYofLg","createdAt":"2026-10-09T00:00:00Z"}"#;
+
+    /// A harness for the A.8 relay, which also accepts its server id as an audience.
+    fn relay_harness(signup_limit: u32, quotas: crate::quota::Quotas) -> Harness {
+        let h = harness_with(
+            Limits {
+                challenge: 100,
+                failure: 100,
+                signup: signup_limit,
+            },
+            no_signup_repos(),
+            Arc::new(Recording::default()),
+        );
+        Harness {
+            state: h.state,
+            svc: h
+                .svc
+                .with_server_id(A8_RELAY.to_string())
+                .with_quotas(quotas),
+        }
+    }
+
+    fn pow_cmd(p: &Presented, username: &str, bits: u32, nonce: &str) -> SignupWithKeyCmd {
+        SignupWithKeyCmd {
+            proof_of_work: Some(nonce.to_string()),
+            ..signup_cmd(p, username, RegistrationMode::Pow { bits }, None)
+        }
+    }
+
+    #[tokio::test]
+    async fn a8_proof_of_work_signs_up_on_its_relay() {
+        let h = relay_harness(100, crate::quota::Quotas::default());
+        let p = h.present(1).await;
+        assert_eq!(p.key_log[0].payload, A8_INCEPTION);
+        let res = h
+            .svc
+            .signup_with_key(pow_cmd(&p, "ada", 16, "AAAAAAAAkaM"))
+            .await
+            .expect("A.8's nonce meets 16 bits");
+        assert_eq!(res.server_id, None);
+        assert_eq!(h.user_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_weak_malformed_or_misplaced_proof_of_work_creates_nothing() {
+        let h = relay_harness(100, crate::quota::Quotas::default());
+        let p = h.present(1).await;
+        for (bits, nonce) in [
+            (16, "AAAAAAAAkaI"),
+            (19, "AAAAAAAAkaM"),
+            (16, "AAAA"),
+            (16, "!!"),
+        ] {
+            let err = h
+                .svc
+                .signup_with_key(pow_cmd(&p, "ada", bits, nonce))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ServiceError::Validation(_)),
+                "{nonce}: {err:?}"
+            );
+        }
+        // Bound to the relay: the same nonce does not count at another server.
+        let other = harness_with(
+            Limits {
+                challenge: 100,
+                failure: 100,
+                signup: 100,
+            },
+            no_signup_repos(),
+            Arc::new(Recording::default()),
+        );
+        let other = Harness {
+            state: other.state,
+            svc: other.svc.with_server_id(SERVER_ID.to_string()),
+        };
+        let q = other.present(1).await;
+        let err = other
+            .svc
+            .signup_with_key(pow_cmd(&q, "ada", 16, "AAAAAAAAkaM"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        assert_eq!(h.user_count() + other.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn pow_mode_takes_a_token_or_a_proof_of_work_and_limits_per_ip() {
+        let h = relay_harness(1, crate::quota::Quotas::default());
+        let p = h.present(1).await;
+        let neither = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "ada",
+                RegistrationMode::Pow { bits: 16 },
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(&neither, ServiceError::Validation(m) if m.contains("required")));
+        let both = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                token: Some(SignupToken::Bootstrap("rim_boot".to_string())),
+                ..pow_cmd(&p, "ada", 16, "AAAAAAAAkaM")
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(&both, ServiceError::Validation(m) if m.contains("not both")));
+        let elsewhere = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                proof_of_work: Some("AAAAAAAAkaM".to_string()),
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(&elsewhere, ServiceError::Validation(m) if m.contains("pow")));
+        h.svc
+            .signup_with_key(pow_cmd(&p, "ada", 16, "AAAAAAAAkaM"))
+            .await
+            .expect("first");
+        // The open-signup limit per IP applies to proof-of-work signups too.
+        let q = h.present(2).await;
+        let nonce =
+            URL_SAFE_NO_PAD.encode(rim_s2s::pow::solve_pow(A8_RELAY, &q.key_log[0].payload, 4));
+        let err = h
+            .svc
+            .signup_with_key(pow_cmd(&q, "grace", 4, &nonce))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_principal_blocked_here_cannot_sign_up_enroll_or_sign_in() {
+        let h = harness();
+        let p = h.present(1).await;
+        h.state
+            .lock()
+            .unwrap()
+            .blocked
+            .insert(p.state.principal_id.clone());
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&p, "ada"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Forbidden(m) if m.contains("blocked")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 0);
+
+        let e = h.enroll(2).await;
+        assert!(h.login(&e, e.device_id, &e.device, AUDIENCE).await.is_ok());
+        h.state
+            .lock()
+            .unwrap()
+            .blocked
+            .insert(e.state.principal_id.clone());
+        let err = h
+            .login(&e, e.device_id, &e.device, AUDIENCE)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+
+        let (user_id, session_id) = h.add_user_with_session().await;
+        let id = TestIdentity::new(3);
+        h.state.lock().unwrap().blocked.insert(
+            KeyState::from_inception(&id.inception())
+                .unwrap()
+                .principal_id,
+        );
+        let state = KeyState::from_inception(&id.inception()).unwrap();
+        let device_id = Uuid::now_v7();
+        let device = signing_key(53);
+        let err = h
+            .svc
+            .enroll(EnrollIdentityKeyCmd {
+                actor: Actor::new(user_id),
+                session_id,
+                key_log: vec![payload(id.inception())],
+                device: payload(id.device_cert(&state, device_id, &device, "Laptop")),
+                proof: h.proof(&device, &state, device_id).await,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn devices_and_card_size_follow_the_quotas() {
+        let h = relay_harness(
+            100,
+            crate::quota::Quotas {
+                devices_per_user: 2,
+                card_max_bytes: 2048,
+                ..crate::quota::Quotas::default()
+            },
+        );
+        let e = h.enroll(1).await;
+        let add = |n: u8| AddDeviceKeyCmd {
+            actor: Actor::new(e.user_id),
+            device: payload(e.id.device_cert(
+                &e.state,
+                Uuid::from_u128(u128::from(n)),
+                &signing_key(n),
+                "Phone",
+            )),
+        };
+        h.svc.add_device(add(70)).await.expect("second device");
+        let err = h.svc.add_device(add(71)).await.unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("at most 2 devices")),
+            "{err:?}"
+        );
+
+        let card = |name: &str| PublishProfileCardCmd {
+            actor: Actor::new(e.user_id),
+            card: payload(e.id.profile_card(&e.state, 1, name, &[], &[])),
+        };
+        let err = h
+            .svc
+            .publish_profile_card(card(&"x".repeat(3000)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("2048 bytes")),
+            "{err:?}"
+        );
+        h.svc
+            .publish_profile_card(card("Ada"))
+            .await
+            .expect("a small card");
     }
 }

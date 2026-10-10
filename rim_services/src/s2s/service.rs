@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use mockall::automock;
 
 use crate::ServiceResult;
-use crate::s2s::dto::{PeerDto, PeerLookup, S2sClientError, S2sRequest, S2sResponse};
+use crate::s2s::dto::{
+    PeerBlockChange, PeerDto, PeerLookup, S2sClientError, S2sRequest, S2sResponse,
+};
 
 /// Peers this server talks to: pinning a peer's key log from its discovery document, keeping
 /// the pin current, and refusing peers whose log forked.
@@ -42,6 +44,10 @@ pub trait PeerService: Send + Sync {
     /// Forget a peer's pin after an out-of-band check, so its next contact pins it afresh.
     /// Returns whether it was pinned.
     async fn reset(&self, server_id: &str) -> ServiceResult<bool>;
+
+    /// Block a pinned peer (`blocked`: refused both ways at once) or unblock it (`active`). A
+    /// forked peer stays forked.
+    async fn set_blocked(&self, server_id: &str, blocked: bool) -> ServiceResult<PeerBlockChange>;
 }
 
 /// Replay protection for incoming server-to-server requests.

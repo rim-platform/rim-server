@@ -108,6 +108,7 @@ fn descriptor_settings(
     config: &RIMConfig,
     role: ServerRole,
     s2s_origin: Option<&str>,
+    registration: crate::config::RegistrationMode,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
     let websocket = match origin.split_once("://") {
@@ -127,12 +128,19 @@ fn descriptor_settings(
             clock_skew_seconds: 300,
             max_deliver_items: 256,
         },
-        registration: Registration {
-            mode: match config.registration_mode() {
-                crate::config::RegistrationMode::Open => RegistrationMode::Open,
-                crate::config::RegistrationMode::InviteOnly => RegistrationMode::Invite,
+        registration: match registration {
+            crate::config::RegistrationMode::Open => Registration {
+                mode: RegistrationMode::Open,
+                pow_bits: None,
             },
-            pow_bits: None,
+            crate::config::RegistrationMode::InviteOnly => Registration {
+                mode: RegistrationMode::Invite,
+                pow_bits: None,
+            },
+            crate::config::RegistrationMode::Pow { bits } => Registration {
+                mode: RegistrationMode::Pow,
+                pow_bits: Some(bits),
+            },
         },
         mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
     }
@@ -158,7 +166,10 @@ async fn build_s2s(
     let loaded = server_key::load_or_create(identity_repo.as_ref(), &key_files)
         .await
         .map_err(|e| io_error("server key")(format!("{e:#}")))?;
-    let settings = descriptor_settings(config, role, s2s_origin.as_deref());
+    let registration = config
+        .registration_mode()
+        .map_err(io_error("RIM_REGISTRATION_POW_BITS"))?;
+    let settings = descriptor_settings(config, role, s2s_origin.as_deref(), registration);
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
         .map_err(|e| io_error("server descriptor")(format!("{e:#}")))?;
@@ -220,17 +231,21 @@ async fn build_s2s(
         RelaySettings {
             queue_bytes_per_user: config.relay_queue_bytes_per_user(),
             retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
+            quotas: config.quotas(),
         },
     ));
-    let host = Arc::new(DefaultHostService::new(
-        repos.for_host(),
-        Some(raw_db.clone()),
-        identity.clone(),
-        Arc::clone(&peers),
-        Arc::clone(&client),
-        direct_space_id,
-        config.s2s_device_rate_per_min(),
-    ));
+    let host = Arc::new(
+        DefaultHostService::new(
+            repos.for_host(),
+            Some(raw_db.clone()),
+            identity.clone(),
+            Arc::clone(&peers),
+            Arc::clone(&client),
+            direct_space_id,
+            config.s2s_device_rate_per_min(),
+        )
+        .with_quotas(config.quotas()),
+    );
     Ok(S2sRuntime {
         relay: Arc::clone(&relay),
         host: Arc::clone(&host),
@@ -400,6 +415,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             direct_space_id: Some(s2s.direct_space_id),
             remote_key_packages: Some(Arc::clone(&s2s.host) as Arc<dyn RemoteKeyPackages>),
             relay_service: Some(Arc::clone(&s2s.relay) as Arc<dyn RelayService>),
+            server_id: Some(s2s.state.identity.current().server_id().to_string()),
+            quotas: config.quotas(),
         },
     ));
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
@@ -667,7 +684,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let alert_max_body_bytes = config.alert_max_body_bytes();
 
     // ── Registration mode boot-time validation (§6.3) ──────────────────────
-    let registration_mode = config.registration_mode();
+    let registration_mode = config.registration_mode().map_err(std::io::Error::other)?;
 
     // marker: see spec §4.7 R2 — limiter lives inside DefaultAuthService;
     // this token is a typed marker carried through RegistrationContext for
@@ -684,12 +701,23 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
              instance accepts signups without invitation"
         );
     }
+    if let crate::config::RegistrationMode::Pow { bits } = registration_mode {
+        tracing::warn!(
+            target = "audit",
+            pow_bits = bits,
+            open_registration_ignored = config.open_registration.unwrap_or(false),
+            "RIM_REGISTRATION_POW_BITS is set: key-only signups need a proof-of-work or a token"
+        );
+    }
 
     let registration_mode_dto = match registration_mode {
         crate::config::RegistrationMode::InviteOnly => {
             rim_services::auth::dto::RegistrationMode::InviteOnly
         }
         crate::config::RegistrationMode::Open => rim_services::auth::dto::RegistrationMode::Open,
+        crate::config::RegistrationMode::Pow { bits } => {
+            rim_services::auth::dto::RegistrationMode::Pow { bits }
+        }
     };
 
     let schema = build_schema(
