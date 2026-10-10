@@ -997,7 +997,9 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
         .clone();
     assert_eq!(first.event["message"]["id"], json!(first_id.to_string()));
 
-    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox.
+    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox. Holding
+    // deliveries waits for the sender to finish, so no acknowledgement in flight resets it.
+    drained(&a).await;
     a.db.execute_unprepared(
         "UPDATE s2s_peer_delivery SET next_attempt_at = now() + interval '1 hour', failures = 9",
     )
@@ -1361,6 +1363,21 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     assert_eq!(code, "VALIDATION");
+    let message = alice
+        .post(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "encrypted": false,
+                "remoteMembers": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }],
+            } }),
+        )
+        .await["errors"][0]["message"]
+        .clone();
+    assert_eq!(
+        message,
+        "conversations with people on other servers are encrypted"
+    );
 
     let create_with_alice = json!({ "input": {
         "serverId": direct,

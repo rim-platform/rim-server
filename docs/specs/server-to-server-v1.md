@@ -446,7 +446,9 @@ cursor per device (`relay_device_cursor`): each device's queue is its user's ite
 
 - **Push**: a subscription `relayStream(after: ID)` on the existing `/api/ws` yields items above
   `after`, then live ones: `{"type":"RelayItem","id":"981","hostServerId":"rims1_…","workspaceId":"…","envelope":{…}}`,
-  plus notices: `{"type":"DmRequestReceived","requestId":"<uuid>"}`, `RevocationAcked` and
+  plus notices: `{"type":"DmRequestReceived","requestId":"<uuid>"}`,
+  `{"type":"RevocationAcked","deviceId":"<uuid>","hostServerId":"rims1_…","ack":{"payload","signature"}}`
+  (the app checks the acknowledgement and refreshes `deviceRevocationStatus`) and
   `{"type":"QueueOverflow","spaces":[{"hostServerId":"rims1_…","workspaceId":"<uuid>"}]}`.
 - **Pull** `relayItems(after, limit)`; **ack** `ackRelayItems(upTo)` moves the session device's
   cursor. A newly linked device starts at the newest item and reads history from the host's feed
@@ -525,8 +527,9 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    `remoteMembers` and no `memberIds` makes a DM, more make a group; the app names every member
    this way, those on R_A included. The app creates a conversation with anyone on another relay
    only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
-   R_A refuses such a conversation unencrypted (`VALIDATION`), and an encrypted one when a member
-   has no MLS-active device. A person from another relay may create one too, through the forward
+   The server enforces this too: R_A refuses such a conversation unencrypted (`VALIDATION`,
+   "conversations with people on other servers are encrypted"), so relays only ever carry its
+   ciphertext, and refuses an encrypted one when a member has no MLS-active device. A person from another relay may create one too, through the forward
    path, naming R_A's members the same way.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
    `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"},"cipherSuite":79}`
@@ -641,7 +644,8 @@ A current member (an earlier join, or an existing local account on H) sends `inv
 
 Signed by the device key over `rim.delegation.v1\0 || payload`: "relay `relay` may receive this
 workspace's events for me and forward my device-signed requests to `host` until `expiresAt`". It
-never lets the relay act as the person; writes still need device signatures.
+never lets the relay act as the person; writes still need device signatures. `nonce` is 16 random
+bytes, unpadded base64url; the app issues delegations for exactly 24 hours from a whole second.
 
 A host accepts it (on `join` or `POST /s2s/v1/subscriptions`) when the signature verifies under a
 non-revoked device of the principal (an unknown device is fetched once from the presenting relay's
@@ -737,18 +741,25 @@ another origin).
   user (the host waits up to 10 seconds for the relays). The app then uses the host's `/api` and
   `/api/ws` as a local client would, under a banner "Connected directly to <host>". The account
   mutations a remote user may not run are refused on that session too (`FORBIDDEN`).
+- **Meanwhile.** Events from the host's `workspaceEvents` carry no `seq`, so the app holds the
+  host's `RelayItem`s unapplied and unacknowledged while connected directly.
 - **Back.** It probes `relayInfo` every 60 seconds; after two successes it renews delegations,
-  reads `relayStream` from its last item, deduplicates by `(host, stream, seq)` and closes the
-  direct connections.
+  asks the host directly for the `streamHeads` of the streams it knows there and takes them as
+  their baseline, runs the held items and reads `relayStream` on from its last item,
+  deduplicating by `(host, stream, seq)`, and closes the direct connections.
 
 ## Switching relays
 
-1. `signupWithKey` on the new relay R2 with the same identity.
+1. `signupWithKey` on the new relay R2 with the same identity: the key log, this device's
+   certificate and a proof whose `audience` is R2's server id, sent directly (desktop) with a
+   session kept outside the webview; `loginWithKey` instead when an earlier attempt created it.
 2. Publish a card (version + 1) with `relays: [R2, R1]` to both; direct-space hosts deliver to both.
 3. Sign a delegation for R2 for every subscribed workspace, including those R1 hosts (a delegation
    may name a local member too), and `renewDelegations` on R2.
 4. Drain R1's `relayStream`; nothing new reaches R1 that does not also reach R2.
-5. If R1 will go away, create successors on R2 for conversations homed in R1's direct space.
+5. If R1 will go away, list the conversations homed in R1's direct space; once the app runs on R2
+   it creates their successors there (a successor is created by the app's session on its own
+   relay), with R1's direct space as a space elsewhere.
 6. Publish `relays: [R2]` and call `leaveRelay` on R1, which cancels its subscriptions at every host
    and deletes the person's queue, contacts and requests there (the `user` row stays: it may still
    be a member of spaces R1 hosts).
