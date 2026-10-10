@@ -47,8 +47,9 @@ WORKDIR /app
 COPY --from=builder /app/target/release/rim_server /app/rim-server
 COPY --from=builder /app/target/release/migration /app/migration
 
-# Create data directory for file storage
-RUN mkdir -p /app/data && chown -R rim:rim /app
+# Create data directories for file storage and keys; /data is where the relay compose file
+# mounts its volume, so a new volume starts owned by rim
+RUN mkdir -p /app/data /data && chown -R rim:rim /app /data
 
 USER rim
 
@@ -68,6 +69,8 @@ USER rim
 #                           refuses to start without an audience for key logins
 #   RIM_KEY_LOGIN_AUDIENCES — comma-separated host[:port] clients reach this server at
 #   RIM_ROLE              — relay, host or both (default: both)
+#   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
+#   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
 
 ENV RIM_SERVER_HOST=0.0.0.0 \
     RIM_SERVER_PORT=8080 \
