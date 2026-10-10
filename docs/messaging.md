@@ -62,9 +62,8 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
 - Owner/Moderator archive and unarchive channels (`setConversationArchived`); other roles get
   `FORBIDDEN`. Only channels can be archived (`VALIDATION` otherwise).
 - An archived conversation is read-only: sending, replying, editing, deleting and forwarding into
-  it, reactions, pins, topic edits, threads, attachments, typing, joining, inviting and starting an
-  incident fail with `CONVERSATION_ARCHIVED`; alert ingestion into an archived channel is refused
-  (409 `{"error": "conversation is archived"}` on the webhook). Leaving and removing members still work.
+  it, reactions, pins, topic edits, threads, attachments, typing, joining and inviting fail with
+  `CONVERSATION_ARCHIVED`. Leaving and removing members still work.
 - Archived channels are hidden from `channels` unless `includeArchived: true`, and stay readable
   and searchable by whoever could read them before.
 
@@ -124,7 +123,7 @@ themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
 - `timeoutMember(until, reason)`: `until` must be in the future and at most 30 days ahead. While
   it lasts, every write fails with `TIMED_OUT` (extension `until`, RFC 3339): sending, replying,
   editing, forwarding, reactions, pins, topic, attachments (REST upload: 403 with `until`),
-  starting an incident, joining, inviting, creating conversations, and `executeCommand` of
+  joining, inviting, creating conversations, and `executeCommand` of
   any `Mutating` (or stricter) command in that workspace. Reads continue, and a timed-out author
   may still delete their own messages over GraphQL. Expired timeouts are ignored;
   `clearTimeout` ends one early.

@@ -314,7 +314,7 @@ since login and member lookups assume one row per name.
 Remote users may not run mutations that change the account rather than a space (`FORBIDDEN`, `not
 available to remote members`): `login`, `logout`, `signup*`, `enrollIdentityKey`, `addDeviceKey`,
 `revokeDeviceKey`, `rotateIdentityKey`, `publishProfileCard`, `logoutOtherSessions`, password and
-email mutations, `createServer`, ingest token and bot mutations. Identity changes arrive by `POST
+email mutations, `createServer` and bot mutations. Identity changes arrive by `POST
 /identity` and `POST /revocations`.
 
 `updateMyProfile` sets what the host stores per member and the card does not carry: the avatar
@@ -418,7 +418,7 @@ entity of a remote space by (host server id, id).
 
 | `stream` | Events | `seq` |
 |---|---|---|
-| `c:<conversationId>` | Every event with a `conversation_id` (messages, reactions, pins, threads, conversation membership, link previews, incidents, `MlsCommitAccepted`, `MlsMembershipChanged`) | 1, 2, … |
+| `c:<conversationId>` | Every event with a `conversation_id` (messages, reactions, pins, threads, conversation membership, link previews, `MlsCommitAccepted`, `MlsMembershipChanged`) | 1, 2, … |
 | `u:<principalId>` | Events for one user (`NotificationDue`, `UserMentioned`, `ReadStateUpdated`, `MlsWelcomeAvailable`, `DmInvite`); for a guest, the directory events about them | 1, 2, … |
 | `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `WorkspacePluginChanged`, pipeline and workspace-state events), to non-guests | 1, 2, … |
 | `e` | `TypingStarted`, `PresenceChanged` | `null` |

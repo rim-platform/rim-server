@@ -41,8 +41,8 @@ minimum support needed so people can use the app daily.
    and AI grounding keep working there. Stages 2 to 5 below deliver this.
 
 What this rules out: chasing Discord or Slack feature parity, building first-party verticals
-(the incident and on-call layer stays as the first showcase of what the platform can host,
-it is no longer a pillar), and building voice.
+(the incident and on-call layer is gone from the core; it returns as a plugin), and building
+voice.
 
 **One sentence:** *RIM is the communication workspace you program: commands, keybinds,
 macros, pipelines, plugins and an AI operator on top of chat, where you are a key, your
@@ -78,7 +78,7 @@ run yet and the client keeps no history between launches.
 | Message edits | No `updated_at` or version on `message`, so a client cache cannot see edits yet |
 | Shell | Side rail, workspace rail, tool panel, docked thread pane, status bar, spatial navigation, layout presets, zen mode, density modes, modal composer |
 | Security | Argon2id, HttpOnly session cookies with HMAC double-submit CSRF, login and reset rate limits, SSRF-safe link previews, storage quotas, CSP on desktop and web |
-| Showcase vertical | Incidents, on-call schedules, escalation policies, alert webhooks; optional per workspace since 0.4 |
+| Showcase vertical | Dropped 2026-10-10 (tag incidents-last); returns as a plugin after Track 3 |
 | rim-cli | Initial commit only |
 | Quality | Server CI (fmt, clippy, single-threaded tests, coverage gate, audit, Docker) and client CI (ESLint, Prettier, tsc, Vitest, build, Docker) green |
 
@@ -311,8 +311,8 @@ These keep Tracks 1–6 from making Stages 2 to 5 a rewrite. They cost little no
 - **Single-node stores stay behind traits.** Broadcaster, confirmation store, rate limiters,
   presence and typing are in memory behind interfaces today; keep it that way and never let
   a new feature depend on their single-node semantics.
-- **No new server-only vertical features.** The incident layer is grandfathered; anything
-  comparable goes through plugins, bots or pipelines.
+- **No new server-only vertical features.** The incident layer was removed from the core;
+  anything comparable goes through plugins, bots or pipelines.
 
 ## Stages (the master plan, 2026-10-08)
 
@@ -471,7 +471,7 @@ Decision 1 (go on the first PRs) was answered "go" on 2026-10-08.
 | 9 | Readable names for keys in Stage 5? | contact lists / alias / directory | contact lists |
 | 10 | Embedded terminal (still in `src-tauri/src/terminal`)? | remove / keep gated | remove |
 | 11 | Audit-log retention variant? | A (90d/365d) / B (365/365) | A |
-| 12 | Incidents and on-call: spike moving them to a plugin, or commit now? | spike / commit | spike |
+| 12 | Incidents and on-call: spike moving them to a plugin, or commit now? | spike / commit | dropped |
 | 13 | License for rim-ui and rim-cli (rim-server is Apache-2.0)? | Apache-2.0 / AGPL / MIT | Apache-2.0 |
 | 14 | Vim mode: opt-in, or on by default? | opt-in / default | opt-in |
 | 15 | Mobile: PWA after Stage 3, or native later? | PWA / native | PWA |

@@ -102,11 +102,8 @@ need an enterprise platform with thousands of pre-built integrations.
 See `docs/competitive-analysis.md` for the full analysis.
 
 Summary: No competing team-chat product combines a command palette, custom keybinds,
-macro commands, and client-side plugins. On the incident side, Mattermost (the closest
-competitor) has Playbooks checklists and Agents V2 but delegates on-call and escalation to
-PagerDuty/Opsgenie, and its agents cannot drive runbooks. See
-`docs/research/competitive-landscape-2026-04-29.md` and
-`docs/research/mattermost-playbooks-teardown-2026-07-10.md`.
+macro commands, and client-side plugins. See
+`docs/research/competitive-landscape-2026-04-29.md`.
 
 | Feature               | Slack | Discord | Mattermost | Zulip | Element | RIM   |
 |-----------------------|-------|---------|------------|-------|---------|-------|
