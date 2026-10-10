@@ -186,3 +186,30 @@ fn message_report_sdl_has_the_franked_report_fields() {
         assert!(compact.contains(definition), "SDL lacks `{definition}`");
     }
 }
+
+/// `serverInfo` and its type, with their exact signatures.
+#[test]
+fn server_info_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&export_sdl(
+        test_service_provider(),
+        InMemoryBroadcaster::new(16),
+        test_presence_manager(),
+        test_typing_tracker(),
+        test_observers(),
+    ));
+    assert!(sdl.contains("serverInfo: ServerInfo!"));
+    assert!(sdl.contains("type ServerInfo { version: String! apiVersion: Int! }"));
+}
+
+/// `serverInfo` answers without a session.
+#[tokio::test]
+async fn server_info_needs_no_session() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(Request::new("{ serverInfo { version apiVersion } }"))
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert_eq!(data["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(data["serverInfo"]["apiVersion"], crate::types::API_VERSION);
+}

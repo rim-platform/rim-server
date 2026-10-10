@@ -45,6 +45,7 @@ pub(crate) mod presence;
 pub(crate) mod profile;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
+pub(crate) mod server_info;
 pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod workspace;
@@ -131,4 +132,5 @@ pub(crate) struct QueryGroup7(
 pub(crate) struct QueryGroup8(
     relay::RelayQueries,
     remote_workspace::RemoteWorkspaceQueries,
+    server_info::ServerInfoQueries,
 );
