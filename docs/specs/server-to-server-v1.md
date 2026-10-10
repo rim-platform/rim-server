@@ -839,10 +839,10 @@ drill, quotas and how to change them, monitoring (queue bytes, outbox depth per 
 failures, `401`/`409`/`429` rates, PoW signups), incident response for spam waves, a hostile peer, a
 stolen server key and a database leak, and the abuse policy text.
 
-**Compose** (`deploy/compose.relay.yml`, with `deploy/README.md`): rim-server with
-`RIM_ROLE=relay`, `RIM_PUBLIC_BASE_URL=https://relay.rim.chat`, `RIM_REGISTRATION_POW_BITS=24`,
-`RIM_RELAY_QUEUE_BYTES_PER_USER=67108864` and the other quotas above,
-`RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_FORCE_SECURE_COOKIES=true`, `RIM_DATA_DIR=/data` on a
+**Compose** (`deploy/compose.yml` with the `deploy/compose.relay.yml` override, and
+`deploy/README.md`): rim-server with `RIM_ROLE=relay`, `RIM_PUBLIC_BASE_URL=https://<RIM_DOMAIN>`,
+`RIM_REGISTRATION_POW_BITS=24`, `RIM_RELAY_QUEUE_BYTES_PER_USER=67108864` and the other quotas
+above, `RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_FORCE_SECURE_COOKIES=true`, `RIM_DATA_DIR=/data` on a
 volume (the audit log too); a migration step before it; Postgres 17 on its own volume, on a
 network with no way out; Caddy as the TLS proxy passing `/api`, `/api/ws`, `/s2s/v1` and
 `/.well-known/rim-server` unchanged with bodies up to 32 MiB and setting `X-Forwarded-For`
