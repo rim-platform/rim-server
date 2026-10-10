@@ -7,8 +7,8 @@ use rim_core::user::model::UserId;
 use uuid::Uuid;
 
 use crate::host::dto::{
-    ForwardOutcome, ForwardRequest, HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef,
-    StreamHeadDto,
+    ConversationPredecessorDto, ForwardOutcome, ForwardRequest, HostCleanup, RemoteClaim,
+    RemoteKeyPackage, RemoteMemberRef, StreamHeadDto,
 };
 use crate::relay::dto::{IdentityDocument, OutboxPage};
 use crate::{Actor, ServiceResult};
@@ -41,6 +41,12 @@ pub trait HostService: Send + Sync {
         host_server_id: String,
         predecessor_id: Uuid,
     ) -> ServiceResult<()>;
+
+    /// The conversation `conversation_id` succeeds, if it is a successor.
+    async fn predecessor(
+        &self,
+        conversation_id: ConversationId,
+    ) -> ServiceResult<Option<ConversationPredecessorDto>>;
 
     /// Apply an identity a relay pushed, for a principal held here as remote. Returns whether
     /// it was applied.

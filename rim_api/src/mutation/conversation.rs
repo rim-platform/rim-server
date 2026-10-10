@@ -39,7 +39,10 @@ impl ConversationMutations {
             rim_services::conversation::types::ConversationParticipants::DirectMessage {
                 other_user_id: parse_uuid_id::<rim_core::user::model::UserId>(other_user_id)?,
             }
-        } else if input.member_ids.is_none() && remote_ids.len() == 1 {
+        } else if input.member_ids.is_none()
+            && input.remote_members.as_ref().map_or(0, Vec::len) == 1
+            && remote_ids.len() == 1
+        {
             rim_services::conversation::types::ConversationParticipants::DirectMessage {
                 other_user_id: remote_ids[0],
             }

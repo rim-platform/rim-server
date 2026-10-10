@@ -807,12 +807,16 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
     // Ignoring deletes the held items and drops what follows.
     let ignored = bob
         .ok(
-            "mutation($id: ID!) { ignoreDmRequest(id: $id) { status heldItems { id } } }",
+            "mutation($id: ID!) { ignoreDmRequest(id: $id) { status heldItems { id hostServerId workspaceId envelope { payload signature } } } }",
             json!({ "id": request["id"] }),
         )
         .await;
     assert_eq!(ignored["ignoreDmRequest"]["status"], "IGNORED");
-    assert_eq!(ignored["ignoreDmRequest"]["heldItems"], json!([]));
+    let kept = ignored["ignoreDmRequest"]["heldItems"]
+        .as_array()
+        .expect("held");
+    assert_eq!(kept.len(), 1, "only the invite stays");
+    assert_eq!(verify_item(&a, &kept[0]).event["type"], "DmInvite");
     let code = bob
         .err(
             "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
@@ -1221,6 +1225,37 @@ async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_
         ("local".to_string(), "bobby".to_string(), 1)
     );
 
+    // A successor names the conversation it replaces.
+    let dave = sign_up(&b, "dave", 5).await;
+    let direct = alice.direct_space().await;
+    let replaced = Uuid::now_v7();
+    let successor = alice
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "remoteMembers": [{ "principalId": dave.principal(), "relayUrls": [b.origin] }],
+                "predecessor": { "hostServerId": b.id(), "conversationId": replaced },
+            } }),
+        )
+        .await["createConversation"]["id"]
+        .clone();
+    let predecessor = alice
+        .ok(
+            "query($s: ID!, $c: ID!) { conversation(serverId: $s, conversationId: $c) { conversationType predecessor { hostServerId conversationId } } }",
+            json!({ "s": direct, "c": successor }),
+        )
+        .await["conversation"]
+        .clone();
+    assert_eq!(
+        predecessor["conversationType"], "DIRECT",
+        "one remote member is a DM"
+    );
+    assert_eq!(
+        predecessor["predecessor"],
+        json!({ "hostServerId": b.id(), "conversationId": replaced.to_string() })
+    );
+
     // Leaving his own relay deletes his requests and contacts there.
     bob.ok(
         "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
@@ -1263,6 +1298,8 @@ async fn the_sdl_names_every_relay_type_and_field() {
         "type StreamHead",
         "input RemoteMemberInput",
         "input PredecessorInput",
+        "type ConversationPredecessor",
+        "predecessor: ConversationPredecessor",
         "remoteMembers: [RemoteMemberInput!]",
         "predecessor: PredecessorInput",
         "relayInfo: RelayInfo!",

@@ -33,8 +33,8 @@ use rim_s2s::SharedIdentity;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
-    ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest, HostCleanup, RemoteClaim,
-    RemoteKeyPackage, RemoteMemberRef, StreamHeadDto,
+    ConversationPredecessorDto, ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest,
+    HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, StreamHeadDto,
 };
 use rim_services::host::service::{DelegationCheck, HostService, RemoteKeyPackages};
 use rim_services::relay::dto::{
@@ -486,6 +486,23 @@ impl HostService for DefaultHostService {
             .set_conversation_predecessor(conversation_id, &host_server_id, predecessor_id)
             .await?;
         Ok(())
+    }
+
+    async fn predecessor(
+        &self,
+        conversation_id: ConversationId,
+    ) -> ServiceResult<Option<ConversationPredecessorDto>> {
+        Ok(self
+            .repos
+            .host_repo
+            .conversation_predecessor(conversation_id)
+            .await?
+            .map(
+                |(host_server_id, conversation_id)| ConversationPredecessorDto {
+                    host_server_id,
+                    conversation_id,
+                },
+            ))
     }
 
     #[instrument(name = "host.apply_identity", skip_all, fields(peer_server_id = %peer_server_id))]

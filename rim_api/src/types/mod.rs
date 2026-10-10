@@ -122,8 +122,9 @@ pub use pipeline::{
 };
 pub use platform::Capability;
 pub use relay::{
-    Contact, DmRequest, DmRequestStatus, PredecessorInput, RelayInfo, RelayItem, RelayItemPage,
-    RemoteIdentity, RemoteMemberInput, RemotePrincipalDevice, RemoteServer, StreamHead,
+    Contact, ConversationPredecessor, DmRequest, DmRequestStatus, PredecessorInput, RelayInfo,
+    RelayItem, RelayItemPage, RemoteIdentity, RemoteMemberInput, RemotePrincipalDevice,
+    RemoteServer, StreamHead,
 };
 pub use skill_profile::{FeatureUsage, SkillProfileGql, SkillTier};
 pub use thread::Thread;

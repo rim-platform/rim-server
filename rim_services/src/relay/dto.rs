@@ -124,9 +124,6 @@ pub enum RelayNotice {
     DmRequestReceived {
         user_id: UserId,
         request_id: DmRequestId,
-        from_principal_id: String,
-        host_server_id: String,
-        conversation_id: Uuid,
     },
     /// Items were dropped over the user's byte cap.
     QueueOverflow {
@@ -148,19 +145,10 @@ impl RelayNotice {
     pub fn stream_json(&self) -> Option<String> {
         match self {
             Self::Items { .. } => None,
-            Self::DmRequestReceived {
-                request_id,
-                from_principal_id,
-                host_server_id,
-                conversation_id,
-                ..
-            } => Some(
+            Self::DmRequestReceived { request_id, .. } => Some(
                 serde_json::json!({
                     "type": "DmRequestReceived",
                     "requestId": request_id.to_string(),
-                    "fromPrincipalId": from_principal_id,
-                    "hostServerId": host_server_id,
-                    "conversationId": conversation_id,
                 })
                 .to_string(),
             ),

@@ -102,6 +102,12 @@ struct HeadRow {
 }
 
 #[derive(FromQueryResult)]
+struct PredecessorRow {
+    predecessor_host: Option<String>,
+    predecessor_conversation_id: Option<Uuid>,
+}
+
+#[derive(FromQueryResult)]
 struct HighestRow {
     request_highest_seq: Option<i64>,
 }
@@ -354,6 +360,20 @@ impl HostRepository for SeaOrmHostRepository {
         )
         .await?;
         Ok(())
+    }
+
+    async fn conversation_predecessor(
+        &self,
+        conversation_id: ConversationId,
+    ) -> RepoResult<Option<(String, Uuid)>> {
+        Ok(self
+            .one::<PredecessorRow>(
+                "SELECT predecessor_host, predecessor_conversation_id FROM conversation \
+                 WHERE id = $1",
+                vec![uuid(conversation_id)],
+            )
+            .await?
+            .and_then(|r| r.predecessor_host.zip(r.predecessor_conversation_id)))
     }
 
     async fn next_stream_seq(&self, workspace_id: ServerId, stream: &str) -> RepoResult<i64> {

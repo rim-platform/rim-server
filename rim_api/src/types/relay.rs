@@ -4,7 +4,7 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_core::relay::model::DmRequestStatus as CoreDmRequestStatus;
-use rim_services::host::dto::StreamHeadDto;
+use rim_services::host::dto::{ConversationPredecessorDto, StreamHeadDto};
 use rim_services::relay::dto::{
     ContactDto, DmRequestDto, IdentityDevice, RelayInfoDto, RelayItemDto, RelayItemPageDto,
     RemoteIdentityDto, RemoteServerDto, SignedJson,
@@ -228,6 +228,22 @@ impl From<StreamHeadDto> for StreamHead {
         Self {
             stream: dto.stream,
             seq: dto.seq.to_string(),
+        }
+    }
+}
+
+/// The conversation a successor replaces, on the host that held it.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ConversationPredecessor {
+    pub host_server_id: String,
+    pub conversation_id: ID,
+}
+
+impl From<ConversationPredecessorDto> for ConversationPredecessor {
+    fn from(dto: ConversationPredecessorDto) -> Self {
+        Self {
+            host_server_id: dto.host_server_id,
+            conversation_id: ID(dto.conversation_id.to_string()),
         }
     }
 }

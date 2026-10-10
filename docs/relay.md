@@ -79,8 +79,8 @@ has no invite for are refused (`not_subscribed`), so a host cannot skip the inbo
 | Action | Effect |
 |---|---|
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
-| `ignoreDmRequest` | Held items deleted; later items dropped; the request expires after 30 days |
-| `blockPrincipal` | Pending requests from the principal ignored; its invites (`blocked`) and key package claims refused |
+| `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
+| `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
 | `reportDmRequest` | Audited as `relay.dm_request_reported`; a pending request is ignored |
 | Nothing | Expires after the retention period |
 
@@ -131,16 +131,18 @@ requests, outbox rows over 7 days and accepted `seq` values out of the window. A
   without `?`, `#` or `@`.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
-  group with people on other servers. The caller needs a published profile card: their relays show
-  it in the request inbox. `predecessor: { hostServerId, conversationId }` records the
-  conversation a successor replaces.
+  group with people on other servers; people on this relay may be named the same way. Any
+  `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
+  card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`
+  records the conversation a successor replaces, and `Conversation.predecessor` returns it.
 - `dmRequests(status)`, `acceptDmRequest`, `ignoreDmRequest`, `blockPrincipal`,
   `unblockPrincipal`, `reportDmRequest` work the request inbox. A request's `heldItems` are
-  host-signed envelopes to read before deciding.
+  host-signed envelopes to read before deciding, the `DmInvite` first; verify it to bind the
+  conversation's space to its home before reading or leaving it.
 - `relayStream(after)` on the existing WebSocket yields the session device's items above `after`
   (its cursor when omitted), then live ones, as JSON strings:
   `{"type":"RelayItem","id","hostServerId","workspaceId","envelope":{"payload","signature"}}`, plus
-  `{"type":"DmRequestReceived","requestId","fromPrincipalId","hostServerId","conversationId"}` and
+  `{"type":"DmRequestReceived","requestId"}` and
   `{"type":"QueueOverflow","spaces":[{"hostServerId","workspaceId"}]}`. `relayItems(after, limit)`
   pulls the same items; `ackRelayItems(upTo)` moves the device's cursor. The session must be bound
   to a device.

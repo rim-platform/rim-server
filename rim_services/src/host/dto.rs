@@ -11,6 +11,13 @@ pub struct RemoteMemberRef {
     pub relay_urls: Vec<String>,
 }
 
+/// The conversation a successor replaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationPredecessorDto {
+    pub host_server_id: String,
+    pub conversation_id: Uuid,
+}
+
 /// A request a relay forwarded under `/s2s/v1/forward/…`, after its S2S signature verified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardRequest {

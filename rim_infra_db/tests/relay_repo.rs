@@ -496,7 +496,24 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
             .unwrap(),
         1
     );
-    assert_eq!(repo.count_held(other.id).await.unwrap(), 0);
+    assert_eq!(
+        repo.count_held(other.id).await.unwrap(),
+        1,
+        "the invite stays with the request"
+    );
+    let env = repo
+        .insert_envelope(envelope(Some(3), Uuid::now_v7()))
+        .await
+        .unwrap();
+    repo.insert_item(NewRelayItem {
+        request_id: Some(other.id),
+        ..item(user.id, env)
+    })
+    .await
+    .unwrap();
+    let first = repo.held_items(other.id).await.unwrap()[0].id;
+    assert_eq!(repo.delete_held(other.id).await.unwrap(), 1);
+    assert_eq!(repo.held_items(other.id).await.unwrap()[0].id, first);
     assert_eq!(
         repo.delete_expired_requests(Utc::now() + Duration::days(31))
             .await

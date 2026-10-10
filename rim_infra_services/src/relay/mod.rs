@@ -253,17 +253,14 @@ impl DefaultRelayService {
     }
 
     async fn request_dto(&self, request: DmRequest) -> ServiceResult<DmRequestDto> {
-        let held_items = if request.status == DmRequestStatus::Pending {
-            self.repos
-                .relay_repo
-                .held_items(request.id)
-                .await?
-                .into_iter()
-                .map(item_dto)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let held_items = self
+            .repos
+            .relay_repo
+            .held_items(request.id)
+            .await?
+            .into_iter()
+            .map(item_dto)
+            .collect();
         Ok(DmRequestDto {
             id: request.id,
             from_principal_id: request.from_principal_id,
@@ -474,9 +471,6 @@ impl DefaultRelayService {
                     notices.push(RelayNotice::DmRequestReceived {
                         user_id,
                         request_id: request.id,
-                        from_principal_id: request.from_principal_id.clone(),
-                        host_server_id: request.host_server_id.clone(),
-                        conversation_id,
                     });
                     Some(request.id)
                 } else {

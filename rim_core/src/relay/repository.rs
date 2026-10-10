@@ -104,7 +104,8 @@ pub trait RelayRepository: Send + Sync {
     /// Let a request's held items flow. Returns how many.
     async fn release_held(&self, request_id: DmRequestId) -> RepoResult<u64>;
 
-    /// Delete a request's held items. Returns how many.
+    /// Delete a request's held items but its first, the invite, which stays with the request so
+    /// the app can still verify the conversation's home. Returns how many.
     async fn delete_held(&self, request_id: DmRequestId) -> RepoResult<u64>;
 
     async fn count_held(&self, request_id: DmRequestId) -> RepoResult<i64>;
@@ -114,8 +115,8 @@ pub trait RelayRepository: Send + Sync {
     /// Whether the user ever accepted a request from the principal.
     async fn accepted_from(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
-    /// Ignore every pending request from a principal, deleting their held items. Returns
-    /// how many.
+    /// Ignore every pending request from a principal, deleting their held items but each
+    /// request's invite. Returns how many requests.
     async fn ignore_pending_from(
         &self,
         user_id: UserId,
