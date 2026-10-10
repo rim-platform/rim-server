@@ -1,9 +1,11 @@
 use async_graphql::*;
 use base64::Engine;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::features::require_feature;
 use crate::ids::parse_uuid_id;
 
 #[derive(Default)]
@@ -16,6 +18,7 @@ impl CustomEmojiMutations {
         ctx: &Context<'_>,
         input: CreateCustomEmojiInput,
     ) -> Result<crate::types::CustomEmoji> {
+        require_feature(ctx, ServerFeature::CustomEmoji)?;
         let actor = require_actor(ctx)?;
         let svc = ctx
             .data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>(
@@ -40,6 +43,7 @@ impl CustomEmojiMutations {
     }
 
     async fn delete_custom_emoji(&self, ctx: &Context<'_>, emoji_id: ID) -> Result<bool> {
+        require_feature(ctx, ServerFeature::CustomEmoji)?;
         let actor = require_actor(ctx)?;
         let svc = ctx
             .data::<std::sync::Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>>(

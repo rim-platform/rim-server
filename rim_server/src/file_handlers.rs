@@ -6,8 +6,10 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
 use rim_services::moderation::service::ModerationService;
@@ -46,6 +48,13 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
             HttpResponse::Forbidden().json(serde_json::json!({
                 "error": "timed out",
                 "until": until.to_rfc3339(),
+            }))
+        }
+        rim_services::ServiceError::FeatureDisabled(feature) => {
+            HttpResponse::Forbidden().json(serde_json::json!({
+                "error": format!("the {feature} feature is not available on this server"),
+                "code": "FEATURE_DISABLED",
+                "feature": feature.as_str(),
             }))
         }
         rim_services::ServiceError::RateLimited {
@@ -94,6 +103,17 @@ use rim_core::util::sanitize_filename;
 fn is_mime_allowed(content_type: &str, allowed: &[&str]) -> bool {
     let ct = content_type.to_lowercase();
     allowed.iter().any(|prefix| ct.starts_with(prefix))
+}
+
+/// Refuse a route of a feature that is not enabled on this instance: 403 with the
+/// `FEATURE_DISABLED` code.
+pub(crate) fn require_feature(
+    features: &dyn FeatureGate,
+    feature: ServerFeature,
+) -> Result<(), HttpResponse> {
+    features
+        .require(feature)
+        .map_err(map_service_error_to_response)
 }
 
 /// Enforce CSRF validation for REST endpoints. Returns 403 on failure.
@@ -242,7 +262,11 @@ pub async fn handle_file_upload(
     req: HttpRequest,
     payload: Multipart,
     attachment_service: web::Data<Arc<dyn MessageAttachmentService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Attachments) {
+        return resp;
+    }
     if let Err(resp) = require_csrf(&req) {
         return resp;
     }
@@ -393,7 +417,11 @@ pub async fn handle_attachment_download(
     path: web::Path<String>,
     attachment_service: web::Data<Arc<dyn MessageAttachmentService>>,
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Attachments) {
+        return resp;
+    }
     let user_id = match require_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -755,5 +783,81 @@ mod tests {
             let resp = actix_test::call_service(&app, get(&path, true).to_request()).await;
             assert_eq!(resp.status(), 404, "{path}");
         }
+    }
+
+    macro_rules! attachment_app {
+        ($gate:expr) => {
+            actix_test::init_service(
+                App::new()
+                    .service(
+                        web::resource("/api/files/upload")
+                            .route(web::post().to(handle_file_upload)),
+                    )
+                    .service(
+                        web::resource("/api/attachments/{attachment_id}/download")
+                            .route(web::get().to(handle_attachment_download)),
+                    )
+                    .app_data(web::Data::new(
+                        Arc::new(MockRequestAuthenticator::new()) as Arc<dyn RequestAuthenticator>
+                    ))
+                    .app_data(web::Data::new(Arc::new(
+                        rim_services::message_attachment::service::MockMessageAttachmentService::new(),
+                    )
+                        as Arc<dyn MessageAttachmentService>))
+                    .app_data(web::Data::new(Arc::new(OneFile) as Arc<dyn StorageBackend>))
+                    .app_data(web::Data::new(Arc::new($gate) as Arc<dyn FeatureGate>)),
+            )
+            .await
+        };
+    }
+
+    fn upload() -> actix_test::TestRequest {
+        actix_test::TestRequest::post()
+            .uri("/api/files/upload")
+            .insert_header((
+                header::CONTENT_TYPE,
+                "multipart/form-data; boundary=rimboundary",
+            ))
+            .set_payload(
+                "--rimboundary\r\nContent-Disposition: form-data; name=\"file\"; \
+                 filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--rimboundary--\r\n",
+            )
+    }
+
+    /// With attachments disabled, upload and download answer 403 `FEATURE_DISABLED` before the
+    /// session is looked at; the unprimed mocks panic on any call.
+    #[actix_web::test]
+    async fn a_disabled_feature_refuses_attachment_upload_and_download() {
+        let gate = rim_infra_services::feature_gate::InstanceFeatureGate::new(
+            &[ServerFeature::Attachments],
+            &[],
+        );
+        let app = attachment_app!(gate);
+        for req in [
+            upload().to_request(),
+            actix_test::TestRequest::get()
+                .uri(&format!(
+                    "/api/attachments/{}/download",
+                    uuid::Uuid::now_v7()
+                ))
+                .to_request(),
+        ] {
+            let resp = actix_test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 403);
+            let body: serde_json::Value = actix_test::read_body_json(resp).await;
+            assert_eq!(body["code"], "FEATURE_DISABLED");
+            assert_eq!(body["feature"], "attachments");
+        }
+    }
+
+    /// With attachments enabled the upload goes on to the CSRF check.
+    #[actix_web::test]
+    async fn an_enabled_feature_lets_the_upload_reach_the_csrf_check() {
+        let app =
+            attachment_app!(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled());
+        let resp = actix_test::call_service(&app, upload().to_request()).await;
+        assert_eq!(resp.status(), 403);
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert!(body.get("code").is_none(), "{body}");
     }
 }

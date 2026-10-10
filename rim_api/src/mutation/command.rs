@@ -9,6 +9,7 @@ use rim_services::command::service::CommandService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::features::require_initiator;
 use crate::types::{Command, CommandContextInput, CommandInitiator, CommandResult};
 
 #[derive(Default)]
@@ -21,6 +22,7 @@ impl CommandMutations {
         ctx: &Context<'_>,
         input: ExecuteCommandInput,
     ) -> Result<CommandResult> {
+        require_initiator(ctx, input.initiator)?;
         let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;

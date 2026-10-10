@@ -11,6 +11,7 @@ use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::device_link::service::DeviceLinkService;
 use rim_services::events::Observers;
+use rim_services::feature::service::FeatureGate;
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::link_preview::service::LinkPreviewService;
@@ -92,6 +93,7 @@ pub struct DefaultAppServiceProvider {
     e2ee_service: Arc<dyn rim_services::e2ee::service::E2eeService>,
     workspace_plugin_service: Arc<dyn WorkspacePluginService>,
     plugin_bundle_service: Arc<dyn PluginBundleService>,
+    feature_gate: Arc<dyn FeatureGate>,
 }
 
 impl DefaultAppServiceProvider {
@@ -110,6 +112,7 @@ impl DefaultAppServiceProvider {
         key_login_audiences: Vec<String>,
         franking_keys: crate::franking_keys::SharedFrankingKeys,
         federation: FederationHooks,
+        feature_gate: Arc<dyn FeatureGate>,
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
@@ -325,7 +328,8 @@ impl DefaultAppServiceProvider {
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
         let link_preview_service: Arc<dyn LinkPreviewService> = Arc::new(
-            crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview()),
+            crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview())
+                .with_feature_gate(Arc::clone(&feature_gate)),
         );
         let custom_emoji_service: Arc<dyn CustomEmojiService> =
             Arc::new(crate::custom_emoji::DefaultCustomEmojiService::new(
@@ -410,6 +414,7 @@ impl DefaultAppServiceProvider {
             e2ee_service,
             workspace_plugin_service,
             plugin_bundle_service,
+            feature_gate,
         }
     }
 }
@@ -508,5 +513,8 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn plugin_bundle_service(&self) -> Arc<dyn PluginBundleService> {
         Arc::clone(&self.plugin_bundle_service)
+    }
+    fn feature_gate(&self) -> Arc<dyn FeatureGate> {
+        Arc::clone(&self.feature_gate)
     }
 }

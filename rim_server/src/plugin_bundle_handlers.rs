@@ -8,13 +8,17 @@ use actix_web::http::header;
 use actix_web::{HttpRequest, HttpResponse, web};
 use futures_util::StreamExt;
 use rim_core::server::model::ServerId;
+use rim_core::server_feature::model::ServerFeature;
+use rim_services::feature::service::FeatureGate;
 use rim_services::workspace_plugin::command::{DownloadPluginBundleQuery, UploadPluginBundleCmd};
 use rim_services::workspace_plugin::service::PluginBundleService;
 use rim_services::workspace_plugin::{MAX_PLUGIN_BUNDLE_BYTES, PLUGIN_BUNDLE_MEDIA_TYPE};
 use rim_services::{Actor, ServiceError};
 use sha2::{Digest, Sha256};
 
-use crate::file_handlers::{map_service_error_to_response, require_auth, require_csrf};
+use crate::file_handlers::{
+    map_service_error_to_response, require_auth, require_csrf, require_feature,
+};
 
 /// Bundles are named by their hash, so a URL's bytes never change.
 const BUNDLE_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
@@ -71,7 +75,12 @@ pub async fn handle_plugin_bundle_upload(
     path: web::Path<String>,
     payload: web::Payload,
     service: web::Data<Arc<dyn PluginBundleService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::WorkspacePlugins)
+    {
+        return resp;
+    }
     let user_id = match require_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -133,7 +142,12 @@ pub async fn handle_plugin_bundle_download(
     req: HttpRequest,
     path: web::Path<(String, String)>,
     service: web::Data<Arc<dyn PluginBundleService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::WorkspacePlugins)
+    {
+        return resp;
+    }
     let user_id = match require_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -220,6 +234,13 @@ mod tests {
 
     macro_rules! test_app {
         ($auth:expr, $service:expr) => {
+            test_app!(
+                $auth,
+                $service,
+                rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled()
+            )
+        };
+        ($auth:expr, $service:expr, $gate:expr) => {
             actix_test::init_service(
                 App::new()
                     .service(
@@ -235,7 +256,8 @@ mod tests {
                     ))
                     .app_data(web::Data::new(
                         Arc::new($service) as Arc<dyn PluginBundleService>
-                    )),
+                    ))
+                    .app_data(web::Data::new(Arc::new($gate) as Arc<dyn FeatureGate>)),
             )
             .await
         };
@@ -470,5 +492,36 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), 401);
+    }
+
+    /// With workspace plugins disabled, upload and download answer 403 `FEATURE_DISABLED`
+    /// before the session is looked at; the unprimed mocks panic on any call.
+    #[actix_web::test]
+    async fn a_disabled_feature_refuses_upload_and_download() {
+        let gate = rim_infra_services::feature_gate::InstanceFeatureGate::new(
+            &[ServerFeature::WorkspacePlugins],
+            &[],
+        );
+        let app = test_app!(
+            MockRequestAuthenticator::new(),
+            MockPluginBundleService::new(),
+            gate
+        );
+        let server_id = ServerId::new();
+        for req in [
+            signed_in(upload_request(server_id, BUNDLE), true).to_request(),
+            actix_test::TestRequest::get()
+                .uri(&format!(
+                    "/api/plugin-bundles/{server_id}/{}",
+                    sha256_hex(BUNDLE)
+                ))
+                .to_request(),
+        ] {
+            let resp = actix_test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 403);
+            let body: serde_json::Value = actix_test::read_body_json(resp).await;
+            assert_eq!(body["code"], "FEATURE_DISABLED");
+            assert_eq!(body["feature"], "workspace_plugins");
+        }
     }
 }

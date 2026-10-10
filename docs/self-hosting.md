@@ -235,6 +235,12 @@ production's. Record each drill: **FILL** where.
   `RIM_AUDIT_RETENTION_DAYS` for the audit table.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.
 
+## Optional features
+
+Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface
+can be switched off with `RIM_FEATURES_DISABLED` (commented out in the `rim` service);
+`docs/operations/features.md` lists what each one covers and what clients see.
+
 ## Another proxy
 
 Caddy is an example. Any TLS proxy works if it:
