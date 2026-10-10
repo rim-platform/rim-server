@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::host::dto::{
     ConversationPredecessorDto, ForwardOutcome, ForwardRequest, HostCleanup, RemoteClaim,
-    RemoteKeyPackage, RemoteMemberRef, StreamHeadDto,
+    RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
 };
 use crate::relay::dto::{IdentityDocument, OutboxPage};
 use crate::{Actor, ServiceResult};
@@ -32,7 +32,7 @@ pub trait HostService: Send + Sync {
         &self,
         actor: Actor,
         member: RemoteMemberRef,
-    ) -> ServiceResult<UserId>;
+    ) -> ServiceResult<ResolvedMember>;
 
     /// Record the conversation a successor replaces.
     async fn set_predecessor(

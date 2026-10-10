@@ -69,6 +69,13 @@ impl Subscription {
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();
         let subscriber_user_id = actor.to_string();
+        // In the direct space, a conversation in the subscriber's request inbox (or from a
+        // creator they blocked) stays quiet until they accept it.
+        let inbox = ctx
+            .data::<crate::federation::FederationContext>()
+            .ok()
+            .filter(|f| f.info.direct_space_id.to_string() == ws_id)
+            .map(|f| Arc::clone(&f.relay));
 
         // Use async_stream to handle Lagged errors gracefully without ending the stream.
         // BroadcastStream ends on Lagged, so we use the raw receiver directly.
@@ -96,7 +103,23 @@ impl Subscription {
                         );
                         if user_can_see_event_as(&event, &subscriber_user_id, is_guest)
                             && let Ok(json) = serde_json::to_string(&event) {
-                                yield json;
+                                let conversation_id = inbox.as_ref().and_then(|_| {
+                                    serde_json::to_value(&event)
+                                        .ok()?
+                                        .get("conversation_id")?
+                                        .as_str()
+                                        .and_then(|v| uuid::Uuid::parse_str(v).ok())
+                                });
+                                let hidden = match (&inbox, conversation_id) {
+                                    (Some(relay), Some(conversation_id)) => relay
+                                        .conversation_hidden(actor, conversation_id)
+                                        .await
+                                        .unwrap_or(true),
+                                    _ => false,
+                                };
+                                if !hidden {
+                                    yield json;
+                                }
                             }
                         if removed_self {
                             break;

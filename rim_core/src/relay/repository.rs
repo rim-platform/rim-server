@@ -126,6 +126,15 @@ pub trait RelayRepository: Send + Sync {
 
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
+    /// Local users whose request for a conversation of this server's direct space is pending,
+    /// with their principal ids.
+    async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
+
+    /// Whether a conversation stays out of a local user's list: their request for it is pending
+    /// or ignored, or they blocked the direct-space conversation's creator.
+    async fn conversation_hidden(&self, user_id: UserId, conversation_id: Uuid)
+    -> RepoResult<bool>;
+
     /// A user's contacts, oldest first.
     async fn list_contacts(&self, user_id: UserId) -> RepoResult<Vec<Contact>>;
 

@@ -18,6 +18,14 @@ pub struct ConversationPredecessorDto {
     pub conversation_id: Uuid,
 }
 
+/// The user a conversation member resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedMember {
+    pub user_id: UserId,
+    /// Their relay is another server.
+    pub remote: bool,
+}
+
 /// A request a relay forwarded under `/s2s/v1/forward/…`, after its S2S signature verified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardRequest {

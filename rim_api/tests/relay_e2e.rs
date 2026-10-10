@@ -77,8 +77,6 @@ const SEND_ENCRYPTED: &str = r#"
 mutation Send($input: SendEncryptedMessageInput!) { sendEncryptedMessage(input: $input) { id } }"#;
 const EDIT_ENCRYPTED: &str = r#"
 mutation Edit($input: EditEncryptedMessageInput!) { editEncryptedMessage(input: $input) { id } }"#;
-const SEND_PLAIN: &str = r#"
-mutation Send($input: SendMessageInput!) { sendMessage(input: $input) { id } }"#;
 const MARK_READ: &str = r#"
 mutation Read($input: MarkAsReadInput!) { markAsRead(input: $input) }"#;
 const HEADS: &str = r#"
@@ -467,6 +465,54 @@ impl Person {
             .to_string()
     }
 
+    /// Create the encrypted conversation's group with `other`'s device, claiming their key
+    /// package through their relay.
+    async fn create_group_with(&mut self, other: &Person, direct: &str, conv: &str) {
+        let claimed = self
+            .ok(
+                CLAIM,
+                json!({ "input": {
+                    "serverId": direct,
+                    "conversationId": conv,
+                    "devices": [{ "principalId": other.principal(), "deviceId": other.device_id() }],
+                } }),
+            )
+            .await["claimMlsKeyPackages"]
+            .clone();
+        let other_principal = other.principal();
+        let (commit, welcome) = self.mls.create_group(
+            conv.parse().expect("uuid"),
+            &[(
+                other_principal.as_str(),
+                other.device_id(),
+                claimed[0]["keyPackage"].as_str().expect("package"),
+            )],
+        );
+        self.ok(
+            SUBMIT,
+            json!({ "input": {
+                "serverId": direct, "conversationId": conv, "incarnation": 1, "epoch": 0,
+                "cipherSuite": 0x004f, "commit": commit, "welcome": welcome,
+            } }),
+        )
+        .await;
+        self.mls.merge_pending();
+    }
+
+    /// Send an encrypted message; returns its id.
+    async fn send_encrypted(&mut self, direct: &str, conv: &str, body: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        let envelope = self
+            .mls
+            .encrypt(id, &content(id, 0, body, &[]), [6; 32], &[]);
+        self.ok(
+            SEND_ENCRYPTED,
+            json!({ "input": { "serverId": direct, "conversationId": conv, "messageId": id, "envelope": envelope } }),
+        )
+        .await;
+        id
+    }
+
     async fn pending_request(&self, from: &Person) -> Value {
         eventually("a DM request", || async {
             let data = self.ok(REQUESTS, json!({ "status": "PENDING" })).await;
@@ -845,7 +891,7 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
     );
 
     // Blocking ignores pending requests and refuses later invites.
-    carol.start_dm(&bob, &b, false).await;
+    carol.start_dm(&bob, &b, true).await;
     let from_carol = bob.pending_request(&carol).await;
     let blocked = bob
         .ok(
@@ -871,6 +917,7 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
                 "memberIds": [],
                 "remoteMembers": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }],
                 "title": "group",
+                "encrypted": true,
             } }),
         )
         .await;
@@ -903,7 +950,7 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
     let (a, b) = relays().await;
-    let alice = sign_up(&a, "alice", 1).await;
+    let mut alice = sign_up(&a, "alice", 1).await;
     let bob = sign_up(&b, "bob", 2).await;
     // A contact's conversation flows without a request.
     bob.ok(
@@ -920,14 +967,10 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
                 AuthActorCtx::new(Some(bob_user), None).with_device_key_id(Some(bob_device)),
             ));
 
-    let conv = alice.start_dm(&bob, &b, false).await;
+    let conv = alice.start_dm(&bob, &b, true).await;
     let direct = alice.direct_space().await;
-    alice
-        .ok(
-            SEND_PLAIN,
-            json!({ "input": { "serverId": direct, "conversationId": conv, "text": "first" } }),
-        )
-        .await;
+    alice.create_group_with(&bob, &direct, &conv).await;
+    let first_id = alice.send_encrypted(&direct, &conv, "first").await;
     let mut seen = Vec::new();
     while !seen.iter().any(|i: &Item| i.event["type"] == "NewMessage") {
         let response = tokio::time::timeout(Duration::from_secs(20), stream.next())
@@ -952,7 +995,7 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
         .find(|i| i.event["type"] == "NewMessage")
         .expect("NewMessage")
         .clone();
-    assert_eq!(first.event["message"]["text"], "first");
+    assert_eq!(first.event["message"]["id"], json!(first_id.to_string()));
 
     // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox.
     a.db.execute_unprepared(
@@ -960,18 +1003,16 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
     )
     .await
     .expect("hold deliveries");
-    alice
-        .ok(
-            SEND_PLAIN,
-            json!({ "input": { "serverId": direct, "conversationId": conv, "text": "second" } }),
-        )
-        .await;
+    let second_id = json!(
+        alice
+            .send_encrypted(&direct, &conv, "second")
+            .await
+            .to_string()
+    );
     tokio::time::sleep(Duration::from_secs(2)).await;
     let before = bob.items(&a, Some(first.id)).await;
     assert!(
-        before
-            .iter()
-            .all(|i| i.event["message"]["text"] != "second"),
+        before.iter().all(|i| i.event["message"]["id"] != second_id),
         "the delivery is held"
     );
     let pulled = b.s2s.relay.pull_outbox(a.id()).await.expect("pull");
@@ -979,7 +1020,7 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
     let after = bob.items(&a, Some(first.id)).await;
     let second = after
         .iter()
-        .find(|i| i.event["message"]["text"] == "second")
+        .find(|i| i.event["message"]["id"] == second_id)
         .expect("the pulled item");
     assert_eq!(
         second.seq,
@@ -1001,7 +1042,7 @@ async fn forwarded_requests_refuse_replays_tampering_and_relays_a_card_does_not_
     let (a, b) = relays().await;
     let alice = sign_up(&a, "alice", 1).await;
     let mut bob = sign_up(&b, "bob", 2).await;
-    alice.start_dm(&bob, &b, false).await;
+    alice.start_dm(&bob, &b, true).await;
     bob.pending_request(&alice).await;
     let direct = alice.direct_space().await;
 
@@ -1187,7 +1228,7 @@ async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_
     let (a, b) = relays().await;
     let alice = sign_up(&a, "alice", 1).await;
     let bob = sign_up(&b, "bob", 2).await;
-    alice.start_dm(&bob, &b, false).await;
+    alice.start_dm(&bob, &b, true).await;
     bob.pending_request(&alice).await;
     let remote = user_id(&a, &bob.principal()).await;
     let row = |node: &Node, id: UserId| {
@@ -1235,6 +1276,7 @@ async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_
             json!({ "input": {
                 "serverId": direct,
                 "remoteMembers": [{ "principalId": dave.principal(), "relayUrls": [b.origin] }],
+                "encrypted": true,
                 "predecessor": { "hostServerId": b.id(), "conversationId": replaced },
             } }),
         )
@@ -1270,6 +1312,104 @@ async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_
         json!([])
     );
     assert_eq!(bob.ok(REQUESTS, json!({})).await["dmRequests"], json!([]));
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// The conversations `person` sees in `direct`'s list.
+async fn listed(person: &Person, direct: &str) -> Vec<String> {
+    person
+        .ok(
+            "query($s: ID!) { inboxConversations(serverId: $s, dir: AFTER, limit: 50) { items { id } } }",
+            json!({ "s": direct }),
+        )
+        .await["inboxConversations"]["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|c| c["id"].as_str().expect("id").to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let mut dave = sign_up(&b, "dave", 5).await;
+    // Carol's DMs make Bob and Dave members of A's direct space.
+    carol.start_dm(&bob, &b, true).await;
+    carol.start_dm(&dave, &b, true).await;
+    alice
+        .ok(
+            "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+            json!({ "p": dave.principal(), "r": [b.origin] }),
+        )
+        .await;
+    let direct = alice.direct_space().await;
+
+    // A conversation with someone on another relay is encrypted only.
+    let code = alice
+        .err(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "remoteMembers": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }],
+            } }),
+        )
+        .await;
+    assert_eq!(code, "VALIDATION");
+
+    let create_with_alice = json!({ "input": {
+        "serverId": direct,
+        "encrypted": true,
+        "remoteMembers": [{ "principalId": alice.principal(), "relayUrls": [a.origin] }],
+    } });
+
+    // Bob, a stranger to Alice, starts a DM with her at her own relay: it is a request.
+    let from_bob =
+        bob.remote(&a, CREATE, create_with_alice.clone()).await["createConversation"]["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+    let request = alice.pending_request(&bob).await;
+    assert_eq!(request["hostServerId"], json!(a.id()));
+    assert_eq!(request["conversationId"], json!(from_bob));
+    let invite = verify_item(&a, &request["heldItems"][0]);
+    assert_eq!(invite.event["type"], "DmInvite");
+    assert_eq!(invite.stream, format!("u:{}", alice.principal()));
+    assert!(
+        !listed(&alice, &direct).await.contains(&from_bob),
+        "a request is not a live conversation"
+    );
+
+    // Dave, her contact, starts one too: it is live at once.
+    let from_dave = dave.remote(&a, CREATE, create_with_alice).await["createConversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let pending = alice.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+    assert!(
+        pending["dmRequests"]
+            .as_array()
+            .expect("requests")
+            .iter()
+            .all(|r| r["fromPrincipalId"] != json!(dave.principal())),
+        "a contact files no request"
+    );
+    assert!(listed(&alice, &direct).await.contains(&from_dave));
+
+    // Accepting Bob's request makes his conversation live.
+    alice
+        .ok(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+    assert!(listed(&alice, &direct).await.contains(&from_bob));
 
     a.stop().await;
     b.stop().await;
