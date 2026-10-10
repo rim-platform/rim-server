@@ -241,7 +241,9 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
   `active`, `lapsed` (every delegation expired) or `ended` (cancelled).
 - When the current delegations have less than 6 hours left, an online device signs fresh ones and
   sends them with `renewDelegations(delegations)`. Each entry of the answer is `active` with its
-  `expiresAt`, or `refused` with a `reason`.
+  `expiresAt`, or `refused` with a `reason`: one of the host's (`not_member`, `expired`, …), or
+  `host_unreachable` (try again later; the subscription is unchanged) or `host_refused` (the host
+  turned the presentation down). The relay logs what lies behind the last two.
 - While a device has `relayStream` open, the hosts see the person online; 30 seconds after the last
   stream closes they see them offline.
 

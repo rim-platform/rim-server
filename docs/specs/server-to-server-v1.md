@@ -664,6 +664,10 @@ relay replaying an older delegation cannot shorten or reset the one it holds.
 `status` `active` or `refused` with a `reason` (`invalid_delegation`, `bad_signature`,
 `wrong_host`, `wrong_relay`, `relay_key`, `expired`, `unknown_device`, `revoked_device`,
 `not_member`, `banned`, `limited`); `workspaceId` is null for a delegation that cannot be read.
+`renewDelegations` answers these reasons and two of the relay's own, and logs the detail behind
+them. `host_unreachable`: the host could not be reached, failed, rate-limited the relay or gave an
+unreadable answer, and the relay keeps the subscription as it was. `host_refused`: the host refused
+the presentation as a whole, or refused a delegation for a reason outside this list.
 A relay's subscription for (user, workspace) lives while one of the user's devices has an active
 delegation there.
 `POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` (at most 64)
