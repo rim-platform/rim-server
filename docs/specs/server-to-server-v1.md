@@ -136,6 +136,12 @@ the peer; at most one fetch per peer per minute and 60 in total.
 | Does not extend it (a fork) | Status `forked`: requests either way fail `403 peer_forked`, ERROR log, audit `s2s.peer_forked`, until `rim_server peer reset <id>` after an out-of-band check |
 | A prefix of the pin | Keep the pin (the peer serves an older view, say a lagging node) |
 
+`blocked` is an operator's decision (`rim_server peer block <id>`, S5-6): requests either way
+fail `403 peer_not_allowed` from the next one, until `rim_server peer unblock <id>` makes the peer
+`active` again. Only an `active` peer is blocked and only a `blocked` one unblocked, so a forked
+peer stays forked; a server never pinned is refused with `RIM_S2S_DENIED_PEERS` instead. Audit
+`s2s.peer_blocked`, `s2s.peer_unblocked`.
+
 A first pin keeps the key before the head but gives it no grace: the grace counts from an
 extension this server saw. A refetch whose inception hashes to another id (the origin now serves
 another server) fails and keeps the pin; only a log from the same inception can fork it.
@@ -275,7 +281,12 @@ Actix's request types.
 | `RIM_S2S_MAX_BODY_BYTES` | 8388608 | Body cap (forward path: 32 MiB) |
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Queued bytes per local user |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | Queue and DM request retention |
-| `RIM_REGISTRATION_POW_BITS` | unset | Turns on `pow` registration |
+| `RIM_REGISTRATION_POW_BITS` | unset | Turns on `pow` registration (1 to 40); wins over `RIM_OPEN_REGISTRATION` |
+| `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest card a local user publishes (at most 128 KiB) |
+| `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and suite |
+| `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices per local user, revoked ones not counted |
+| `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Forwarded requests per local user per day; per device per minute is `RIM_S2S_DEVICE_RATE_PER_MIN`, on the relay as on the host |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests per sender principal per day on this relay, and invites per local user per day to people on other servers who are not their contacts |
 
 The existing `config` loader (`Environment::with_prefix("RIM")`) maps `RIM_ROLE` to the field
 `role`. From S5-1 on a login proof's audience may also be this server's id, compared exactly
@@ -594,9 +605,10 @@ principal id, `base32(first 10 bytes of SHA-256("rim.principal-fingerprint.v1\0"
 in four groups of four, the same on every device, and may process the Welcome to read the held
 messages before deciding. It accepts on its own when the sender shares a workspace
 with the person (checked on host-signed member lists): workspace members are never strangers.
-Limits: 100 pending per recipient, 20 per sender principal per day per relay;
-`reportDmRequest(id, reason)` reports abuse: until `relay_abuse_report` exists (S5-6) it is the
-audit event `relay.dm_request_reported`, and a pending request is ignored.
+Limits: 100 pending per recipient, 20 per sender principal per day per relay
+(`RIM_RELAY_DM_REQUESTS_PER_DAY`); `reportDmRequest(id, reason)` reports abuse: it files a
+`relay_abuse_report` row naming the reporter, the sender, the host and the request (audit
+`relay.dm_request_reported`), and a pending request is ignored.
 
 ## Remote workspace members (7.4b)
 
@@ -731,8 +743,9 @@ History is on the devices and the drive, keys on the devices, spaces on their ho
 
 The public relay (`relay.rim.chat` is its working name; the domain is not registered yet, and
 every mention of it here and in the runbook is a placeholder) runs the stock image with
-`RIM_ROLE=relay`. In `pow` mode `signupWithKey` takes an
-instance invite token or `proofOfWork`: an 8-byte nonce (unpadded base64url) such that
+`RIM_ROLE=relay`. In `pow` mode `signupWithKey` takes a registration token (bootstrap, instance
+invite or workspace invite, as in invite-only mode) or `proofOfWork`, not both: an 8-byte nonce
+(unpadded base64url) such that
 
 ```
 SHA-256("rim.pow.v1\0" || relay server id (ASCII) || "\0" || inception payload bytes || nonce)
@@ -740,32 +753,50 @@ SHA-256("rim.pow.v1\0" || relay server id (ASCII) || "\0" || inception payload b
 
 starts with `powBits` zero bits (the descriptor's, from `RIM_REGISTRATION_POW_BITS`; 24 to start,
 about 16.7 million hashes on average). It binds the work to this relay and this principal; the
-server checks one hash; the open-signup per-IP limit applies too. Rejected: a server-issued puzzle
-(a round trip and stored state for no gain) and memory-hard functions (no WebCrypto support).
+server checks one hash before any signature; the open-signup per-IP limit applies too, and each
+such signup is audited as `relay.registration_pow`. Password signups take a token, as in
+invite-only mode; `registrationMode` answers `POW`. The check is `rim_s2s::pow`. Rejected: a
+server-issued puzzle (a round trip and stored state for no gain) and memory-hard functions (no
+WebCrypto support).
 
-| Quota per local user | Public relay |
-|---|---|
-| Queued bytes | 64 MiB |
-| Card / key packages / devices | 1 card of 128 KiB / 100 unclaimed per device / 32 |
-| Forwarded requests | 120 per device per minute, 50,000 per user per day |
-| DM requests sent | 20 per sender principal per day |
+| Quota per local user | Public relay | Setting |
+|---|---|---|
+| Queued bytes | 64 MiB | `RIM_RELAY_QUEUE_BYTES_PER_USER` |
+| Card / key packages / devices | 1 card of 128 KiB / 100 unclaimed per device / 32 | `RIM_RELAY_CARD_MAX_BYTES`, `RIM_RELAY_KEY_PACKAGES_PER_DEVICE`, `RIM_RELAY_DEVICES_PER_USER` |
+| Forwarded requests | 120 per device per minute, 50,000 per user per day | `RIM_S2S_DEVICE_RATE_PER_MIN`, `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` |
+| DM requests sent | 20 per sender principal per day | `RIM_RELAY_DM_REQUESTS_PER_DAY` |
 
-**Abuse hooks** (S5-6), each audited: `rim_server principal block <principalId> --reason …`
-(sessions, signups and deliveries refused; `relay_principal_block`); `rim_server peer block|unblock
-<serverId>` (like `RIM_S2S_DENIED_PEERS` without a restart); `reportDmRequest` and the abuse
-address feed `relay_abuse_report`, listed by `rim_server abuse-reports list`.
+Each is enforced where it applies: the card at `publishProfileCard`, key packages at
+`uploadMlsKeyPackages`, devices at `addDeviceKey` (all `VALIDATION`), forwarded requests at
+`/api/remote/…` (`429`). The DM request limit counts on both sides: the relay of the recipients
+refuses a sender principal's invites past it (`limited`), and the sender's relay refuses a local
+user's invites past it to people on other servers who are not their contacts (`RATE_LIMITED`).
+Counters are in memory, per node.
 
-**Runbook** (`docs/oncall/relay-rim-chat.md`, S5-6): who holds the server recovery key and where,
+**Abuse hooks** (S5-6), each audited: `rim_server principal block <principalId> --reason …`,
+`principal unblock`, `principal list` (`relay_principal_block`): the account's sessions are ended
+and its pending DM requests ignored for every recipient; its logins, signups and enrollments are
+refused (`FORBIDDEN`), deliveries to it (`unknown_principal`) and its invites (`blocked`), key
+package claims for and by it, its identity (`404`) and forwarded requests it signs (`403`).
+`rim_server peer block|unblock <serverId>` ("Pinning a peer"; like `RIM_S2S_DENIED_PEERS` without
+a restart). `reportDmRequest` and the abuse address (`rim_server abuse-reports add`) feed
+`relay_abuse_report`, listed by `rim_server abuse-reports list [--open]` and closed by
+`abuse-reports resolve <id>`.
+
+**Runbook** (`docs/oncall/relay-public.md`, S5-6): who holds the server recovery key and where,
 yearly `server-key rotate` and `recover` on compromise, database and key file backups with a restore
 drill, quotas and how to change them, monitoring (queue bytes, outbox depth per peer, deliver
 failures, `401`/`409`/`429` rates, PoW signups), incident response for spam waves, a hostile peer, a
 stolen server key and a database leak, and the abuse policy text.
 
-**Compose** (`deploy/compose.relay.yml`): rim-server with `RIM_ROLE=relay`,
-`RIM_PUBLIC_BASE_URL=https://relay.rim.chat`, `RIM_REGISTRATION_POW_BITS=24`,
-`RIM_RELAY_QUEUE_BYTES_PER_USER=67108864`, `RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_DATA_DIR=/data`
-on a volume; Postgres 17 on its own volume; a TLS proxy passing `/api`, `/api/ws`, `/s2s/v1` and
-`/.well-known/rim-server` with bodies up to 32 MiB.
+**Compose** (`deploy/compose.relay.yml`, with `deploy/README.md`): rim-server with
+`RIM_ROLE=relay`, `RIM_PUBLIC_BASE_URL=https://relay.rim.chat`, `RIM_REGISTRATION_POW_BITS=24`,
+`RIM_RELAY_QUEUE_BYTES_PER_USER=67108864` and the other quotas above,
+`RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_FORCE_SECURE_COOKIES=true`, `RIM_DATA_DIR=/data` on a
+volume (the audit log too); a migration step before it; Postgres 17 on its own volume, on a
+network with no way out; Caddy as the TLS proxy passing `/api`, `/api/ws`, `/s2s/v1` and
+`/.well-known/rim-server` unchanged with bodies up to 32 MiB and setting `X-Forwarded-For`
+itself.
 
 ## Migration of single-server deployments
 
@@ -869,7 +900,7 @@ CREATE TABLE relay_revocation_fanout (device_key_id uuid NOT NULL REFERENCES dev
     attempts integer NOT NULL DEFAULT 0, next_attempt_at timestamptz NOT NULL,
     ack_payload text NULL, ack_signature text NULL, PRIMARY KEY (device_key_id, host_server_id));
 
--- S5-6 add_relay_abuse
+-- S5-6 add_relay_abuse; down refuses while either table has rows
 CREATE TABLE relay_principal_block (principal_id text PRIMARY KEY, reason text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE relay_abuse_report (id uuid PRIMARY KEY,
@@ -918,6 +949,7 @@ input RemoteMemberInput { principalId: String!  relayUrls: [String!]! }
 input PredecessorInput { hostServerId: String!  conversationId: ID! }
 input CreateConversationInput { remoteMembers: [RemoteMemberInput!]  predecessor: PredecessorInput }   # additive fields
 input SignupWithKeyInput { proofOfWork: String }   # additive field (S5-6)
+enum RegistrationModeGql { POW }                    # additive value (S5-6)
 input JoinRemoteWorkspaceInput { hostServerId: String!  hostOrigin: String!  inviteToken: String
                                  proof: SignedStatementInput!  delegation: SignedStatementInput! }
 
@@ -971,10 +1003,12 @@ is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error
 
 Rate limits are the in-memory per-node limiters; nonces, `seq` windows and cursors are in the
 database, so correctness never depends on one node. Audit (ids only):
-`s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`, `host.remote_join`,
-`host.delegation_accepted`, `host.revocation_applied`, `relay.principal_blocked`,
-`relay.registration_pow`, `server_key.created`, `server_key.rotated`, `server_key.recovered`,
-`s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
+`s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`,
+`s2s.peer_unblocked`, `host.remote_join`, `host.delegation_accepted`, `host.revocation_applied`,
+`relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),
+`relay.principal_unblocked`, `relay.blocked_principal_refused`, `relay.dm_request_reported`,
+`relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,
+`server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
 key and peer events have neither (its columns are `NOT NULL`), so they go to the audit log stream
 (`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
 queue bytes, S2S responses by status, signature failures by reason.
@@ -1201,7 +1235,8 @@ ed25519:Yuy9VdOS78e8fL4sMDT9PHmBkZcuzeJEvLlfdD8dRhDjJeJiivU4FcatDrlwEKaB3l9Beado
 ```
 
 Both computed by `rim_s2s` and cross-checked with Python `cryptography` 50.0.2. Every value of
-A.1 to A.8 reproduces byte for byte in `rim_s2s`'s tests.
+A.1 to A.8 reproduces byte for byte in `rim_s2s`'s tests; A.8's nonce also signs up through
+`signupWithKey` at the A.1 relay in `rim_infra_services`'s tests.
 
 **Without `RIM_PUBLIC_BASE_URL`** the descriptor's `graphql` and `websocket` endpoints use
 `http://localhost:<RIM_SERVER_PORT>`; `s2s` is null.
