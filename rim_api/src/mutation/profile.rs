@@ -5,6 +5,7 @@ use rim_services::user::service::UserService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::federation::ensure_may_set_display_name;
 use crate::types::User;
 
 #[derive(Default)]
@@ -20,6 +21,8 @@ impl ProfileMutations {
     /// # Errors
     ///
     /// - `UNAUTHENTICATED` — no session.
+    /// - `FORBIDDEN` — `displayName` from a member whose relay is another server; their
+    ///   display name comes from their profile card.
     /// - `VALIDATION` — `displayName` > 64 chars, `statusText` > 256 chars,
     ///   `bio` > 2000 chars, or `avatarUrl` not under `/api/files/`.
     /// - `NOT_FOUND` — caller's user row missing (should not happen in practice).
@@ -40,6 +43,9 @@ impl ProfileMutations {
         input: UpdateMyProfileInput,
     ) -> Result<User> {
         let actor = require_actor(ctx)?;
+        if input.display_name.is_some() {
+            ensure_may_set_display_name(ctx, actor).await?;
+        }
         let svc = ctx.data::<std::sync::Arc<dyn UserService>>()?;
 
         let dto = svc

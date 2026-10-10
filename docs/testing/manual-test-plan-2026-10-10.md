@@ -155,6 +155,12 @@ Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at 
 | 6.12 | On B: `cargo run -p rim_server -- peer block <A's rims1_ id>`; send a message from A to Bob | A's server log shows `403 peer_not_allowed` from B and the message does not reach Bob until `peer unblock`; then it does |
 | 6.13 | On B as Carl (a stranger to Ada): send a DM request to Ada; on A, in the request, choose **Report** | `cargo run -p rim_server -- abuse-reports list --open` on A lists it; `resolve <id>` clears it |
 
+A remote member's avatar, status text and bio are stored by the host: after uploading the image
+through the relay (`POST /api/files/avatar` forwarded), a forwarded `updateMyProfile` with
+`avatarUrl` sets it, and a `displayName` in it is refused (`FORBIDDEN`), since the name comes
+from the profile card. The desktop does not offer this for a workspace hosted elsewhere yet; the
+two-server e2e test covers it.
+
 ## 7. Regressions for Stage 5
 
 - A single server with **no** `RIM_PUBLIC_BASE_URL` behaves as before: `/.well-known/rim-server`
