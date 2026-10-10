@@ -148,8 +148,11 @@ another server) fails and keeps the pin; only a log from the same inception can 
   followed only by `signer: server` rotations, then pins id and log.
 - **Trust on first use** for a contact's relay (the home of a DM someone else started). DM content
   is MLS-protected either way; the pin protects metadata events.
-- A signature at a `keySeq` above the pin makes the app refetch and accept only an extension. A
-  fork stops the app using that server: "This server's identity changed in a way RIM cannot verify".
+- A signature at a `keySeq` above the pin makes the app refetch (at most once a minute) and accept
+  only an extension. The key before the head keeps verifying 24 hours after the app accepted a
+  `signer: server` rotation, never after a `signer: recovery` one, and a first pin gives it no
+  grace, as for servers ("Pinning a peer"). A fork stops the app using that server: "This
+  server's identity changed in a way RIM cannot verify".
 
 The invite carries the host's existing invite token, not one the host signed: the server id is a
 hash of the host's inception, so id plus key hash already expose a substituted host, and a
@@ -436,7 +439,8 @@ cursor per device (`relay_device_cursor`): each device's queue is its user's ite
 
 - **Push**: a subscription `relayStream(after: ID)` on the existing `/api/ws` yields items above
   `after`, then live ones: `{"type":"RelayItem","id":"981","hostServerId":"rims1_…","workspaceId":"…","envelope":{…}}`,
-  plus `DmRequestReceived`, `RevocationAcked` and `QueueOverflow` notices.
+  plus notices: `{"type":"DmRequestReceived","requestId":"<uuid>"}`, `RevocationAcked` and
+  `{"type":"QueueOverflow","spaces":[{"hostServerId":"rims1_…","workspaceId":"<uuid>"}]}`.
 - **Pull** `relayItems(after, limit)`; **ack** `ackRelayItems(upTo)` moves the session device's
   cursor. A newly linked device starts at the newest item and reads history from the host's feed
   and the archive.
@@ -477,9 +481,10 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
 - **Contacts.** A contact link is `rim-contact:1:<principalId>:<relayUrl>` (relay URL rules as a
   device-link endpoint: 1 to 256 bytes of printable ASCII, no `?`, `#`, `@`), shown as a byte-mode
   QR code. The principal id authenticates everything fetched with it. Rejected: the card in the link
-  (up to 128 KiB, too large for a QR code, stale after a relay switch). A shared workspace's member
-  list carries each member's card (`ServerMember.user.profileCard`). The contact list answers open
-  decision 9 (readable names): the app shows the card's name or the person's alias for it. The relay
+  (up to 128 KiB, too large for a QR code, stale after a relay switch). The app reads a shared
+  workspace member's card with `remoteIdentity(principalId)` (the relay answers its own principals
+  directly) to offer "Add as contact". The contact list answers open decision 9 (readable names):
+  the app shows the card's name or the person's alias for it; aliases stay on the device. The relay
   keeps the list (`relay_contact`) because it filters DM requests by it.
 
 ## The direct space
@@ -504,7 +509,10 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
 1. **Create.** Alice calls `createConversation(serverId: <directSpaceId>, encrypted: true,
    remoteMembers: [{ principalId, relayUrls }])` on R_A. R_A fetches Bob's identity from the first
    relay that answers, creates or refreshes his remote user row and direct-space membership, and
-   checks readiness from `mlsActive`. A pair with a DM there gets it back, as today.
+   checks readiness from `mlsActive`. A pair with a DM there gets it back, as today. One entry in
+   `remoteMembers` and no `memberIds` makes a DM, more make a group; the app names every member
+   this way, those on R_A included. The app creates a conversation with anyone on another relay
+   only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
    `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"}}`
    → `{"keyPackages":[{"deviceId","keyPackage","keyPackageRef","lastResort"}]}`, by today's claim
@@ -513,8 +521,9 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    principal per day. R_A stores the packages as claimed `mls_key_package` rows of Bob's device rows,
    so `submitMlsCommit`'s claim check runs unchanged.
 3. **Invite.** With the Commit that adds a remote member, R_A emits `DmInvite` on the member's `u:`
-   stream, `{"type":"DmInvite","workspace_id","conversation_id","from_principal_id","from_card","member_principal_ids"}`,
-   then `MlsWelcomeAvailable` per added device. That is how R_B and Bob's devices learn of it.
+   stream, `{"type":"DmInvite","workspace_id","conversation_id","from_principal_id","from_card","member_principal_ids"}`
+   (`from_card` is the creator's card as `{"payload","signature"}`; its relays tell Bob's app
+   where to pin R_A from), then `MlsWelcomeAvailable` per added device. That is how R_B and Bob's devices learn of it.
 4. **Traffic.** Bob's devices fetch Welcomes and Commits, read the change feed, send, edit, react
    and mark read through `/api/remote/<R_A>/api`; R_A runs them as Bob's device, and its events reach
    Bob's devices through R_B's queue. The envelopes are exactly the `message.encryption` R_A stores.
@@ -529,15 +538,17 @@ Rejected: a sequencer that moves between relays or a vote between them (the stat
 absent from the creator's newest card and not answering. Any member's app may then create a
 **successor** in its own relay's direct space with the same members and
 `predecessor: { hostServerId, conversationId }`; apps show both as one timeline from the cache and
-archive. Of two successors the one with the smaller `(createdAt, id)` is canonical and members
-leave the other. The creator's app also makes successors when its person leaves the relay.
+archive. Of two successors the one with the smaller id is canonical (ids are UUID v7, so this is
+the earlier) and members leave the other. Members learn a conversation is a successor from
+`Conversation.predecessor`. The creator's app also makes successors when its person leaves the relay.
 
 ### The request inbox
 
 R_B files a `DmInvite` from a principal outside Bob's contacts and never accepted as a **DM
-request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it
-(later ones dropped until accepted; the app reads them from the host). Only `DmRequestReceived` is
-pushed.
+request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it,
+the `DmInvite` first (later ones dropped until accepted; the app reads them from the host). The
+app verifies the held `DmInvite` like any relay item to bind the conversation's space to its home
+before it reads or leaves it. Only `DmRequestReceived` is pushed.
 
 | Action | Effect |
 |---|---|
@@ -546,8 +557,10 @@ pushed.
 | `blockPrincipal(principalId)` | Pending requests from it ignored; its `DmInvite`s refused (`blocked`) and its claims refused; the app leaves the conversation through the home |
 | Nothing | Expires after 30 days |
 
-The app shows the card's name and a fingerprint of the principal id and may process the Welcome to
-read the held messages before deciding. It accepts on its own when the sender shares a workspace
+The app shows the card's name (verified against the sender's key log) and a fingerprint of the
+principal id, `base32(first 10 bytes of SHA-256("rim.principal-fingerprint.v1\0" || principal id))`
+in four groups of four, the same on every device, and may process the Welcome to read the held
+messages before deciding. It accepts on its own when the sender shares a workspace
 with the person (checked on host-signed member lists): workspace members are never strangers.
 Limits: 100 pending per recipient, 20 per sender principal per day per relay;
 `reportDmRequest(id, reason)` reports abuse.
@@ -865,6 +878,8 @@ type RevocationFanout { hostServerId: String!  status: RevocationFanoutStatus!  
 type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime! }
 type RemoteJoinResult { hostServerId: String!  workspaceId: ID!  userId: ID!  role: String! }
 type StreamHead { stream: String!  seq: String! }                                    # host; decimal
+type ConversationPredecessor { hostServerId: String!  conversationId: ID! }
+type Conversation { predecessor: ConversationPredecessor }                            # additive field
 
 input RemoteMemberInput { principalId: String!  relayUrls: [String!]! }
 input PredecessorInput { hostServerId: String!  conversationId: ID! }
