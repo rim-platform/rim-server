@@ -288,7 +288,7 @@ impl DefaultKeyAuthService {
             .await?
         {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "relay.blocked_principal_refused",
                 principal_id = %principal_id,
                 action,
@@ -673,7 +673,7 @@ impl DefaultKeyAuthService {
     async fn verify_login(&self, proof: &SignedPayload) -> ServiceResult<(UserId, DeviceKey)> {
         let fail = |reason: &str| {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "key_login_failure",
                 reason,
                 "key login failed"
@@ -718,7 +718,7 @@ impl DefaultKeyAuthService {
         }
         if device.revoked_at.is_some() {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "key_login_failure",
                 reason = "device_revoked",
                 user_id = %user_id,
@@ -795,7 +795,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .await?;
         if current.is_none_or(|d| d.revoked_at.is_some()) {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "key_login_failure",
                 reason = "device_revoked",
                 user_id = %user_id,
@@ -828,7 +828,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         Self::commit(scope).await?;
 
         info!(
-            target = "audit",
+            target: "audit",
             event = "key_login_success",
             remote,
             user_id = %user_id,
@@ -894,7 +894,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         Self::commit(scope).await?;
 
         info!(
-            target = "audit",
+            target: "audit",
             event = "key_identity_enrolled",
             user_id = %user_id,
             principal_id = %state.principal_id,
@@ -974,7 +974,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                 )
                 .await?;
                 info!(
-                    target = "audit",
+                    target: "audit",
                     event = "key_identity_adopted",
                     user_id = %remote,
                     principal_id = %state.principal_id,
@@ -1032,7 +1032,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         match (&token, pow_bits) {
             (Some(token), _) => signup::announce_claimed(token, user.id, username, &self.observers),
             (None, Some(bits)) => info!(
-                target = "audit",
+                target: "audit",
                 event = "relay.registration_pow",
                 user_id = %user.id,
                 principal_id = %state.principal_id,
@@ -1041,7 +1041,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                 "user created via a proof-of-work signup"
             ),
             (None, None) => info!(
-                target = "audit",
+                target: "audit",
                 event = "signup_open_success",
                 user_id = %user.id,
                 remote_ip = %cmd.remote_ip,
@@ -1050,7 +1050,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             ),
         }
         info!(
-            target = "audit",
+            target: "audit",
             event = "key_identity_enrolled",
             user_id = %user.id,
             principal_id = %state.principal_id,
@@ -1093,7 +1093,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         let device = insert_device(&repos, new_device(user_id, &cert, &cmd.device)).await?;
         Self::commit(scope).await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "device_key_added",
             user_id = %user_id,
             device_id = %device.device_id,
@@ -1133,7 +1133,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             self.identity_changed(user_id);
             self.revocation_committed(user_id, device.id);
             info!(
-                target = "audit",
+                target: "audit",
                 event = "device_key_revoked",
                 user_id = %user_id,
                 device_id = %device.device_id,
@@ -1238,7 +1238,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         }
 
         info!(
-            target = "audit",
+            target: "audit",
             event = "identity_key_rotated",
             user_id = %user_id,
             principal_id = %principal_id,

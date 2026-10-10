@@ -119,7 +119,7 @@ impl AuditLogService for DefaultAuditLogService {
                     .check(&caller, Some(ws), "audit.read")
                     .await?;
                 tracing::warn!(
-                    target = "audit",
+                    target: "audit",
                     event = "cross_user_filter_stripped",
                     caller_id = %caller.user_id,
                     requested_user_id = %other,

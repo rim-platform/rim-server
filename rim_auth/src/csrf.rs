@@ -25,7 +25,7 @@ pub fn generate_csrf_token(session_token: &str) -> String {
     let mut nonce = [0u8; 32];
     if let Err(e) = fill(&mut nonce) {
         tracing::error!(
-            target = "audit",
+            target: "audit",
             error = %e,
             "fatal: OS entropy source failed; cannot generate CSRF token"
         );
