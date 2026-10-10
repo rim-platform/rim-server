@@ -92,6 +92,25 @@ Both `ada` (A) and `bob` (B, a different OS user, signed in with his key) must h
 | 3.15 | Install a plugin asking for `chat.read` and `chat.read.encrypted` (edit the SDK template's manifest) | Its consent line reads "Read your encrypted DMs and groups: this plugin sees their decrypted text…"; Settings > Plugins > Activity counts encrypted reads per day; a manifest with `chat.read.encrypted` but no `chat.read` is refused at install; without the encrypted grant `rim.chat.list_messages` on the DM answers `CAPABILITY_DENIED` |
 | 3.16 | Open the agent in the encrypted DM (conversation menu) | Off by default; turning it on shows the model-provider warning; after that it answers from the local cache and asks before every post it makes there |
 
+## 4. Regressions worth a glance
+
+- Plaintext channels: send, search, pipelines, pins, the notification bell — unchanged.
+- Password accounts that never enrolled a key: login, reset, email digests still work.
+- Offline start on A (stop the server, start A): the cache opens; encrypted DMs still readable.
+- The web app without a device key: encrypted conversations show the "set up this browser as a
+  linked device" notice and nothing else leaks.
+
+## 5. Open questions you may hit
+
+- **Windows/macOS**: the secret vault's key goes into Credential Manager / Keychain; nothing has
+  run there yet (`rim-ui/docs/secret-vault.md`).
+- **Linux prompt count**: one Secret Service unlock per app start is the expectation.
+- **Plugin installs under load**: a bundle install that restarts a plugin while another process
+  is being spawned used to fail with "Text file busy"; the host now retries (rim-ui #53). If an
+  install still leaves a plugin stopped, the log line names it.
+- Anything that fails in 3.x with "could not be verified" is the client refusing a message
+  whose cross-checks failed; that is a bug worth the full log, not a user error.
+
 ## 6. Two servers: relays and hosts (Stage 5)
 
 Stage 5 only shows itself with **two rim-servers**. Run a second one from the same checkout on
@@ -136,22 +155,3 @@ Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at 
   has `"s2s": null`, `/s2s/v1/ping` answers 404, every Stage 3–4 flow works unchanged.
 - A desktop pointed at a single server still creates DMs in the direct space (rail entry "Direct
   messages"); old DMs inside workspaces still open.
-
-## 4. Regressions worth a glance
-
-- Plaintext channels: send, search, pipelines, pins, the notification bell — unchanged.
-- Password accounts that never enrolled a key: login, reset, email digests still work.
-- Offline start on A (stop the server, start A): the cache opens; encrypted DMs still readable.
-- The web app without a device key: encrypted conversations show the "set up this browser as a
-  linked device" notice and nothing else leaks.
-
-## 5. Open questions you may hit
-
-- **Windows/macOS**: the secret vault's key goes into Credential Manager / Keychain; nothing has
-  run there yet (`rim-ui/docs/secret-vault.md`).
-- **Linux prompt count**: one Secret Service unlock per app start is the expectation.
-- **Plugin installs under load**: a bundle install that restarts a plugin while another process
-  is being spawned used to fail with "Text file busy"; the host now retries (rim-ui #53). If an
-  install still leaves a plugin stopped, the log line names it.
-- Anything that fails in 3.x with "could not be verified" is the client refusing a message
-  whose cross-checks failed; that is a bug worth the full log, not a user error.
