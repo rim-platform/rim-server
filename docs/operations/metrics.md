@@ -129,6 +129,13 @@ request the recipient has not answered. The relay queue and the pending migratio
 the database when the listener starts and every 30 seconds after; a read that fails or takes over
 5 seconds leaves the last value in place and logs a warning.
 
+### Audit retention
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_audit_rows_purged_total` | counter | | Command audit rows the daily retention purge deleted (`docs/operations/audit-retention.md`). |
+| `rim_audit_retention_days` | gauge | | `RIM_AUDIT_RETENTION_DAYS`, set at boot; `0` when rows are kept forever. |
+
 ## Example alert rules
 
 Readiness is checked from outside, by probing `/readyz` on the API port with the Prometheus
