@@ -61,7 +61,8 @@ get the event (for a workspace, the relays holding an active delegation of the p
 direct space, the relays the person's newest card lists, else the relay that served their
 identity) and a sender delivers each relay's rows in order (`POST /s2s/v1/deliver`), backing off
 from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a person as unknown
-is not sent their events for 24 hours.
+is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
+forgets it, and with several nodes each node learns it from the relay on its own.
 
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
