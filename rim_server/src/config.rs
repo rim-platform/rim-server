@@ -177,6 +177,10 @@ pub struct RIMConfig {
     /// people on other servers per day. Default 20. Controlled by
     /// `RIM_RELAY_DM_REQUESTS_PER_DAY`.
     pub relay_dm_requests_per_day: Option<u32>,
+
+    /// `host:port` of the Prometheus listener serving `GET /metrics`; unset turns metrics off.
+    /// Controlled by `RIM_METRICS_ADDR`.
+    pub metrics_addr: Option<String>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -290,6 +294,7 @@ impl fmt::Debug for RIMConfig {
                 "s2s_subscriptions_per_peer",
                 &self.s2s_subscriptions_per_peer(),
             )
+            .field("metrics_addr", &self.metrics_addr)
             .finish()
     }
 }
@@ -343,6 +348,7 @@ impl Default for RIMConfig {
             relay_devices_per_user: None,
             relay_forwards_per_user_per_day: None,
             relay_dm_requests_per_day: None,
+            metrics_addr: None,
         }
     }
 }
@@ -728,6 +734,25 @@ impl RIMConfig {
             .filter(|u| u.host().is_some())
             .map(|u| u.origin().ascii_serialization())
             .unwrap_or_else(|| format!("http://localhost:{}", self.server_port))
+    }
+
+    /// `RIM_METRICS_ADDR` as a socket address; `None` when unset or empty.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is not an `ip:port` address.
+    pub fn metrics_addr(&self) -> Result<Option<std::net::SocketAddr>, String> {
+        match self
+            .metrics_addr
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+        {
+            None => Ok(None),
+            Some(addr) => addr
+                .parse()
+                .map(Some)
+                .map_err(|_| format!("RIM_METRICS_ADDR={addr} is not an ip:port address")),
+        }
     }
 
     /// `RIM_S2S_DENIED_PEERS` as server ids.
@@ -1154,6 +1179,28 @@ mod tests {
         assert_eq!(quotas.forwards_per_device_per_min, 60);
         assert_eq!(quotas.forwards_per_user_per_day, 10);
         assert_eq!(quotas.dm_requests_per_day, 5);
+    }
+
+    #[test]
+    fn metrics_addr_is_off_when_unset_and_refuses_a_non_address() {
+        assert_eq!(RIMConfig::default().metrics_addr(), Ok(None));
+        let config = |value: &str| RIMConfig {
+            metrics_addr: Some(value.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config("  ").metrics_addr(), Ok(None));
+        assert_eq!(
+            config(" 127.0.0.1:9090 ").metrics_addr(),
+            Ok(Some(std::net::SocketAddr::from(([127, 0, 0, 1], 9090))))
+        );
+        assert_eq!(
+            config("[::1]:9090").metrics_addr(),
+            Ok(Some("[::1]:9090".parse().unwrap()))
+        );
+        for bad in ["localhost:9090", "127.0.0.1", "9090"] {
+            let err = config(bad).metrics_addr().unwrap_err();
+            assert!(err.contains("RIM_METRICS_ADDR"), "{bad}: {err}");
+        }
     }
 
     #[test]

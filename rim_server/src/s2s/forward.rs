@@ -288,6 +288,7 @@ pub(crate) async fn run(state: &S2sState, req: &HttpRequest, verified: &Verified
         Err(refused) => refusal(refused),
         Ok(auth) => execute(req, verified, &auth, &method, &tail).await,
     };
+    crate::metrics::forwarded("incoming", crate::metrics::forward_outcome(reply.status));
     match outcome.request_payload {
         Some(payload) => with_host_response(state, reply, &payload),
         None => reply,

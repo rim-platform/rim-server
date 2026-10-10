@@ -38,6 +38,8 @@ pub(crate) mod mention;
 pub(crate) mod message;
 pub(crate) mod message_attachment;
 pub(crate) mod message_reaction;
+// Public: `rim_server` describes these metrics and samples the relay queue.
+pub mod metrics;
 pub(crate) mod moderation;
 // pub(crate) promoted to pub: the notification digest/retention jobs are constructed directly
 // by the composition root (rim_server/src/app.rs), mirroring the escalation driver above.
