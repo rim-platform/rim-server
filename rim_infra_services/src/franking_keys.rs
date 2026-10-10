@@ -2,9 +2,9 @@
 //! the older keys that still verify the receipts they signed.
 //!
 //! The key file is `{"v":1,"keys":[{"id":1,"key":"<base64url, 32 bytes>","createdAt":"…"}]}`,
-//! mode 0600. The key with the highest id signs; a key a newer one replaced keeps verifying for
-//! [`RETIRED_KEY_WINDOW`] after its replacement was created, and the next rotation after that
-//! drops it from the file. A rotation writes `<file>.next` and moves it over the file.
+//! mode 0600. The key with the highest id signs; every key in the file verifies, since a receipt
+//! is never signed again. A rotation adds a key, writing `<file>.next` and moving it over the
+//! file.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,16 +14,13 @@ use std::time::Instant;
 use anyhow::{Context, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use rim_core::e2ee::repository::E2eeRepository;
 
 use crate::secret_file::{check_private, write_secret};
-
-/// How long a replaced key keeps verifying receipts, counted from its replacement's creation.
-pub const RETIRED_KEY_WINDOW: Duration = Duration::days(30);
 
 /// Version of the key file format.
 const KEY_FILE_VERSION: u32 = 1;
@@ -127,15 +124,9 @@ impl FrankingKeys {
             .unwrap_or_else(|| unreachable!("a key set is never empty"))
     }
 
-    /// Key `id` when it may verify a receipt at `now`: the current key, or an older one whose
-    /// replacement was created less than [`RETIRED_KEY_WINDOW`] ago.
-    pub fn verifying(&self, id: i32, now: DateTime<Utc>) -> Option<&FrankingKey> {
-        let index = self.0.iter().position(|k| k.id == id)?;
-        match self.0.get(index + 1) {
-            None => Some(&self.0[index]),
-            Some(next) if now < next.created_at + RETIRED_KEY_WINDOW => Some(&self.0[index]),
-            Some(_) => None,
-        }
+    /// Key `id`, which verifies the receipts it signed whether or not a newer key replaced it.
+    pub fn verifying(&self, id: i32) -> Option<&FrankingKey> {
+        self.0.iter().find(|k| k.id == id)
     }
 
     /// Every key, oldest first.
@@ -216,12 +207,10 @@ impl SharedFrankingKeys {
         Ok(changed)
     }
 
-    /// Key `id`'s secret when it may verify a receipt at `now`. A key id above every id this
-    /// node holds makes it read the key file again first (at most every ten seconds), so a fresh
-    /// rotation verifies at once.
-    pub fn verifying(&self, id: i32, now: DateTime<Utc>) -> Option<Zeroizing<[u8; KEY_LEN]>> {
-        let found =
-            |keys: &FrankingKeys| keys.verifying(id, now).map(|k| Zeroizing::new(*k.secret()));
+    /// Key `id`'s secret. A key id above every id this node holds makes it read the key file
+    /// again first (at most every ten seconds), so a fresh rotation verifies at once.
+    pub fn verifying(&self, id: i32) -> Option<Zeroizing<[u8; KEY_LEN]>> {
+        let found = |keys: &FrankingKeys| keys.verifying(id).map(|k| Zeroizing::new(*k.secret()));
         let keys = self.keys();
         if let Some(secret) = found(&keys) {
             return Some(secret);
@@ -296,8 +285,9 @@ fn next_file(path: &Path) -> PathBuf {
 
 /// Load the key file, creating it at first boot. A missing file takes the keys of the
 /// `franking_key` table when it has any, so receipts signed before the file existed keep
-/// verifying; otherwise a new key 1. Refuses to start when messages carry receipts under a key
-/// that neither the file nor the table holds (a lost key file).
+/// verifying, plus a fresh key that signs from then on, since the database and its backups hold
+/// the old ones; otherwise a new key 1. Refuses to start when messages carry receipts under a
+/// key that neither the file nor the table holds (a lost key file).
 pub async fn load_or_create(
     path: &Path,
     repo: &dyn E2eeRepository,
@@ -326,7 +316,7 @@ pub async fn load_or_create(
     let keys = if legacy.is_empty() {
         FrankingKeys::new(vec![FrankingKey::generate(1, Utc::now())?])?
     } else {
-        let keys = legacy
+        let mut keys = legacy
             .iter()
             .map(|k| {
                 let secret: [u8; KEY_LEN] = k
@@ -337,6 +327,10 @@ pub async fn load_or_create(
                 Ok(FrankingKey::new(k.id, secret, k.created_at))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let next_id = held
+            .and_then(|held| held.checked_add(1))
+            .ok_or_else(|| anyhow!("franking key ids are exhausted"))?;
+        keys.push(FrankingKey::generate(next_id, Utc::now())?);
         FrankingKeys::new(keys)?
     };
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -351,17 +345,18 @@ pub async fn load_or_create(
     if legacy.is_empty() {
         tracing::info!(path = %path.display(), "created the franking key file");
     } else {
-        tracing::warn!(
+        tracing::info!(
             path = %path.display(),
-            keys = ?keys.ids(),
-            "moved the franking keys from the database into the key file; run \
-             `rim_server franking-key rotate` so the key the database holds stops signing"
+            moved = ?legacy.iter().map(|k| k.id).collect::<Vec<_>>(),
+            current = keys.current().id,
+            "moved the franking keys from the database into the key file and rotated: the moved \
+             keys only verify, the new key signs"
         );
     }
     Ok(keys)
 }
 
-/// Add a new current key to the key file at `now` and drop the keys that stopped verifying.
+/// Add a new current key to the key file at `now`; the older keys stay and keep verifying.
 pub fn rotate(path: &Path, now: DateTime<Utc>) -> anyhow::Result<FrankingKeys> {
     if !path.exists() {
         bail!(
@@ -378,7 +373,6 @@ pub fn rotate(path: &Path, now: DateTime<Utc>) -> anyhow::Result<FrankingKeys> {
     let mut keys: Vec<FrankingKey> = old
         .keys()
         .iter()
-        .filter(|k| old.verifying(k.id, now).is_some())
         .map(|k| FrankingKey::new(k.id, *k.secret(), k.created_at))
         .collect();
     keys.push(FrankingKey::generate(next_id, now)?);
@@ -401,7 +395,7 @@ mod tests {
     use rim_core::e2ee::repository::MockE2eeRepository;
 
     fn at(days: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_790_000_000, 0).unwrap() + Duration::days(days)
+        DateTime::from_timestamp(1_790_000_000, 0).unwrap() + chrono::Duration::days(days)
     }
 
     fn key(id: i32, byte: u8, created: i64) -> FrankingKey {
@@ -438,16 +432,12 @@ mod tests {
     }
 
     #[test]
-    fn finding_7_the_newest_key_signs_and_a_replaced_one_verifies_for_30_days() {
+    fn finding_7_the_newest_key_signs_and_every_key_verifies() {
         let keys = FrankingKeys::new(vec![key(2, 2, 10), key(1, 1, 0)]).unwrap();
         assert_eq!(keys.current().id, 2);
-        assert!(keys.verifying(2, at(1000)).is_some());
-        assert_eq!(
-            keys.verifying(1, at(39)).map(|k| k.secret()),
-            Some(&[1; 32])
-        );
-        assert!(keys.verifying(1, at(40)).is_none());
-        assert!(keys.verifying(3, at(0)).is_none());
+        assert!(keys.verifying(2).is_some());
+        assert_eq!(keys.verifying(1).map(|k| k.secret()), Some(&[1; 32]));
+        assert!(keys.verifying(3).is_none());
         assert!(FrankingKeys::new(vec![]).is_err());
         assert!(FrankingKeys::new(vec![key(1, 1, 0), key(1, 2, 0)]).is_err());
         assert!(FrankingKeys::new(vec![key(0, 1, 0)]).is_err());
@@ -473,18 +463,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_the_database_key_moves_into_the_file_once() {
+    async fn finding_7_the_database_key_moves_into_the_file_and_stops_signing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
         let keys = load_or_create(&path, &repo(vec![(1, 0x42)], Some(1)))
             .await
             .unwrap();
-        assert_eq!(keys.current().id, 1);
-        assert_eq!(keys.current().secret(), &[0x42; 32]);
-        assert_eq!(
-            read_key_file(&path).unwrap().current().secret(),
-            &[0x42; 32]
-        );
+        assert_eq!(keys.ids(), vec![1, 2]);
+        assert_eq!(keys.verifying(1).map(|k| k.secret()), Some(&[0x42; 32]));
+        assert_eq!(keys.current().id, 2, "a fresh key signs");
+        assert_ne!(keys.current().secret(), &[0x42; 32]);
+        let stored = read_key_file(&path).unwrap();
+        assert_eq!(stored.ids(), vec![1, 2]);
+        assert_eq!(stored.current().secret(), keys.current().secret());
     }
 
     #[tokio::test]
@@ -531,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_7_rotation_adds_a_key_and_drops_the_expired_ones() {
+    fn finding_7_rotation_adds_a_key_and_keeps_every_older_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
         assert!(rotate(&path, at(0)).is_err(), "no file yet");
@@ -543,11 +534,11 @@ mod tests {
         assert_ne!(rotated.current().secret(), &[1; 32]);
         assert_eq!(mode(&path), 0o600);
         assert!(!next_file(&path).exists());
-        // Key 1 still verifies 29 days after key 2 replaced it, so a rotation keeps it.
-        assert_eq!(rotate(&path, at(39)).unwrap().ids(), vec![1, 2, 3]);
-        // Past its window key 1 goes; key 2 stays while key 3 is young.
-        assert_eq!(rotate(&path, at(41)).unwrap().ids(), vec![2, 3, 4]);
-        assert_eq!(read_key_file(&path).unwrap().ids(), vec![2, 3, 4]);
+        // Years later key 1 still verifies the receipts it signed.
+        assert_eq!(rotate(&path, at(1000)).unwrap().ids(), vec![1, 2, 3]);
+        let stored = read_key_file(&path).unwrap();
+        assert_eq!(stored.ids(), vec![1, 2, 3]);
+        assert_eq!(stored.verifying(1).map(|k| k.secret()), Some(&[1; 32]));
     }
 
     #[test]
@@ -561,18 +552,18 @@ mod tests {
 
         rotate(&path, Utc::now()).unwrap();
         // A receipt under the new key verifies before the periodic reload ran.
-        assert!(shared.verifying(2, Utc::now()).is_some());
+        assert!(shared.verifying(2).is_some());
         assert_eq!(shared.keys().current().id, 2);
-        assert!(shared.verifying(1, Utc::now()).is_some());
+        assert!(shared.verifying(1).is_some());
 
         // An unknown id reads the file at most once per interval.
         rotate(&path, Utc::now()).unwrap();
-        assert!(shared.verifying(9, Utc::now()).is_none());
+        assert!(shared.verifying(9).is_none());
         assert!(
-            shared.verifying(3, Utc::now()).is_none(),
+            shared.verifying(3).is_none(),
             "the read for key 9 was moments ago"
         );
         assert!(shared.reload().unwrap());
-        assert!(shared.verifying(3, Utc::now()).is_some());
+        assert!(shared.verifying(3).is_some());
     }
 }

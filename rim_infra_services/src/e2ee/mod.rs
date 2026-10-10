@@ -1882,7 +1882,7 @@ impl E2eeService for DefaultE2eeService {
             ServiceError::internal(anyhow::anyhow!("franking keys are not configured"))
         })?;
         let server_key = franking_keys
-            .verifying(cmd.receipt_key_id, Utc::now())
+            .verifying(cmd.receipt_key_id)
             .ok_or_else(mismatch)?;
         let fields = ReceiptFields {
             message_id: message.id.into(),

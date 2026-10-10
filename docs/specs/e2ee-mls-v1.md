@@ -589,8 +589,8 @@ A report proves one message's content to the moderators without the server havin
    and checks, comparing secrets and MACs in constant time:
    - `c` equals the message row's `franking_commitment`, `sentAtUs` its `sent_at`, the sender user
      its author and the sender device the row's sender device (while the row still names one);
-   - `r` recomputed with key `receiptKeyId` equals the receipt, and that key still verifies
-     ("Franking keys").
+   - `r` recomputed with key `receiptKeyId` (any key in the key file, "Franking keys") equals the
+     receipt.
 
    The row check means a holder of `K` (a stolen key file or backup) cannot have the server
    verify content the sender never sent: the receipt alone proves only that `K` signed it. An
@@ -633,17 +633,18 @@ can read):
   message's `franking_key_id`. Keys are held in memory in zeroizing buffers.
 - At first boot without the file the server creates it with one random key, id 1. A server
   that kept its key in the `franking_key` table moves those rows into the file instead, so
-  receipts it signed keep verifying; it refuses to start when messages carry a
-  `franking_key_id` that neither the file nor the table holds (a lost file: restore it). After
-  that the table is unused and the server never reads or writes it; `message.franking_key_id`
-  no longer references it (migration `drop_message_franking_key_fk`).
-- `rim_server franking-key rotate` adds a key with the next id, which becomes current. A key a
-  newer one replaced still verifies receipts for **30 days** after its replacement was created;
-  a report of a message signed under it must arrive in that window. The rotation also drops
-  keys past their window from the file. `rim_server franking-key show` lists the keys. A
-  running server reads the file again every minute, and at once (at most every ten seconds)
-  when a report names a key id above the ones it holds. After moving keys out of the table, rotate once so the key the
-  database (and its backups) holds stops signing.
+  receipts it signed keep verifying, and at once adds a fresh key with the next id that signs
+  from then on: the moved keys, which the database and its backups also hold, only verify. It
+  refuses to start when messages carry a `franking_key_id` that neither the file nor the table
+  holds (a lost file: restore it). After that the table is unused and the server never reads
+  or writes it; `message.franking_key_id` no longer references it (migration
+  `drop_message_franking_key_fk`).
+- `rim_server franking-key rotate` adds a key with the next id, which becomes current. Every
+  key stays in the file and keeps verifying the receipts it signed for good: a receipt is never
+  signed again, so a message stays reportable for as long as it exists. What stops a forged
+  report is the check against the stored revisions, not a key's age. `rim_server franking-key
+  show` lists the keys. A running server reads the file again every minute, and at once (at
+  most every ten seconds) when a report names a key id above the ones it holds.
 
 **Limits.** A report proves one message, not its context: what it replied to, what came before, or
 whether the reporter provoked it (a reporter may report several messages, each proven alone). The
