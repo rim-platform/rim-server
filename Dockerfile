@@ -53,7 +53,8 @@ USER rim
 #   RIM_SERVER_HOST       — Bind address (default: 0.0.0.0)
 #   RIM_SERVER_PORT       — Listen port (default: 8080)
 #   RUST_LOG              — Log filter, e.g. info or rim_server=debug (default: info)
-#   RIM_CORS_ALLOWED_ORIGIN — CORS origin (optional)
+#   RIM_CORS_ALLOWED_ORIGIN — one browser origin accepted besides the server's own (optional);
+#                           the own origin is RIM_PUBLIC_BASE_URL's, else the request's Host
 #   RIM_DATA_DIR          — Data directory (default: ./data)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
 #   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the

@@ -64,8 +64,9 @@ services:
       # The https origin clients and other servers reach this server at. Left out of
       # deploy/.env it follows RIM_DOMAIN; set empty, server-to-server traffic is off.
       RIM_PUBLIC_BASE_URL: ${RIM_PUBLIC_BASE_URL-https://${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}}
-      # The web client's own origin; its requests carry it as Origin.
-      RIM_CORS_ALLOWED_ORIGIN: ${RIM_CORS_ALLOWED_ORIGIN:-https://${RIM_DOMAIN}}
+      # The server accepts its own origin, RIM_PUBLIC_BASE_URL's, without configuration. One
+      # more origin may be allowed, such as a client served from another domain:
+      # RIM_CORS_ALLOWED_ORIGIN: https://app.example.org
       # Server key, recovery key (until moved offline), franking keys and uploads.
       RIM_DATA_DIR: /data
       RIM_STORAGE_LOCAL_PATH: /data/uploads
