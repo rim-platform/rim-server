@@ -34,12 +34,12 @@ use rim_services::e2ee::{MAX_ENVELOPE_BYTES, MlsCommitRequiredReason};
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
 use rim_services::message::command::{
     DeleteMessageCmd, EditEncryptedMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
-    GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery,
-    ReplyToMessageCmd, SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
+    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
+    SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
 };
 use rim_services::message::dto::{
     ConversationChangesStatus, ConversationMessageChangesDto, MessageChangeDto, MessageChangeKind,
-    MessageDto, MessageEncryptionDto, MessagePageCursor, MessageReferenceDto, MessageSearchHitDto,
+    MessageDto, MessageEncryptionDto, MessagePageCursor, MessageSearchHitDto,
 };
 use rim_services::message::search_query::{ChannelToken, FromToken, HasFilter, parse_search_query};
 use rim_services::message::service::MessageService;
@@ -1123,40 +1123,6 @@ impl MessageService for DefaultMessageService {
         }
 
         self.to_dto(msg, query.server_id).await
-    }
-
-    async fn get_message_reference(
-        &self,
-        query: GetMessageReferenceQuery,
-    ) -> ServiceResult<MessageReferenceDto> {
-        let msg = self
-            .get_message_model(
-                query.actor,
-                query.server_id,
-                query.conversation_id,
-                query.message_id,
-            )
-            .await?;
-
-        let permalink_path = match msg.thread_id {
-            Some(thread_id) => format!(
-                "/workspaces/{}/conversations/{}/threads/{}/messages/{}",
-                query.server_id, query.conversation_id, thread_id, msg.id
-            ),
-            None => format!(
-                "/workspaces/{}/conversations/{}/messages/{}",
-                query.server_id, query.conversation_id, msg.id
-            ),
-        };
-
-        Ok(MessageReferenceDto {
-            server_id: query.server_id,
-            conversation_id: query.conversation_id,
-            message_id: msg.id,
-            thread_id: msg.thread_id,
-            permalink_path,
-            anchor: format!("message-{}", msg.id),
-        })
     }
 
     async fn list_messages(

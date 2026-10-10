@@ -1,33 +1,7 @@
 use async_graphql::*;
-use rim_services::Actor;
-use rim_services::auth::command::ListInvitesQuery;
 use rim_services::auth::service::AuthService;
 
-use crate::auth_context::require_actor;
-use crate::ids::parse_uuid_id;
-use crate::types::{InstanceInviteGql, Invite, InviteTokenPreviewGql, RegistrationModeGql};
-
-#[derive(Default)]
-pub(crate) struct InviteQueries;
-
-#[Object]
-impl InviteQueries {
-    async fn my_invites(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<Invite>> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-
-        let invites = svc
-            .list_invites(ListInvitesQuery {
-                actor: Actor::new(actor),
-                server_id,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(invites.into_iter().map(Into::into).collect())
-    }
-}
+use crate::types::{InviteTokenPreviewGql, RegistrationModeGql};
 
 #[derive(Default)]
 pub(crate) struct RegistrationQueries;
@@ -41,22 +15,6 @@ impl RegistrationQueries {
     async fn registration_mode(&self, ctx: &Context<'_>) -> Result<RegistrationModeGql> {
         let mode = ctx.data::<std::sync::Arc<rim_services::auth::dto::RegistrationMode>>()?;
         Ok(RegistrationModeGql::from(mode.as_ref().clone()))
-    }
-
-    /// List all active (non-revoked) instance invites.
-    ///
-    /// Admin-only: requires the caller to be `Owner` on at least one workspace.
-    /// Returns `FORBIDDEN` otherwise.
-    async fn list_instance_invites(&self, ctx: &Context<'_>) -> Result<Vec<InstanceInviteGql>> {
-        let actor = require_actor(ctx)?;
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-
-        let invites = auth
-            .list_instance_invites(rim_services::Actor::new(actor))
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(invites.into_iter().map(InstanceInviteGql::from).collect())
     }
 
     /// Preview a registration token without consuming it.

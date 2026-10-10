@@ -23,7 +23,6 @@ pub(crate) mod moderation;
 pub(crate) mod notification;
 pub(crate) mod pagination;
 pub(crate) mod pipeline;
-pub(crate) mod platform;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
@@ -65,22 +64,20 @@ pub use e2ee::{
     SubmitMlsCommitInput,
 };
 pub use invite::{
-    CreateInstanceInvitePayloadGql, InstanceInviteGql, Invite, InviteTokenPreviewGql,
-    InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql, WorkspaceInvitePreviewGql,
+    InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql,
+    WorkspaceInvitePreviewGql,
 };
 pub use key_identity::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLogEntry, KeyLogEntryKind,
     KeyLoginChallenge, ProfileCard, RotateIdentityKeyInput, SignedStatement, SignedStatementInput,
     SignupWithKeyInput,
 };
-pub use keybind::{
-    DefaultKeybind, Keybind, KeybindContext, KeybindLayers, KeybindScope, KeybindSource,
-};
+pub use keybind::{Keybind, KeybindContext, KeybindScope, KeybindSource};
 pub use macro_def::{MacroDef, MacroStep};
 pub use message::{
     ConversationChangesStatus, ConversationMessageChanges, LinkPreview, Message, MessageChange,
-    MessageChangeCursorInput, MessageChangeKind, MessageChangesInput, MessageReference,
-    ReactionGroup, SearchMessagesInput, SearchResultMessage,
+    MessageChangeCursorInput, MessageChangeKind, MessageChangesInput, ReactionGroup,
+    SearchMessagesInput, SearchResultMessage,
 };
 pub use moderation::{
     MemberTimeout, MessageReport, MessageReportCursorInput, MessageReportCursorOutput,
@@ -94,14 +91,13 @@ pub use notification::{
 pub use pagination::{
     ChannelCursorInput, ChannelCursorOutput, ChannelPage, ConversationPage, InboxCursorInput,
     InboxCursorOutput, MessageCursorInput, MessageCursorOutput, MessagePage, PageInfo,
-    SearchResultPage, ThreadCursorInput, ThreadCursorOutput, ThreadPage,
+    SearchResultPage,
 };
 pub use pipeline::{
     CreatePipelineInput, PipelineActionGql, PipelineActionInput, PipelineFilterConditionGql,
     PipelineFilterConditionInput, PipelineFilterGql, PipelineFilterInput, PipelineGql,
     PipelineTriggerGql, PipelineTriggerInput, PipelineTriggerKindGql, UpdatePipelineInput,
 };
-pub use platform::Capability;
 pub use relay::{
     Contact, ConversationPredecessor, DmRequest, DmRequestStatus, PredecessorInput, RelayInfo,
     RelayItem, RelayItemPage, RemoteIdentity, RemoteMemberInput, RemotePrincipalDevice,
@@ -120,6 +116,6 @@ pub use workspace_plugin::{
     PluginSourceKind, UpdateWorkspacePluginInput, WorkspacePlugin, WorkspacePluginStatus,
 };
 pub use workspace_state::{
-    DeleteWorkspaceStateInput, IncrementWorkspaceStateInput, SetWorkspaceStateInput,
-    WorkspaceStateEntryGql, WorkspaceStateScopeGql,
+    DeleteWorkspaceStateInput, SetWorkspaceStateInput, WorkspaceStateEntryGql,
+    WorkspaceStateScopeGql,
 };

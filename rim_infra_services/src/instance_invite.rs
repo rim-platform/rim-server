@@ -1,5 +1,5 @@
-//! Instance invites: the terms every issuer is held to and the issuing itself, shared by
-//! `createInstanceInvite` and the operator's `rim_server invite` command.
+//! Instance invites: the terms every issuer is held to and the issuing itself, used by the
+//! operator's `rim_server invite` command.
 
 use chrono::{DateTime, Duration, Utc};
 

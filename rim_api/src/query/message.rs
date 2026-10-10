@@ -2,8 +2,8 @@ use async_graphql::*;
 use rim_services::Actor;
 use rim_services::conversation::service::ConversationService;
 use rim_services::message::command::{
-    GetMessageQuery, GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery,
-    MessageChangeCursor, SearchMessagesQuery,
+    GetMessageQuery, ListMessageChangesQuery, ListMessagesQuery, MessageChangeCursor,
+    SearchMessagesQuery,
 };
 use rim_services::message::service::MessageService;
 
@@ -12,8 +12,7 @@ use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
 use crate::types::{
     ConversationMessageChanges, ConversationTypeEnum, Message, MessageChangesInput,
-    MessageCursorInput, MessagePage, MessageReference, SearchMessagesInput, SearchResultMessage,
-    SearchResultPage,
+    MessageCursorInput, MessagePage, SearchMessagesInput, SearchResultMessage, SearchResultPage,
 };
 
 #[derive(Default)]
@@ -186,33 +185,6 @@ impl MessageQueries {
         Ok(dto.into())
     }
 
-    async fn message_reference(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-        conversation_id: ID,
-        message_id: ID,
-    ) -> Result<MessageReference> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn MessageService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-        let conversation_id =
-            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
-        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&message_id)?;
-
-        let reference = svc
-            .get_message_reference(GetMessageReferenceQuery {
-                actor: Actor::new(actor),
-                server_id,
-                conversation_id,
-                message_id,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(reference.into())
-    }
-
     /// The message change feed: for each conversation, the messages created, edited or deleted
     /// after its cursor (timeline and thread replies alike), oldest change first. A client cache
     /// stores each returned `cursor` and passes it back as `after`. Contract (frozen):
@@ -262,36 +234,6 @@ impl MessageQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(feed.into_iter().map(Into::into).collect())
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct MessageMentionQueries;
-
-#[Object]
-impl MessageMentionQueries {
-    async fn my_mentions(
-        &self,
-        ctx: &Context<'_>,
-        server_id: ID,
-        #[graphql(default = 50)] limit: u32,
-    ) -> Result<Vec<Message>> {
-        let actor = require_actor(ctx)?;
-
-        let svc =
-            ctx.data::<std::sync::Arc<dyn rim_services::mention::service::MentionService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-
-        let messages = svc
-            .get_my_mentions(rim_services::mention::command::MyMentionsQuery {
-                actor: rim_services::Actor::new(actor),
-                server_id,
-                limit,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(messages.into_iter().map(Into::into).collect())
     }
 }
 

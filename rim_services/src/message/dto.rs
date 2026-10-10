@@ -113,16 +113,6 @@ pub struct MessageSearchHitDto {
     pub headline: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct MessageReferenceDto {
-    pub server_id: ServerId,
-    pub conversation_id: ConversationId,
-    pub message_id: MessageId,
-    pub thread_id: Option<rim_core::message_thread::model::MessageThreadId>,
-    pub permalink_path: String,
-    pub anchor: String,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct MessagePageCursor {
     pub sent_at: chrono::DateTime<chrono::Utc>,

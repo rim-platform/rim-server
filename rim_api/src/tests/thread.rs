@@ -89,60 +89,6 @@ async fn thread_by_root_message_query_calls_service_when_authed() {
 }
 
 #[tokio::test]
-async fn threads_page_exact_fit_has_no_next_or_prev() {
-    let actor = UserId::new();
-    let server_id = ServerId::new();
-    let conversation_id = ConversationId::new();
-    let thread_id = MessageThreadId::new();
-    let now = chrono::Utc::now();
-
-    let mut thread = MockThreadService::new();
-    thread.expect_list_threads().returning(move |_q| {
-        Box::pin(async move {
-            let mut dto = test_thread_dto();
-            dto.id = thread_id;
-            dto.server_id = server_id;
-            dto.conversation_id = conversation_id;
-            dto.created_at = now;
-            dto.last_message_at = now;
-            Ok(Page::new(vec![dto], None, None))
-        })
-    });
-
-    let schema = schema_with_mocks(
-        MockAuthService::new(),
-        MockConversationService::new(),
-        MockMessageService::new(),
-        MockMessageAttachmentService::new(),
-        thread,
-    );
-
-    let req = authed_request(
-        r#"query($sid: ID!, $cid: ID!) { threads(serverId: $sid, conversationId: $cid, dir: AFTER, limit: 1) { pageInfo { hasNext hasPrev } next { threadId } prev { threadId } } }"#,
-        actor,
-    )
-    .variables(Variables::from_json(serde_json::json!({
-        "sid": server_id.to_string(),
-        "cid": conversation_id.to_string(),
-    })));
-
-    let res = schema.execute(req).await;
-    assert_no_errors(&res);
-
-    let json = res.data.into_json().unwrap();
-    assert_eq!(
-        json["threads"]["pageInfo"]["hasNext"],
-        serde_json::json!(false)
-    );
-    assert_eq!(
-        json["threads"]["pageInfo"]["hasPrev"],
-        serde_json::json!(false)
-    );
-    assert_eq!(json["threads"]["next"], serde_json::Value::Null);
-    assert_eq!(json["threads"]["prev"], serde_json::Value::Null);
-}
-
-#[tokio::test]
 async fn thread_messages_page_exposes_both_directions() {
     let actor = UserId::new();
     let server_id = ServerId::new();

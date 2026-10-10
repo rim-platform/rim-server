@@ -31,46 +31,6 @@ pub struct Keybind {
     pub is_enabled: bool,
 }
 
-#[derive(SimpleObject, Clone, Debug)]
-pub struct DefaultKeybind {
-    pub source: KeybindSource,
-    pub keystroke: String,
-    pub command_id: String,
-    pub context: KeybindContext,
-    pub preset_args: Option<async_graphql::Json<serde_json::Value>>,
-}
-
-impl From<rim_services::keybind::dto::DefaultKeybindDto> for DefaultKeybind {
-    fn from(value: rim_services::keybind::dto::DefaultKeybindDto) -> Self {
-        Self {
-            source: value.source.into(),
-            keystroke: value.keystroke,
-            command_id: value.command_id,
-            context: value.context.into(),
-            preset_args: value.preset_args.map(async_graphql::Json),
-        }
-    }
-}
-
-#[derive(SimpleObject, Clone, Debug)]
-pub struct KeybindLayers {
-    pub default_keybind: Option<DefaultKeybind>,
-    pub user_keybind: Option<Keybind>,
-    pub workspace_keybind: Option<Keybind>,
-    pub resolved_persisted_keybind: Option<Keybind>,
-}
-
-impl From<rim_services::keybind::dto::KeybindLayersDto> for KeybindLayers {
-    fn from(value: rim_services::keybind::dto::KeybindLayersDto) -> Self {
-        Self {
-            default_keybind: value.default_keybind.map(Into::into),
-            user_keybind: value.user_keybind.map(Into::into),
-            workspace_keybind: value.workspace_keybind.map(Into::into),
-            resolved_persisted_keybind: value.resolved_persisted_keybind.map(Into::into),
-        }
-    }
-}
-
 impl From<rim_services::keybind::dto::KeybindDto> for Keybind {
     fn from(value: rim_services::keybind::dto::KeybindDto) -> Self {
         Self {

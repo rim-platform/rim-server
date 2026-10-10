@@ -38,10 +38,6 @@ async fn create_get_by_id_and_token_hash_and_revoke() {
     assert!(repo.get_by_id(inv.id).await.unwrap().is_some());
     let by_hash = repo.get_by_token_hash("ith").await.unwrap().unwrap();
     assert_eq!(by_hash.id, inv.id);
-
-    repo.revoke_invite(inv.id).await.unwrap();
-    let after = repo.get_by_id(inv.id).await.unwrap().unwrap();
-    assert!(after.revoked_at.is_some());
 }
 
 #[tokio::test]

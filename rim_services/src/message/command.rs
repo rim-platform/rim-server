@@ -72,14 +72,6 @@ pub struct GetMessageQuery {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct GetMessageReferenceQuery {
-    pub actor: Actor,
-    pub server_id: ServerId,
-    pub conversation_id: ConversationId,
-    pub message_id: MessageId,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct ListMessagesQuery {
     pub actor: Actor,
     pub server_id: ServerId,

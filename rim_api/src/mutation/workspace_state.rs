@@ -63,31 +63,4 @@ impl WorkspaceStateMutations {
 
         Ok(deleted)
     }
-
-    async fn increment_workspace_state(
-        &self,
-        ctx: &Context<'_>,
-        input: crate::types::IncrementWorkspaceStateInput,
-    ) -> Result<crate::types::WorkspaceStateEntryGql> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<
-            dyn rim_services::workspace_state::service::WorkspaceStateService,
-        >>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.server_id)?;
-
-        let entry = svc
-            .increment(
-                rim_services::workspace_state::request::IncrementWorkspaceStateCmd {
-                    actor: Actor::new(actor),
-                    server_id,
-                    key: input.key,
-                    scope: input.scope.into(),
-                    delta: input.delta,
-                },
-            )
-            .await
-            .map_err(map_service_error)?;
-
-        Ok(entry.into())
-    }
 }

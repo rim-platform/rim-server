@@ -2,9 +2,8 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupToken, SignupWithBootstrapCmd,
-    SignupWithInstanceInviteCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, SignupOpenCmd, SignupToken,
+    SignupWithBootstrapCmd, SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::auth::service::AuthService;
@@ -13,7 +12,7 @@ use crate::auth_context::require_actor;
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::types::{CreateInstanceInvitePayloadGql, InstanceInviteGql, SignupWithInvitePayloadGql};
+use crate::types::SignupWithInvitePayloadGql;
 
 #[derive(Default)]
 pub(crate) struct InviteMutations;
@@ -105,21 +104,6 @@ impl InviteMutations {
         Ok(JoinServerByInvitePayload {
             server_id: ID(res.server_id.to_string()),
         })
-    }
-
-    async fn revoke_invite(&self, ctx: &Context<'_>, invite_id: ID) -> Result<bool> {
-        let actor = require_actor(ctx)?;
-        let invite_id = parse_uuid_id::<rim_core::auth::model::InviteId>(&invite_id)?;
-
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        auth.revoke_invite(RevokeInviteCmd {
-            actor: Actor::new(actor),
-            invite_id,
-        })
-        .await
-        .map_err(map_service_error)?;
-
-        Ok(true)
     }
 
     /// Unified signup mutation for all token-based and open-mode registration paths.
@@ -240,52 +224,6 @@ impl InviteMutations {
             server_id: server_id.map(|id| ID(id.to_string())),
         })
     }
-
-    /// Create a new instance invite (admin-only gate: must own at least one workspace).
-    ///
-    /// Returns the raw invite token exactly once in the payload. Store it; it cannot
-    /// be retrieved again.
-    async fn create_instance_invite(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateInstanceInviteInput,
-    ) -> Result<CreateInstanceInvitePayloadGql> {
-        let actor = require_actor(ctx)?;
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-
-        let res = auth
-            .create_instance_invite(CreateInstanceInviteCmd {
-                actor: Actor::new(actor),
-                expires_at: input.expires_at,
-                max_uses: input.max_uses,
-                recipient_email: input.recipient_email,
-            })
-            .await
-            .map_err(map_service_error)?;
-
-        Ok(CreateInstanceInvitePayloadGql {
-            invite_token: res.invite_token,
-            invite: InstanceInviteGql::from(res.invite),
-        })
-    }
-
-    /// Revoke an existing instance invite (admin-only gate: must own at least one workspace).
-    ///
-    /// Returns `true` on success. Returns `NOT_FOUND` if the invite does not exist.
-    async fn revoke_instance_invite(&self, ctx: &Context<'_>, invite_id: ID) -> Result<bool> {
-        let actor = require_actor(ctx)?;
-        let invite_id = parse_uuid_id::<rim_core::auth::model::InstanceInviteId>(&invite_id)?;
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-
-        auth.revoke_instance_invite(RevokeInstanceInviteCmd {
-            actor: Actor::new(actor),
-            invite_id,
-        })
-        .await
-        .map_err(map_service_error)?;
-
-        Ok(true)
-    }
 }
 
 #[derive(InputObject)]
@@ -339,19 +277,6 @@ pub struct SignupWithInviteInput {
     pub bootstrap_token: Option<String>,
     pub instance_invite_token: Option<String>,
     pub workspace_invite_token: Option<String>,
-}
-
-/// Input for `createInstanceInvite`.
-///
-/// Both fields are optional: `expires_at` defaults to `now() + 7 days`,
-/// `max_uses` defaults to 1.
-#[derive(InputObject)]
-pub struct CreateInstanceInviteInput {
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub max_uses: Option<i32>,
-    /// Optional recipient to email the invite link to (Track B3). Validated server-side;
-    /// malformed addresses return a validation error.
-    pub recipient_email: Option<String>,
 }
 
 #[cfg(test)]

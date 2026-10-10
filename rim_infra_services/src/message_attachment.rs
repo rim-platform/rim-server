@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use rim_services::message_attachment::command::{
-    CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd, GetAttachmentQuery,
+    CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
 };
 use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus, UploadTicketDto};
 use rim_services::message_attachment::service::MessageAttachmentService;
@@ -15,7 +15,6 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::AttachmentRepos;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
-    ensure_server_member,
 };
 
 /// The only file name and media type an encrypted conversation's attachment is created with:
@@ -344,33 +343,6 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .await?;
 
         Ok(Self::attachment_dto(updated))
-    }
-
-    async fn get_attachment(&self, query: GetAttachmentQuery) -> ServiceResult<AttachmentDto> {
-        // Preflight: reject non-server-members before probing attachment existence.
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
-            query.actor.user_id,
-        )
-        .await?;
-
-        let att = self
-            .repos
-            .message_attachment_repo
-            .get_by_id(query.attachment_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        self.ensure_actor_can_access_message(
-            query.server_id,
-            query.actor.user_id,
-            att.message_id,
-            false,
-        )
-        .await?;
-
-        Ok(Self::attachment_dto(att))
     }
 
     async fn delete_attachment(&self, cmd: DeleteAttachmentCmd) -> ServiceResult<()> {

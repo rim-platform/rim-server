@@ -2,20 +2,15 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use entity::message_mention;
-use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::message_mention::repository::MessageMentionRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect,
-    RelationTrait, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
-use crate::sea_orm_impl::relay::hidden;
 
 pub struct SeaOrmMessageMentionRepository {
     pub db: DbHandle,
@@ -73,39 +68,5 @@ impl MessageMentionRepository for SeaOrmMessageMentionRepository {
                 .push(m.mentioned_user_id.into());
         }
         Ok(result)
-    }
-
-    async fn get_messages_mentioning_user(
-        &self,
-        user_id: UserId,
-        conversation_ids: &[ConversationId],
-        limit: u32,
-    ) -> RepoResult<Vec<MessageId>> {
-        if conversation_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let conv_uuids: Vec<Uuid> = conversation_ids.iter().copied().map(Into::into).collect();
-
-        let models = message_mention::Entity::find()
-            .filter(message_mention::Column::MentionedUserId.eq(Uuid::from(user_id)))
-            .join(
-                JoinType::InnerJoin,
-                message_mention::Relation::Message.def(),
-            )
-            .filter(entity::message::Column::ConversationId.is_in(conv_uuids))
-            .filter(entity::message::Column::IsDeleted.eq(false))
-            // Mentions in a conversation hidden by the request inbox wait until it is accepted.
-            .filter(sea_orm::sea_query::Expr::cust_with_values(
-                format!("NOT {}", hidden("$1", r#""message"."conversation_id""#)),
-                [sea_orm::Value::from(Uuid::from(user_id))],
-            ))
-            .order_by_desc(message_mention::Column::CreatedAt)
-            .limit(Some(limit as u64))
-            .all(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(models.into_iter().map(|m| m.message_id.into()).collect())
     }
 }

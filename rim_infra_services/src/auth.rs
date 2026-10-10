@@ -11,19 +11,18 @@ use rim_core::auth::model::NewInvite;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInstanceInviteCmd, CreateInviteCmd, JoinServerByInviteCmd,
-    ListInvitesQuery, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd, PreviewInviteTokenQuery,
-    RevokeInstanceInviteCmd, RevokeInviteCmd, SignupOpenCmd, SignupWithBootstrapCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
     SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::{
-    AcceptInviteResultDto, AuthSessionDto, CreateInstanceInviteResultDto, CreateInviteResultDto,
-    InstanceInviteDto, InviteDto, InviteTokenPreviewDto, InviteTokenType,
-    JoinServerByInviteResultDto, LoginResultDto, SignupResultDto, WorkspaceInvitePreviewDto,
+    AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InviteTokenPreviewDto,
+    InviteTokenType, JoinServerByInviteResultDto, LoginResultDto, SignupResultDto,
+    WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::rate_limit::RateLimitDecision;
-use rim_services::{Actor, ServiceError, ServiceResult};
+use rim_services::{ServiceError, ServiceResult};
 
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
@@ -397,40 +396,6 @@ impl DefaultAuthService {
             },
         )
         .await
-    }
-
-    /// Ensure the actor is an Owner on at least one server (instance-invite gate).
-    async fn ensure_any_server_owner(
-        repos: &AuthRepos,
-        actor_user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<()> {
-        let servers = repos
-            .server_repo
-            .get_servers_for_user(actor_user_id)
-            .await?;
-        for server in &servers {
-            if let Some(member) = repos
-                .server_member_repo
-                .get_member(server.id, actor_user_id)
-                .await?
-                && member.member_role == ServerMemberRole::Owner
-            {
-                return Ok(());
-            }
-        }
-        Err(ServiceError::PermissionDenied)
-    }
-
-    fn to_instance_invite_dto(inv: rim_core::auth::model::InstanceInvite) -> InstanceInviteDto {
-        InstanceInviteDto {
-            id: inv.id,
-            created_by_user_id: inv.created_by_user_id,
-            expires_at: inv.expires_at,
-            max_uses: inv.max_uses,
-            use_count: inv.use_count,
-            revoked_at: inv.revoked_at,
-            created_at: inv.created_at,
-        }
     }
 }
 
@@ -822,54 +787,6 @@ impl AuthService for DefaultAuthService {
         })
     }
 
-    #[instrument(name = "auth.list_invites", skip_all, fields(actor_id = %query.actor.user_id, server_id = %query.server_id))]
-    async fn list_invites(&self, query: ListInvitesQuery) -> ServiceResult<Vec<InviteDto>> {
-        ensure_server_owner(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
-            query.actor.user_id,
-        )
-        .await?;
-
-        let invites = self
-            .repos
-            .invite_repo
-            .list_active_by_server(query.server_id)
-            .await?;
-
-        Ok(invites.into_iter().map(Self::to_invite_dto).collect())
-    }
-
-    #[instrument(name = "auth.revoke_invite", skip_all, fields(actor_id = %cmd.actor.user_id, invite_id = %cmd.invite_id))]
-    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<()> {
-        let inv = self
-            .repos
-            .invite_repo
-            .get_by_id(cmd.invite_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        ensure_server_owner(
-            self.repos.server_member_repo.as_ref(),
-            inv.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
-
-        self.repos.invite_repo.revoke_invite(cmd.invite_id).await?;
-
-        // H4 audit: workspace invite revocation.
-        tracing::info!(
-            target: "audit",
-            event = "invite_revoked",
-            invite_id = %cmd.invite_id,
-            actor_user_id = %cmd.actor.user_id,
-            "workspace invite revoked"
-        );
-        info!(invite_id = %cmd.invite_id, "invite revoked");
-        Ok(())
-    }
-
     #[instrument(name = "auth.signup_with_bootstrap", skip_all, fields(username = %cmd.username))]
     async fn signup_with_bootstrap(
         &self,
@@ -1081,94 +998,6 @@ impl AuthService for DefaultAuthService {
             session_token: raw_sess_token,
             csrf_token: csrf,
         })
-    }
-
-    #[instrument(name = "auth.create_instance_invite", skip_all, fields(actor_id = %cmd.actor.user_id))]
-    async fn create_instance_invite(
-        &self,
-        cmd: CreateInstanceInviteCmd,
-    ) -> ServiceResult<CreateInstanceInviteResultDto> {
-        // Gate: must be Owner of at least one server (§5 placeholder gate).
-        Self::ensure_any_server_owner(&self.repos, cmd.actor.user_id).await?;
-
-        // Validate before persisting, per docs/email.md — a malformed address should surface
-        // as a validation error, not a silently-dropped invite email.
-        let recipient_email = cmd
-            .recipient_email
-            .clone()
-            .map(|email| Self::validate_email(&email))
-            .transpose()?;
-
-        let crate::instance_invite::IssuedInvite {
-            invite,
-            token: raw_token,
-        } = crate::instance_invite::issue(
-            self.repos.instance_invite_repo.as_ref(),
-            Some(cmd.actor.user_id),
-            cmd.expires_at,
-            cmd.max_uses,
-            Utc::now(),
-        )
-        .await?;
-
-        tracing::info!(
-            target: "audit",
-            event = "instance_invite_issued",
-            instance_invite_id = %invite.id,
-            issued_by_user_id = %cmd.actor.user_id,
-            "instance invite issued"
-        );
-
-        if let Some(recipient_email) = recipient_email {
-            let link = self.build_invite_link(&raw_token);
-            let message = templates::invite(&recipient_email, &link);
-            if let Err(e) = self.email_sender.send(message).await {
-                warn!(error = %e, "failed to send instance invite email");
-            }
-        }
-
-        Ok(CreateInstanceInviteResultDto {
-            invite: Self::to_instance_invite_dto(invite),
-            invite_token: raw_token,
-        })
-    }
-
-    #[instrument(name = "auth.revoke_instance_invite", skip_all, fields(actor_id = %cmd.actor.user_id, invite_id = %cmd.invite_id))]
-    async fn revoke_instance_invite(&self, cmd: RevokeInstanceInviteCmd) -> ServiceResult<()> {
-        Self::ensure_any_server_owner(&self.repos, cmd.actor.user_id).await?;
-
-        let _invite = self
-            .repos
-            .instance_invite_repo
-            .get_by_id(cmd.invite_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        self.repos
-            .instance_invite_repo
-            .revoke(cmd.invite_id)
-            .await?;
-
-        // H4 audit: instance invite revocation.
-        tracing::info!(
-            target: "audit",
-            event = "instance_invite_revoked",
-            invite_id = %cmd.invite_id,
-            actor_user_id = %cmd.actor.user_id,
-            "instance invite revoked"
-        );
-        info!(invite_id = %cmd.invite_id, "instance invite revoked");
-        Ok(())
-    }
-
-    #[instrument(name = "auth.list_instance_invites", skip_all, fields(actor_id = %actor.user_id))]
-    async fn list_instance_invites(&self, actor: Actor) -> ServiceResult<Vec<InstanceInviteDto>> {
-        Self::ensure_any_server_owner(&self.repos, actor.user_id).await?;
-        let invites = self.repos.instance_invite_repo.list_active().await?;
-        Ok(invites
-            .into_iter()
-            .map(Self::to_instance_invite_dto)
-            .collect())
     }
 
     #[instrument(name = "auth.preview_invite_token", skip_all, fields(remote_ip = %query.remote_ip))]

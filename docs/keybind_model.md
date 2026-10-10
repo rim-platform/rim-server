@@ -222,14 +222,9 @@ In the current backend shape:
   records
 - the client/runtime is expected to own `device_local` keybinds and final runtime keypress handling
 
-The backend may expose:
-
-- `default` keybind suggestions
-- stored persisted keybinds by scope
-- resolved persisted keybinds
-- single-key persisted resolution for a given `(context, keystroke)`
-- keybind layer inspection for a given `(context, keystroke)`, so the client can understand which
-  backend layers contributed before applying any device-local override
+The backend exposes the resolved persisted keybinds (`resolvedKeybinds`): the defaults, then the
+user's, then the workspace's, each later layer replacing an earlier binding of the same
+`(context, keystroke)`.
 
 The client/runtime should then own the final effective merge:
 

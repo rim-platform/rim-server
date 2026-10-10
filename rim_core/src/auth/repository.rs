@@ -40,11 +40,6 @@ pub trait InviteRepository: Send + Sync {
     /// Returns `true` if the invite was consumed (use_count incremented), `false` if it was
     /// already exhausted or missing.
     async fn try_consume(&self, id: InviteId) -> RepoResult<bool>;
-    async fn revoke_invite(&self, id: InviteId) -> RepoResult<()>;
-    async fn list_active_by_server(
-        &self,
-        server_id: crate::server::model::ServerId,
-    ) -> RepoResult<Vec<Invite>>;
 }
 
 /// Repository for bootstrap tokens — one-shot CLI-issued tokens for cold-start signup.
