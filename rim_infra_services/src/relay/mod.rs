@@ -786,7 +786,7 @@ impl RelayService for DefaultRelayService {
             .await?;
         Self::commit(scope).await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "relay.principal_blocked",
             scope = "user",
             user_id = %actor.user_id,
@@ -908,7 +908,7 @@ impl RelayService for DefaultRelayService {
             })
             .await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "relay.dm_request_reported",
             user_id = %actor.user_id,
             report_id = %report.id,
@@ -957,7 +957,7 @@ impl RelayService for DefaultRelayService {
     async fn leave_relay(&self, actor: Actor) -> ServiceResult<bool> {
         self.repos.relay_repo.clear_user(actor.user_id).await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "relay.left",
             user_id = %actor.user_id,
             "a user left this relay; their queue, requests and contacts are deleted"

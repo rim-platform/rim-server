@@ -166,7 +166,7 @@ fn conflict(link: &DeviceLink, wanted: &str) -> ServiceError {
 /// Log an audit event with the link's row id and user, never its link id or sealed bytes.
 fn audit(event: &str, link_row_id: DeviceLinkId, user_id: UserId, message: &str) {
     info!(
-        target = "audit",
+        target: "audit",
         event,
         link_row_id = %link_row_id,
         user_id = %user_id,

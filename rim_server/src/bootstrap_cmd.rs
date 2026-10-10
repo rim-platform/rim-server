@@ -106,7 +106,7 @@ async fn run_inner(args: impl Iterator<Item = String>) -> Result<(), String> {
     eprintln!("  sha256    : {fingerprint}");
 
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "bootstrap_token_issued",
         token_id = %token.id,
         email = %opts.email,

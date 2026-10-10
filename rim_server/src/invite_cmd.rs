@@ -201,7 +201,7 @@ async fn execute_on(
             .await
             .map_err(|e| e.to_string())?;
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "instance_invite_issued",
                 instance_invite_id = %issued.invite.id,
                 issued_by = "operator",
@@ -229,7 +229,7 @@ async fn execute_on(
                 .ok_or_else(|| format!("no invite {id}"))?;
             repo.revoke(id).await.map_err(|e| e.to_string())?;
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "instance_invite_revoked",
                 invite_id = %id,
                 actor = "operator",

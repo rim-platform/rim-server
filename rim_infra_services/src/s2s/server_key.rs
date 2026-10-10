@@ -278,7 +278,7 @@ pub async fn load_or_create(
         bail!("cannot store the server key log's inception: {e}");
     }
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "server_key.created",
         server_id = %state.server_id,
         "created this server's key and key log"
@@ -355,7 +355,7 @@ pub async fn rotate(
     );
     let loaded = commit_rotation(repo, files, current.log, &current.state, entry, next).await?;
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "server_key.rotated",
         server_id = %loaded.state.server_id,
         seq = loaded.state.seq,
@@ -415,7 +415,7 @@ pub async fn recover(
         }
     };
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "server_key.recovered",
         server_id = %loaded.state.server_id,
         seq = loaded.state.seq,

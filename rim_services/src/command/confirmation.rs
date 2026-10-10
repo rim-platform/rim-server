@@ -34,7 +34,7 @@
 //!   it — the actual MCP capability/consent integration ships with Phase 6.
 //! - **Audit emission.** Issue/verify success+failure are surfaced via
 //!   structured `tracing` events at this layer, but the dedicated
-//!   `target = "audit"` sink does not yet exist (N3 / Phase 4).
+//!   `target: "audit"` sink does not yet exist (N3 / Phase 4).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
