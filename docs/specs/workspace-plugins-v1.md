@@ -1,6 +1,6 @@
-# Workspace plugins v1 (Stage 3, S3-10)
+# Workspace plugins v1
 
-_Spec written 2026-10-09 for Track 2.4. Extends `docs/specs/key-identity-v1.md` (signed statements,
+_Status: implemented, normative. Extends `docs/specs/key-identity-v1.md` (signed statements,
 version 2 tagged keys, the public `keyLog`) and `docs/specs/web-plugins-v1.md` (the `WebSandboxed`
 kind and the bundle format). This document is the contract between the server
 (`WorkspacePluginService` and the bundle endpoints) and the clients for a per-workspace plugin
@@ -293,8 +293,8 @@ CREATE INDEX idx_workspace_plugin_bundle ON workspace_plugin (server_id, bundle_
   longer log that extends it, and a log that diverges from it is `VALIDATION`.
 - `approved_by` and `approved_at` are set on add and on every update. `approved_by` becomes null
   if that account is deleted.
-- The registry belongs to the workspace; in Stage 5 it moves to the workspace host with roles and
-  bans, so it needs no origin column.
+- The registry belongs to the workspace and lives on the server that hosts it, next to its roles
+  and bans (`server-to-server-v1.md`), so it needs no origin column.
 - **Rollback.** `down` drops `workspace_plugin`, then `plugin_bundle`. Nothing references them.
   Files under `plugin-bundles/` stay in storage, and an operator may delete that prefix. Clients
   keep what they installed; a registry install whose entry is gone is treated as removed.
@@ -537,10 +537,10 @@ was stored or already there), never the statement text or bundle bytes.
 ## Deferred
 
 - **Signed approvals**: an Owner's signature over the entry's status, so a client stops trusting
-  the server for "recommended by Acme". With the registry on the workspace host in Stage 5.
+  the server for "recommended by Acme".
 - **Freshness of the publisher's log.** A server could withhold a later recovery rotation, keeping
-  old signatures valid for its clients. Profile cards fetched from several relays answer this in
-  Stage 5.
+  old signatures valid for its clients. Fetching profile cards from several relays would answer
+  this; relays do not fan out reads yet.
 - Enforcing required plugins, and per-workspace limits on capabilities (`capability_security_model.md`,
   "Admin Restriction Direction").
 - CLI signing; release channels (more than one version per entry); the server mirroring external

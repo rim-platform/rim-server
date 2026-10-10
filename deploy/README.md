@@ -3,11 +3,13 @@
 `compose.relay.yml` turns `compose.yml` into a public relay: rim-server with `RIM_ROLE=relay`,
 the public relay's quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS,
 and no web client. The relay holds its users' accounts, devices and cards, queues what other
-servers send them and forwards their requests; it hosts no workspaces. The operator's runbook is
-`docs/oncall/relay-public.md`; the protocol is `docs/specs/server-to-server-v1.md`.
+servers send them and forwards their requests; it hosts no workspaces. This page brings a relay up for the first time. The operator's runbook
+(`docs/operations/relay-public.md`) covers running it: keys, backups, quotas, monitoring,
+incidents, the abuse policy and every command. `docs/relay.md` explains what a relay does, and
+`docs/specs/server-to-server-v1.md` is the protocol.
 
 A server that hosts workspaces uses `compose.yml` alone: `docs/self-hosting.md` covers it, and
-its sections on updates and backups apply to the relay too.
+its sections on updates, backups and monitoring apply to the relay too.
 
 The relay's working name, `relay.rim.chat`, is not a registered domain. Use your own.
 
@@ -67,50 +69,18 @@ dc exec rim /app/rim-server server-key show
 
 The descriptor in the discovery document says `"registration":{"mode":"pow","powBits":24}`.
 
-## Health
+## Health, updates and operation
 
-The server answers two probes on its own port, without a session. Caddy does not proxy them,
-so they are reachable from inside the compose network only:
-
-- `GET /healthz` answers 200 with `{"status":"ok","version":"…"}` while the process serves
-  requests. The image's `HEALTHCHECK` uses it.
-- `GET /readyz` answers 200 when the database answers, no migration is pending and the server
-  key file and franking key file are readable. Otherwise it answers 503 with `"status":"fail"`
-  and the failing checks named under `checks`; the log says why each one failed. The `rim`
-  service's compose healthcheck uses it.
+The probes (`/healthz`, `/readyz`) and their checks are the same as on any server:
+`docs/self-hosting.md`, "Monitoring". Caddy does not proxy them, so they are reachable from
+inside the compose network only:
 
 ```sh
 dc ps rim          # healthy once /readyz passes
 dc exec rim curl -s http://localhost:8080/readyz
-dc exec rim /app/rim-server --version
 ```
 
-## The operator's commands
-
-The CLI is `/app/rim-server` inside the `rim` container and reads the same environment:
-
-```sh
-alias rim-relay='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml exec rim /app/rim-server'
-rim-relay server-key show
-rim-relay principal block rimp1_… --reason "spam wave 2026-11-02"
-rim-relay peer block rims1_…
-rim-relay abuse-reports list --open
-rim-relay invite create --max-uses 10 --expires-in-days 7 --public-url https://relay.example.org
-rim-relay invite create --email ops@example.org --public-url https://relay.example.org
-```
-
-`invite create` prints a signup link whose token works as a registration token in
-`signupWithKey`, so it is how the operator lets people in without the proof-of-work: up to 50
-signups per link, for at most 30 days. `invite list` shows the live ones with their use counts and
-`invite revoke <id>` ends one. With `--email` the link admits only a password signup with that
-address.
-
-`audit purge --dry-run` counts the command audit rows past `RIM_AUDIT_RETENTION_DAYS` and
-`audit purge` exports them to `/data/audit-exports/` and deletes them; with the variable set the
-server does the same daily. `docs/operations/audit-retention.md` has the details and the
-logrotate setup for `/data/audit.log`.
-
-## Updating
+Update as `docs/self-hosting.md`, "Updates", says, with the relay's files named for the backup:
 
 ```sh
 COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh
@@ -118,8 +88,9 @@ git pull
 dc up -d --build
 ```
 
-The migrations run before the new server starts. The backup scripts and how often to run them
-are in the runbook, "Backups".
+The operator's commands (`/app/rim-server` inside the `rim` container: invites that skip the
+proof-of-work, principal and peer blocks, abuse reports, key rotation) are listed in the runbook,
+"Command reference".
 
 ## Another proxy
 

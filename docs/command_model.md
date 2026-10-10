@@ -1,6 +1,6 @@
 # Command Model
 
-This document defines the Phase 0 command model for RIM.
+This document defines the command model for RIM.
 
 The command system is one of the core differentiators of the product. Commands are the backbone for:
 
@@ -89,7 +89,7 @@ RIM should support the following command sources.
 - Stable and documented.
 - Usually available in the command palette.
 
-Channel builtins (Track 1.1, `docs/specs/track-1-1-private-channels.md`). Apart from the read-only
+Channel builtins (`docs/messaging.md`, Channel Visibility And Membership). Apart from the read-only
 `chat.list_channels` (`Safe`, `chat.read`), all are `Backend`, `Mutating`, `chat.write`, palette-
 and keybind-visible. `conversation_id`
 falls back to the focused conversation (`context.conversation_id`). Authorization (membership,
@@ -107,7 +107,7 @@ never do more than the user it acts for.
 | `chat.unarchive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
 | `chat.remove_conversation_member` | `server_id`, `conversation_id`, `user_id` | no | yes | Owner/Moderator, or yourself; confirmation required |
 
-Moderation builtins (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`). All are
+Moderation builtins. All are
 `Backend` and `Mutating`; the `admin.*` ones require `admin.manage_members`, the `chat.*` ones
 `chat.write`. They call `ModerationService`, which enforces the roles (Owner/Moderator, who may
 target whom) and writes the moderation audit row (`docs/messaging.md`, Roles And Moderation), so
@@ -125,7 +125,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
 
-Notification builtins (Track 1.3, `docs/specs/track-1-3-notification-rules.md`). All are
+Notification builtins (`docs/messaging.md`, Notification Rules). All are
 `Backend`, `Mutating`, palette- and keybind-visible, AI-callable, in category `Notifications`,
 and need **no capability**: like `chat.mark_as_read` they change only the caller's own state.
 They call `NotificationService`, which requires workspace membership (and, for the level, read
@@ -138,11 +138,11 @@ access to the conversation). Being `Mutating`, they are refused while the caller
 | `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
 | `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
 
-General builtins made AI-callable in Track 4.1. None declares a new capability. The navigation
+General builtins the agent may call. None declares a new capability. The navigation
 commands are `DesktopLocal`: the server refuses to execute them, so the desktop agent runs them
 through the client's local handlers, and only when they are `Safe` and not dangerous (anything
 stricter goes to `executeCommand`, which refuses it). The five writes were raised from `Safe` to
-`Mutating` (ai-reframe review §8.3), which has three effects beyond the agent's confirmation
+`Mutating`, which has three effects beyond the agent's confirmation
 gate: a timed-out member can no longer run them through the command path (T1; the GraphQL
 `markAsRead` mutation is not affected), server-side pipelines (initiator `Plugin`) can no longer
 run them because nobody is there to confirm, and they count towards the agent's per-turn
@@ -170,13 +170,17 @@ an invite token that would pass through the model provider), and `chat.mark_all_
 List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
 comma-separated string, because the agent's tool schema types every argument as a scalar.
 
-AI-callable builtins: 45 (the 21 of Track 1.1, plus `admin.timeout`, `chat.set_slow_mode` and
-`chat.report_message` from Track 1.2, plus the three `notifications.*` builtins of Track 1.3, plus
-the eighteen general builtins of Track 4.1), pinned by
+AI-callable builtins: 41. They are seventeen chat, channel and navigation builtins
+(`chat.post_message`, `chat.open_thread`, `workspace.open_settings`,
+`workspace.navigate_to_channel`, `workspace.switch_workspace`, `chat.list_channels`,
+`chat.create_channel`, `chat.list_members`, `chat.search_messages`, `chat.get_recent_messages`,
+`chat.pin_message`, `chat.toggle_reaction` and the five channel membership builtins above),
+`admin.timeout`, `chat.set_slow_mode` and `chat.report_message`, the three `notifications.*`
+builtins, and the eighteen general builtins above. The set is pinned by
 `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
-`list_commands_ai_surface_returns_forty_five_commands_with_caps` (`command_tests.rs`). The
-capability union the AI surface checks is unchanged (`admin.manage_members`, `chat.read`,
-`chat.write`), since neither the notification nor the Track 4.1 builtins declare any.
+`list_commands_ai_surface_returns_forty_one_commands_with_caps` (`command_tests.rs`). The
+capability union the AI surface checks is `admin.manage_members`, `chat.read` and `chat.write`;
+the notification and general builtins declare none.
 
 ### Plugin-Provided Commands
 
@@ -238,7 +242,7 @@ Each command should expose the following metadata.
 - `supports_preview`
 - `supports_dry_run`
 
-### Timeout gate (T1, Track 1.2)
+### Timeout gate (T1)
 
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
 `Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
@@ -472,18 +476,16 @@ Examples:
   - `workspace.open_folder`
 - dangerous capability required because it runs a local process
 
-## Non-Goals For Phase 0
+## Non-Goals
 
-This spec does not yet define:
+The command model does not define:
 
-- a full scripting language
-- complex piping/dataflow semantics
+- a scripting language: macros pipe one command's result into the next step, and anything
+  beyond that belongs in a plugin
+- dataflow beyond a linear pipe
 - distributed workflow execution
-- full audit schema
-- full command-result typed payload protocol
-- final UI for editing commands
-
-Those can be layered on later once the base model is stable.
+- a typed payload schema per command result: results share one envelope
+- the UI for editing commands, which is the client's concern
 
 ## Summary Of Decisions
 

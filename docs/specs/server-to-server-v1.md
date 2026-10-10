@@ -1,11 +1,11 @@
-# Server-to-server v1 (Stage 5, S5-0)
+# Server-to-server v1
 
-_Spec written 2026-10-09 for Stage 5 (`docs/plans/stage-5-2026-10-09.md`, `ROADMAP.md` Track 7.4)
-under `docs/decisions/decentralization-2026-10-08.md` and
+_Status: implemented, normative. Follows `docs/decisions/decentralization-2026-10-08.md` and
 `docs/decisions/relay-proxied-workspaces-2026-10-09.md`. Read `key-identity-v1.md`,
-`device-linking-v1.md` and `e2ee-mls-v1.md` first. This document is the contract between the server
-PRs (S5-1, S5-2, S5-4, S5-6) and the client PRs (S5-3, S5-5): server identity, the signed HTTP API
-between servers, relays, hosts, and what the client verifies._
+`device-linking-v1.md` and `e2ee-mls-v1.md` first. This document is the contract between servers
+and between a server and its clients: server identity, the signed HTTP API between servers,
+relays, hosts, and what the client verifies. Labels of the form S5-n below name the change that
+introduced an item._
 
 ## Summary
 
@@ -842,7 +842,7 @@ a restart). `reportDmRequest` and the abuse address (`rim_server abuse-reports a
 `relay_abuse_report`, listed by `rim_server abuse-reports list [--open]` and closed by
 `abuse-reports resolve <id>`.
 
-**Runbook** (`docs/oncall/relay-public.md`, S5-6): who holds the server recovery key and where,
+**Runbook** (`docs/operations/relay-public.md`, S5-6): who holds the server recovery key and where,
 yearly `server-key rotate` and `recover` on compromise, database and key file backups with a restore
 drill, quotas and how to change them, monitoring (queue bytes, outbox depth per peer, deliver
 failures, `401`/`409`/`429` rates, PoW signups), incident response for spam waves, a hostile peer, a
@@ -973,7 +973,7 @@ A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `d
 rows, relay items and orphaned envelopes, expired requests and outbox rows older than 7 days, and
 ends expired delegations. Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
 `S2sService`, `RelayService` and `HostService` traits in `rim_services`, implementations in
-`rim_infra_services`, handlers in `rim_server` (`s2s_handlers.rs`, `remote_handlers.rs`), wired in
+`rim_infra_services`, handlers in `rim_server` (the `s2s` module and `remote_handlers.rs`), wired in
 `app.rs`.
 
 ## GraphQL

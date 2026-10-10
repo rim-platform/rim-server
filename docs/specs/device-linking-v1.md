@@ -1,9 +1,9 @@
-# Device linking v1 (Stage 3, S3-2)
+# Device linking v1
 
-_Spec written 2026-10-09 for the second Stage 3 server PR. Extends `docs/specs/key-identity-v1.md`
+_Status: implemented, normative. Extends `docs/specs/key-identity-v1.md`
 (read it first: keys, tagged encodings, device certificates and challenge login are defined
 there). This document is the contract between the server (`DeviceLinkService`), the desktop
-client and the later web client for giving a new device its own certified device key._
+client and the web client for giving a new device its own certified device key._
 
 ## Summary
 
@@ -436,7 +436,7 @@ Same as the new desktop device, except:
 - **Short typed codes** with a PAKE (CPace, SPAKE2), so a code can be read aloud.
 - **QR scanning**, with the mobile PWA; the code format is fixed now so the QR works then.
 - **A subscription** in place of polling (see GraphQL).
-- **Linking across servers** (a code whose endpoint is not the new device's server): Stage 5.
+- **Linking across servers** (a code whose endpoint is not the new device's server).
 - Rate limits shared across nodes.
 
 ## Test plan
