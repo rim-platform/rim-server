@@ -7,7 +7,7 @@ Sealed, historical design records. ADR-style.
 - Each file documents a design decision and its implementation outcome.
 - Files in this directory are **frozen** once sealed (status header at top says "Do not edit").
 - For changes to behavior described here, write a NEW ADR rather than editing the historical one.
-- Active design work lives in `docs/design/`; once landed and reviewed, specs are sealed and moved here.
+- Normative contracts live in `docs/specs/`; a decision recorded here explains why one was chosen.
 - A product-level decision accepted before implementation may be recorded here directly (status "Accepted"); it is sealed once its implementation lands.
 
 ## Index

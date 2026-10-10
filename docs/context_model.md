@@ -1,6 +1,6 @@
 # Context Model
 
-This document defines the Phase 0 context model for RIM.
+This document defines the context model for RIM.
 
 Context is one of the most important concepts in the product. It is what allows communication to
 turn into action without forcing users to copy state manually between surfaces.
@@ -63,7 +63,7 @@ Examples:
 - selected issue
 - selected repository path
 
-## Phase 0 Decision
+## Decision
 
 Plugin-defined context should stay scoped to the plugin or panel that owns it, instead of becoming
 globally available everywhere.
@@ -93,12 +93,12 @@ This avoids uncontrolled namespace pollution and unclear coupling between unrela
 - selected channel/conversation
 
 A conversation in context is only ever one the actor can see: public channels for any workspace
-member, private channels, DMs and groups for their members (Track 1.1). Commands that take a
+member, private channels, DMs and groups for their members. Commands that take a
 `conversation_id` fall back to `context.conversation_id`, and the service re-checks access, so a
 stale or forged context id for a private channel resolves to `NOT_FOUND`, exactly like an
 unknown id.
 
-## Phase 0 Decisions
+## Decisions
 
 - selected text should be first-class context from the beginning
 - multiple selected messages should be first-class context from the beginning
@@ -154,7 +154,7 @@ Commands may use both:
 - implicit context
 - explicit arguments
 
-## Phase 0 Decision
+## Decision
 
 Commands should be allowed to use both implicit context and explicit arguments.
 
@@ -209,7 +209,7 @@ Recommended behavior:
   missing
 - in the command palette, a command may still appear if it can prompt for the missing inputs
 
-## Phase 0 Decision
+## Decision
 
 The command palette should be allowed to show commands that are missing context if those commands
 can ask for input instead.
@@ -282,9 +282,9 @@ Recommended lifetime model:
 - some navigation/session context may be held in client runtime state
 - long-term product state belongs in domain models and services, not in context itself
 
-## Non-Goals For Phase 0
+## Non-Goals
 
-The first context model should not try to solve:
+The context model does not solve:
 
 - a fully reactive context graph
 - cross-plugin context negotiation protocols

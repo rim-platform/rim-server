@@ -44,7 +44,7 @@ cargo test -p rim_services conversation::tests::creates_conversation  # specific
 cargo test -p rim_core -- --nocapture     # with stdout
 
 # Feature-gated integration tests (require running Postgres)
-# NOTE: These tests PANIC if DATABASE_URL is unset — this is intentional (P6-W6).
+# NOTE: These tests PANIC if DATABASE_URL is unset; this is intentional.
 # To skip them entirely, simply omit the --features flag. Do NOT set the feature
 # flag without a valid DATABASE_URL or CI will fail loudly (by design).
 cargo test -p rim_infra_db --features db-tests -- --test-threads=1

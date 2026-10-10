@@ -2,7 +2,7 @@
 
 RIM sends transactional email for password resets, invites, and notification digests. This
 document covers the `RIM_SMTP_*` config matrix, TLS modes, the three wired flows, retry policy,
-and the "unconfigured → log-only" fallback behavior. Implementation: Track B3 (2026-07-10).
+and the "unconfigured → log-only" fallback behavior.
 
 ## Config matrix
 
@@ -78,10 +78,10 @@ exists and never fail because of an SMTP hiccup.
    created and the raw token is still returned in the response either way (the copy-paste flow
    keeps working even if email delivery fails).
 
-If `recipientEmail` is omitted, no email is sent — the raw-token-only flow works exactly as
-before Track B3.
+If `recipientEmail` is omitted, no email is sent and the raw token is the only way to share the
+invite.
 
-### Notification digest (Track 1.3)
+### Notification digest
 
 A user can ask for unread notifications by email: `digest` in their workspace notification
 settings is `OFF` (default), `HOURLY` or `DAILY` (`docs/messaging.md`, Notification rules). A
@@ -126,12 +126,10 @@ Notifications older than 90 days are deleted by an hourly retention task in the 
 `pool` — no `native-tls`/OpenSSL, matching the rest of this workspace's pure-rustls stack).
 Dual MIT/Apache-2.0 licensed, actively maintained (`lettre v0.11.22` as of this writing).
 
-## Future work
+## Not handled
 
-Explicitly out of scope for Track B3 (tracked here so they aren't silently dropped):
-- ~~**Notification digest engine**~~ — shipped in Track 1.3 (see "Notification digest" above).
 - **Bounce handling, DKIM/SPF setup** — operator/infrastructure concerns, not application code.
 - **Richer HTML email theming** — current HTML bodies are a basic inline-styled paragraph, not a
   branded template.
-- **Live SMTP integration test** — out of scope per the implementation spec; a `lettre` stub
-  transport or a mailpit container would be the path if this is ever wanted.
+- **Live SMTP integration test** — none exists; a `lettre` stub transport or a mailpit container
+  would be the path if one is wanted.

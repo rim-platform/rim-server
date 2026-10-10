@@ -1,6 +1,6 @@
 # Messaging Contract
 
-This document describes the current v0 backend contract for conversations, messages, threads, and attachments.
+This document describes the backend contract for conversations, messages, threads, and attachments.
 
 ## Product Terms
 
@@ -14,9 +14,7 @@ This document describes the current v0 backend contract for conversations, messa
 - `Direct`: 1:1 conversation between two users.
 - `Group`: multi-user private conversation.
 
-## Channel Visibility And Membership (Track 1.1)
-
-Spec: `docs/specs/track-1-1-private-channels.md`.
+## Channel Visibility And Membership
 
 - **Public channels** (`isPrivate = false`) are readable by every workspace member, joined or not
   (except guests, see Roles And Moderation below).
@@ -47,8 +45,8 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
   events reach the whole workspace. The visibility fields on `WorkspaceEvent` (`is_private`,
   `member_user_ids`, and `conversation_type` where it was not already serialized) are
   server-side only and never serialized, so the WebSocket JSON is unchanged.
-- Existing workspace members became members of every existing channel when the Track 1.1
-  migration ran, so the joined list did not start empty. A user who joins the workspace later
+- Existing workspace members became members of every existing channel when the
+  `m20261005_005743_add_channel_privacy_and_archive` migration ran, so the joined list did not start empty. A user who joins the workspace later
   (invite acceptance, join by invite, owner adding them, server creation — all through
   `util::add_workspace_member`) is joined to every public, unarchived channel at that moment;
   private and archived channels are not joined.
@@ -67,9 +65,7 @@ Spec: `docs/specs/track-1-1-private-channels.md`.
 - Archived channels are hidden from `channels` unless `includeArchived: true`, and stay readable
   and searchable by whoever could read them before.
 
-## Roles And Moderation (Track 1.2)
-
-Spec: `docs/specs/track-1-2-roles-and-moderation.md`.
+## Roles And Moderation
 
 ### Roles
 
@@ -80,7 +76,7 @@ Spec: `docs/specs/track-1-2-roles-and-moderation.md`.
 | `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
 
-- **Migration:** until Track 1.2 every new member was created as `guest`, so "guest" meant an
+- **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
   ordinary member. The `m20261005_024730_add_member_role` migration adds `member` to the
   `server_member_role` enum and turns **every existing `guest` into `member`**; the column
   default is now `member`.
@@ -180,9 +176,9 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
 
-## Notification Rules (Track 1.3)
+## Notification Rules
 
-The server decides, once per message, who is told about it (`docs/specs/track-1-3-notification-rules.md`).
+The server decides, once per message, who is told about it.
 For every recipient it stores a notification (the inbox, the bell badge and the email digest) and
 sends that user a private `NotificationDue` event; clients only render what the server decided.
 Sound and preview stay device-local client settings.
@@ -287,20 +283,26 @@ no existing event changed.
 
 This lets clients render the timeline normally while also knowing whether a timeline message can open an existing thread.
 
-## Attachments In v0
+## Attachments
 
-- Message send APIs still reject inline attachment refs in v0.
-- `has_attachments` is still part of the message shape because attachment rows already exist in the data model and may be read for existing data.
-- Attachment reads require both:
-  - server membership, and
-  - membership in the conversation that owns the attachment's message.
-- Attachment create/finalize/delete endpoints now support a minimal lifecycle for existing messages:
-  - `createAttachment` requires `message_id`
-  - the actor must be the author of that message
-  - create returns a temporary upload ticket and stores the attachment as pending
-  - finalize marks the attachment as ready
-  - delete removes the attachment and refreshes the message `has_attachments` flag
-- Upload-ticket validation and pre-message attachment staging are not implemented yet.
+- Sending a message takes no attachments; the author adds them to a message they already sent.
+- `createAttachment(serverId, conversationId, messageId, filename, contentType, sizeBytes)`:
+  only the message's author, at most 25 MB. The declared size is reserved against the
+  workspace quota (`RIM_MAX_WORKSPACE_STORAGE_BYTES`), the attachment is stored as pending
+  upload, the message's `has_attachments` is set, and the answer is an upload ticket: the
+  attachment id, an upload token, the size limit and an expiry.
+- `POST /api/files/upload` (multipart: `upload_token`, `attachment_id` and one file) stores the
+  bytes and marks the attachment uploaded; a file larger than declared is refused.
+- `finalizeAttachment` marks an uploaded attachment ready. `deleteAttachment` removes it and
+  refreshes `has_attachments`.
+- An upload still pending 15 minutes after it started is marked failed by the stale-attachment
+  cleanup job (`docs/operations/background-jobs.md`).
+- Reading an attachment (`GET /api/attachments/{id}/download`) needs workspace membership and read
+  access to the conversation of its message.
+- In an encrypted conversation the client uploads the encrypted blob: `createAttachment` then
+  requires `blobSha256`, a fixed file name and type, and the upload is checked against the hash
+  (`docs/specs/e2ee-mls-v1.md`, "Attachments").
+- The `attachments` instance feature switches all of this off (`docs/operations/features.md`).
 
 ## Pagination
 

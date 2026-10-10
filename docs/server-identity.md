@@ -3,7 +3,9 @@
 Every rim-server has its own **server key**, an Ed25519 key whose signed history (the **key log**)
 fixes the server's id, `rims1_…`. Other servers use the id and key to tell this server apart from
 any other, to check the requests it sends them and the answers it gives. The format and protocol
-are in `docs/specs/server-to-server-v1.md`; this page is the operator's view.
+are in `docs/specs/server-to-server-v1.md`; this page is the operator's view of the server's own
+identity. What a relay and a host do with it is in `docs/relay.md`; running the public relay is
+in `docs/operations/relay-public.md`.
 
 ## The key file
 
@@ -83,9 +85,7 @@ and with the same rules:
 
 The file is `{"v":1,"keys":[{"id":1,"key":"<base64url>","createdAt":"…"}]}`, mode `0600`; the
 server refuses to start when the group or others can read it. The first start creates it with
-one key. A server upgraded from a version that kept the key in the database moves it into the
-file at that start and rotates at once: the moved key, which the database and its backups also
-hold, only verifies from then on, and a new key signs. The log line says so. The server refuses
+one key. The server refuses
 to start when the file is missing but messages carry receipts under a key it no longer has:
 restore the file from a backup.
 

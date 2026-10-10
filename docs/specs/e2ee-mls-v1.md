@@ -1,10 +1,11 @@
-# End-to-end encryption with MLS v1 (Stage 4, S4-0)
+# End-to-end encryption with MLS v1
 
-_Spec written 2026-10-09 for Stage 4 (`docs/plans/stage-4-2026-10-09.md`, `ROADMAP.md` Track 7.3).
-Library, providers, cipher suite and test vectors: `docs/decisions/mls-library-2026-10-09.md`.
-Read `key-identity-v1.md` (keys, tagged encodings, statements) and `device-linking-v1.md` first.
-This document is the contract between the server (S4-1), the `rim_mls` crate (S4-2), the desktop
-client (S4-3, S4-4, S4-5) and the web client (S4-6)._
+_Status: implemented, normative. Library, providers, cipher suite and test vectors:
+`docs/decisions/mls-library-2026-10-09.md`. Read `key-identity-v1.md` (keys, tagged encodings,
+statements) and `device-linking-v1.md` first. This document is the contract between the server
+(`E2eeService`), the `rim_mls` crate in rim-ui, the desktop client and the web client. Labels of
+the form S4-n below name the change that built an item: S4-1 the server, S4-2 the `rim_mls`
+crate, S4-3 to S4-5 the desktop client, S4-6 the web client._
 
 ## Summary
 
@@ -736,8 +737,8 @@ S4-4 implements the client message service; this is its contract.
   the operation produced, before the operation's result is used (no ciphertext is sent, and no
   plaintext shown, before the write lands). A failed write rolls the in-memory state back, so a
   message is still decrypted once.
-- **Plaintext store**: the web app has no message cache today; decrypt-once requires one, so S4-6
-  adds an IndexedDB store of decrypted messages for encrypted conversations.
+- **Plaintext store**: the web app has no general message cache; decrypt-once requires one, so the web
+  client keeps an IndexedDB store of decrypted messages for encrypted conversations.
 - **Keys**: the MLS signature key and HPKE private keys are raw bytes in IndexedDB, because OpenMLS
   signs and decapsulates synchronously; the device key stays a non-extractable WebCrypto key and
   signs only `mls-key` statements and re-add requests. There is no keyring.
@@ -1086,7 +1087,8 @@ server and a desktop peer.
   history sharing to new members.
 - Message deniability; encrypted reactions and pins; client-made thumbnails; streamed or chunked
   attachments above 25 MB; per-conversation plugin grants.
-- Groups spanning servers (Stage 5); signed archive messages (`sig`).
+- Signed archive messages (`sig`). Groups spanning servers are defined in
+  `server-to-server-v1.md`.
 
 ## Appendix A: known-answer vectors
 

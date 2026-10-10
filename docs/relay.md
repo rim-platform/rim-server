@@ -3,9 +3,10 @@
 A relay is the server a person's app talks to. It keeps their account, devices and profile card,
 queues what other servers send them, files conversations from strangers in a request inbox, and
 forwards their requests to the servers that host the spaces they use. Every server is the relay of
-its local users unless it runs with `RIM_ROLE=host`. The contract is
-`docs/specs/server-to-server-v1.md`; server identity and the signed transport are in
-`docs/server-identity.md`.
+its local users unless it runs with `RIM_ROLE=host`. This page explains what a relay and a host
+do, for operators and for client authors. The contract is `docs/specs/server-to-server-v1.md`;
+the server's key, id and transport settings are in `docs/server-identity.md`; deploying a public
+relay is `deploy/README.md` and running one is `docs/operations/relay-public.md`.
 
 Nothing here runs until server-to-server traffic is on (`RIM_PUBLIC_BASE_URL` is an `https` URL).
 Before that, a server is the relay and host of its own users only, as it always was.
@@ -185,8 +186,9 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 ### The public relay
 
 A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
-`deploy/compose.relay.yml` on top of `deploy/compose.yml`; `deploy/README.md` brings it up and
-`docs/oncall/relay-public.md` is its runbook.
+`deploy/compose.relay.yml` on top of `deploy/compose.yml`. This section says how its
+registration and blocks behave; `docs/operations/relay-public.md` has its quotas, the operator's
+commands and the abuse policy.
 
 **Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
 registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
@@ -201,14 +203,11 @@ starts with that many zero bits. The work is bound to this server and one princi
 checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP
 and are audited as `relay.registration_pow`. Password signups take a token, as in invite-only
 mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
-answers `POW`. To let people in without the work, the operator issues a signup link with
-`rim_server invite create [--email A] [--max-uses N] [--expires-in-days D]` (`invite list`,
-`invite revoke <id>`), which needs no account or workspace and so works with `RIM_ROLE=relay`. A
-link created with `--email` admits only a password signup with that address.
+answers `POW`. A signup link from `rim_server invite create` lets a person in without the work;
+it needs no account or workspace, so it works with `RIM_ROLE=relay`.
 
-**Quotas** per local user are the `RIM_RELAY_*` settings above with
-`RIM_RELAY_QUEUE_BYTES_PER_USER`; the public relay keeps 64 MiB of queue per user. The
-per-minute and per-day counters are in memory, per node.
+**Quotas** per local user are the `RIM_RELAY_*` settings above. The per-minute and per-day
+counters are in memory, per node.
 
 **Blocking a principal.** `rim_server principal block <principalId> --reason <text>` stores the
 block in `relay_principal_block`, ends the sessions of the account holding the principal here
@@ -224,9 +223,9 @@ signs are refused with `403`. `principal list` shows the blocks.
 forked peer stays forked; a peer never pinned is refused with `RIM_S2S_DENIED_PEERS` instead.
 Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
 
-**Abuse reports.** `reportDmRequest` and the abuse address both end in `relay_abuse_report`:
-`rim_server abuse-reports list [--open]`, `abuse-reports add [--principal P] [--server S]
---reason <text>` for a report that came by mail, and `abuse-reports resolve <id>`.
+**Abuse reports.** `reportDmRequest` in the app and reports that come by mail (`rim_server
+abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list` and
+`abuse-reports resolve` work through.
 
 ## For clients
 
