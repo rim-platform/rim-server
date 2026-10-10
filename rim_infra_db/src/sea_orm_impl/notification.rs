@@ -23,6 +23,7 @@ use sea_orm::{
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::relay::hidden;
 
 pub struct SeaOrmNotificationRepository {
     db: DbHandle,
@@ -32,6 +33,17 @@ impl SeaOrmNotificationRepository {
     pub fn new(db: DbHandle) -> Self {
         Self { db }
     }
+}
+
+/// Leaves out a user's notifications for conversations hidden from them by the request inbox.
+fn not_hidden(user_id: UserId) -> sea_orm::sea_query::SimpleExpr {
+    sea_orm::sea_query::Expr::cust_with_values(
+        format!(
+            "NOT {}",
+            hidden("$1", r#""user_notification"."conversation_id""#)
+        ),
+        [sea_orm::Value::from(Uuid::from(user_id))],
+    )
 }
 
 fn uuids<T: Copy + Into<Uuid>>(ids: &[T]) -> Vec<Uuid> {
@@ -182,7 +194,8 @@ impl NotificationRepository for SeaOrmNotificationRepository {
     ) -> RepoResult<Page<UserNotification, UserNotificationCursor>> {
         let mut q = user_notification::Entity::find()
             .filter(user_notification::Column::UserId.eq(Uuid::from(params.user_id)))
-            .filter(user_notification::Column::ServerId.eq(Uuid::from(params.server_id)));
+            .filter(user_notification::Column::ServerId.eq(Uuid::from(params.server_id)))
+            .filter(not_hidden(params.user_id));
         if params.unread_only {
             q = q.filter(user_notification::Column::ReadAt.is_null());
         }
@@ -266,6 +279,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
             .filter(user_notification::Column::UserId.eq(Uuid::from(user_id)))
             .filter(user_notification::Column::ServerId.eq(Uuid::from(server_id)))
             .filter(user_notification::Column::ReadAt.is_null())
+            .filter(not_hidden(user_id))
             .count(&self.db)
             .await
             .map_err(map_db_err)
@@ -386,16 +400,19 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         // `pending` aggregates unread, un-emailed rows; `last` is the newest `emailed_at` (the
         // previous digest) per user and workspace. The cutoff is the frequency's interval.
         // Users without an email address (key-only accounts) are never candidates.
+        // Rows of conversations hidden by the request inbox wait until they are accepted.
         let rows = self
             .db
             .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
-                r#"WITH pending AS (
+                format!(
+                    r#"WITH pending AS (
                        SELECT user_id, server_id,
                               MIN(created_at) AS oldest_pending_at,
                               COUNT(*) AS pending_count
                        FROM user_notification
                        WHERE read_at IS NULL AND emailed_at IS NULL
+                         AND NOT {}
                        GROUP BY user_id, server_id
                    ),
                    last AS (
@@ -418,6 +435,11 @@ impl NotificationRepository for SeaOrmNotificationRepository {
                      AND (l.last_digest_at IS NULL
                           OR l.last_digest_at <= CASE s.digest WHEN 'hourly' THEN $1 ELSE $2 END)
                    ORDER BY p.oldest_pending_at, s.user_id, s.server_id"#,
+                    hidden(
+                        "user_notification.user_id",
+                        "user_notification.conversation_id"
+                    )
+                ),
                 [hourly_cutoff.into(), daily_cutoff.into()],
             ))
             .await
@@ -463,6 +485,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
             .filter(user_notification::Column::ServerId.eq(Uuid::from(server_id)))
             .filter(user_notification::Column::ReadAt.is_null())
             .filter(user_notification::Column::EmailedAt.is_null())
+            .filter(not_hidden(user_id))
             .order_by_asc(user_notification::Column::CreatedAt)
             .order_by_asc(user_notification::Column::Id)
             .limit(u64::from(limit))
@@ -491,5 +514,35 @@ impl NotificationRepository for SeaOrmNotificationRepository {
             .await
             .map_err(map_db_err)?;
         Ok(res.rows_affected)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{DbBackend, EntityTrait, QueryFilter, QueryTrait};
+
+    use super::*;
+
+    #[test]
+    fn not_hidden_binds_the_user_to_its_own_placeholders() {
+        let server = Uuid::now_v7();
+        let user = UserId::new();
+        let stmt = user_notification::Entity::find()
+            .filter(user_notification::Column::ServerId.eq(server))
+            .filter(not_hidden(user))
+            .build(DbBackend::Postgres);
+        let values = stmt.values.expect("values").0;
+        let user = sea_orm::Value::from(Uuid::from(user));
+        assert_eq!(values.len(), 3);
+        assert_eq!(values[1], user);
+        assert_eq!(values[2], user);
+        assert!(stmt.sql.contains("r.user_id = $2"), "{}", stmt.sql);
+        assert!(stmt.sql.contains("b.user_id = $3"), "{}", stmt.sql);
+        assert!(
+            stmt.sql
+                .contains(r#"r.conversation_id = "user_notification"."conversation_id""#),
+            "{}",
+            stmt.sql
+        );
     }
 }

@@ -840,3 +840,183 @@ async fn the_migration_refuses_down_while_remote_users_or_items_exist() {
         .await;
     assert!(err.is_err(), "one direct space");
 }
+
+/// What a user sees of one conversation: notifications listed, the bell's count, digest rows,
+/// whether the digest picks them, unread count and mentions.
+async fn visible_signals(
+    db: &DbHandle,
+    user_id: UserId,
+    server_id: rim_core::server::model::ServerId,
+    conversation_id: rim_core::conversation::model::ConversationId,
+) -> (usize, u64, usize, bool, usize, usize) {
+    use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
+    use rim_core::message_mention::repository::MessageMentionRepository;
+    use rim_core::notification::repository::{ListUserNotificationsParams, NotificationRepository};
+    use rim_core::repository::pagination::PageDir;
+    use rim_infra_db::sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository;
+    use rim_infra_db::sea_orm_impl::message_mention::SeaOrmMessageMentionRepository;
+    use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
+
+    let notifications = SeaOrmNotificationRepository::new(db.clone());
+    let listed = notifications
+        .list_notifications(ListUserNotificationsParams {
+            user_id,
+            server_id,
+            unread_only: false,
+            limit: 50,
+            dir: PageDir::After,
+            cursor: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .len();
+    let bell = notifications
+        .unread_count(user_id, server_id)
+        .await
+        .unwrap();
+    let digest_rows = notifications
+        .list_pending_digest(user_id, server_id, 50)
+        .await
+        .unwrap()
+        .len();
+    let later = Utc::now() + Duration::hours(1);
+    let digest_candidate = notifications
+        .list_digest_candidates(later, later)
+        .await
+        .unwrap()
+        .iter()
+        .any(|c| c.user_id == user_id);
+    let unread = SeaOrmConversationReadStateRepository::new(db.clone())
+        .get_unread_counts(user_id, &[conversation_id])
+        .await
+        .unwrap()
+        .len();
+    let mentions = SeaOrmMessageMentionRepository::new(db.clone())
+        .get_messages_mentioning_user(user_id, &[conversation_id], 50)
+        .await
+        .unwrap()
+        .len();
+    (
+        listed,
+        bell,
+        digest_rows,
+        digest_candidate,
+        unread,
+        mentions,
+    )
+}
+
+#[tokio::test]
+async fn a_hidden_conversation_stays_out_of_notifications_counts_and_mentions() {
+    use rim_core::conversation::model::{ConversationType, NewConversation};
+    use rim_core::conversation::repository::ConversationRepository;
+    use rim_core::message_mention::repository::MessageMentionRepository;
+    use rim_core::notification::model::{
+        DigestFrequency, NewUserNotification, NotificationReason, UserNotificationSettings,
+    };
+    use rim_core::notification::repository::NotificationRepository;
+    use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+    use rim_infra_db::sea_orm_impl::message_mention::SeaOrmMessageMentionRepository;
+    use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let direct = SeaOrmHostRepository::new(ctx.db.clone())
+        .ensure_direct_space("Direct messages")
+        .await
+        .unwrap();
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    let bob = ctx.create_user("bob").await;
+    let conversation = SeaOrmConversationRepository::new(ctx.db.clone())
+        .create_conversation(NewConversation {
+            server_id: direct,
+            conversation_type: ConversationType::Direct,
+            title: None,
+            is_private: true,
+            created_by: Some(alice.id),
+            encrypted: false,
+        })
+        .await
+        .unwrap();
+    let message = ctx
+        .create_message(conversation.id, alice.id, "hello <@bob>")
+        .await;
+    SeaOrmMessageMentionRepository::new(ctx.db.clone())
+        .create_mentions(message.id, &[bob.id])
+        .await
+        .unwrap();
+    let notifications = SeaOrmNotificationRepository::new(ctx.db.clone());
+    notifications
+        .upsert_settings(UserNotificationSettings {
+            digest: DigestFrequency::Hourly,
+            ..UserNotificationSettings::defaults(bob.id, direct, Utc::now())
+        })
+        .await
+        .unwrap();
+    notifications
+        .create_notifications(
+            &[NewUserNotification {
+                user_id: bob.id,
+                server_id: direct,
+                conversation_id: conversation.id,
+                message_id: message.id,
+                reason: NotificationReason::Direct,
+            }],
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let shown = (1, 1, 1, true, 1, 1);
+    let hidden = (0, 0, 0, false, 0, 0);
+    let signals = || visible_signals(&ctx.db, bob.id, direct, conversation.id);
+    assert_eq!(signals().await, shown);
+
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = repo
+        .insert_request(NewDmRequest {
+            status: DmRequestStatus::Pending,
+            user_id: bob.id,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: HOST.to_string(),
+            conversation_id: conversation.id.into(),
+            expires_at: Utc::now() + Duration::days(30),
+        })
+        .await
+        .unwrap();
+    assert!(
+        repo.conversation_hidden(bob.id, conversation.id.into())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        signals().await,
+        hidden,
+        "a pending request hides everything"
+    );
+    repo.decide_request(
+        request.id,
+        DmRequestStatus::Accepted,
+        Utc::now() + Duration::days(36500),
+    )
+    .await
+    .unwrap();
+    assert_eq!(signals().await, shown, "accepting brings everything back");
+
+    repo.block(bob.id, "rimp1_alice").await.unwrap();
+    assert_eq!(
+        signals().await,
+        hidden,
+        "a blocked creator's conversation is hidden"
+    );
+    repo.unblock(bob.id, "rimp1_alice").await.unwrap();
+    assert_eq!(signals().await, shown);
+    assert!(
+        !repo
+            .conversation_hidden(alice.id, conversation.id.into())
+            .await
+            .unwrap(),
+        "only the request's holder is affected"
+    );
+}
