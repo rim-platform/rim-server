@@ -14,6 +14,10 @@ pub const POW_REJECTIONS: &str = "rim_pow_rejections_total";
 pub const RELAY_QUEUE_ITEMS: &str = "rim_relay_queue_items";
 /// Relay queue bytes, labelled `state` (`queued` or `held`).
 pub const RELAY_QUEUE_BYTES: &str = "rim_relay_queue_bytes";
+/// Audit log rows deleted by the retention purge.
+pub const AUDIT_ROWS_PURGED: &str = "rim_audit_rows_purged_total";
+/// The configured audit retention in days, 0 when rows are kept forever.
+pub const AUDIT_RETENTION_DAYS: &str = "rim_audit_retention_days";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -37,6 +41,16 @@ pub fn describe() {
         Unit::Bytes,
         "Bytes in the relay queue, waiting for devices (queued) or behind a DM request (held)."
     );
+    describe_counter!(
+        AUDIT_ROWS_PURGED,
+        Unit::Count,
+        "Audit log rows deleted by the retention purge."
+    );
+    describe_gauge!(
+        AUDIT_RETENTION_DAYS,
+        Unit::Count,
+        "Days audit log rows are kept before the purge; 0 keeps them forever."
+    );
 }
 
 /// Count one request the limiter named `limiter` refused.
@@ -47,6 +61,16 @@ pub fn rate_limited(limiter: &'static str) {
 /// Count one refused proof-of-work.
 pub fn pow_rejected() {
     counter!(POW_REJECTIONS).increment(1);
+}
+
+/// Count `n` audit log rows the retention purge deleted.
+pub fn audit_rows_purged(n: u64) {
+    counter!(AUDIT_ROWS_PURGED).increment(n);
+}
+
+/// Set the audit retention gauge; `None` (keep forever) is recorded as 0.
+pub fn set_audit_retention_days(days: Option<u32>) {
+    gauge!(AUDIT_RETENTION_DAYS).set(f64::from(days.unwrap_or(0)));
 }
 
 /// Set the relay queue gauges from `stats`.
@@ -158,6 +182,20 @@ mod tests {
             1
         );
         assert_eq!(got.counter(POW_REJECTIONS, &[]), 1);
+    }
+
+    #[test]
+    fn the_audit_retention_metrics_count_rows_and_record_the_setting() {
+        let ((), got) = recorded(|| {
+            audit_rows_purged(5000);
+            audit_rows_purged(12);
+            set_audit_retention_days(Some(90));
+        });
+        assert_eq!(got.counter(AUDIT_ROWS_PURGED, &[]), 5012);
+        assert_eq!(got.gauge(AUDIT_RETENTION_DAYS, &[]), Some(90.0));
+
+        let ((), got) = recorded(|| set_audit_retention_days(None));
+        assert_eq!(got.gauge(AUDIT_RETENTION_DAYS, &[]), Some(0.0));
     }
 
     #[test]
