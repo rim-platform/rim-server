@@ -1,0 +1,66 @@
+# Documentation
+
+## Product
+
+- `vision.md`: what RIM is, for whom, and the product principles.
+- `architecture.md`: layers, crates, the domain model, and what the backend and the client own.
+- `../ROADMAP.md`: direction, open decisions and the shipped-state ledger.
+
+## Models
+
+How the programmable layer works, independent of the transport:
+
+- `command_model.md`: commands, builtins, the AI-callable set, the execution gates.
+- `keybind_model.md`: keybind scopes, contexts and precedence.
+- `context_model.md`: the context a command runs in.
+- `capability_security_model.md`: capabilities, sensitivity, confirmations.
+- `plugin_model.md`: what a plugin is and what the server's part in plugins is.
+- `local_plugin_host.md`: how the desktop app hosts plugin processes and panels.
+
+## Server contracts
+
+- `messaging.md`: conversations, channels, roles and moderation, notification rules, threads.
+- `pagination.md`: the cursor pagination contract.
+- `message-change-feed.md`: the change feed client caches sync from.
+- `search.md`: full-text search syntax, ranking and visibility.
+- `email.md`: SMTP configuration and the mails the server sends.
+- `server-identity.md`: the server key, the franking key file, key login audiences, roles.
+- `relay.md`: what a relay and a host do, for operators and for clients.
+
+## Specifications
+
+Normative, versioned contracts in `specs/`:
+
+- `specs/key-identity-v1.md`: keys, signed statements, challenge login.
+- `specs/device-linking-v1.md`: giving a new device its certified key.
+- `specs/e2ee-mls-v1.md`: end-to-end encryption with MLS.
+- `specs/server-to-server-v1.md`: server identity, the signed HTTP API, relays and hosts.
+- `specs/plugin-protocol-v1.md`: the plugin process protocol.
+- `specs/web-plugins-v1.md`: sandboxed web plugins.
+- `specs/workspace-plugins-v1.md`: signed manifests and workspace plugin registries.
+
+## Operations
+
+- `self-hosting.md`: running a server with `deploy/compose.yml`: first start, updates, backups,
+  monitoring.
+- `oncall/relay-public.md`: the public relay's runbook: keys, backups, quotas, incidents, abuse.
+- `operations/audit-retention.md`: audit log retention, export and purge.
+- `operations/background-jobs.md`: the timers the server runs.
+- `operations/features.md`: instance feature switches (`RIM_FEATURES_DISABLED`).
+- `operations/metrics.md`: the Prometheus metrics.
+
+## Security
+
+- `security/audit-access-matrix.md`: who can read which audit rows.
+- `security/crypto-review-brief-2026-10.md`: the brief for the outside cryptographic review,
+  pinned to the commits it describes.
+- `security/env-history-purge-runbook.md`: removing `.env` from the published git history.
+
+## Records
+
+Dated documents that describe a point in time and are not updated:
+
+- `decisions/`: sealed decision records (`decisions/README.md` indexes them).
+- `plans/`: the work plans, each with a table of what shipped.
+- `testing/manual-test-plan-2026-10-10.md`: the manual test run for key identity, encryption
+  and two servers.
