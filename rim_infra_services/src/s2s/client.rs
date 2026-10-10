@@ -17,8 +17,9 @@ use url::Url;
 
 use crate::s2s::net::{NetError, check_url_host, http_client, read_limited};
 
-/// Response headers handed back with the answer, for the forward path.
-const FORWARDED_RESPONSE_HEADERS: &[&str] = &["rim-host-response", "rim-host-signature"];
+/// Response headers handed back with the answer: the host-response pair for the forward path,
+/// and `Retry-After` for a peer's `429`.
+const KEPT_RESPONSE_HEADERS: &[&str] = &["rim-host-response", "rim-host-signature", "retry-after"];
 
 /// How long a signed request stays valid.
 const REQUEST_LIFETIME_SECS: i64 = 300;
@@ -161,7 +162,7 @@ impl S2sClient for DefaultS2sClient {
 
         let status = response.status().as_u16();
         let owned = |name: &str| header(&response, name).map(str::to_string);
-        let forwarded_headers: Vec<(String, String)> = FORWARDED_RESPONSE_HEADERS
+        let kept_headers: Vec<(String, String)> = KEPT_RESPONSE_HEADERS
             .iter()
             .filter_map(|name| owned(name).map(|value| ((*name).to_string(), value)))
             .collect();
@@ -224,7 +225,7 @@ impl S2sClient for DefaultS2sClient {
             content_type: response_type.unwrap_or_default(),
             body: response_body,
             key_seq: seq,
-            headers: forwarded_headers,
+            headers: kept_headers,
         })
     }
 }

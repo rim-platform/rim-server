@@ -95,7 +95,8 @@ pub struct S2sResponse {
     pub body: Vec<u8>,
     /// The seq of the peer key that signed the response.
     pub key_seq: u32,
-    /// The `Rim-Host-Response` and `Rim-Host-Signature` headers, when the peer sent them.
+    /// The `Rim-Host-Response`, `Rim-Host-Signature` and `Retry-After` headers, when the peer
+    /// sent them, by lowercase name.
     pub headers: Vec<(String, String)>,
 }
 
@@ -104,6 +105,28 @@ impl S2sResponse {
     pub fn error_code(&self) -> Option<String> {
         let value: serde_json::Value = serde_json::from_slice(&self.body).ok()?;
         value.get("error")?.as_str().map(str::to_string)
+    }
+
+    /// A kept response header, by lowercase name.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The `Retry-After` header in seconds from `now`, as delay seconds or an HTTP date; at
+    /// least 1.
+    pub fn retry_after_seconds(&self, now: DateTime<Utc>) -> Option<u64> {
+        let value = self.header("retry-after")?.trim();
+        let seconds = match value.parse::<u64>() {
+            Ok(seconds) => seconds,
+            Err(_) => {
+                let at = DateTime::parse_from_rfc2822(value).ok()?;
+                u64::try_from((at.with_timezone(&Utc) - now).num_seconds()).unwrap_or(0)
+            }
+        };
+        Some(seconds.max(1))
     }
 }
 
@@ -129,4 +152,42 @@ pub enum S2sClientError {
     /// an answer.
     #[error("response signature refused: {0}")]
     BadResponseSignature(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_retry_after(value: &str) -> S2sResponse {
+        S2sResponse {
+            status: 429,
+            content_type: "application/json".to_string(),
+            body: Vec::new(),
+            key_seq: 0,
+            headers: vec![("retry-after".to_string(), value.to_string())],
+        }
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_or_an_http_date() {
+        let now = DateTime::parse_from_rfc3339("2026-10-10T08:00:00Z")
+            .expect("time")
+            .with_timezone(&Utc);
+        assert_eq!(with_retry_after(" 30 ").retry_after_seconds(now), Some(30));
+        assert_eq!(
+            with_retry_after("Sat, 10 Oct 2026 08:01:30 GMT").retry_after_seconds(now),
+            Some(90)
+        );
+        assert_eq!(
+            with_retry_after("Sat, 10 Oct 2026 07:00:00 GMT").retry_after_seconds(now),
+            Some(1),
+            "a date passed waits a second"
+        );
+        assert_eq!(with_retry_after("soon").retry_after_seconds(now), None);
+        let none = S2sResponse {
+            headers: Vec::new(),
+            ..with_retry_after("1")
+        };
+        assert_eq!(none.retry_after_seconds(now), None);
+    }
 }

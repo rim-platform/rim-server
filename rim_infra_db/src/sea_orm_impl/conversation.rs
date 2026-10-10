@@ -210,7 +210,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .filter(sea_orm::sea_query::Expr::cust_with_values(
                 format!(
                     "NOT {}",
-                    crate::sea_orm_impl::relay::HIDDEN.replace("c.", "\"conversation\".")
+                    crate::sea_orm_impl::relay::hidden("$1", r#""conversation"."id""#)
                 ),
                 [sea_orm::Value::from(Uuid::from(user_id))],
             ));

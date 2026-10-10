@@ -15,6 +15,7 @@ use sea_orm::{
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::relay::hidden;
 
 pub struct SeaOrmMessageMentionRepository {
     pub db: DbHandle,
@@ -94,6 +95,11 @@ impl MessageMentionRepository for SeaOrmMessageMentionRepository {
             )
             .filter(entity::message::Column::ConversationId.is_in(conv_uuids))
             .filter(entity::message::Column::IsDeleted.eq(false))
+            // Mentions in a conversation hidden by the request inbox wait until it is accepted.
+            .filter(sea_orm::sea_query::Expr::cust_with_values(
+                format!("NOT {}", hidden("$1", r#""message"."conversation_id""#)),
+                [sea_orm::Value::from(Uuid::from(user_id))],
+            ))
             .order_by_desc(message_mention::Column::CreatedAt)
             .limit(Some(limit as u64))
             .all(&self.db)

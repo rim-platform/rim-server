@@ -48,8 +48,13 @@ pub(crate) fn next_revocation_attempt(
     (offset < REVOCATION_FANOUT_WINDOW).then(|| revoked_at + offset)
 }
 
+/// How long to wait after a peer's `429` without `Retry-After`.
+const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
+/// The longest wait a peer's `Retry-After` is passed on with.
+const MAX_RETRY_AFTER_SECS: u64 = 86_400;
+
 /// A peer's refusal as the service error it means; a status with no meaning here is the peer
-/// being unavailable.
+/// being unavailable. A `429` waits for the peer's `Retry-After`.
 pub(crate) fn peer_refusal(peer_server_id: &str, response: &S2sResponse) -> ServiceError {
     let message = serde_json::from_slice::<serde_json::Value>(&response.body)
         .ok()
@@ -61,11 +66,11 @@ pub(crate) fn peer_refusal(peer_server_id: &str, response: &S2sResponse) -> Serv
         404 => ServiceError::NotFound,
         409 => ServiceError::Conflict(message),
         429 => ServiceError::RateLimited {
-            retry_after_seconds: 60,
+            retry_after_seconds: response
+                .retry_after_seconds(Utc::now())
+                .map_or(DEFAULT_RETRY_AFTER_SECS, |s| s.min(MAX_RETRY_AFTER_SECS)),
         },
-        _ => ServiceError::UpstreamUnavailable {
-            host_server_id: peer_server_id.to_string(),
-        },
+        _ => ServiceError::upstream(peer_server_id),
     }
 }
 
@@ -116,5 +121,30 @@ mod tests {
             peer_refusal("rims1_h", &response(500)),
             ServiceError::UpstreamUnavailable { .. }
         ));
+    }
+
+    #[test]
+    fn a_peers_rate_limit_waits_for_its_retry_after() {
+        let limited = |retry_after: Option<&str>| S2sResponse {
+            status: 429,
+            content_type: "application/json".to_string(),
+            body: br#"{"error":"rate_limited","message":"too many requests"}"#.to_vec(),
+            key_seq: 0,
+            headers: retry_after
+                .map(|v| vec![("retry-after".to_string(), v.to_string())])
+                .unwrap_or_default(),
+        };
+        let wait = |retry_after| match peer_refusal("rims1_h", &limited(retry_after)) {
+            ServiceError::RateLimited {
+                retry_after_seconds,
+            } => retry_after_seconds,
+            other => panic!("not rate limited: {other:?}"),
+        };
+        assert_eq!(wait(Some("17")), 17);
+        assert_eq!(wait(Some("0")), 1);
+        assert_eq!(wait(Some("9999999")), MAX_RETRY_AFTER_SECS);
+        assert_eq!(wait(None), DEFAULT_RETRY_AFTER_SECS);
+        let at = (Utc::now() + Duration::seconds(120)).to_rfc2822();
+        assert!((118..=120).contains(&wait(Some(&at))), "an HTTP date");
     }
 }

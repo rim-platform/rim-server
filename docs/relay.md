@@ -61,7 +61,8 @@ get the event (for a workspace, the relays holding an active delegation of the p
 direct space, the relays the person's newest card lists, else the relay that served their
 identity) and a sender delivers each relay's rows in order (`POST /s2s/v1/deliver`), backing off
 from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a person as unknown
-is not sent their events for 24 hours.
+is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
+forgets it, and with several nodes each node learns it from the relay on its own.
 
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
@@ -83,8 +84,10 @@ has no invite for are refused (`not_subscribed`), so a host cannot skip the inbo
 The same rule covers conversations of this server's own direct space whose creator is someone
 else: a person from another relay creating a DM with a local user through the forward path, or a
 local stranger. The server files its own invite for the local member; until they accept, the
-conversation is left out of their `inboxConversations` and its events out of their
-`workspaceEvents`, and its first events are held with the request. This needs
+conversation is left out of their `inboxConversations`, its events out of their
+`workspaceEvents`, and its notifications, mentions and unread counts out of the notification
+list, the bell, `myMentions`, `unreadCounts` and the email digest; its first events are held with
+the request. Everything appears once they accept. This needs
 server-to-server traffic to be on; with it off, conversations in the direct space are live at
 once.
 
@@ -116,7 +119,8 @@ the method, path and body hash, the `seq` window), and that the relay may carry 
 traffic: the relay holds an active delegation of that device for a workspace the user is still a
 member of, or the user is a member of its direct space and their newest card lists the relay's
 origin (`403 not_delegated` otherwise). It then runs GraphQL (`POST /api`), attachment downloads and
-uploads, or plugin bundle downloads as that user and device, with no session, and signs every
+uploads, avatar uploads (`POST /api/files/avatar`), stored-file downloads (`GET /api/files/<path>`)
+or plugin bundle downloads as that user and device, with no session, and signs every
 answer, refusals included, with `Rim-Host-Response` and `Rim-Host-Signature`. Per-IP limits key
 on `relay:<serverId>:<principalId>`.
 
@@ -238,7 +242,9 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
   `active`, `lapsed` (every delegation expired) or `ended` (cancelled).
 - When the current delegations have less than 6 hours left, an online device signs fresh ones and
   sends them with `renewDelegations(delegations)`. Each entry of the answer is `active` with its
-  `expiresAt`, or `refused` with a `reason`.
+  `expiresAt`, or `refused` with a `reason`: one of the host's (`not_member`, `expired`, …), or
+  `host_unreachable` (try again later; the subscription is unchanged) or `host_refused` (the host
+  turned the presentation down). The relay logs what lies behind the last two.
 - While a device has `relayStream` open, the hosts see the person online; 30 seconds after the last
   stream closes they see them offline.
 

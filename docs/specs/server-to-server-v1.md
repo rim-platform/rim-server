@@ -340,7 +340,7 @@ payload text) and `Rim-Device-Signature` (the tagged signature over
 | Field | Rule |
 |---|---|
 | `host` | The host's server id |
-| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
+| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `POST /api/files/avatar`, `GET /api/files/<path>`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
 | `seq` | Below 2⁵³, greater than every `seq` this device used with this host; clients use `max(previous + 1, Unix time in µs)` and persist it |
 | `bodySha256` | base64url(SHA-256(exact body bytes)); the empty body's hash for `GET` |
 
@@ -361,14 +361,14 @@ transport in `rim_server`, in the `file_handlers.rs` pattern); GraphQL is
 refuses a device request naming another principal or device than the session's or a revoked
 device (`FORBIDDEN`), and sends `<host s2s>/forward<path>` with the body byte for byte, the client's
 `Content-Type`, both device headers and its own signature. It returns the host's status, body,
-`Content-Type`, `Rim-Host-Response` and `Rim-Host-Signature` unchanged.
+`Content-Type`, `Rim-Host-Response`, `Rim-Host-Signature` and `Retry-After` unchanged.
 
 The host's `/s2s/v1/forward/…` checks the S2S signature, then the device request (a non-revoked
 device of a user here; `host` is its own id; method, path, body hash; `seq`), then that the relay
 may carry this user's traffic: it holds an active delegation of this device for a workspace here,
 or the user is a member of this host's direct space and the relay's origin is in their newest card
-(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, upload, download) as that user
-and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
+(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, attachment upload and download,
+avatar upload, stored-file download, plugin bundle download) as that user and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
 `relay:<serverId>:<principalId>` for forwarded requests.
 
 Every forwarded response carries `Rim-Host-Response` (base64url payload) and `Rim-Host-Signature`:
@@ -581,8 +581,10 @@ items of any other conversation are refused.
 When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
 its creator is someone else, from another relay or not), the home files its own `DmInvite` for
 Bob through the same rule instead of delivering it. The invite and the conversation's events are
-held as above, and until Bob accepts, the conversation is left out of his `inboxConversations` and
-its events out of his `workspaceEvents`; ignoring keeps it out, and so does blocking its creator.
+held as above, and until Bob accepts, the conversation is left out of his `inboxConversations`,
+its events out of his `workspaceEvents`, and its notifications, mentions and unread messages out
+of his `myNotifications`, `myUnreadNotificationCount`, `myMentions`, `unreadCounts` and email
+digest; ignoring keeps it out, and so does blocking its creator.
 Once accepted it is an ordinary conversation of the space he uses directly.
 
 | Action | Effect |
@@ -662,6 +664,10 @@ relay replaying an older delegation cannot shorten or reset the one it holds.
 `status` `active` or `refused` with a `reason` (`invalid_delegation`, `bad_signature`,
 `wrong_host`, `wrong_relay`, `relay_key`, `expired`, `unknown_device`, `revoked_device`,
 `not_member`, `banned`, `limited`); `workspaceId` is null for a delegation that cannot be read.
+`renewDelegations` answers these reasons and two of the relay's own, and logs the detail behind
+them. `host_unreachable`: the host could not be reached, failed, rate-limited the relay or gave an
+unreadable answer, and the relay keeps the subscription as it was. `host_refused`: the host refused
+the presentation as a whole, or refused a delegation for a reason outside this list.
 A relay's subscription for (user, workspace) lives while one of the user's devices has an active
 delegation there.
 `POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` (at most 64)
@@ -991,8 +997,11 @@ type Subscription { relayStream(after: ID): String! }                     # JSON
 ```
 
 Every new mutation but `applyRemoteRevocation` needs the CSRF header. A peer that cannot be reached
-is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error keeps its meaning
-(`FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`).
+is the new code `UPSTREAM_UNAVAILABLE` with `hostServerId`, the peer's server id. When only its
+origin is known (a relay URL from a card or contact that could not be pinned), `hostServerId` is
+null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`); `RATE_LIMITED`'s `retryAfterSeconds` is the peer's
+`Retry-After` (at most a day), or 60 when the peer sent none.
 
 ## Limits and audit
 

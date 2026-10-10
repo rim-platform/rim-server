@@ -135,9 +135,56 @@ fn statement(s: &SignedJson) -> SignedStatement {
 }
 
 fn upstream(server_id: &str) -> ServiceError {
-    ServiceError::UpstreamUnavailable {
-        host_server_id: server_id.to_string(),
+    ServiceError::upstream(server_id)
+}
+
+/// Reasons a host refuses one presented delegation for.
+const HOST_REASONS: &[&str] = &[
+    "invalid_delegation",
+    "bad_signature",
+    "wrong_host",
+    "wrong_relay",
+    "relay_key",
+    "expired",
+    "unknown_device",
+    "revoked_device",
+    "not_member",
+    "banned",
+    "limited",
+];
+/// The host could not be reached or gave no usable answer; the subscription stays as it was.
+const HOST_UNREACHABLE: &str = "host_unreachable";
+/// The host refused the presentation as a whole, or refused a delegation for an unlisted reason.
+const HOST_REFUSED: &str = "host_refused";
+
+/// The reason for every delegation of a presentation the host did not answer with `200`.
+fn presentation_refusal(response: &S2sResponse) -> &'static str {
+    match (response.status, response.error_code().as_deref()) {
+        (_, Some("role_disabled")) => HOST_REFUSED,
+        (429, _) => HOST_UNREACHABLE,
+        (status, _) if status >= 500 => HOST_UNREACHABLE,
+        _ => HOST_REFUSED,
     }
+}
+
+/// A host's result for one delegation, refused as `host_refused` unless it is active or
+/// refused for a listed reason.
+fn listed(host: &str, answer: SubscriptionResult) -> SubscriptionResult {
+    if answer.is_active()
+        || answer
+            .reason
+            .as_deref()
+            .is_some_and(|reason| HOST_REASONS.contains(&reason))
+    {
+        return answer;
+    }
+    warn!(
+        peer_server_id = %host,
+        status = %answer.status,
+        reason = ?answer.reason,
+        "a host refused a delegation for an unlisted reason"
+    );
+    SubscriptionResult::refused(answer.workspace_id, HOST_REFUSED)
 }
 
 impl DefaultWorkspaceRelay {
@@ -268,7 +315,8 @@ impl DefaultWorkspaceRelay {
             })
     }
 
-    /// Present delegations to one host; one result per delegation, in order.
+    /// Present delegations to one host; one result per delegation, in order, each active or
+    /// refused for a listed reason.
     async fn present(&self, host: &str, delegations: &[SignedJson]) -> Vec<SubscriptionResult> {
         let refused_all = |reason: &str| {
             delegations
@@ -276,24 +324,40 @@ impl DefaultWorkspaceRelay {
                 .map(|_| SubscriptionResult::refused(None, reason))
                 .collect()
         };
-        let Ok(body) = serde_json::to_vec(&SubscriptionsRequest {
+        let body = match serde_json::to_vec(&SubscriptionsRequest {
             delegations: delegations.to_vec(),
-        }) else {
-            return refused_all("internal");
+        }) {
+            Ok(body) => body,
+            Err(e) => {
+                warn!(peer_server_id = %host, error = %e, "could not encode delegations");
+                return refused_all(HOST_UNREACHABLE);
+            }
         };
         let response = match self.post(host, "/subscriptions", body).await {
             Ok(response) => response,
-            Err(_) => return refused_all("upstream_unavailable"),
+            Err(_) => return refused_all(HOST_UNREACHABLE),
         };
         if response.status != 200 {
-            let code = response
-                .error_code()
-                .unwrap_or_else(|| "upstream_unavailable".to_string());
-            return refused_all(&code);
+            let reason = presentation_refusal(&response);
+            warn!(
+                peer_server_id = %host,
+                status = response.status,
+                code = ?response.error_code(),
+                reason,
+                "a host refused presented delegations"
+            );
+            return refused_all(reason);
         }
         match serde_json::from_slice::<SubscriptionsAnswer>(&response.body) {
-            Ok(answer) if answer.subscriptions.len() == delegations.len() => answer.subscriptions,
-            _ => refused_all("upstream_unavailable"),
+            Ok(answer) if answer.subscriptions.len() == delegations.len() => answer
+                .subscriptions
+                .into_iter()
+                .map(|answer| listed(host, answer))
+                .collect(),
+            _ => {
+                warn!(peer_server_id = %host, "a host's answer to presented delegations is unreadable");
+                refused_all(HOST_UNREACHABLE)
+            }
         }
     }
 
@@ -522,9 +586,7 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
                     } else {
                         SubscriptionStatus::Ended
                     };
-                    if answer.is_active()
-                        || answer.reason.as_deref() != Some("upstream_unavailable")
-                    {
+                    if answer.is_active() || answer.reason.as_deref() != Some(HOST_UNREACHABLE) {
                         self.repos
                             .subscription_repo
                             .upsert_subscription(
@@ -722,5 +784,78 @@ impl RevocationFanout for DefaultWorkspaceRelay {
         info!(user_id = %user_id, device_key_id = %device_key_id, hosts = added, "sending a device revocation to the hosts holding its person");
         self.send_due_revocations().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn response(status: u16, error: &str) -> S2sResponse {
+        S2sResponse {
+            status,
+            content_type: "application/json".to_string(),
+            body: serde_json::json!({ "error": error, "message": "detail" })
+                .to_string()
+                .into_bytes(),
+            key_seq: 0,
+            headers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_refused_presentation_is_unreachable_or_refused_never_a_raw_code() {
+        assert_eq!(
+            presentation_refusal(&response(500, "internal")),
+            HOST_UNREACHABLE
+        );
+        assert_eq!(
+            presentation_refusal(&response(502, "upstream_unavailable")),
+            HOST_UNREACHABLE
+        );
+        assert_eq!(
+            presentation_refusal(&response(429, "rate_limited")),
+            HOST_UNREACHABLE
+        );
+        assert_eq!(
+            presentation_refusal(&response(503, "role_disabled")),
+            HOST_REFUSED
+        );
+        assert_eq!(
+            presentation_refusal(&response(403, "not_delegated")),
+            HOST_REFUSED
+        );
+        assert_eq!(
+            presentation_refusal(&response(401, "bad_signature")),
+            HOST_REFUSED
+        );
+    }
+
+    #[test]
+    fn a_hosts_unlisted_reason_becomes_host_refused() {
+        let workspace = Uuid::now_v7();
+        let listed_reason = SubscriptionResult::refused(Some(workspace), "not_member");
+        assert_eq!(listed("rims1_h", listed_reason.clone()), listed_reason);
+        let active = SubscriptionResult::active(workspace, Utc::now());
+        assert_eq!(listed("rims1_h", active.clone()), active);
+        assert_eq!(
+            listed(
+                "rims1_h",
+                SubscriptionResult::refused(Some(workspace), "internal")
+            ),
+            SubscriptionResult::refused(Some(workspace), HOST_REFUSED)
+        );
+        let odd = SubscriptionResult {
+            workspace_id: Some(workspace),
+            status: "pending".to_string(),
+            expires_at: None,
+            reason: None,
+        };
+        assert_eq!(
+            listed("rims1_h", odd),
+            SubscriptionResult::refused(Some(workspace), HOST_REFUSED)
+        );
     }
 }

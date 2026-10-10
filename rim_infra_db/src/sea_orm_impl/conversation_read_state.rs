@@ -11,6 +11,7 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter,
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::relay::hidden;
 
 pub struct SeaOrmConversationReadStateRepository {
     pub db: DbHandle,
@@ -82,12 +83,14 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
 
         // Baseline: the last read, else when the user joined (conversation_member.joined_at),
         // else conversation.created_at for a conversation without a member row (callers pass
-        // joined conversations only since Track 1.1, so that fallback is defensive).
+        // joined conversations only since Track 1.1, so that fallback is defensive). A
+        // conversation hidden by the request inbox has no count.
         let rows = self
             .db
             .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
-                r#"SELECT c.id AS conversation_id, COUNT(m.id) AS unread_count
+                format!(
+                    r#"SELECT c.id AS conversation_id, COUNT(m.id) AS unread_count
                    FROM conversation c
                    LEFT JOIN conversation_member cm
                        ON cm.user_id = $1 AND cm.conversation_id = c.id
@@ -99,9 +102,11 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
                        AND m.thread_id IS NULL
                        AND m.is_deleted = false
                        AND m.sent_by != $1
-                   WHERE c.id = ANY($2)
+                   WHERE c.id = ANY($2) AND NOT {}
                    GROUP BY c.id
                    HAVING COUNT(m.id) > 0"#,
+                    hidden("$1", "c.id")
+                ),
                 [user_uuid.into(), conv_uuids.into()],
             ))
             .await
