@@ -430,6 +430,16 @@ pub fn build_test_provider_with(
         host_repo: Arc::new(rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository::new(
             db.clone(),
         )),
+        delegation_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::remote_workspace::SeaOrmDelegationRepository::new(
+                db.clone(),
+            ),
+        ),
+        subscription_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(
+                db.clone(),
+            ),
+        ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(
             rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(db.clone()),
