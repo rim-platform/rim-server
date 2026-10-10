@@ -2,8 +2,9 @@
 
 `deploy/compose.yml` runs one RIM server on one domain: rim-server with `RIM_ROLE=both` (it
 hosts workspaces and is its users' relay), PostgreSQL 17, the web client, and Caddy terminating
-TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…`, `/s2s/…`, `/healthz` and `/readyz` to
-rim-server and every other path to the web client, so the client and the API share one origin.
+TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…` and `/s2s/…` to rim-server and every
+other path to the web client, so the client and the API share one origin. The health probes
+stay inside the compose network.
 A public relay is the same file with `deploy/compose.relay.yml` on top; `deploy/README.md`
 covers it.
 
@@ -115,7 +116,7 @@ signups without an invite.
 ### Check it answers
 
 ```sh
-curl -s https://rim.example.org/readyz; echo
+dc exec rim curl -fsS http://localhost:8080/readyz; echo
 curl -s https://rim.example.org/.well-known/rim-server | head -c 300; echo
 curl -sI https://rim.example.org/ | head -n 1                 # the web client
 dc exec rim /app/rim-server --version
@@ -211,10 +212,20 @@ production's. Record each drill: **FILL** where.
 
 ## Monitoring
 
-- **Readiness.** `https://<domain>/readyz` answers 200 when the database answers, no migration
-  is pending and the key files are readable, else 503 naming the failing checks; `/healthz`
-  answers 200 while the process runs. Point an outside uptime check at `/readyz`. Inside, `dc ps`
-  shows the health of `rim`, `postgres` and `web`.
+- **Probes.** rim-server answers `/healthz` (200 while the process runs) and `/readyz` (200
+  when the database answers, no migration is pending and the key files are readable, else 503
+  naming the failing checks) on its own port, without a session. They are for Docker and the
+  compose network: the `rim` service's healthcheck uses `/readyz`, and Caddy answers both paths
+  with 404. From the host:
+
+  ```sh
+  dc ps                                                    # rim, postgres and web: healthy
+  dc exec rim curl -fsS http://localhost:8080/readyz; echo
+  dc exec rim curl -fsS http://localhost:8080/healthz; echo
+  ```
+
+  An outside uptime check watches the public origin instead, for example
+  `https://<domain>/.well-known/rim-server` and the web client's `/`.
 - **Metrics.** Uncomment `RIM_METRICS_ADDR: 0.0.0.0:9090` in the `rim` service and run
   Prometheus in a container on the compose project's `internal` network, scraping `rim:9090`.
   Never publish the port or route it through Caddy. `docs/operations/metrics.md` lists the
@@ -226,8 +237,13 @@ production's. Record each drill: **FILL** where.
 
 ## Another proxy
 
-Caddy is an example. Any TLS proxy works if it sends `/api` (with `/api/ws` as a WebSocket
-upgrade), `/.well-known/…`, `/s2s/…`, `/healthz` and `/readyz` to `rim:8080` unchanged and the
-rest to `web:80`; accepts bodies up to 32 MiB; sets `X-Forwarded-For` itself, replacing what the
-client sent; and is the only way in. `deploy/README.md` has an nginx example for the relay's
-paths.
+Caddy is an example. Any TLS proxy works if it:
+
+- sends `/api` (with `/api/ws` as a WebSocket upgrade), `/.well-known/…` and `/s2s/…` to
+  `rim:8080` unchanged, and the rest to `web:80`;
+- keeps `/healthz` and `/readyz` off the public side;
+- accepts bodies up to 32 MiB;
+- sets `X-Forwarded-For` itself, replacing what the client sent;
+- is the only way in.
+
+`deploy/README.md` has an nginx example for the relay's paths.
