@@ -16,6 +16,7 @@ use rim_core::storage::StorageBackend;
 use rim_s2s::host::sign_host_response;
 use rim_services::host::dto::{ForwardAuth, ForwardRefusal, ForwardRequest};
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::storage::service::StorageService;
 use rim_services::workspace_plugin::service::PluginBundleService;
 use serde_json::json;
 
@@ -134,6 +135,14 @@ async fn graphql(
     }
 }
 
+/// The forwarded body as a multipart stream, under the request's `Content-Type`.
+fn multipart(req: &HttpRequest, verified: &Verified) -> Multipart {
+    let bytes = actix_web::web::Bytes::from(verified.body.clone());
+    let stream =
+        futures_util::stream::once(async move { Ok::<_, actix_web::error::PayloadError>(bytes) });
+    Multipart::new(req.headers(), stream)
+}
+
 /// Run the forwarded request's handler as its user and device.
 async fn execute(
     req: &HttpRequest,
@@ -168,16 +177,38 @@ async fn execute(
             else {
                 return internal("attachments are not configured");
             };
-            let bytes = actix_web::web::Bytes::from(verified.body.clone());
-            let stream = futures_util::stream::once(async move {
-                Ok::<_, actix_web::error::PayloadError>(bytes)
-            });
-            let multipart = Multipart::new(req.headers(), stream);
             reply_of(
                 crate::file_handlers::upload_as(
                     auth.user_id,
-                    multipart,
+                    multipart(req, verified),
                     attachments.get_ref().as_ref(),
+                )
+                .await,
+            )
+            .await
+        }
+        ("POST", ["api", "files", "avatar"]) => {
+            let Some(storage) = req.app_data::<web::Data<Arc<dyn StorageService>>>() else {
+                return internal("storage is not configured");
+            };
+            reply_of(
+                crate::file_handlers::avatar_upload_as(
+                    auth.user_id,
+                    multipart(req, verified),
+                    storage.get_ref().as_ref(),
+                )
+                .await,
+            )
+            .await
+        }
+        ("GET", ["api", "files", file_path @ ..]) if !file_path.is_empty() => {
+            let Some(storage) = req.app_data::<web::Data<Arc<dyn StorageBackend>>>() else {
+                return internal("storage is not configured");
+            };
+            reply_of(
+                crate::file_handlers::file_download_as(
+                    &file_path.join("/"),
+                    storage.get_ref().as_ref(),
                 )
                 .await,
             )
