@@ -7,7 +7,7 @@ use crate::file_handlers::{
 use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
 };
-use crate::health::{ReadinessProbe, SystemProbe};
+use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
@@ -95,11 +95,11 @@ pub async fn serve(
     let moderation_service = runtime.moderation_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
     let feature_gate = runtime.feature_gate;
-    let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
+    let readiness = web::Data::new(ReadinessCache::new(Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
         franking_key_file: config.franking_key_file(),
-    });
+    })));
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
@@ -171,7 +171,7 @@ pub async fn serve(
             .service(web::resource("/s2s/v1/{tail:.*}").to(crate::s2s::handle))
             .service(api)
             .app_data(web::Data::new(s2s_state.clone()))
-            .app_data(web::Data::new(Arc::clone(&readiness)))
+            .app_data(readiness.clone())
             .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
