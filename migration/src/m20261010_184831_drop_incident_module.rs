@@ -35,9 +35,9 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
+    /// Does not recreate the tables: the code that used them is gone. The `incidents-last` tag
+    /// holds the last commit with the module.
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
-        Err(DbErr::Migration(
-            "the incident module was removed; restore from the incidents-last tag".to_string(),
-        ))
+        Ok(())
     }
 }
