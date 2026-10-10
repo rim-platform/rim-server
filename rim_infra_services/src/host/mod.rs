@@ -303,6 +303,7 @@ impl DefaultHostService {
             .check_and_record(&actor.user_id.to_string(), Utc::now())
         {
             warn!(user_id = %actor.user_id, "a user's invites to other servers are over their daily quota");
+            crate::metrics::rate_limited("dm_invites");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });
@@ -373,6 +374,7 @@ impl DefaultHostService {
             .device_limiter
             .check_and_record(&device.id.to_string(), "forward", Utc::now())
         {
+            crate::metrics::rate_limited("host_forward_device");
             return Err(ForwardRefusal::RateLimited {
                 retry_after_seconds,
             });

@@ -133,6 +133,7 @@ pub(crate) fn check_open_signup_rate(
             retry_after_seconds = %retry_after_seconds,
             "open-mode signup rate limited"
         );
+        crate::metrics::rate_limited("signup");
         return Err(ServiceError::RateLimited {
             retry_after_seconds,
         });

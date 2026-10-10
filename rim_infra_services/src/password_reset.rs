@@ -135,6 +135,7 @@ impl PasswordResetService for DefaultPasswordResetService {
                 retry_after_seconds = %retry_after_seconds,
                 "password reset request rate limited by IP"
             );
+            crate::metrics::rate_limited("password_reset");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });
@@ -155,6 +156,7 @@ impl PasswordResetService for DefaultPasswordResetService {
                 username = %username,
                 "password reset request over the per-username limit; no email sent"
             );
+            crate::metrics::rate_limited("password_reset_account");
             return Ok(());
         }
 

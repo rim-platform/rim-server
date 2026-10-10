@@ -62,9 +62,9 @@ pub struct AppRuntime {
     pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
     pub alert_max_body_bytes: usize,
     pub s2s: S2sRuntime,
-    pub shutdown_tx: watch::Sender<bool>,
-    /// The server's connection pool, closed once the server has stopped.
+    /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
+    pub shutdown_tx: watch::Sender<bool>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -836,8 +836,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         alert_rate_limiter,
         alert_max_body_bytes,
         s2s,
-        shutdown_tx,
         db: raw_db_for_tasks,
+        shutdown_tx,
     })
 }
 

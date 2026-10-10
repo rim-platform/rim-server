@@ -274,6 +274,25 @@ async fn a_stranger_claims_twenty_times_a_day() {
     }
 }
 
+#[test]
+fn a_strangers_refused_claim_is_counted_under_its_limiter() {
+    let ((), got) = crate::metrics::test_support::recorded(|| {
+        crate::metrics::test_support::block_on(async {
+            let svc = relay(false, false, Arc::default());
+            for _ in 0..21 {
+                let _ = svc.claim_for_peer(PEER.to_string(), claim(PEER)).await;
+            }
+        })
+    });
+    assert_eq!(
+        got.counter(
+            crate::metrics::RATE_LIMIT_REJECTIONS,
+            &[("limiter", "stranger_claim")]
+        ),
+        1
+    );
+}
+
 // ── The host's checks of forwarded requests ─────────────────────────────────────────────
 
 /// What the host's repositories answer for Bob, a remote user here.
