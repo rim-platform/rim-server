@@ -168,7 +168,7 @@ async fn build_s2s(
         .map_err(|e| io_error("server key")(format!("{e:#}")))?;
     let registration = config
         .registration_mode()
-        .map_err(io_error("RIM_REGISTRATION_POW_BITS"))?;
+        .map_err(io_error("registration"))?;
     let settings = descriptor_settings(config, role, s2s_origin.as_deref(), registration);
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
