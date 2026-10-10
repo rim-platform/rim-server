@@ -68,3 +68,12 @@ S-3 and D-7. A database is reassigned only after its previous agent has reported
 
 | # | PR | Date |
 |---|---|---|
+| D-1 | rim-server #98 | 2026-10-10 |
+| D-2 | rim-server #94 | 2026-10-10 |
+| D-6 | rim-ui #57 (+ #58, an incident mutation fix the skew check found) | 2026-10-10 |
+| S-1 | rim-ui #59 | 2026-10-10 |
+| S-2 | rim-ui #60 | 2026-10-10 |
+| S-3 | rim-server #96 (+ #97: 72 audit events now reach the audit log) | 2026-10-10 |
+| S-4 | rim-server #95 | 2026-10-10 |
+
+D-7 now runs after the incident drop of `cleanup-2026-10-10.md`, with instance flags only.
