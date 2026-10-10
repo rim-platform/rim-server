@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rim_s2s::Role;
 use rim_services::auth::service::RequestAuthenticator;
-use rim_services::s2s::dto::{S2sMethod, S2sRequest};
+use rim_services::s2s::dto::{S2sMethod, S2sRequest, S2sResponse};
 
 use crate::file_handlers::{map_service_error_to_response, require_csrf};
 use crate::graphql_support::extract_auth;
@@ -54,6 +54,25 @@ async fn read_body(mut payload: web::Payload) -> Result<Vec<u8>, HttpResponse> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// Host response headers passed through to the client unchanged.
+const PASSED_HEADERS: &[&str] = &[RIM_HOST_RESPONSE, RIM_HOST_SIGNATURE, "retry-after"];
+
+/// The host's answer as the client's response: status, body, `Content-Type`, the host-response
+/// pair and `Retry-After`.
+fn host_answer(answer: S2sResponse) -> HttpResponse {
+    let status = StatusCode::from_u16(answer.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = HttpResponse::build(status);
+    if !answer.content_type.is_empty() {
+        response.content_type(answer.content_type.as_str());
+    }
+    for (name, value) in &answer.headers {
+        if PASSED_HEADERS.contains(&name.as_str()) {
+            response.insert_header((name.as_str(), value.as_str()));
+        }
+    }
+    response.body(answer.body)
 }
 
 /// Forward a local user's device-signed request to the host it names.
@@ -177,20 +196,7 @@ pub async fn handle_remote(
         })
         .await;
     match answer {
-        Ok(answer) => {
-            let status =
-                StatusCode::from_u16(answer.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            let mut response = HttpResponse::build(status);
-            if !answer.content_type.is_empty() {
-                response.content_type(answer.content_type.as_str());
-            }
-            for (name, value) in &answer.headers {
-                if name == RIM_HOST_RESPONSE || name == RIM_HOST_SIGNATURE {
-                    response.insert_header((name.as_str(), value.as_str()));
-                }
-            }
-            response.body(answer.body)
-        }
+        Ok(answer) => host_answer(answer),
         Err(e) => {
             tracing::warn!(host_server_id = %host, error = %e, "a forwarded request found no verified answer");
             HttpResponse::BadGateway().json(serde_json::json!({
@@ -199,5 +205,43 @@ pub async fn handle_remote(
                 "hostServerId": host,
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[actix_web::test]
+    async fn a_hosts_answer_keeps_its_retry_after_and_host_response_headers() {
+        let response = host_answer(S2sResponse {
+            status: 429,
+            content_type: "application/json".to_string(),
+            body: br#"{"error":"rate_limited"}"#.to_vec(),
+            key_seq: 0,
+            headers: vec![
+                (RIM_HOST_RESPONSE.to_string(), "cGF5bG9hZA".to_string()),
+                (RIM_HOST_SIGNATURE.to_string(), "ed25519:sig".to_string()),
+                ("retry-after".to_string(), "17".to_string()),
+                ("x-other".to_string(), "dropped".to_string()),
+            ],
+        });
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        assert_eq!(header("retry-after").as_deref(), Some("17"));
+        assert_eq!(header(RIM_HOST_RESPONSE).as_deref(), Some("cGF5bG9hZA"));
+        assert_eq!(header(RIM_HOST_SIGNATURE).as_deref(), Some("ed25519:sig"));
+        assert_eq!(header("content-type").as_deref(), Some("application/json"));
+        assert_eq!(header("x-other"), None);
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .expect("body");
+        assert_eq!(&body[..], br#"{"error":"rate_limited"}"#);
     }
 }
