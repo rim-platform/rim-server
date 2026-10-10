@@ -42,6 +42,7 @@ pub(crate) mod pipeline;
 pub(crate) mod presence;
 pub(crate) mod profile;
 pub(crate) mod relay;
+pub(crate) mod remote_workspace;
 pub(crate) mod skill_profile;
 pub(crate) mod workspace;
 pub(crate) mod workspace_feature;
@@ -57,6 +58,7 @@ pub struct Mutation(
     MutationGroup5,
     MutationGroup6,
     MutationGroup7,
+    MutationGroup8,
 );
 
 #[derive(MergedObject, Default)]
@@ -121,3 +123,6 @@ pub(crate) struct MutationGroup7(
     e2ee::E2eeMutations,
     relay::RelayMutations,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct MutationGroup8(remote_workspace::RemoteWorkspaceMutations);

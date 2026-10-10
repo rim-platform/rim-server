@@ -33,6 +33,7 @@ pub mod presence;
 pub mod provider;
 pub mod read_state;
 pub mod relay;
+pub mod remote_workspace;
 pub mod s2s;
 pub mod server;
 pub mod server_member;

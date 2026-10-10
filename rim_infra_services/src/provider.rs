@@ -55,6 +55,11 @@ pub struct FederationHooks {
     pub remote_key_packages: Option<Arc<dyn rim_services::host::service::RemoteKeyPackages>>,
     /// Told when a local user's card or devices change.
     pub relay_service: Option<Arc<dyn rim_services::relay::service::RelayService>>,
+    /// Refreshes a remote user's identity before they sign in directly.
+    pub host_service: Option<Arc<dyn rim_services::host::service::HostService>>,
+    /// Sends a local device's revocation to every host holding its person.
+    pub revocation_fanout:
+        Option<Arc<dyn rim_services::remote_workspace::service::RevocationFanout>>,
 }
 
 #[derive(Clone)]
@@ -146,6 +151,12 @@ impl DefaultAppServiceProvider {
         );
         if let Some(relay) = &federation.relay_service {
             key_auth = key_auth.with_relay_service(Arc::clone(relay));
+        }
+        if let Some(host) = &federation.host_service {
+            key_auth = key_auth.with_host_service(Arc::clone(host));
+        }
+        if let Some(fanout) = &federation.revocation_fanout {
+            key_auth = key_auth.with_revocation_fanout(Arc::clone(fanout));
         }
         let capability_service: Arc<dyn CapabilityService> = Arc::new(
             crate::capability::DefaultCapabilityService::new(repos.for_capability()),

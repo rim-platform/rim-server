@@ -24,6 +24,9 @@ use rim_infra_db::sea_orm_impl::s2s::{
 use rim_infra_services::host::outbox::{HostEventWriter, OutboxSender, OutboxSink, RefusalCache};
 use rim_infra_services::host::{DIRECT_SPACE_NAME, DefaultHostService};
 use rim_infra_services::relay::{DefaultRelayService, RelaySettings};
+use rim_infra_services::remote_workspace::{
+    DefaultWorkspaceHost, DefaultWorkspaceRelay, RepoDelegationCheck,
+};
 use rim_infra_services::s2s::server_key::{self, DescriptorSettings, KeyFiles};
 use rim_infra_services::s2s::{
     DefaultPeerService, DefaultS2sClient, DefaultS2sNonceService, HttpDiscoveryFetcher,
@@ -36,6 +39,9 @@ use rim_services::host::service::{HostService, RemoteKeyPackages};
 use rim_services::provider::AppServiceProvider;
 use rim_services::relay::dto::RelayInfoDto;
 use rim_services::relay::service::RelayService;
+use rim_services::remote_workspace::service::{
+    RevocationFanout, WorkspaceHostService, WorkspaceRelayService,
+};
 use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
 #[allow(dead_code)] // shutdown_tx is held to keep the watch channel open
@@ -68,6 +74,10 @@ pub struct S2sRuntime {
     pub relay: Arc<DefaultRelayService>,
     /// This server as the host of spaces with remote members.
     pub host: Arc<DefaultHostService>,
+    /// This server as the host of workspaces with members whose relay is elsewhere.
+    pub workspace_host: Arc<DefaultWorkspaceHost>,
+    /// This server as the relay of members of workspaces hosted elsewhere.
+    pub workspace_relay: Arc<DefaultWorkspaceRelay>,
     /// The relay's direct space.
     pub direct_space_id: rim_core::server::model::ServerId,
     pub key_files: KeyFiles,
@@ -94,6 +104,9 @@ const S2S_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// Largest server-to-server response read: the forward path's cap.
 const S2S_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// How often revocations due for another attempt are sent to hosts.
+const REVOCATION_FANOUT_INTERVAL_SECS: u64 = 5;
 
 /// How often expired request nonces are deleted and a CLI key rotation (server key or franking
 /// keys) is picked up.
@@ -222,23 +235,46 @@ async fn build_s2s(
             retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
         },
     ));
-    let host = Arc::new(DefaultHostService::new(
-        repos.for_host(),
-        Some(raw_db.clone()),
+    let host = Arc::new(
+        DefaultHostService::new(
+            repos.for_host(),
+            Some(raw_db.clone()),
+            identity.clone(),
+            Arc::clone(&peers),
+            Arc::clone(&client),
+            direct_space_id,
+            config.s2s_device_rate_per_min(),
+        )
+        .with_delegations(Arc::new(RepoDelegationCheck::new(Arc::clone(
+            &repos.delegation_repo,
+        )))),
+    );
+    let workspace_host = Arc::new(DefaultWorkspaceHost::new(
+        repos.for_workspace_host(),
+        identity.clone(),
+        Arc::clone(&peers),
+        Arc::clone(&host),
+        i64::from(config.s2s_subscriptions_per_peer()),
+    ));
+    let workspace_relay = Arc::new(DefaultWorkspaceRelay::new(
+        repos.for_workspace_relay(),
         identity.clone(),
         Arc::clone(&peers),
         Arc::clone(&client),
-        direct_space_id,
-        config.s2s_device_rate_per_min(),
+        Arc::clone(&relay) as Arc<dyn RelayService>,
     ));
     Ok(S2sRuntime {
         relay: Arc::clone(&relay),
         host: Arc::clone(&host),
+        workspace_host: Arc::clone(&workspace_host),
+        workspace_relay: Arc::clone(&workspace_relay),
         direct_space_id,
         state: S2sState {
             client: Arc::clone(&client),
             relay,
             host,
+            workspace_host,
+            workspace_relay,
             identity,
             peers,
             nonces,
@@ -400,6 +436,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             direct_space_id: Some(s2s.direct_space_id),
             remote_key_packages: Some(Arc::clone(&s2s.host) as Arc<dyn RemoteKeyPackages>),
             relay_service: Some(Arc::clone(&s2s.relay) as Arc<dyn RelayService>),
+            host_service: Some(Arc::clone(&s2s.host) as Arc<dyn HostService>),
+            revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
         },
     ));
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
@@ -428,6 +466,12 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
         observers_for_presence,
     ));
+    s2s.workspace_host.set_services(
+        service_provider.auth_service(),
+        Arc::clone(&presence_manager) as Arc<dyn PresenceService>,
+        service_provider.e2ee_service(),
+        service_provider.audit_log_service(),
+    );
 
     let typing_tracker = Arc::new(rim_infra_services::typing::TypingTracker::new());
 
@@ -611,6 +655,29 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         tokio::spawn(sender.run(shutdown_tx.subscribe()));
     }
 
+    // Background task: send device revocations due for another attempt to the hosts holding
+    // their person.
+    if s2s.state.settings.origin.is_some() {
+        let workspace_relay = Arc::clone(&s2s.workspace_relay);
+        let mut shutdown_rx6 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(
+                REVOCATION_FANOUT_INTERVAL_SECS,
+            ));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        if let Err(e) = workspace_relay.send_due_revocations().await {
+                            tracing::error!(error = %e, "revocation fan-out pass failed");
+                        }
+                    }
+                    _ = shutdown_rx6.changed() => break,
+                }
+            }
+        });
+    }
+
     // Background task: delete expired server-to-server nonces, queued items, requests, outbox
     // rows and seen request seqs, pull what hosts queued, and pick up a server key or franking
     // key rotation made by the CLI, every minute.
@@ -706,6 +773,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,
             host: Arc::clone(&s2s.host) as Arc<dyn HostService>,
+            workspace_host: Arc::clone(&s2s.workspace_host) as Arc<dyn WorkspaceHostService>,
+            workspace_relay: Arc::clone(&s2s.workspace_relay) as Arc<dyn WorkspaceRelayService>,
             info: RelayInfoDto {
                 server_id: s2s.state.identity.current().server_id().to_string(),
                 roles: s2s
@@ -743,8 +812,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 }
 
 /// The relay and host parts of the per-minute cleanup: acked and expired items, orphaned
-/// envelopes, expired requests, outbox rows over 7 days and seen request seqs, then a pull of
-/// what each host's outbox holds above what was received from it.
+/// envelopes, expired requests, outbox rows over 7 days, seen request seqs, ended delegations
+/// and lapsed subscriptions, then a pull of what each host's outbox holds above what was
+/// received from it.
 async fn run_relay_cleanup(
     s2s: &S2sRuntime,
     relay_repo: &dyn rim_core::relay::repository::RelayRepository,
@@ -766,6 +836,20 @@ async fn run_relay_cleanup(
             "host cleanup"
         ),
         Err(e) => tracing::error!(error = %e, "host cleanup failed"),
+    }
+    match s2s.workspace_host.cleanup().await {
+        Ok(done) => tracing::debug!(
+            ended_delegations = done.ended_delegations,
+            "delegation cleanup"
+        ),
+        Err(e) => tracing::error!(error = %e, "delegation cleanup failed"),
+    }
+    match s2s.workspace_relay.cleanup().await {
+        Ok(done) => tracing::debug!(
+            lapsed_subscriptions = done.lapsed_subscriptions,
+            "subscription cleanup"
+        ),
+        Err(e) => tracing::error!(error = %e, "subscription cleanup failed"),
     }
     if s2s.state.settings.origin.is_none() {
         return;

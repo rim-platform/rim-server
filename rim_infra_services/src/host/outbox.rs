@@ -1,6 +1,7 @@
 //! Host events for relays: the writer turns each workspace event into signed envelopes on the
-//! streams its remote recipients see and appends one outbox row per relay; the sender delivers
-//! each relay's rows in order with backoff.
+//! streams its remote recipients see and appends one outbox row per relay (for a workspace,
+//! each relay holding an active delegation of a recipient; for the direct space, the relays a
+//! recipient's card lists); the sender delivers each relay's rows in order with backoff.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -280,7 +281,14 @@ impl HostEventWriter {
         };
         let workspace_id = ServerId::from(workspace_id);
         let direct = workspace_id == self.direct_space_id && self.relay.is_some();
-        let members = self.repos.host_repo.remote_members(workspace_id).await?;
+        let (members, delegated) = if workspace_id == self.direct_space_id {
+            (
+                self.repos.host_repo.remote_members(workspace_id).await?,
+                None,
+            )
+        } else {
+            self.delegated(workspace_id, event).await?
+        };
         if members.is_empty() && !direct {
             return Ok(0);
         }
@@ -304,7 +312,7 @@ impl HostEventWriter {
                     Invitee::Local(_) => continue,
                 };
                 rows += self
-                    .append(workspace_id, &planned, &invite.to_string())
+                    .append(workspace_id, &planned, &invite.to_string(), None)
                     .await?;
             }
         }
@@ -329,12 +337,67 @@ impl HostEventWriter {
         }
         let text = event_json.to_string();
         for planned in plans {
-            rows += self.append(workspace_id, &planned, &text).await?;
+            rows += self
+                .append(workspace_id, &planned, &text, delegated.as_ref())
+                .await?;
         }
         if rows > 0 {
             self.wake.notify_one();
         }
+        if let (Some(_), WorkspaceEvent::MemberLeft { user_id, .. }) = (&delegated, event) {
+            let ended = self
+                .repos
+                .delegation_repo
+                .end_for_user(workspace_id, *user_id, None)
+                .await?;
+            if ended > 0 {
+                info!(user_id = %user_id, workspace_id = %workspace_id, ended, "ended a departed member's delegations");
+            }
+        }
         Ok(rows)
+    }
+
+    /// The members of a workspace whose relays hold an active delegation, and those relays by
+    /// user. A member who just left still gets their `MemberLeft`, on their own stream.
+    async fn delegated(
+        &self,
+        workspace_id: ServerId,
+        event: &WorkspaceEvent,
+    ) -> ServiceResult<(Vec<RemoteMember>, Option<HashMap<UserId, Vec<String>>>)> {
+        let now = Utc::now();
+        let mut members = self
+            .repos
+            .delegation_repo
+            .delegated_members(workspace_id, now)
+            .await?;
+        let mut relays: HashMap<UserId, Vec<String>> = HashMap::new();
+        for (user_id, relay) in self
+            .repos
+            .delegation_repo
+            .delegated_relays(workspace_id, now)
+            .await?
+        {
+            relays.entry(user_id).or_default().push(relay);
+        }
+        if let WorkspaceEvent::MemberLeft { user_id, .. } = event
+            && relays.contains_key(user_id)
+            && !members.iter().any(|m| m.user_id == *user_id)
+            && let Some(principal_id) = self
+                .repos
+                .user_repo
+                .get_by_id(*user_id)
+                .await?
+                .and_then(|u| u.principal_id)
+        {
+            members.push(RemoteMember {
+                user_id: *user_id,
+                principal_id,
+                role: rim_core::server_member::model::ServerMemberRole::Guest,
+                home_relay: None,
+                card_payload: None,
+            });
+        }
+        Ok((members, Some(relays)))
     }
 
     /// `DmInvite` events for the members a direct-space conversation was created with or added
@@ -425,24 +488,34 @@ impl HostEventWriter {
     }
 
     /// Sign one envelope and add an outbox row for each relay its recipients use, in one
-    /// transaction that also takes the stream's `seq`.
+    /// transaction that also takes the stream's `seq`. A workspace's relays are those holding
+    /// a delegation (`delegated`); the direct space's are those each card lists.
     async fn append(
         &self,
         workspace_id: ServerId,
         planned: &Planned,
         event_json: &str,
+        delegated: Option<&HashMap<UserId, Vec<String>>>,
     ) -> ServiceResult<usize> {
         let identity = self.identity.current();
         let own_id = identity.server_id().to_string();
         let mut by_relay: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for member in &planned.recipients {
-            let relays = DefaultHostService::relays_of(
-                self.repos.host_repo.as_ref(),
-                &own_id,
-                member.card_payload.as_deref(),
-                member.home_relay.as_deref(),
-            )
-            .await?;
+            let relays = match delegated {
+                Some(delegated) => delegated
+                    .get(&member.user_id)
+                    .map(|relays| relays.iter().filter(|r| **r != own_id).cloned().collect())
+                    .unwrap_or_default(),
+                None => {
+                    DefaultHostService::relays_of(
+                        self.repos.host_repo.as_ref(),
+                        &own_id,
+                        member.card_payload.as_deref(),
+                        member.home_relay.as_deref(),
+                    )
+                    .await?
+                }
+            };
             for relay in relays {
                 if self.refusals.is_refused(&relay, &member.principal_id) {
                     continue;

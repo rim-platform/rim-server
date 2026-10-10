@@ -21,6 +21,18 @@ pub(crate) enum Endpoint {
     Outbox,
     /// `GET|POST /forward/<path>`: a device-signed request run as its user and device.
     Forward,
+    /// `POST /join/challenge`: a login challenge for a person joining a workspace here.
+    JoinChallenge,
+    /// `POST /join`: a person a relay presents joins a workspace here.
+    Join,
+    /// `POST /subscriptions`: delegations a relay presents.
+    Subscriptions,
+    /// `POST /subscriptions/cancel`: a relay ends its users' subscriptions.
+    SubscriptionsCancel,
+    /// `POST /presence`: a relay reports its users online or offline.
+    Presence,
+    /// `POST /revocations`: a device revocation a relay brings.
+    Revocations,
 }
 
 /// Which roles serve an endpoint.
@@ -32,6 +44,8 @@ pub(crate) enum EndpointRole {
     Host,
     /// Relays only; a host answers `503 role_disabled`.
     Relay,
+    /// Hosts of workspaces only; a relay answers `503 role_disabled`.
+    Workspace,
 }
 
 impl Endpoint {
@@ -50,6 +64,12 @@ impl Endpoint {
             ("POST", "/key-packages/claim") => Some(Self::KeyPackageClaim),
             ("POST", "/deliver") => Some(Self::Deliver),
             ("GET", "/outbox") => Some(Self::Outbox),
+            ("POST", "/join/challenge") => Some(Self::JoinChallenge),
+            ("POST", "/join") => Some(Self::Join),
+            ("POST", "/subscriptions") => Some(Self::Subscriptions),
+            ("POST", "/subscriptions/cancel") => Some(Self::SubscriptionsCancel),
+            ("POST", "/presence") => Some(Self::Presence),
+            ("POST", "/revocations") => Some(Self::Revocations),
             _ => None,
         }
     }
@@ -58,13 +78,27 @@ impl Endpoint {
         match self {
             Self::Ping => EndpointRole::All,
             Self::Principal | Self::KeyPackageClaim | Self::Deliver => EndpointRole::Relay,
-            Self::Identity | Self::Outbox | Self::Forward => EndpointRole::Host,
+            Self::Identity | Self::Outbox | Self::Forward | Self::Presence | Self::Revocations => {
+                EndpointRole::Host
+            }
+            Self::JoinChallenge | Self::Join | Self::Subscriptions | Self::SubscriptionsCancel => {
+                EndpointRole::Workspace
+            }
         }
     }
 
     /// Whether `RIM_HOST_ALLOWED_RELAYS` applies to the endpoint.
     pub(crate) fn host_allow_list_applies(self) -> bool {
-        self == Self::Forward
+        matches!(
+            self,
+            Self::Forward
+                | Self::JoinChallenge
+                | Self::Join
+                | Self::Subscriptions
+                | Self::SubscriptionsCancel
+                | Self::Presence
+                | Self::Revocations
+        )
     }
 }
 
@@ -75,6 +109,7 @@ pub(crate) fn serves(role: ServerRole, endpoint_role: EndpointRole) -> bool {
         // A relay hosts its direct space, so it serves host endpoints for that space.
         EndpointRole::Host => role.runs(Role::Host) || role.runs(Role::Relay),
         EndpointRole::Relay => role.runs(Role::Relay),
+        EndpointRole::Workspace => role.runs(Role::Host),
     }
 }
 
@@ -146,6 +181,35 @@ mod tests {
         assert!(!Endpoint::Identity.host_allow_list_applies());
         assert!(!Endpoint::Outbox.host_allow_list_applies());
         assert!(!Endpoint::Deliver.host_allow_list_applies());
+    }
+
+    #[test]
+    fn workspace_endpoints_route_and_belong_to_hosts_behind_the_allow_list() {
+        for (path, endpoint) in [
+            ("/join/challenge", Endpoint::JoinChallenge),
+            ("/join", Endpoint::Join),
+            ("/subscriptions", Endpoint::Subscriptions),
+            ("/subscriptions/cancel", Endpoint::SubscriptionsCancel),
+        ] {
+            assert_eq!(Endpoint::route("POST", path), Some(endpoint));
+            assert_eq!(Endpoint::route("GET", path), None);
+            assert_eq!(endpoint.role(), EndpointRole::Workspace);
+            assert!(endpoint.host_allow_list_applies());
+            assert!(!serves(ServerRole::Relay, endpoint.role()), "{endpoint:?}");
+            assert!(serves(ServerRole::Host, endpoint.role()));
+            assert!(serves(ServerRole::Both, endpoint.role()));
+        }
+        for (path, endpoint) in [
+            ("/presence", Endpoint::Presence),
+            ("/revocations", Endpoint::Revocations),
+        ] {
+            assert_eq!(Endpoint::route("POST", path), Some(endpoint));
+            assert_eq!(endpoint.role(), EndpointRole::Host);
+            assert!(endpoint.host_allow_list_applies());
+            for role in [ServerRole::Relay, ServerRole::Host, ServerRole::Both] {
+                assert!(serves(role, endpoint.role()));
+            }
+        }
     }
 
     #[test]
