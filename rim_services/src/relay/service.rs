@@ -77,6 +77,9 @@ pub trait RelayService: Send + Sync {
     /// Live notices for every local user; subscribers filter by user.
     fn subscribe(&self) -> broadcast::Receiver<RelayNotice>;
 
+    /// Send a notice to a local user's devices online.
+    fn publish(&self, notice: RelayNotice);
+
     /// Check a device request a local user's session sends through this relay: it names the
     /// session's principal and device, which is not revoked, and its signature verifies.
     /// Returns the host it names.

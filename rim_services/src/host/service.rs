@@ -22,6 +22,9 @@ pub trait HostService: Send + Sync {
     /// The relay's direct space.
     fn direct_space_id(&self) -> ServerId;
 
+    /// Whether a user is someone whose relay is another server.
+    async fn is_remote_user(&self, user_id: UserId) -> ServiceResult<bool>;
+
     /// Make sure a local user is a member of the direct space (a guest).
     async fn join_direct_space(&self, user_id: UserId) -> ServiceResult<()>;
 
@@ -59,6 +62,15 @@ pub trait HostService: Send + Sync {
     /// Refetch remote principals whose stored identity is over an hour old, from their home
     /// relay. Failures keep the stored copy.
     async fn refresh_remote(&self, principal_ids: Vec<String>) -> ServiceResult<()>;
+
+    /// Fetch a principal held here as remote from `from_relay`, or else from the relays their
+    /// newest card lists and then their home relay, and store what verifies. Returns whether
+    /// an identity was stored; a relay that is down keeps the stored copy.
+    async fn refresh_identity(
+        &self,
+        principal_id: String,
+        from_relay: Option<String>,
+    ) -> ServiceResult<bool>;
 
     /// Check a forwarded request: the device request and its `seq`, and that the relay may
     /// carry the user's traffic.

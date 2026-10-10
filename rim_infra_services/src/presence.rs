@@ -12,6 +12,9 @@ struct PresenceEntry {
     status: PresenceStatus,
     last_heartbeat_at: DateTime<Utc>,
     workspace_ids: Vec<ServerId>,
+    /// Reported by the member's relay rather than kept alive by heartbeats, so it never times
+    /// out.
+    remote: bool,
 }
 
 pub struct PresenceManager {
@@ -59,6 +62,7 @@ impl PresenceManager {
             let old_status = entry.status;
             entry.last_heartbeat_at = now;
             entry.status = status;
+            entry.remote = false;
 
             // Add workspace if not already tracked.
             if !entry.workspace_ids.contains(&workspace_id) {
@@ -74,6 +78,7 @@ impl PresenceManager {
                     status,
                     last_heartbeat_at: now,
                     workspace_ids: vec![workspace_id],
+                    remote: false,
                 },
             );
             true
@@ -125,6 +130,9 @@ impl PresenceManager {
         let mut transitions: Vec<(UserId, PresenceStatus, Vec<ServerId>)> = Vec::new();
 
         for mut entry in self.states.iter_mut() {
+            if entry.value().remote {
+                continue;
+            }
             let elapsed = now
                 .signed_duration_since(entry.value().last_heartbeat_at)
                 .num_seconds();
@@ -171,6 +179,53 @@ impl PresenceManager {
         }
     }
 
+    /// Set a remote member's presence in `workspace_ids` as their relay reports it. Emits
+    /// `PresenceChanged` in each workspace whose status changes.
+    pub fn set_remote(&self, user_id: UserId, workspace_ids: Vec<ServerId>, online: bool) {
+        let status = if online {
+            PresenceStatus::Online
+        } else {
+            PresenceStatus::Offline
+        };
+        let now = Utc::now();
+        let changed: Vec<ServerId> = match self.states.get_mut(&user_id) {
+            Some(mut entry) => {
+                let was = entry.status;
+                entry.status = status;
+                entry.last_heartbeat_at = now;
+                entry.remote = true;
+                let mut changed = Vec::new();
+                for ws in &workspace_ids {
+                    if !entry.workspace_ids.contains(ws) {
+                        entry.workspace_ids.push(*ws);
+                        changed.push(*ws);
+                    } else if was != status {
+                        changed.push(*ws);
+                    }
+                }
+                changed
+            }
+            None => {
+                if !online {
+                    return;
+                }
+                self.states.insert(
+                    user_id,
+                    PresenceEntry {
+                        status,
+                        last_heartbeat_at: now,
+                        workspace_ids: workspace_ids.clone(),
+                        remote: true,
+                    },
+                );
+                workspace_ids
+            }
+        };
+        for ws in changed {
+            self.emit_presence_changed(user_id, status, ws);
+        }
+    }
+
     fn emit_presence_changed(
         &self,
         user_id: UserId,
@@ -197,6 +252,10 @@ impl PresenceService for PresenceManager {
     fn mark_offline(&self, user_id: UserId) {
         self.mark_offline(user_id);
     }
+
+    fn set_remote(&self, user_id: UserId, workspace_ids: Vec<ServerId>, online: bool) {
+        self.set_remote(user_id, workspace_ids, online);
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +281,36 @@ mod tests {
         assert_eq!(presence.len(), 1);
         assert_eq!(presence[0].user_id, uid);
         assert_eq!(presence[0].status, PresenceStatus::Online);
+    }
+
+    #[test]
+    fn remote_presence_holds_without_heartbeats_until_the_relay_reports_offline() {
+        let mgr = make_manager();
+        let uid = UserId::new();
+        let (ws1, ws2) = (ServerId::new(), ServerId::new());
+
+        mgr.set_remote(uid, vec![ws1], false);
+        assert!(
+            mgr.get_workspace_presence(ws1).is_empty(),
+            "offline first is a no-op"
+        );
+
+        mgr.set_remote(uid, vec![ws1, ws2], true);
+        if let Some(mut entry) = mgr.states.get_mut(&uid) {
+            entry.last_heartbeat_at =
+                Utc::now() - chrono::Duration::seconds(OFFLINE_TIMEOUT_SECS + 1);
+        }
+        mgr.check_timeouts();
+        assert_eq!(
+            mgr.get_workspace_presence(ws2)[0].status,
+            PresenceStatus::Online
+        );
+
+        mgr.set_remote(uid, vec![ws1, ws2], false);
+        assert_eq!(
+            mgr.get_workspace_presence(ws1)[0].status,
+            PresenceStatus::Offline
+        );
     }
 
     #[test]
@@ -283,6 +372,7 @@ mod tests {
                 status: PresenceStatus::Online,
                 last_heartbeat_at: Utc::now() - chrono::Duration::seconds(100),
                 workspace_ids: vec![ws],
+                remote: false,
             },
         );
 

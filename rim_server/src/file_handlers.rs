@@ -339,40 +339,38 @@ pub async fn handle_file_download(
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
 ) -> HttpResponse {
     let file_path = path.into_inner();
+    if !file_path.starts_with(LEGACY_UPLOADS_PREFIX)
+        && let Err(resp) = require_auth(&req).await
+    {
+        return resp;
+    }
+    file_download_as(&file_path, storage_backend.get_ref().as_ref()).await
+}
 
-    // Legacy uploads endpoint — clients should use /api/attachments/{id}/download instead.
-    if file_path.starts_with("uploads/") {
+/// Legacy uploads, now served by `/api/attachments/{id}/download`.
+const LEGACY_UPLOADS_PREFIX: &str = "uploads/";
+
+/// Serve a stored file to an authenticated user: avatars only. The session path above and
+/// forwarded requests from another relay share it.
+pub(crate) async fn file_download_as(
+    file_path: &str,
+    storage_backend: &dyn StorageBackend,
+) -> HttpResponse {
+    if file_path.starts_with(LEGACY_UPLOADS_PREFIX) {
         return HttpResponse::Gone()
             .json(serde_json::json!({"error": "use /api/attachments/{id}/download"}));
     }
-
-    // Avatars are publicly accessible (only require authentication).
-    if file_path.starts_with("avatars/") {
-        // Avatars are public — just require authentication.
-        if let Err(resp) = require_auth(&req).await {
-            return resp;
-        }
-    } else {
-        // Unknown path prefix — require auth and deny.
-        if let Err(resp) = require_auth(&req).await {
-            return resp;
-        }
+    // Avatars are readable by every authenticated user; any other prefix is denied.
+    if !file_path.starts_with("avatars/") {
         return HttpResponse::Forbidden().json(serde_json::json!({"error": "access denied"}));
     }
 
-    let data = match storage_backend.get(&file_path).await {
+    let data = match read_stored_file(storage_backend, file_path).await {
         Ok(d) => d,
-        Err(rim_core::storage::StorageError::NotFound(_)) => {
-            return HttpResponse::NotFound().json(serde_json::json!({"error": "file not found"}));
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "file download failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "download failed"}));
-        }
+        Err(resp) => return resp,
     };
 
-    let content_type = mime_guess::from_path(&file_path)
+    let content_type = mime_guess::from_path(file_path)
         .first_or_octet_stream()
         .to_string();
 
@@ -559,7 +557,16 @@ pub async fn handle_avatar_upload(
         Ok(id) => id,
         Err(resp) => return resp,
     };
+    avatar_upload_as(user_id, payload, storage_service.get_ref().as_ref()).await
+}
 
+/// Store `user_id`'s avatar: the session path above and forwarded requests from another relay
+/// share it.
+pub(crate) async fn avatar_upload_as(
+    user_id: rim_core::user::model::UserId,
+    payload: Multipart,
+    storage_service: &dyn StorageService,
+) -> HttpResponse {
     let upload = match read_multipart_fields(payload, MAX_AVATAR_BYTES).await {
         Ok(v) => v,
         Err(resp) => return resp,

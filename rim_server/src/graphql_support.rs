@@ -64,6 +64,9 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     // The new device sends its sealed offer before it has a session. It acts only on the link
     // id, a capability a cross-site page does not have.
     "sendDeviceLinkOffer",
+    // A device revocation brought to a host directly. It acts only on the revocation's
+    // signature, never on a session.
+    "applyRemoteRevocation",
 ];
 
 /// Mutation fields exempt from CSRF validation only when the request carries no session cookie.

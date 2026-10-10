@@ -20,7 +20,7 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{SeqDecision, UserKind};
-use rim_core::host::repository::HostRepository;
+use rim_core::host::repository::{DelegationRepository, HostRepository};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
 use rim_core::server::model::ServerId;
@@ -77,6 +77,7 @@ pub struct HostRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub delegation_repo: Arc<dyn DelegationRepository>,
     /// Principals this server refuses.
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
 }
@@ -100,9 +101,7 @@ pub struct DefaultHostService {
 }
 
 fn upstream(server_id: &str) -> ServiceError {
-    ServiceError::UpstreamUnavailable {
-        host_server_id: server_id.to_string(),
-    }
+    ServiceError::upstream(server_id)
 }
 
 impl DefaultHostService {
@@ -175,7 +174,7 @@ impl DefaultHostService {
     }
 
     /// Store a fetched or pushed identity as a remote user and remember where it came from.
-    async fn store_identity(
+    pub(crate) async fn store_identity(
         &self,
         document: &IdentityDocument,
         served_by: &str,
@@ -419,6 +418,27 @@ impl DefaultHostService {
         })
     }
 
+    /// A principal's identity as `relay` serves it, if it answers with one for that principal.
+    async fn fetch_document(&self, relay: &str, principal_id: &str) -> Option<IdentityDocument> {
+        let response = self
+            .client
+            .send(S2sRequest {
+                peer_server_id: relay.to_string(),
+                method: S2sMethod::Get,
+                path: format!("/principals/{principal_id}"),
+                body: Vec::new(),
+                content_type: None,
+                headers: Vec::new(),
+            })
+            .await;
+        match response {
+            Ok(r) if r.status == 200 => serde_json::from_slice::<IdentityDocument>(&r.body)
+                .ok()
+                .filter(|d| d.principal_id == principal_id),
+            _ => None,
+        }
+    }
+
     /// The relay a remote user's claims go to: the first of their relays that answers.
     async fn claim_from_relays(
         &self,
@@ -465,6 +485,10 @@ impl DefaultHostService {
 impl HostService for DefaultHostService {
     fn direct_space_id(&self) -> ServerId {
         self.direct_space_id
+    }
+
+    async fn is_remote_user(&self, user_id: UserId) -> ServiceResult<bool> {
+        Ok(self.repos.host_repo.user_kind(user_id).await? == Some(UserKind::Remote))
     }
 
     async fn join_direct_space(&self, user_id: UserId) -> ServiceResult<()> {
@@ -597,25 +621,8 @@ impl HostService for DefaultHostService {
             let Some(relay) = relay else {
                 continue;
             };
-            let response = self
-                .client
-                .send(S2sRequest {
-                    peer_server_id: relay.clone(),
-                    method: S2sMethod::Get,
-                    path: format!("/principals/{principal_id}"),
-                    body: Vec::new(),
-                    content_type: None,
-                    headers: Vec::new(),
-                })
-                .await;
-            let document = match response {
-                Ok(r) if r.status == 200 => {
-                    serde_json::from_slice::<IdentityDocument>(&r.body).ok()
-                }
-                _ => None,
-            };
-            match document {
-                Some(document) if document.principal_id == principal_id => {
+            match self.fetch_document(&relay, &principal_id).await {
+                Some(document) => {
                     if let Err(e) = self.store_identity(&document, &relay).await {
                         warn!(error = %e, user_id = %user_id, "a refreshed identity was refused");
                     }
@@ -626,6 +633,56 @@ impl HostService for DefaultHostService {
             }
         }
         Ok(())
+    }
+
+    async fn refresh_identity(
+        &self,
+        principal_id: String,
+        from_relay: Option<String>,
+    ) -> ServiceResult<bool> {
+        let Some((user_id, UserKind::Remote)) =
+            self.repos.host_repo.find_user(&principal_id).await?
+        else {
+            return Ok(false);
+        };
+        let relays = match from_relay {
+            Some(relay) => vec![relay],
+            None => {
+                let card = self
+                    .repos
+                    .key_identity_repo
+                    .get_profile_card(user_id)
+                    .await?;
+                let home = self.repos.host_repo.home_relay(user_id).await?;
+                let mut relays = Self::relays_of(
+                    self.repos.host_repo.as_ref(),
+                    &self.own_id(),
+                    card.as_ref().map(|c| c.payload.as_str()),
+                    home.as_deref(),
+                )
+                .await?;
+                if let Some(home) = home
+                    && home != self.own_id()
+                    && !relays.contains(&home)
+                {
+                    relays.push(home);
+                }
+                relays
+            }
+        };
+        for relay in relays {
+            let Some(document) = self.fetch_document(&relay, &principal_id).await else {
+                warn!(user_id = %user_id, peer_server_id = %relay, "could not refresh a remote identity");
+                continue;
+            };
+            match self.store_identity(&document, &relay).await {
+                Ok(stored) => return Ok(stored.is_some()),
+                Err(e) => {
+                    warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused")
+                }
+            }
+        }
+        Ok(false)
     }
 
     async fn authenticate_forward(&self, request: ForwardRequest) -> ForwardOutcome {

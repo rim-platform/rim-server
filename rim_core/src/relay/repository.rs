@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::key_identity::model::DeviceKeyId;
 use crate::relay::model::{
     AbuseReport, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus,
-    DroppedSpace, NewAbuseReport, NewDmRequest, NewRelayEnvelope, NewRelayItem, PrincipalBlock,
-    RelayItemRecord,
+    DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope,
+    NewRelayItem, PrincipalBlock, RelayItemRecord, RelaySubscription, RevocationFanout,
+    SubscriptionStatus,
 };
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -158,7 +159,8 @@ pub trait RelayRepository: Send + Sync {
 
     async fn is_blocked(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
-    /// Hosts that queued items or sent requests for a user.
+    /// Hosts that queued items or sent requests for a user, or hold an active subscription of
+    /// theirs.
     async fn hosts_of_user(&self, user_id: UserId) -> RepoResult<Vec<String>>;
 
     /// Delete a user's queue, requests, contacts and blocks.
@@ -172,6 +174,82 @@ pub trait RelayRepository: Send + Sync {
         served_by: &str,
         identity: &str,
     ) -> RepoResult<()>;
+}
+
+/// A relay's side of workspaces hosted elsewhere: its users' subscriptions, and revocations of
+/// its users' devices on their way to every host holding them.
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait SubscriptionRepository: Send + Sync {
+    /// Record a subscription's status and expiry, one row per user, host and workspace.
+    async fn upsert_subscription(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        status: SubscriptionStatus,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> RepoResult<RelaySubscription>;
+
+    /// A user's subscriptions, oldest first.
+    async fn list_subscriptions(&self, user_id: UserId) -> RepoResult<Vec<RelaySubscription>>;
+
+    /// Whether a user's subscription to a host's workspace is active and has not expired.
+    async fn is_subscribed(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
+    /// Hosts where the user holds an active subscription that has not expired.
+    async fn subscribed_hosts(
+        &self,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<Vec<String>>;
+
+    /// End every subscription of a user. Returns how many were not ended already.
+    async fn end_subscriptions(&self, user_id: UserId) -> RepoResult<u64>;
+
+    /// Mark active subscriptions past their expiry as lapsed. Returns how many.
+    async fn lapse_expired(&self, now: DateTime<Utc>) -> RepoResult<u64>;
+
+    /// Start sending a device's revocation to `hosts`, first at `next_attempt_at`; a host it is
+    /// on its way to already keeps its row. Returns how many rows were added.
+    async fn insert_fanouts(
+        &self,
+        device_key_id: DeviceKeyId,
+        hosts: &[String],
+        next_attempt_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    /// Pending fan-outs whose next attempt is due, at most `limit`, oldest first.
+    async fn due_fanouts(&self, now: DateTime<Utc>, limit: i64) -> RepoResult<Vec<DueFanout>>;
+
+    /// Record an attempt that got no acknowledgement.
+    async fn record_fanout_attempt(
+        &self,
+        device_key_id: DeviceKeyId,
+        host_server_id: &str,
+        attempts: i32,
+        status: FanoutStatus,
+        next_attempt_at: DateTime<Utc>,
+    ) -> RepoResult<()>;
+
+    /// Record a host's acknowledgement.
+    async fn record_fanout_ack(
+        &self,
+        device_key_id: DeviceKeyId,
+        host_server_id: &str,
+        attempts: i32,
+        ack_payload: &str,
+        ack_signature: &str,
+    ) -> RepoResult<()>;
+
+    /// Where a device's revocation stands at each host, by host.
+    async fn list_fanouts(&self, device_key_id: DeviceKeyId) -> RepoResult<Vec<RevocationFanout>>;
 }
 
 /// The operator's abuse tools: principals this server refuses, and abuse reports.

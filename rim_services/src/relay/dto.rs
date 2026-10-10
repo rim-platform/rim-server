@@ -130,6 +130,13 @@ pub enum RelayNotice {
         user_id: UserId,
         spaces: Vec<QueueSpace>,
     },
+    /// A host acknowledged the revocation of one of the user's devices.
+    RevocationAcked {
+        user_id: UserId,
+        device_id: Uuid,
+        host_server_id: String,
+        ack: SignedJson,
+    },
 }
 
 impl RelayNotice {
@@ -137,7 +144,8 @@ impl RelayNotice {
         match self {
             Self::Items { user_id }
             | Self::DmRequestReceived { user_id, .. }
-            | Self::QueueOverflow { user_id, .. } => *user_id,
+            | Self::QueueOverflow { user_id, .. }
+            | Self::RevocationAcked { user_id, .. } => *user_id,
         }
     }
 
@@ -155,6 +163,20 @@ impl RelayNotice {
             Self::QueueOverflow { spaces, .. } => {
                 Some(serde_json::json!({ "type": "QueueOverflow", "spaces": spaces }).to_string())
             }
+            Self::RevocationAcked {
+                device_id,
+                host_server_id,
+                ack,
+                ..
+            } => Some(
+                serde_json::json!({
+                    "type": "RevocationAcked",
+                    "deviceId": device_id,
+                    "hostServerId": host_server_id,
+                    "ack": ack,
+                })
+                .to_string(),
+            ),
         }
     }
 }
