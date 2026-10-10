@@ -62,7 +62,7 @@ pub struct AppRuntime {
     pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
     pub alert_max_body_bytes: usize,
     pub s2s: S2sRuntime,
-    /// The database connection the readiness checks use.
+    /// The database connection pool the services share.
     pub db: sea_orm::DatabaseConnection,
     pub shutdown_tx: watch::Sender<bool>,
 }
@@ -322,7 +322,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let raw_db = db.clone(); // Keep raw DatabaseConnection for UoW
     let raw_db_for_tasks = raw_db.clone();
-    let readiness_db = raw_db.clone();
     let db: DbHandle = db.into();
 
     // Canonical repo constructor (mirrors the FL1 composition-root note in
@@ -836,7 +835,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         alert_rate_limiter,
         alert_max_body_bytes,
         s2s,
-        db: readiness_db,
+        db: raw_db_for_tasks,
         shutdown_tx,
     })
 }

@@ -360,6 +360,7 @@ impl DefaultWorkspaceHost {
                 .map_err(|e| internal(e.into()))?;
             if active >= self.delegations_per_relay {
                 warn!(peer_server_id, active, "a relay is at its delegation limit");
+                crate::metrics::rate_limited("delegations_per_relay");
                 return Err("limited");
             }
         }
@@ -929,6 +930,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                 .check_and_record(&remote_ip, DIRECT_REVOCATION_KEY, Utc::now())
         {
             warn!(remote_ip = %remote_ip, "too many revocations brought directly from one address");
+            crate::metrics::rate_limited("direct_revocation");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });

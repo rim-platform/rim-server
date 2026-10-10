@@ -35,6 +35,8 @@ rim_identity = { path = "../rim_identity" }
 url = "2.5"
 anyhow = "1.0.99"
 base64 = "0.22.1"
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 migration = { path = "../migration" }
 async-trait = "0.1.89"
 

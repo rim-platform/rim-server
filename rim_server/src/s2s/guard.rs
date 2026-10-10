@@ -24,6 +24,7 @@ use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::metrics;
 use crate::s2s::S2sState;
 
 /// A request body as `T`; `400 bad_request` naming `what` when it is not one.
@@ -365,6 +366,7 @@ async fn verify(
     } = state.rate_limiter.check_and_record(&peer_id, Utc::now())
     {
         tracing::warn!(peer_server_id = %peer_id, "rate-limited a peer's server-to-server requests");
+        rim_infra_services::metrics::rate_limited("s2s_peer");
         let mut reply = Reply::error(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -565,7 +567,10 @@ pub(crate) async fn handle(
 
     let verified = match verify(&state, &req, payload, &binding, endpoint).await {
         Ok(verified) => verified,
-        Err(reply) => return signed(&state, &binding, reply),
+        Err(reply) => {
+            metrics::s2s_request(metrics::s2s_outcome(false, reply.status));
+            return signed(&state, &binding, reply);
+        }
     };
     let reply = match endpoint {
         None => Reply::error(StatusCode::NOT_FOUND, "not_found", "no such endpoint"),
@@ -581,5 +586,6 @@ pub(crate) async fn handle(
         status = reply.status.as_u16(),
         "answered a server-to-server request"
     );
+    metrics::s2s_request(metrics::s2s_outcome(true, reply.status));
     signed(&state, &binding, reply)
 }

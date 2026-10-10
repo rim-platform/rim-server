@@ -80,6 +80,7 @@ pub async fn serve(
         force_secure_cookies: config.force_secure_cookies(),
     };
 
+    let metrics_addr = config.metrics_addr().map_err(std::io::Error::other)?;
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
@@ -96,13 +97,16 @@ pub async fn serve(
     let alert_max_body_bytes =
         crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
     let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
-        db: runtime.db,
+        db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
         franking_key_file: config.franking_key_file(),
     });
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
+    if let Some(addr) = metrics_addr {
+        crate::metrics::start(addr, runtime.db.clone(), shutdown_tx.subscribe())?;
+    }
 
     let server = HttpServer::new(move || {
         let schema = schema.clone();
@@ -189,6 +193,7 @@ pub async fn serve(
         // document is readable from any origin. The health probes sit there too: no session,
         // no CSRF, no `Origin` needed.
         App::new()
+            .wrap(actix_web::middleware::from_fn(crate::metrics::record_http))
             .service(
                 web::resource("/.well-known/rim-server")
                     .route(web::get().to(crate::s2s::discovery::handle)),

@@ -15,7 +15,9 @@ use rim_core::host::model::{NewRemoteUser, SeqDecision, UserKind};
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{DeviceKey, NewDeviceKey};
 use rim_core::key_identity::repository::KeyIdentityRepository;
-use rim_core::relay::model::{DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem};
+use rim_core::relay::model::{
+    DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem, RelayQueueStats,
+};
 use rim_core::relay::repository::RelayRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
@@ -367,10 +369,28 @@ async fn the_oldest_items_go_over_the_cap_and_held_ones_stay() {
         repo.insert_item(item(user.id, env)).await.unwrap();
     }
     assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 400);
+    assert_eq!(
+        repo.queue_stats().await.unwrap(),
+        RelayQueueStats {
+            queued_items: 3,
+            queued_bytes: 300,
+            held_items: 1,
+            held_bytes: 100,
+        }
+    );
     let dropped = repo.drop_oldest(user.id, 150).await.unwrap();
     let spaces: HashSet<Uuid> = dropped.iter().map(|d| d.workspace_id).collect();
     assert_eq!(spaces, HashSet::from([w1, w2]));
     assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 200);
+    assert_eq!(
+        repo.queue_stats().await.unwrap(),
+        RelayQueueStats {
+            queued_items: 1,
+            queued_bytes: 100,
+            held_items: 1,
+            held_bytes: 100,
+        }
+    );
     assert_eq!(
         repo.count_held(request.id).await.unwrap(),
         1,

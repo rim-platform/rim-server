@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::relay::model::{
     CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus, DroppedSpace, NewDmRequest,
-    NewRelayEnvelope, NewRelayItem, RelayItemRecord,
+    NewRelayEnvelope, NewRelayItem, RelayItemRecord, RelayQueueStats,
 };
 use rim_core::relay::repository::RelayRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
@@ -26,6 +26,14 @@ struct IdRow {
 #[derive(FromQueryResult)]
 struct CountRow {
     n: i64,
+}
+
+#[derive(FromQueryResult)]
+struct QueueStatsRow {
+    queued_items: i64,
+    queued_bytes: i64,
+    held_items: i64,
+    held_bytes: i64,
 }
 
 #[derive(FromQueryResult)]
@@ -313,6 +321,30 @@ impl RelayRepository for SeaOrmRelayRepository {
             vec![uuid(user_id)],
         )
         .await
+    }
+
+    async fn queue_stats(&self) -> RepoResult<RelayQueueStats> {
+        let row = self
+            .one::<QueueStatsRow>(
+                "SELECT \
+                     count(*) FILTER (WHERE request_id IS NULL) AS queued_items, \
+                     COALESCE(sum(size_bytes) FILTER (WHERE request_id IS NULL), 0)::bigint \
+                         AS queued_bytes, \
+                     count(*) FILTER (WHERE request_id IS NOT NULL) AS held_items, \
+                     COALESCE(sum(size_bytes) FILTER (WHERE request_id IS NOT NULL), 0)::bigint \
+                         AS held_bytes \
+                 FROM relay_item",
+                vec![],
+            )
+            .await?;
+        Ok(
+            row.map_or_else(RelayQueueStats::default, |r| RelayQueueStats {
+                queued_items: r.queued_items,
+                queued_bytes: r.queued_bytes,
+                held_items: r.held_items,
+                held_bytes: r.held_bytes,
+            }),
+        )
     }
 
     async fn drop_oldest(&self, user_id: UserId, bytes: i64) -> RepoResult<Vec<DroppedSpace>> {

@@ -141,6 +141,7 @@ async fn ingest_common(
         rim_services::command::rate_limit::RateLimitDecision::Limited {
             retry_after_seconds,
         } => {
+            rim_infra_services::metrics::rate_limited("alert_ingest");
             return map_service_error_to_response(ServiceError::RateLimited {
                 retry_after_seconds,
             });
