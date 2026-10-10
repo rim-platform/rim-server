@@ -15,7 +15,7 @@ use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
 use rim_core::key_identity::repository::{MockKeyChallengeRepository, MockKeyIdentityRepository};
 use rim_core::moderation::model::ServerBan;
 use rim_core::moderation::repository::MockModerationRepository;
-use rim_core::relay::repository::MockRelayRepository;
+use rim_core::relay::repository::{MockRelayAbuseRepository, MockRelayRepository};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use rim_core::server_member::repository::MockServerMemberRepository;
@@ -248,6 +248,7 @@ fn setup(facts: Facts) -> Setup {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
+            relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
         },
         None,
         host_identity.clone(),

@@ -178,7 +178,7 @@ pub struct EnrollIdentityKeyInput {
 
 /// Input for `signupWithKey`: an account created from a key identity alone, with no password
 /// and no email. The tokens follow the same rules as `signupWithInvite`: exactly one in
-/// invite-only mode, none in open mode.
+/// invite-only mode, none in open mode. In pow mode it takes one token or `proofOfWork`.
 #[derive(InputObject, Clone, Debug)]
 pub struct SignupWithKeyInput {
     pub username: String,
@@ -194,6 +194,10 @@ pub struct SignupWithKeyInput {
     pub bootstrap_token: Option<String>,
     pub instance_invite_token: Option<String>,
     pub workspace_invite_token: Option<String>,
+    /// In pow registration mode: an 8-byte nonce, unpadded base64url, such that
+    /// `SHA-256("rim.pow.v1\0" || server id || "\0" || inception payload || nonce)` starts with
+    /// the descriptor's `powBits` zero bits.
+    pub proof_of_work: Option<String>,
 }
 
 #[derive(InputObject, Clone, Debug)]

@@ -2,14 +2,15 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 use rim_core::key_identity::model::DeviceKeyId;
-use rim_core::relay::model::{DmRequestId, DmRequestStatus};
+use rim_core::relay::model::{AbuseReportId, DmRequestId, DmRequestStatus};
 use rim_core::user::model::UserId;
 use tokio::sync::broadcast;
 
 use crate::e2ee::command::MlsCaller;
 use crate::relay::dto::{
-    ContactDto, DeliverItem, DeliverResponse, DmRequestDto, IdentityDocument, PeerClaimRequest,
-    PeerClaimResponse, RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto,
+    AbuseReportDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, FileAbuseReport,
+    IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
+    PrincipalBlockOutcome, RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto,
     RemoteServerDto, SignedJson,
 };
 use crate::{Actor, ServiceResult};
@@ -147,4 +148,34 @@ pub trait RelayService: Send + Sync {
 
     /// Delete acked and expired items, orphaned envelopes and expired requests.
     async fn cleanup(&self) -> ServiceResult<RelayCleanup>;
+}
+
+/// The operator's abuse tools: principals this server refuses (their sessions are ended, their
+/// signups, logins and deliveries refused) and the abuse reports users and the abuse address
+/// file.
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait RelayAbuseService: Send + Sync {
+    /// Block a principal for `reason`: end the sessions of the account holding it here and
+    /// ignore its pending DM requests.
+    async fn block_principal(
+        &self,
+        principal_id: String,
+        reason: String,
+    ) -> ServiceResult<PrincipalBlockOutcome>;
+
+    /// Returns whether a block was lifted.
+    async fn unblock_principal(&self, principal_id: String) -> ServiceResult<bool>;
+
+    /// Every block, newest first.
+    async fn principal_blocks(&self) -> ServiceResult<Vec<PrincipalBlockDto>>;
+
+    /// File a report from the abuse address.
+    async fn file_report(&self, report: FileAbuseReport) -> ServiceResult<AbuseReportDto>;
+
+    /// Reports, oldest first; only unresolved ones when `open_only`.
+    async fn reports(&self, open_only: bool) -> ServiceResult<Vec<AbuseReportDto>>;
+
+    /// Mark a report resolved. `None` when there is no such report.
+    async fn resolve_report(&self, id: AbuseReportId) -> ServiceResult<Option<AbuseReportDto>>;
 }

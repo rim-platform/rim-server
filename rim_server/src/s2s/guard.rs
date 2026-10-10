@@ -364,6 +364,7 @@ async fn verify(
         retry_after_seconds,
     } = state.rate_limiter.check_and_record(&peer_id, Utc::now())
     {
+        tracing::warn!(peer_server_id = %peer_id, "rate-limited a peer's server-to-server requests");
         let mut reply = Reply::error(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",

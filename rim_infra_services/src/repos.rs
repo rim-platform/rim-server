@@ -40,7 +40,7 @@ use rim_core::oncall::repository::{
 };
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::pipeline::repository::PipelineRepository;
-use rim_core::relay::repository::{RelayRepository, SubscriptionRepository};
+use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::skill_profile::repository::SkillProfileRepository;
@@ -104,6 +104,7 @@ pub struct AppRepos {
     pub host_repo: Arc<dyn HostRepository>,
     pub delegation_repo: Arc<dyn DelegationRepository>,
     pub subscription_repo: Arc<dyn SubscriptionRepository>,
+    pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
 }
 
 #[derive(Clone)]
@@ -370,6 +371,7 @@ impl AppRepos {
             key_challenge_repo: Arc::clone(&self.key_challenge_repo),
             signup: self.for_auth().signup_repos(),
             host_repo: Arc::clone(&self.host_repo),
+            relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
         }
     }
 
@@ -381,6 +383,15 @@ impl AppRepos {
             e2ee_repo: Arc::clone(&self.e2ee_repo),
             user_repo: Arc::clone(&self.user_repo),
             subscription_repo: Arc::clone(&self.subscription_repo),
+            relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
+        }
+    }
+
+    pub fn for_relay_abuse(&self) -> crate::relay::abuse::RelayAbuseRepos {
+        crate::relay::abuse::RelayAbuseRepos {
+            relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            session_repo: Arc::clone(&self.session_repo),
         }
     }
 
@@ -394,6 +405,7 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
             delegation_repo: Arc::clone(&self.delegation_repo),
         }
     }
@@ -845,6 +857,9 @@ impl AppRepos {
                 sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(
                     handle.clone(),
                 ),
+            ),
+            relay_abuse_repo: Arc::new(
+                sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(handle.clone()),
             ),
         }
     }

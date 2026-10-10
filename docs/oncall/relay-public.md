@@ -1,0 +1,316 @@
+# Public relay runbook
+
+The public relay is the server anyone's app can use as its relay: accounts, devices, profile
+cards, the queue of what other servers send, the request inbox, and the forward path to the
+servers that host people's workspaces. It runs the stock image with `RIM_ROLE=relay` from
+`deploy/compose.relay.yml` (`deploy/README.md` brings it up). Its working name is
+`relay.rim.chat`; that domain is not registered, so read it as "the relay's domain" wherever this
+page or the compose file says it.
+
+Everything marked **FILL** is a decision or a fact the operator records here before the relay
+opens to the public.
+
+The commands below assume, on the host, in the repository checkout:
+
+```sh
+alias dc='docker compose -f deploy/compose.relay.yml'
+alias rim-relay='docker compose -f deploy/compose.relay.yml exec rim /app/rim-server'
+alias rim-sql='docker compose -f deploy/compose.relay.yml exec -T postgres psql -U rim -d rim'
+```
+
+## What lives where
+
+| What | Where | Backed up |
+|---|---|---|
+| Configuration | `deploy/.env` on the host (secrets) and `deploy/compose.relay.yml` | `.env` with the key backups; the compose file is in Git |
+| Database | volume `rim-relay_postgres_data` | nightly dump, "Backups" |
+| Server key | `/data/server-key.json` in volume `rim-relay_rim_data` | with every dump |
+| Server recovery key | offline only, "The server recovery key" | its own copies |
+| Franking keys | `/data/franking-key.json` | with every dump |
+| Uploads (avatars) | `/data/uploads` | with every dump |
+| Audit log | `/data/audit.log`, and every audit event on stdout too | with every dump |
+| TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
+
+## Keys
+
+### The server recovery key
+
+The recovery key replaces a lost or stolen server key. Whoever holds it can make any key this
+server's, so it never stays on the host: the first start writes it to
+`/data/server-recovery-key.txt` and warns at every start until it is gone (`deploy/README.md`,
+"Start").
+
+| | |
+|---|---|
+| Holders | **FILL**: two named people, so one absence never blocks a recovery |
+| Copy 1 | **FILL**: e.g. a password manager vault, its name and who can open it |
+| Copy 2 | **FILL**: e.g. a printed copy in a safe, its location |
+| Last checked that both copies read back | **FILL**: date; check every quarter with the restore drill |
+
+The file is one line, `rim-server-recovery:1:<base64url>`. Check a copy without using it: the
+public half it names is `recovery key` in `rim-relay server-key show`.
+
+### Yearly rotation
+
+Rotate the server key once a year (**FILL**: the month) and when someone with host access leaves.
+
+```sh
+rim-relay server-key rotate
+rim-relay server-key show          # key seq went up by one
+```
+
+The running server switches within a minute. Peers accept the previous key for 24 hours after
+they see the rotation, so nothing in flight fails. Take a backup right after: an older backup
+of `/data` with a newer database (or the reverse) does not start, "Restore".
+
+### Compromise: recover
+
+When the server key may be stolen (host broken into, `/data` or a backup of it leaked), recover
+with the recovery key. The new key is signed by the recovery key, and peers stop accepting the
+old one as soon as they see it.
+
+```sh
+dc cp ./recovery.txt rim:/tmp/recovery.txt        # the offline copy, briefly
+rim-relay server-key recover --recovery-key-file /tmp/recovery.txt --new-recovery-key
+dc exec rim rm /tmp/recovery.txt
+dc exec rim cat /data/server-recovery-key.txt     # the new recovery key: store it as above
+dc exec rim rm /data/server-recovery-key.txt
+rim-relay franking-key rotate                     # /data leaked with the key
+```
+
+Replace the old recovery key's copies with the new one. If the recovery key itself may be
+known to someone else, `--new-recovery-key` is what takes it away; do it before they do.
+
+### The franking key file
+
+`/data/franking-key.json` signs the receipts that let users report encrypted messages. Rotation
+adds a key and keeps every older one, since old receipts must still verify:
+
+```sh
+rim-relay franking-key show
+rim-relay franking-key rotate
+```
+
+Rotate when `/data` may have leaked. Losing the file loses the ability to verify reports of
+messages sent before: back it up with everything else in `/data`.
+
+## Backups
+
+Nightly (**FILL**: the time and the cron or timer that runs it), off the host, encrypted
+(**FILL**: the tool, e.g. `age`, and who holds the decryption key), kept for **FILL** days:
+
+```sh
+day=$(date +%F)
+rim-sql -c 'SELECT 1' >/dev/null                                   # the database answers
+dc exec -T postgres pg_dump -U rim -Fc rim > "rim-$day.dump"
+docker run --rm -v rim-relay_rim_data:/data:ro -v "$PWD":/backup alpine \
+    tar czf "/backup/rim-data-$day.tgz" -C /data .
+cp deploy/.env "rim-env-$day"
+# encrypt the three files and copy them off the host (FILL: destination)
+```
+
+The dump and the data archive are one set: the key file must match the head of the key log in
+the database. Never mix sets.
+
+### Restore
+
+On the new host, with the repository checked out and `deploy/.env` from the set:
+
+```sh
+dc up -d postgres
+dc exec -T postgres pg_restore -U rim -d rim --clean --if-exists < rim-$day.dump
+docker volume create rim-relay_rim_data
+docker run --rm -v rim-relay_rim_data:/data -v "$PWD":/backup alpine \
+    sh -c 'tar xzf /backup/rim-data-'"$day"'.tgz -C /data && chown -R 1001:1001 /data'
+dc up -d --build
+rim-relay server-key show
+```
+
+The server refuses to start when the key file and the log head disagree: that is a mixed set,
+or a rotation after the backup. Use a matching set, or `server-key recover` if the key file of
+the newest log is gone.
+
+### Restore drill
+
+Every quarter (**FILL**: the months; record each drill's date and result below), restore the
+latest set on a scratch host with server-to-server traffic off, so the copy never speaks for
+the relay: leave `RIM_PUBLIC_BASE_URL` empty and set `RIM_KEY_LOGIN_AUDIENCES=localhost:8080`.
+Check:
+
+- `rim-relay server-key show` names the production server id and key seq;
+- `rim-sql -c 'SELECT count(*) FROM "user"'` is close to production's;
+- `rim-relay abuse-reports list` and `rim-relay principal list` match production's;
+- the recovery key copies read back (see above).
+
+Then destroy the scratch host and its volumes: two running servers with one key are one server
+to every peer.
+
+| Date | Set restored | Result | By |
+|---|---|---|---|
+| **FILL** | | | |
+
+## Quotas
+
+Per local user, set in `deploy/.env`; the compose file has the public relay's values.
+
+| Variable | Public relay | When it is reached |
+|---|---|---|
+| `RIM_RELAY_QUEUE_BYTES_PER_USER` | 67108864 (64 MiB) | The user's oldest queued items are dropped; their apps online get `QueueOverflow` |
+| `RIM_RELAY_CARD_MAX_BYTES` | 131072 | `publishProfileCard` fails `VALIDATION` (128 KiB is also the most a card can be) |
+| `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | `uploadMlsKeyPackages` fails `VALIDATION` past 100 unclaimed per device and suite |
+| `RIM_RELAY_DEVICES_PER_USER` | 32 | `addDeviceKey` fails `VALIDATION`; revoked devices do not count |
+| `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | `/api/remote/…` answers `429` per device per minute (as a host, this server accepts as many forwarded requests per device) |
+| `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | `/api/remote/…` answers `429` |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | A sender principal's further DM invites to people here are refused (`limited`); a local user's further invites to people on other servers who are not their contacts fail `RATE_LIMITED` |
+| `RIM_RELAY_RETENTION_DAYS` | 30 | Queued items and DM requests are deleted |
+| `RIM_REGISTRATION_POW_BITS` | 24 | Signups without a registration token need a proof-of-work of that many leading zero bits (about 2^24 hashes); the open-signup limit of 20 per IP per 10 minutes applies too |
+
+To change one, edit `deploy/.env` and run `dc up -d`: the server restarts in seconds and apps
+reconnect. The per-minute and per-day counters are in memory, so a restart starts them afresh.
+Each extra bit of proof-of-work doubles a signup's cost; the descriptor tells apps the new value
+at once.
+
+To let someone in without the proof-of-work, give them a single-use signup link:
+`rim-relay bootstrap-user --email <their address> --public-url https://<domain>`.
+
+## Monitoring
+
+Logs are JSON on stdout (`dc logs rim`); audit events (`"target":"audit"`) also go to
+`/data/audit.log`. The database answers what logs do not. Alert thresholds are **FILL** until a
+month of normal traffic shows the baseline.
+
+| Watch | How | Alert at |
+|---|---|---|
+| Queue bytes | `rim-sql -c 'SELECT sum(size_bytes) AS bytes, count(DISTINCT user_id) AS users FROM relay_item'`; per user: `… GROUP BY user_id ORDER BY 2 DESC LIMIT 10`; log `relay queue over its cap; dropped the oldest items` | **FILL** |
+| Outbox depth per peer | the query below | **FILL** rows or oldest over **FILL** minutes |
+| Deliver failures | logs `delivery to a relay failed`, `a relay refused a delivery`, `outbox delivery to a relay failed`; `s2s_peer_delivery.failures` | **FILL** |
+| `401` from peers | log `refused a server-to-server signature` (with `reason` and `peer_server_id`) | **FILL** per hour |
+| `403` to peers | log `refused a peer that is not allowed` | any from a peer not known to be blocked |
+| `409` replays | log `refused a replayed server-to-server request` | **FILL** per hour |
+| `429` | logs `rate-limited a peer's server-to-server requests`, `a user's forwarded requests are over their quota`, `a user's invites to other servers are over their daily quota`; audit `signup_rate_limited` | **FILL** |
+| Proof-of-work signups | audit `relay.registration_pow` per hour; log `refused a signup's proof-of-work` | **FILL** above the weekly hourly mean |
+| Blocked principals knocking | audit `relay.blocked_principal_refused` | **FILL** |
+| Open abuse reports | `rim-relay abuse-reports list --open` | any older than the response time below |
+
+```sh
+dc logs --since 1h rim | grep -c '"event":"relay.registration_pow"'
+dc logs --since 1h rim | grep 'refused a server-to-server signature' | grep -o '"reason":"[a-z_]*"' | sort | uniq -c
+rim-sql <<'SQL'
+SELECT o.peer_server_id, count(*) AS rows, min(o.created_at) AS oldest,
+       d.failures, d.next_attempt_at, d.last_success_at
+FROM s2s_outbox o LEFT JOIN s2s_peer_delivery d USING (peer_server_id)
+WHERE o.id > COALESCE(d.delivered_through, 0)
+GROUP BY o.peer_server_id, d.failures, d.next_attempt_at, d.last_success_at
+ORDER BY rows DESC;
+SQL
+```
+
+Per-status counts of every client request come from the proxy. Caddy keeps no access log by
+default, since it would hold users' IP addresses; during an incident add `log` to the site block
+of `deploy/Caddyfile.relay`, `dc restart caddy`, and remove it afterwards.
+
+## Incidents
+
+Record each incident: start, what was seen, what was done, end (**FILL**: where the record
+goes).
+
+### A spam wave
+
+Signs: `relay.registration_pow` far above normal, many reports, DM requests from few senders.
+
+1. Find the senders:
+   `rim-sql -c "SELECT from_principal_id, count(*) FROM relay_dm_request WHERE created_at > now() - interval '1 hour' GROUP BY 1 ORDER BY 2 DESC LIMIT 20"`
+   and `rim-relay abuse-reports list --open`.
+2. Block each: `rim-relay principal block <principalId> --reason "spam wave <date>"`. Their
+   sessions end, their pending requests are ignored for everyone here, and their signups,
+   logins and deliveries are refused from then on. Resolve the reports that named them.
+3. Make the next account dearer: raise `RIM_REGISTRATION_POW_BITS` by 2 (four times the work)
+   and, if the spam goes to people here, lower `RIM_RELAY_DM_REQUESTS_PER_DAY`; `dc up -d`.
+4. When the senders are on another server, block that server (next section) and write to its
+   operator (its discovery document names its origin: `rim-sql -c "SELECT origin FROM peer_server WHERE server_id = '<id>'"`).
+5. Lower the settings again a day after the wave ends.
+
+### A hostile peer
+
+Signs: one `peer_server_id` in many signature refusals, replays or rate limits; deliveries
+refused as `invalid_envelope`; reports naming one server.
+
+1. `rim-relay peer block <serverId>`: refused both ways at once, its requests get
+   `403 peer_not_allowed`, nothing is sent to it. Audited as `s2s.peer_blocked`.
+2. A server never pinned here cannot be blocked that way (the command says so): add it to
+   `RIM_S2S_DENIED_PEERS` in `deploy/.env` and `dc up -d`.
+3. `rim-relay peer unblock <serverId>` when it is resolved. A peer refused as forked is not
+   unblocked: check with its operator out of band, then `rim-relay peer reset <serverId>`.
+
+### A stolen server key
+
+Signs: a peer's operator reports requests signed by this server that it did not send; the host
+or a backup of `/data` was exposed.
+
+1. "Compromise: recover", including `--new-recovery-key` and the franking key rotation.
+2. Rotate `POSTGRES_PASSWORD` (`ALTER USER rim PASSWORD …` in `rim-sql`, then `deploy/.env`,
+   then `dc up -d`).
+3. Find how it left: host logins, who had the backups. Rebuild the host if it was broken into.
+4. Tell users what the thief could do until the recovery (sign as this server towards peers and
+   receive what peers delivered for its users; never sign as a user or read their DMs) and when
+   it stopped. **FILL**: the channel for such notices.
+
+### A database leak
+
+What a dump holds: accounts, key logs, devices and cards (public anyway), session token hashes,
+password hashes of the few password accounts, contacts, DM requests and their senders' cards,
+queued host events (plaintext channel events are readable, DMs are MLS-encrypted), abuse
+reports. No private key: the server and franking keys are files in `/data`.
+
+1. End every session: `rim-sql -c 'UPDATE session SET revoked_at = now() WHERE revoked_at IS NULL'`.
+2. Rotate `POSTGRES_PASSWORD` as above, and find and close the way out.
+3. If `/data` or a backup set went too: "A stolen server key".
+4. Notify users and, where the law asks for it, the authority (**FILL**: who decides, the
+   deadline that applies, e.g. 72 hours under the GDPR, and the contact).
+
+## Abuse policy
+
+The text to publish (**FILL**: where, e.g. `https://<domain>/abuse`), filled in:
+
+> **Abuse on <relay name>**
+>
+> This relay carries messages for anyone who signs up. We block an account (its key identity)
+> on this relay when it sends spam or unsolicited bulk requests, harasses or threatens people,
+> impersonates someone, spreads malware or phishing, tries to break or overload the service, or
+> uses it for anything illegal where the relay operates (**FILL**: jurisdiction). We block
+> another server when it sends such traffic and its operator does not stop it, or when it
+> attacks this relay.
+>
+> To report: use "Report" on a message request in the app, or write to **FILL**: abuse address
+> with the principal id or server id, what happened and when. We cannot read encrypted
+> messages; a report from the app carries what the sender's own request showed.
+>
+> We answer reports within **FILL** (e.g. one working day) and act on clear spam or attacks
+> within **FILL** (e.g. four hours). We keep reports for **FILL** and the blocked identity until
+> it is unblocked. A blocked person may ask for a review at the same address; we answer within
+> **FILL**.
+
+Reports from the abuse address go into the same list as those from the app:
+
+```sh
+rim-relay abuse-reports add --principal rimp1_… --reason "mail of <date>: phishing links"
+rim-relay abuse-reports add --server rims1_… --reason "mail of <date>: spam from its users"
+rim-relay abuse-reports list --open
+rim-relay abuse-reports resolve <report id>
+```
+
+## Command reference
+
+```sh
+rim-relay server-key show | rotate | recover --recovery-key-file F [--new-recovery-key]
+rim-relay franking-key show | rotate
+rim-relay principal block <principalId> --reason <text> | unblock <principalId> | list
+rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
+rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
+rim-relay bootstrap-user --email <address> --public-url https://<domain>
+```
+
+Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`),
+`relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
+`relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
+`server_key.recovered`, `bootstrap_token_issued`.

@@ -50,6 +50,7 @@ pub(crate) mod pipeline;
 pub(crate) mod plugin_bundle;
 pub mod presence;
 pub(crate) mod provider;
+pub mod quota;
 pub(crate) mod read_state;
 pub mod registration_rate_limiter;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultRelayService.

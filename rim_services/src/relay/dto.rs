@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rim_core::relay::model::{DmRequestId, DmRequestStatus};
+use rim_core::relay::model::{AbuseReport, AbuseReportId, DmRequestId, DmRequestStatus};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use serde::{Deserialize, Serialize};
@@ -277,4 +277,61 @@ pub struct RelayCleanup {
     pub expired_items: u64,
     pub orphan_envelopes: u64,
     pub expired_requests: u64,
+}
+
+/// A principal this server refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrincipalBlockDto {
+    pub principal_id: String,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What blocking a principal did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrincipalBlockOutcome {
+    /// `false` when it was blocked already; the reason is replaced.
+    pub newly_blocked: bool,
+    /// The account holding the principal here, if any.
+    pub user_id: Option<UserId>,
+    pub ended_sessions: u64,
+    /// Pending DM requests from the principal, ignored for every recipient.
+    pub ignored_requests: u64,
+}
+
+/// An abuse report an operator files, from the abuse address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileAbuseReport {
+    pub subject_principal_id: Option<String>,
+    pub subject_server_id: Option<String>,
+    pub reason: String,
+}
+
+/// An abuse report as an operator reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbuseReportDto {
+    pub id: AbuseReportId,
+    /// The local user who reported; `None` for one an operator filed.
+    pub reporter_user_id: Option<UserId>,
+    pub subject_principal_id: Option<String>,
+    pub subject_server_id: Option<String>,
+    pub request_id: Option<DmRequestId>,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+impl From<AbuseReport> for AbuseReportDto {
+    fn from(r: AbuseReport) -> Self {
+        Self {
+            id: r.id,
+            reporter_user_id: r.reporter_user_id,
+            subject_principal_id: r.subject_principal_id,
+            subject_server_id: r.subject_server_id,
+            request_id: r.request_id,
+            reason: r.reason,
+            created_at: r.created_at,
+            resolved_at: r.resolved_at,
+        }
+    }
 }

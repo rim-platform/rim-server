@@ -16,6 +16,8 @@ pub mod mls;
 pub mod nodes;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
+#[allow(dead_code)] // Only the relay tests sign people up on two servers.
+pub mod relay;
 
 use std::env;
 use std::path::PathBuf;
@@ -439,6 +441,9 @@ pub fn build_test_provider_with(
             rim_infra_db::sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(
                 db.clone(),
             ),
+        ),
+        relay_abuse_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(db.clone()),
         ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(

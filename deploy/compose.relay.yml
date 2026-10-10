@@ -1,0 +1,115 @@
+# =============================================================================
+# RIM — a public relay: rim-server with RIM_ROLE=relay, PostgreSQL 17 and a
+# TLS-terminating Caddy in front. See deploy/README.md and
+# docs/oncall/relay-public.md.
+#
+# relay.rim.chat below is a working name: that domain is not registered.
+# Set RIM_DOMAIN and RIM_PUBLIC_BASE_URL in deploy/.env to the real one.
+#
+#   docker compose -f deploy/compose.relay.yml up -d --build
+# =============================================================================
+
+name: rim-relay
+
+x-database-url: &database-url "postgres://rim:${POSTGRES_PASSWORD:-}@postgres:5432/rim"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rim
+      # Unset, the container refuses to start: set it in deploy/.env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: rim
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rim -d rim"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # Runs the migrations, then exits; the server starts after it succeeded.
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: rim-server:relay
+    entrypoint: ["/app/migration", "up"]
+    environment:
+      DATABASE_URL: *database-url
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  rim:
+    image: rim-server:relay
+    environment:
+      DATABASE_URL: *database-url
+      RUST_LOG: ${RUST_LOG:-info}
+      RIM_SERVER_HOST: 0.0.0.0
+      RIM_SERVER_PORT: 8080
+      RIM_ROLE: relay
+      RIM_PUBLIC_BASE_URL: ${RIM_PUBLIC_BASE_URL:-https://relay.rim.chat}
+      # Server key, recovery key (until moved offline), franking keys and uploads.
+      RIM_DATA_DIR: /data
+      RIM_STORAGE_LOCAL_PATH: /data/uploads
+      # Audit events also go to stdout; this file keeps them across container restarts.
+      RIM_AUDIT_LOG_PATH: /data/audit.log
+      # Caddy is the only way in and sets X-Forwarded-For itself.
+      RIM_TRUST_FORWARDED_HEADERS: "true"
+      RIM_FORCE_SECURE_COOKIES: "true"
+      # Signups: a proof-of-work of 24 bits (about 16.7 million hashes) or an invite.
+      RIM_REGISTRATION_POW_BITS: ${RIM_REGISTRATION_POW_BITS:-24}
+      # Quotas per local user.
+      RIM_RELAY_QUEUE_BYTES_PER_USER: ${RIM_RELAY_QUEUE_BYTES_PER_USER:-67108864}
+      RIM_RELAY_CARD_MAX_BYTES: ${RIM_RELAY_CARD_MAX_BYTES:-131072}
+      RIM_RELAY_KEY_PACKAGES_PER_DEVICE: ${RIM_RELAY_KEY_PACKAGES_PER_DEVICE:-100}
+      RIM_RELAY_DEVICES_PER_USER: ${RIM_RELAY_DEVICES_PER_USER:-32}
+      RIM_S2S_DEVICE_RATE_PER_MIN: ${RIM_S2S_DEVICE_RATE_PER_MIN:-120}
+      RIM_RELAY_FORWARDS_PER_USER_PER_DAY: ${RIM_RELAY_FORWARDS_PER_USER_PER_DAY:-50000}
+      RIM_RELAY_DM_REQUESTS_PER_DAY: ${RIM_RELAY_DM_REQUESTS_PER_DAY:-20}
+      RIM_RELAY_RETENTION_DAYS: ${RIM_RELAY_RETENTION_DAYS:-30}
+      # Peers refused before they are ever pinned, comma-separated server ids.
+      RIM_S2S_DENIED_PEERS: ${RIM_S2S_DENIED_PEERS:-}
+    volumes:
+      - rim_data:/data
+    # `egress` lets it reach other servers; no port is published, so only Caddy reaches it.
+    networks: [internal, egress]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      RIM_DOMAIN: ${RIM_DOMAIN:-relay.rim.chat}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.relay:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal, egress]
+    depends_on: [rim]
+    restart: unless-stopped
+
+networks:
+  # No way out: the database talks to the server and the migrations only.
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  postgres_data:
+  rim_data:
+  caddy_data:
+  caddy_config:
