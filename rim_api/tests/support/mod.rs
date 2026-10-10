@@ -85,7 +85,7 @@ pub const FRANKING_KEY: [u8; 32] = [
 /// Connect to the test database, or **panic loudly**. Only reachable under the
 /// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
 /// so a panic here means the feature was enabled without a usable test DB —
-/// which must fail CI, not silently skip. See CLAUDE.md P6-W6.
+/// which must fail CI, not silently skip.
 pub async fn db_conn() -> DatabaseConnection {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,

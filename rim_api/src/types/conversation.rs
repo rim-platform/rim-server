@@ -33,7 +33,7 @@ pub struct Conversation {
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
     pub member_count: i32,
     pub created_by: Option<async_graphql::ID>,
-    /// Slow mode (Track 1.2): minimum seconds between two messages of the same non-moderator
+    /// Slow mode: minimum seconds between two messages of the same non-moderator
     /// member; `0` when off.
     pub slow_mode_seconds: i32,
     /// When the conversation became end-to-end encrypted; null for plaintext. Messages from
@@ -68,7 +68,7 @@ impl Conversation {
         Ok(self.member_ids.contains(&actor))
     }
 
-    /// The viewer's own notification level for this conversation (Track 1.3); null inherits
+    /// The viewer's own notification level for this conversation; null inherits
     /// the workspace default.
     async fn notification_level(
         &self,

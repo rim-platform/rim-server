@@ -1,6 +1,6 @@
 use super::*;
 
-// ── workspacePresence (S-M2) ─────────────────────────────────────────────
+// ── workspacePresence ────────────────────────────────────────────────────
 
 fn workspace_presence_request(actor: UserId, server_id: ServerId) -> Request {
     authed_request(

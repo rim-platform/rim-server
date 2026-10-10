@@ -1,5 +1,4 @@
-//! Through-the-stack e2e tests for Track 1.3: server-side notification rules
-//! (`docs/specs/track-1-3-notification-rules.md`).
+//! Through-the-stack e2e tests for the server-side notification rules.
 //!
 //! Every assertion goes through GraphQL: resolver → `NotificationService` / `MessageService` /
 //! `ReadStateService` / `CommandService` → SeaORM repositories → Postgres. Notifications are

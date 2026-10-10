@@ -115,7 +115,7 @@ impl Subscription {
         // BroadcastStream ends on Lagged, so we use the raw receiver directly.
         let inner = async_stream::stream! {
             let mut rx = rx;
-            // Track 1.2: the subscriber's guest status follows their role changes, and the
+            // The subscriber's guest status follows their role changes, and the
             // stream ends once they are removed from the workspace (kick/ban), after delivering
             // the `MemberLeft` that tells their client.
             let mut is_guest = initially_guest;

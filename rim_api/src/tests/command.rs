@@ -79,9 +79,8 @@ async fn commands_query_accepts_surface_and_context() {
     assert_no_errors(&res);
 }
 
-/// **P3-A1 closure** — `Command.arguments` is the wire contract the
-/// frontend AI tool-schema generator (Phase 3 §4.B) reads to emit
-/// `input_schema`. Round-trip every per-arg field (incl. `defaultValue`
+/// `Command.arguments` is the wire contract the frontend AI tool-schema
+/// generator reads to emit `input_schema`. Round-trip every per-arg field (incl. `defaultValue`
 /// JSON scalar and `allowedValues` Vec<String>) so a regression that
 /// drops the conversion silently surfaces here, not at the agent.
 #[tokio::test]
@@ -178,7 +177,7 @@ async fn commands_query_returns_arguments_with_full_schema() {
     );
 }
 
-// ── P5-A7 command_discover resolver tests ──────────────────────────────
+// ── command_discover resolver tests ────────────────────────────────────
 
 /// Full round-trip: GQL query → resolver → MockCommandService →
 /// returns `[Command!]!` with expected shape.
@@ -319,7 +318,7 @@ async fn command_discover_returns_empty_list_for_actor_with_no_caps() {
     );
 }
 
-/// Hawkeye gate: 6th `commandDiscover` call in the same 60-second window must
+/// The 6th `commandDiscover` call in the same 60-second window must
 /// return a `RATE_LIMITED` GQL error. The mock returns `ServiceError::RateLimited`
 /// on the 6th invocation; the resolver must surface it as a GQL error whose
 /// message contains "rate" (case-insensitive).

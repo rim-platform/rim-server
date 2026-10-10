@@ -16,7 +16,7 @@ pub(crate) struct ModerationQueries;
 
 #[Object]
 impl ModerationQueries {
-    // ── Moderation (Track 1.2) ────────────────────────────────────────
+    // ── Moderation ────────────────────────────────────────────────────
 
     /// Active bans of the workspace, newest first. Owner/Moderator only.
     async fn server_bans(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<ServerBan>> {
