@@ -476,7 +476,7 @@ dropped from the core), and rim-ui took Apache-2.0 for 13.
 | 7 | First drive providers after the local folder? | Google Drive / Dropbox / both | Google Drive |
 | 8 | Is the first audience developers and ops? | yes / broader | yes |
 | 9 | Readable names for keys in Stage 5? | contact lists / alias / directory | contact lists |
-| 10 | Embedded terminal (still in `src-tauri/src/terminal`)? | remove / keep gated | remove |
+| 10 | Embedded terminal in the desktop app? | remove / keep gated | removed |
 | 11 | Audit-log retention variant? | A (90d/365d) / B (365/365) | A |
 | 12 | Incidents and on-call: spike moving them to a plugin, or commit now? | spike / commit | dropped |
 | 13 | License for rim-ui and rim-cli (rim-server is Apache-2.0)? | Apache-2.0 / AGPL / MIT | Apache-2.0 |
