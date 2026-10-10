@@ -127,3 +127,38 @@ pub struct CachedIdentity {
     pub identity: String,
     pub fetched_at: DateTime<Utc>,
 }
+
+model_id!(AbuseReportId);
+
+/// A principal this server refuses: its sessions, signups and deliveries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrincipalBlock {
+    pub principal_id: String,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// An abuse report, from a user's `reportDmRequest` or filed by an operator from the abuse
+/// address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbuseReport {
+    pub id: AbuseReportId,
+    /// The local user who reported; `None` for a report an operator filed.
+    pub reporter_user_id: Option<UserId>,
+    pub subject_principal_id: Option<String>,
+    pub subject_server_id: Option<String>,
+    pub request_id: Option<DmRequestId>,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// A report to file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAbuseReport {
+    pub reporter_user_id: Option<UserId>,
+    pub subject_principal_id: Option<String>,
+    pub subject_server_id: Option<String>,
+    pub request_id: Option<DmRequestId>,
+    pub reason: String,
+}

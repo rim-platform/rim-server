@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use crate::key_identity::model::DeviceKeyId;
 use crate::relay::model::{
-    CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus, DroppedSpace, NewDmRequest,
-    NewRelayEnvelope, NewRelayItem, RelayItemRecord,
+    AbuseReport, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus,
+    DroppedSpace, NewAbuseReport, NewDmRequest, NewRelayEnvelope, NewRelayItem, PrincipalBlock,
+    RelayItemRecord,
 };
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -171,4 +172,37 @@ pub trait RelayRepository: Send + Sync {
         served_by: &str,
         identity: &str,
     ) -> RepoResult<()>;
+}
+
+/// The operator's abuse tools: principals this server refuses, and abuse reports.
+#[async_trait]
+#[cfg_attr(any(test, feature = "mocks"), automock)]
+pub trait RelayAbuseRepository: Send + Sync {
+    /// Block a principal, or replace the reason of its block. Returns whether the block is new.
+    async fn block_principal(&self, principal_id: &str, reason: &str) -> RepoResult<bool>;
+
+    /// Returns whether a block was lifted.
+    async fn unblock_principal(&self, principal_id: &str) -> RepoResult<bool>;
+
+    async fn is_principal_blocked(&self, principal_id: &str) -> RepoResult<bool>;
+
+    /// Every block, newest first.
+    async fn list_principal_blocks(&self) -> RepoResult<Vec<PrincipalBlock>>;
+
+    /// Ignore every pending DM request from a principal, for every local user, deleting their
+    /// held items but each request's invite. Returns how many requests.
+    async fn ignore_requests_from(
+        &self,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    async fn insert_report(&self, report: NewAbuseReport) -> RepoResult<AbuseReport>;
+
+    /// Reports, oldest first; only those not resolved yet when `open_only`.
+    async fn list_reports(&self, open_only: bool) -> RepoResult<Vec<AbuseReport>>;
+
+    /// Mark a report resolved, keeping the time of an earlier resolution. `None` when there is
+    /// no such report.
+    async fn resolve_report(&self, id: AbuseReportId) -> RepoResult<Option<AbuseReport>>;
 }
