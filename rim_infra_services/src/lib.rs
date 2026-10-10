@@ -1,4 +1,3 @@
-pub mod alert_rate_limiter;
 pub(crate) mod audit;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.
@@ -17,23 +16,19 @@ pub(crate) mod e2ee;
 // constructed directly by the composition root (rim_server/src/app.rs) — mirrors the
 // DefaultAuthService precedent above (Track B3, 2026-07-10).
 pub mod email;
-// pub(crate) promoted to pub: EscalationScheduler impl + driver task are constructed directly
-// by the composition root (rim_server/src/app.rs), mirroring the DefaultOnCallService precedent
-// above.
-pub mod escalation;
 pub mod file_storage;
 /// Public for `rim_server`, which loads the key file at boot and runs `franking-key rotate`.
 pub mod franking_keys;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
 // writer and sender tasks.
 pub mod host;
-pub(crate) mod incident;
-pub(crate) mod ingest_token;
 /// Public for `rim_server`, whose `invite` command issues, lists and revokes the operator's
 /// instance invites.
 pub mod instance_invite;
 pub(crate) mod key_auth;
 pub(crate) mod keybind;
+/// Public for `rim_server`, whose S2S routes rate-limit each peer with it.
+pub mod keyed_rate_limiter;
 pub(crate) mod link_preview;
 pub(crate) mod login_sources;
 pub mod macro_def;
@@ -45,13 +40,9 @@ pub(crate) mod message_reaction;
 pub mod metrics;
 pub(crate) mod moderation;
 // pub(crate) promoted to pub: the notification digest/retention jobs are constructed directly
-// by the composition root (rim_server/src/app.rs), mirroring the escalation driver above.
+// by the composition root (rim_server/src/app.rs).
 pub mod notification;
 pub(crate) mod notification_preference;
-// pub(crate) promoted to pub: DefaultOnCallService is constructed directly by the
-// who_is_on_call_matches_pure_resolver integration test (rim_infra_services/tests/oncall_db_test.rs)
-// against a live database — mirrors the DefaultAuthService precedent above.
-pub mod oncall;
 pub(crate) mod password_reset;
 pub(crate) mod pin;
 pub(crate) mod pipeline;
@@ -71,12 +62,10 @@ pub(crate) mod secret_file;
 pub(crate) mod server;
 pub(crate) mod server_member;
 pub(crate) mod signup;
-pub(crate) mod skill_profile;
 pub mod storage;
 pub(crate) mod thread;
 pub mod typing;
 pub(crate) mod user;
-pub(crate) mod workspace_feature;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
@@ -117,16 +106,7 @@ mod server_member_unit_tests;
 mod user_unit_tests;
 
 #[cfg(test)]
-mod incident_unit_tests;
-
-#[cfg(test)]
-mod oncall_unit_tests;
-
-#[cfg(test)]
 mod key_auth_unit_tests;
-
-#[cfg(test)]
-mod escalation_policy_unit_tests;
 
 #[cfg(test)]
 mod command_tests;
@@ -152,16 +132,13 @@ mod relay_unit_tests;
 #[cfg(test)]
 mod encrypted_message_unit_tests;
 
-pub use alert_rate_limiter::AlertRateLimiter;
 pub use auth::DefaultAuthService;
 pub use channel_lens::ChannelLensRepos;
 pub use custom_emoji::CustomEmojiRepos;
-pub use escalation::{EscalationPolicyRepos, InMemoryEscalationScheduler};
-pub use incident::IncidentRepos;
+pub use keyed_rate_limiter::KeyedRateLimiter;
 pub use macro_def::MacroRepos;
 pub use notification::NotificationRepos;
 pub use notification_preference::NotificationPreferenceRepos;
-pub use oncall::OnCallRepos;
 pub use pipeline::PipelineRepos;
 pub use provider::{DefaultAppServiceProvider, FederationHooks};
 pub use registration_rate_limiter::RegistrationRateLimiter;
@@ -170,5 +147,4 @@ pub use repos::{
     MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,
     ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
 };
-pub use workspace_feature::WorkspaceFeatureRepos;
 pub use workspace_state::WorkspaceStateRepos;

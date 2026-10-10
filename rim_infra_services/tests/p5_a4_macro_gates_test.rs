@@ -183,12 +183,11 @@ fn stub_command_definition(sensitivity: CommandSensitivityDto) -> CommandDefinit
         sensitivity,
         typed_verb: TypedVerb::Other,
         rate_limit_per_minute: None,
-        feature: None,
     }
 }
 
-/// Like `stub_command_definition`, but for an arbitrary step `id` — used by the C2 §6.6 macro
-/// rollup test where the step is `incident.ack`, not `chat.post_message`.
+/// Like `stub_command_definition`, but for an arbitrary step `id` — used by the macro rollup
+/// test where the step is `state.set`, not `chat.post_message`.
 fn stub_command_definition_with_id(
     id: &str,
     sensitivity: CommandSensitivityDto,
@@ -908,28 +907,26 @@ async fn inner_confirmation_required_from_step_is_partial_failure() {
     );
 }
 
-// ── C2 §6.6: macro rollup — C2 commands compose into agent runbooks ─────────
+// ── Macro rollup: AI-callable Mutating steps in agent-run macros ────────────
 
-/// An `ai_callable` macro containing an `incident.ack` step, executed by an `Agent` initiator,
-/// requires per-step confirmation — pinning that C2's `ai_callable` flip (spec §1) composes
-/// into agent-run macros under the *existing* rollup mechanism (no new rollup code needed).
+/// An `ai_callable` macro containing a `state.set` step, executed by an `Agent` initiator,
+/// requires per-step confirmation under the existing rollup mechanism.
 ///
-/// The macro's declared tier is `Safe`; `incident.ack`'s tier is `Mutating`, which does not
-/// cross the macro-level `requires_confirmation_by_tier` outer gate (Restricted-only, BLOCK 4 /
-/// `macro_def.rs`), so no outer proof is verified and no per-step token is minted. The mocked
-/// `execute_command` simulates exactly what the real dispatcher's confirmation gate
-/// (`requires_confirmation_for_initiator`) returns in that situation for a Mutating command run
-/// by an agentic initiator with no proof: `ConfirmationRequired`. Per Bug 3 (test above), that
-/// inner `ConfirmationRequired` is a hard per-step failure — this is the same "step never
-/// silently executes without agent confirmation" contract §1 relies on.
+/// The macro's declared tier is `Safe`; `state.set`'s tier is `Mutating`, which does not cross
+/// the macro-level `requires_confirmation_by_tier` outer gate (Restricted-only, `macro_def.rs`),
+/// so no outer proof is verified and no per-step token is minted. The mocked `execute_command`
+/// simulates what the real dispatcher's confirmation gate (`requires_confirmation_for_initiator`)
+/// returns for a Mutating command run by an agentic initiator with no proof:
+/// `ConfirmationRequired`. That inner `ConfirmationRequired` is a hard per-step failure, so the
+/// step never silently executes without agent confirmation.
 #[tokio::test]
-async fn c2_ai_callable_macro_with_incident_ack_step_requires_confirmation_for_agent_initiator() {
+async fn ai_callable_macro_with_mutating_step_requires_confirmation_for_agent_initiator() {
     let user_id = UserId::new();
     let macro_id = MacroId::new();
     let server_id = ServerId::new();
 
     let step_json = serde_json::json!([
-        { "commandId": "incident.ack", "args": {"incident_id": "11111111-1111-1111-1111-111111111111"} }
+        { "commandId": "state.set", "args": {"key": "k", "value": 1} }
     ]);
 
     let mut macro_repo = MockTestMacroRepository::new();
@@ -948,7 +945,7 @@ async fn c2_ai_callable_macro_with_incident_ack_step_requires_confirmation_for_a
         .returning(|_| {
             Box::pin(async {
                 Ok(Some(stub_command_definition_with_id(
-                    "incident.ack",
+                    "state.set",
                     CommandSensitivityDto::Mutating,
                 )))
             })
@@ -956,7 +953,7 @@ async fn c2_ai_callable_macro_with_incident_ack_step_requires_confirmation_for_a
     command_service
         .expect_execute_command()
         .times(1)
-        .withf(|cmd| cmd.command_id == "incident.ack" && cmd.initiator == CommandInitiator::Agent)
+        .withf(|cmd| cmd.command_id == "state.set" && cmd.initiator == CommandInitiator::Agent)
         .returning(|_| {
             Box::pin(async {
                 Ok(CommandResultDto {
@@ -986,7 +983,7 @@ async fn c2_ai_callable_macro_with_incident_ack_step_requires_confirmation_for_a
     assert_eq!(
         result.status,
         CommandResultStatusDto::Error,
-        "an Agent-run macro composing a C2 Mutating step (incident.ack) must require per-step \
-         confirmation under the existing rollup — no new rollup code"
+        "an Agent-run macro composing a Mutating step (state.set) must require per-step \
+         confirmation under the existing rollup"
     );
 }

@@ -153,7 +153,6 @@ mod tests {
                     sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                     typed_verb: rim_services::command::verb::TypedVerb::Other,
                     rate_limit_per_minute: None,
-                    feature: None,
                 })
             } else {
                 None

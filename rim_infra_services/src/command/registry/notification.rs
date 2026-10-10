@@ -75,7 +75,6 @@ fn notification_command(
         sensitivity: CommandSensitivityDto::Mutating,
         typed_verb,
         rate_limit_per_minute: None,
-        feature: None,
     }
 }
 

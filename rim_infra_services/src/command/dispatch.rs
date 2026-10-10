@@ -196,17 +196,8 @@ impl DefaultCommandService {
         command_id: &str,
         args: Option<Value>,
         context: Option<CommandContextDto>,
-        initiator: CommandInitiator,
     ) -> ServiceResult<CommandResultDto> {
-        executor::execute_builtin_command(
-            &self.services,
-            actor,
-            command_id,
-            args,
-            context,
-            initiator,
-        )
-        .await
+        executor::execute_builtin_command(&self.services, actor, command_id, args, context).await
     }
 
     #[async_recursion]
@@ -433,11 +424,8 @@ impl DefaultCommandService {
         }
 
         if let Some(definition) = Self::builtin_definition(command_id) {
-            // Feature gate for nested dispatch: user-command steps and pipe stages reach
+            // Timeout gate for nested dispatch: user-command steps and pipe stages reach
             // builtins here without passing the top-level gate in `execute_command_inner`.
-            self.ensure_command_feature_enabled(&definition, ctx.context.as_ref())
-                .await?;
-            // Timeout gate for nested dispatch, for the same reason.
             self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
                 .await?;
             if definition.requires_confirmation_for_initiator(ctx.initiator)
@@ -448,7 +436,7 @@ impl DefaultCommandService {
                 ));
             }
             return self
-                .execute_builtin(ctx.actor, command_id, args, ctx.context, ctx.initiator)
+                .execute_builtin(ctx.actor, command_id, args, ctx.context)
                 .await;
         }
 
@@ -527,9 +515,6 @@ impl DefaultCommandService {
             }
         }
 
-        // ── F1: workspace feature gate (Track 0.4) ─────────────────────
-        // Before the rate limiter so a disabled command never consumes a slot; the audit
-        // wrapper in `execute_command` still records the rejection.
         let top_level_def = if cmd.is_pipe {
             None
         } else {
@@ -538,11 +523,6 @@ impl DefaultCommandService {
                 .ok()
                 .flatten()
         };
-        if let Some(def) = &top_level_def {
-            self.ensure_command_feature_enabled(def, cmd.context.as_ref())
-                .await?;
-        }
-
         // ── T1: timeout gate (Track 1.2) ────────────────────────────────
         // A timed-out member cannot run Mutating commands in that workspace; reads still work.
         // Also before the rate limiter, so a refused command consumes no slot.

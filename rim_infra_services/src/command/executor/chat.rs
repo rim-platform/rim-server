@@ -389,7 +389,6 @@ mod tests {
     use rim_services::server_member::service::MockServerMemberService;
     use rim_services::user::dto::UserDto;
     use rim_services::user::service::MockUserService;
-    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
     use rim_services::workspace_state::service::MockWorkspaceStateService;
 
     use crate::command::CommandServices;
@@ -413,15 +412,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -837,15 +827,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -896,15 +877,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -953,15 +925,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -1032,15 +995,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -1085,15 +1039,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -1141,15 +1086,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -1208,15 +1144,6 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -1369,15 +1296,6 @@ mod tests {
             user_service: Arc::new(user_svc),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
-            incident_service: std::sync::Arc::new(
-                rim_services::incident::service::MockIncidentService::new(),
-            ),
-            oncall_service: std::sync::Arc::new(
-                rim_services::oncall::service::MockOnCallService::new(),
-            ),
-            workspace_feature_service: std::sync::Arc::new(
-                MockWorkspaceFeatureService::all_enabled(),
-            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),

@@ -2,11 +2,9 @@ mod admin;
 mod chat;
 mod chat_messages;
 mod conversation;
-mod incident;
 mod member;
 mod moderation;
 mod notification;
-mod oncall;
 mod pin;
 mod reaction;
 mod state;
@@ -73,8 +71,6 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
         reaction::commands(),
         state::commands(),
         admin::commands(),
-        incident::commands(),
-        oncall::commands(),
         moderation::commands(),
         notification::commands(),
     ]
@@ -86,30 +82,6 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Track 0.4: exactly the four incident/on-call builtins belong to the `incidents`
-    /// workspace feature; every other builtin is always available.
-    #[test]
-    fn only_incident_and_oncall_builtins_are_feature_gated() {
-        let commands = builtin_commands();
-        let mut gated: Vec<&str> = commands
-            .iter()
-            .filter(|c| {
-                c.feature == Some(rim_core::workspace_feature::model::WorkspaceFeature::Incidents)
-            })
-            .map(|c| c.id.as_str())
-            .collect();
-        gated.sort_unstable();
-        assert_eq!(
-            gated,
-            [
-                "incident.ack",
-                "incident.escalate",
-                "oncall.take_shift",
-                "oncall.who"
-            ]
-        );
-    }
 
     #[test]
     fn builtin_commands_ids_are_unique() {
@@ -162,45 +134,22 @@ mod tests {
 
     #[test]
     fn collect_ai_callable_inventory_matches_reviewed_set() {
-        // P3 + P4-A4 yielded 7 ai_callable builtins. P4-A5 adds 5 brand-new
-        // commands (`chat.list_members`, `chat.search_messages`,
-        // `chat.get_recent_messages`, `chat.pin_message`,
-        // `chat.toggle_reaction`) for a total of 12. Track C2
-        // (`docs/specs/track-c2-agent-operator.md` §1, Jakub-ratified) flips
-        // 4 more C1 lifecycle commands to `ai_callable: true` — `incident.ack`,
-        // `incident.escalate`, `oncall.who`, `oncall.take_shift` — for a new
-        // total of 16. Track 1.1 (`docs/specs/track-1-1-private-channels.md`, Commands) adds
-        // five chat membership/archive builtins — `chat.join_channel`,
-        // `chat.leave_conversation`, `chat.invite_to_conversation`, `chat.archive_channel`,
-        // `chat.unarchive_channel` — for 21. `chat.remove_conversation_member` is deliberately
-        // NOT AI-callable (dangerous, confirmation-gated). Every one of them is authorized by
-        // `ConversationService` (membership, private-channel visibility, Owner/Moderator for
-        // archive), so the agent gains no access the user does not already have. Track 1.2
-        // (`docs/specs/track-1-2-roles-and-moderation.md`, Commands) adds three moderation
-        // builtins — `chat.set_slow_mode`, `admin.timeout`, `chat.report_message` — for 24. All
-        // three are authorized by `ModerationService` (Owner/Moderator for slow mode and
-        // timeouts, read access for reports). `admin.kick`, `admin.ban`, `admin.unban` and
-        // `admin.set_role` are deliberately NOT AI-callable. Track 1.3
-        // (`docs/specs/track-1-3-notification-rules.md`, Commands) adds three notification
-        // builtins — `notifications.set_level`, `notifications.dnd`,
-        // `notifications.mark_all_read` — for 27. They change only the actor's own notification
-        // state, gated by `NotificationService` (workspace membership; conversation access for
-        // the level), so they need no capability. Track 4.1 (ROADMAP Track 4.1) flips the
-        // general builtins for 45: eleven desktop-local navigation commands the client runs
-        // locally (Safe, no confirmation), `state.get`/`state.list` (Safe reads), and
-        // `chat.mark_as_read`, `chat.create_group`, `state.set`, `state.incr`, `state.delete`,
-        // raised from Safe to Mutating so every agent write is confirmation-gated. Commands that
-        // act on the user's selected message (`chat.edit_message`, `chat.delete_message`,
-        // `chat.reply_to_selected_message`, `chat.copy_message_text`) stay off because the agent
-        // cannot supply a selection, and `admin.invite_member` stays off because its payload is
-        // an invite token that would pass through the model provider.
+        // The builtins the agent may call. Every one is authorized by the service behind it, so
+        // the agent gains no access the user does not already have. Membership, moderation and
+        // notification commands are gated by `ConversationService`, `ModerationService` and
+        // `NotificationService`; the desktop-local navigation commands run on the client; every
+        // agent write is Mutating and therefore confirmation-gated. Left out on purpose:
+        // `chat.remove_conversation_member`, `admin.kick`, `admin.ban`, `admin.unban` and
+        // `admin.set_role` (dangerous); the commands that act on the user's selected message
+        // (`chat.edit_message`, `chat.delete_message`, `chat.reply_to_selected_message`,
+        // `chat.copy_message_text`), since the agent cannot supply a selection; and
+        // `admin.invite_member`, whose payload is an invite token that would pass through the
+        // model provider.
         //
-        // Set-equality assertion: the security contract is that exactly these
-        // 45 IDs are AI-callable. Adding a new ai_callable builtin without a
-        // Hawkeye + Widow security review (and updating this set) must fail
-        // CI. Order is intentionally NOT asserted — registration order is a
-        // domain-file concern, not a security property. Use the audit log
-        // snapshot in ops dashboards for order-sensitive monitoring.
+        // Set-equality assertion: the security contract is that exactly these IDs are
+        // AI-callable, so adding an AI-callable builtin without a security review (and updating
+        // this set) fails CI. Order is not asserted: registration order is a domain-file
+        // concern, not a security property.
         let cmds = builtin_commands();
         let mut ids: Vec<&str> = collect_ai_callable_inventory(&cmds);
         ids.sort();
@@ -218,10 +167,6 @@ mod tests {
             "chat.get_recent_messages",
             "chat.pin_message",
             "chat.toggle_reaction",
-            "incident.ack",
-            "incident.escalate",
-            "oncall.who",
-            "oncall.take_shift",
             "chat.join_channel",
             "chat.leave_conversation",
             "chat.invite_to_conversation",
