@@ -23,10 +23,9 @@ use rim_core::host::model::UserKind;
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::key_identity::repository::KeyIdentityRepository;
-use rim_core::relay::model::NewAbuseReport;
 use rim_core::relay::model::{
-    DmRequest, DmRequestId, DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem,
-    RelayItemRecord,
+    DmRequest, DmRequestId, DmRequestStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope,
+    NewRelayItem, RelayItemRecord,
 };
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
 use rim_core::user::model::UserId;
