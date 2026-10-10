@@ -198,7 +198,13 @@ fn server_info_sdl_matches_the_contract() {
         test_observers(),
     ));
     assert!(sdl.contains("serverInfo: ServerInfo!"));
-    assert!(sdl.contains("type ServerInfo { version: String! apiVersion: Int! }"));
+    assert!(sdl.contains(
+        "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! }"
+    ));
+    assert!(sdl.contains(
+        "type ServerFeatureInfo { key: String! state: ServerFeatureState! reason: String }"
+    ));
+    assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
 }
 
 /// `serverInfo` answers without a session.

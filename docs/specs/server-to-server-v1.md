@@ -92,8 +92,17 @@ keyHash  = base64url(SHA-256(tagged key text))          (as device_key.key_hash)
 `Access-Control-Allow-Origin: *`:
 
 ```json
-{"rim":"server-discovery","keyLog":[{"payload":"…","signature":"…"}],"descriptor":{"payload":"…","signature":"…"}}
+{"rim":"server-discovery","keyLog":[{"payload":"…","signature":"…"}],"descriptor":{"payload":"…","signature":"…"},
+ "features":{"attachments":{"state":"enabled"},"email":{"state":"unavailable","reason":"…"},"custom_emoji":{"state":"disabled"},…}}
 ```
+
+`features` is optional and unsigned: each optional feature of the instance (the names of
+`RIM_FEATURES_DISABLED`, `docs/operations/features.md`) with its `state`, `enabled`,
+`disabled` or `unavailable`, and a `reason` for an unavailable one. It is advisory, for clients
+deciding what to offer; the server enforces the switches itself, so a changed copy only changes
+what a client shows. Readers ignore a missing `features` and names they do not know. It sits
+beside the descriptor rather than in it because the descriptor refuses unknown fields: an
+earlier server would refuse a descriptor that carried it.
 
 The descriptor is signed by the head server key over `rim.server-descriptor.v1\0 || payload`
 (at most 16 KiB):

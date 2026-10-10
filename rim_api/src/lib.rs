@@ -14,6 +14,7 @@ pub mod auth_context;
 pub mod auth_intent;
 pub mod broadcast;
 pub mod errors;
+pub(crate) mod features;
 // pub: rim_server injects the FederationContext and runs forwarded GraphQL with its checks.
 pub mod federation;
 pub mod graphql;
@@ -118,6 +119,7 @@ fn wire_common_schema_data(
         .data(service_provider.device_link_service())
         .data(service_provider.e2ee_service())
         .data(service_provider.workspace_plugin_service())
+        .data(service_provider.feature_gate())
         .data(presence_manager)
         .data(typing_tracker)
         .data(observers)

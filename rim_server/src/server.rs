@@ -94,6 +94,7 @@ pub async fn serve(
     let message_attachment_service = runtime.message_attachment_service;
     let moderation_service = runtime.moderation_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
+    let feature_gate = runtime.feature_gate;
     let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
@@ -198,6 +199,7 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
             .app_data(web::Data::new(Arc::clone(&moderation_service)))
             .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))
+            .app_data(web::Data::new(Arc::clone(&feature_gate)))
             .app_data(web::Data::new(handler_cfg))
     })
     .listen(listener)?

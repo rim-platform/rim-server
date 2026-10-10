@@ -35,9 +35,12 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
-    /// Does not recreate the tables: the code that used them is gone. The `incidents-last` tag
-    /// holds the last commit with the module.
+    /// Succeeds without recreating the dropped tables; the `incidents-last` tag is the way back.
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+        tracing::warn!(
+            "drop_incident_module rolled back: the dropped tables are not recreated; \
+             the incidents-last tag is the way back"
+        );
         Ok(())
     }
 }

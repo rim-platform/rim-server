@@ -8,6 +8,7 @@ pub mod custom_emoji;
 pub mod device_link;
 pub mod e2ee;
 pub mod events;
+pub mod feature;
 pub mod host;
 pub mod key_auth;
 pub mod keybind;
@@ -162,6 +163,11 @@ pub enum ServiceError {
         host_server_id: Option<String>,
         origin: Option<String>,
     },
+
+    /// The instance's operator switched this feature off, or its configuration lacks what the
+    /// feature needs. Surfaced as the `FEATURE_DISABLED` GraphQL error code.
+    #[error("feature {0} is not available on this server")]
+    FeatureDisabled(rim_core::server_feature::model::ServerFeature),
 
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),

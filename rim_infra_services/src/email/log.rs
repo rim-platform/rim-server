@@ -35,9 +35,35 @@ impl EmailSender for LogEmailSender {
     }
 }
 
+/// Sender used while the operator has disabled email (`RIM_FEATURES_DISABLED=email`): drops
+/// every message, logging only its subject at `debug`.
+pub struct DisabledEmailSender;
+
+#[async_trait]
+impl EmailSender for DisabledEmailSender {
+    /// Always succeeds without sending.
+    async fn send(&self, message: EmailMessage) -> anyhow::Result<()> {
+        tracing::debug!(subject = %message.subject, "email is disabled; message dropped");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_disabled_sender_drops_and_succeeds() {
+        let result = DisabledEmailSender
+            .send(EmailMessage {
+                to: "user@example.com".to_string(),
+                subject: "test".to_string(),
+                body_text: "body".to_string(),
+                body_html: None,
+            })
+            .await;
+        assert!(result.is_ok());
+    }
 
     #[tokio::test]
     async fn send_always_succeeds() {

@@ -16,7 +16,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
-pub use log::LogEmailSender;
+pub use log::{DisabledEmailSender, LogEmailSender};
 pub use smtp::{SmtpConfig, SmtpEmailSender, SmtpTlsMode};
 
 /// One outbound email, transport-agnostic.

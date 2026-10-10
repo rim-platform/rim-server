@@ -54,6 +54,7 @@ mod auth;
 mod command;
 mod command_execution;
 mod conversation;
+mod features;
 mod keybind;
 mod message;
 mod presence;
@@ -527,6 +528,23 @@ impl AppServiceProvider for TestAppServiceProvider {
     ) -> Arc<dyn rim_services::workspace_plugin::service::PluginBundleService> {
         Arc::new(rim_services::workspace_plugin::service::MockPluginBundleService::new())
     }
+
+    fn feature_gate(&self) -> Arc<dyn rim_services::feature::service::FeatureGate> {
+        // Every feature on; a test turns one off with `with_features_disabled`.
+        Arc::new(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled())
+    }
+}
+
+/// `request` on an instance where `disabled` are switched off: request data takes precedence
+/// over the schema's.
+fn with_features_disabled(
+    request: Request,
+    disabled: &[rim_core::server_feature::model::ServerFeature],
+) -> Request {
+    let gate: Arc<dyn rim_services::feature::service::FeatureGate> = Arc::new(
+        rim_infra_services::feature_gate::InstanceFeatureGate::new(disabled, &[]),
+    );
+    request.data(gate)
 }
 
 fn schema_with_mocks(
