@@ -4,18 +4,21 @@ use rim_server::{
     abuse_cmd, audit_cmd, bootstrap_cmd, config, franking_key_cmd, invite_cmd, server_key_cmd,
 };
 
-fn initialize() -> Option<LoggingHandle> {
-    // Avoid panicking if logger is already initialized (tests, embedding, etc.).
-    // Return the handle on success — its `WorkerGuard` field keeps the
-    // audit-log background appender alive (P4-A1 §0.5 sink). Dropping it
-    // would silently drop pending audit lines.
-    let handle = init_tracing_json().ok();
+/// Starts logging and returns the handle that keeps the audit file writer alive. Without
+/// logging the audit trail would be lost, so a failure ends the process.
+fn initialize() -> LoggingHandle {
+    let handle = match init_tracing_json() {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("fatal: could not start logging: {e}");
+            std::process::exit(1);
+        }
+    };
     tracing::info!(
         version = config::VERSION,
         "Starting rim-server {}",
         config::VERSION
     );
-    tracing::info!("Initializing DB");
     handle
 }
 
