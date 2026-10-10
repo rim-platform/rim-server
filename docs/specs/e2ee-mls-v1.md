@@ -637,14 +637,11 @@ can read):
 
 - The key with the highest id is current: it signs every new receipt and its id is the
   message's `franking_key_id`. Keys are held in memory in zeroizing buffers.
-- At first boot without the file the server creates it with one random key, id 1. A server
-  that kept its key in the `franking_key` table moves those rows into the file instead, so
-  receipts it signed keep verifying, and at once adds a fresh key with the next id that signs
-  from then on: the moved keys, which the database and its backups also hold, only verify. It
-  refuses to start when messages carry a `franking_key_id` that neither the file nor the table
-  holds (a lost file: restore it). After that the table is unused and the server never reads
-  or writes it; `message.franking_key_id` no longer references it (migration
-  `drop_message_franking_key_fk`).
+- At first boot without the file the server creates it with one random key, id 1. It refuses
+  to start when the file is missing but messages carry a `franking_key_id` (a lost file:
+  restore it). `message.franking_key_id` references no table (migration
+  `drop_message_franking_key_fk`); the `franking_key` table the first migration created is
+  dropped (migration `drop_franking_key`).
 - `rim_server franking-key rotate` adds a key with the next id, which becomes current. Every
   key stays in the file and keeps verifying the receipts it signed for good: a receipt is never
   signed again, so a message stays reportable for as long as it exists. What stops a forged

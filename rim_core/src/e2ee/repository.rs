@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::conversation::model::ConversationId;
 use crate::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, MlsCommit, MlsDesiredDevice,
-    MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
+    ClaimedKeyPackage, E2eeDevice, FrankingRevision, MlsCommit, MlsDesiredDevice, MlsGroup,
+    MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
     MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage,
     NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
     NewMlsWelcome,
@@ -324,10 +324,6 @@ pub trait E2eeRepository: Send + Sync {
 
     /// Every recorded version of a message, oldest first.
     async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>>;
-
-    /// The franking keys an older server kept in the `franking_key` table, oldest first. Read
-    /// only to move them into the key file.
-    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>>;
 
     /// The highest `franking_key_id` any message carries.
     async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>>;
