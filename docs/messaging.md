@@ -14,7 +14,7 @@ This document describes the current v0 backend contract for conversations, messa
 - `Direct`: 1:1 conversation between two users.
 - `Group`: multi-user private conversation.
 
-## Channel Visibility And Membership (Track 1.1)
+## Channel Visibility And Membership
 
 - **Public channels** (`isPrivate = false`) are readable by every workspace member, joined or not
   (except guests, see Roles And Moderation below).
@@ -45,8 +45,8 @@ This document describes the current v0 backend contract for conversations, messa
   events reach the whole workspace. The visibility fields on `WorkspaceEvent` (`is_private`,
   `member_user_ids`, and `conversation_type` where it was not already serialized) are
   server-side only and never serialized, so the WebSocket JSON is unchanged.
-- Existing workspace members became members of every existing channel when the Track 1.1
-  migration ran, so the joined list did not start empty. A user who joins the workspace later
+- Existing workspace members became members of every existing channel when the
+  `m20261005_005743_add_channel_privacy_and_archive` migration ran, so the joined list did not start empty. A user who joins the workspace later
   (invite acceptance, join by invite, owner adding them, server creation — all through
   `util::add_workspace_member`) is joined to every public, unarchived channel at that moment;
   private and archived channels are not joined.
@@ -65,7 +65,7 @@ This document describes the current v0 backend contract for conversations, messa
 - Archived channels are hidden from `channels` unless `includeArchived: true`, and stay readable
   and searchable by whoever could read them before.
 
-## Roles And Moderation (Track 1.2)
+## Roles And Moderation
 
 ### Roles
 
@@ -76,7 +76,7 @@ This document describes the current v0 backend contract for conversations, messa
 | `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
 
-- **Migration:** until Track 1.2 every new member was created as `guest`, so "guest" meant an
+- **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
   ordinary member. The `m20261005_024730_add_member_role` migration adds `member` to the
   `server_member_role` enum and turns **every existing `guest` into `member`**; the column
   default is now `member`.
@@ -176,7 +176,7 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
 
-## Notification Rules (Track 1.3)
+## Notification Rules
 
 The server decides, once per message, who is told about it.
 For every recipient it stores a notification (the inbox, the bell badge and the email digest) and

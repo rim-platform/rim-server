@@ -3,14 +3,14 @@
 
 # Registration Redesign — Backend Spec
 
-**Author:** Tony Stark (Backend Architect)
+**Author:** the backend architect
 **Date:** 2026-04-28
-**Status:** Spec only. No code in this doc. Hulk implements; Hawkeye reviews; report back to Nick Fury.
-**Audience:** Hulk (implementation), Vision (parallel frontend spec), Black Widow (security touchpoints flagged), Fury (gatekeeper).
+**Status:** Spec only. No code in this doc. The implementer builds it; the reviewer reviews; the coordinator merges.
+**Audience:** the implementer, the frontend lead (parallel frontend spec), the security reviewer (security touchpoints flagged), the coordinator (gatekeeper).
 
-**REVISIONS (2026-04-28, post-impl rulings from Tony):**
+**REVISIONS (2026-04-28, post-impl rulings from the architect):**
 - **R1 — Test 10 vs Test 12 contradiction:** RESOLVED in favor of Test 12 (default-7-days). Test 10 dropped. See §6.2 and §8.1.
-- **R2 — Rate limiter wiring:** RESOLVED option (a) — accept hulk's internal-construction design. §8.3 boot-fail tests for rate limiters are dropped. Cosmetic `let _ = &..._rate_limiter;` lines in `app.rs:264-282` to be removed by hulk in a follow-up cleanup. See §4.7, §6.3, §8.3.
+- **R2 — Rate limiter wiring:** RESOLVED option (a) — accept the implementer's internal-construction design. §8.3 boot-fail tests for rate limiters are dropped. Cosmetic `let _ = &..._rate_limiter;` lines in `app.rs:264-282` to be removed by the implementer in a follow-up cleanup. See §4.7, §6.3, §8.3.
 - **R3 — Resolver tests 13–15 placement:** RESOLVED — placed in `rim_api/tests/registration_resolvers_e2e.rs` under the `e2e-tests` feature, requiring `DATABASE_URL`. Unit-test variants already covered in §8.1 (Tests 20–25) via `rim_api/src/tests.rs` schema-only harness. See §8.2.
 - **A1 — Amendment 2026-04-28b:** post-impl product gap closure. Adds required `email` and optional `displayName` to `SignupWithInviteInput`. Migration adds `user.email` (NOT NULL once backfilled) with case-insensitive unique index; `user.display_name` already exists as nullable on the entity (no migration needed for that column). New `ServiceError::EmailTaken` variant + `EMAIL_TAKEN` GraphQL extension code. Test floor moves from 33 to **40**. See §13.
 
@@ -138,7 +138,7 @@ Replaces no existing mutation; coexists with the existing `acceptInvite` mutatio
 
 - `acceptInvite` returns `AcceptInvitePayload { userId, serverId }` with `serverId` non-null. Bootstrap and instance-invite signups have no server. Making `serverId` nullable on the existing payload is a public-API break.
 - Three token types (bootstrap, instance, workspace) is enough divergence in error handling and downstream effects (server membership vs. none) that one mutation per concern reads cleaner.
-- Frontend (vision) is wiring a single `/join/:token` page (path-param form) that calls `previewInviteToken` to discover the `tokenType` (`BOOTSTRAP` / `INSTANCE` / `WORKSPACE`) and routes the raw token to the matching input field on `signupWithInvite`; one mutation taking a sum-typed input is the cleanest server-side contract for that.
+- The frontend is wiring a single `/join/:token` page (path-param form) that calls `previewInviteToken` to discover the `tokenType` (`BOOTSTRAP` / `INSTANCE` / `WORKSPACE`) and routes the raw token to the matching input field on `signupWithInvite`; one mutation taking a sum-typed input is the cleanest server-side contract for that.
 
 ### 4.2 Resolution of registration mode
 
@@ -221,7 +221,7 @@ Two new error codes, `INVALID_TOKEN` and `EXPIRED_TOKEN`, are added to `rim_api:
 
 ### 4.7 Preview query — `previewInviteToken`
 
-Per Vision's frontend spec, the FE needs to inspect a token *before* rendering the signup form so it can (a) bail out early on `EXPIRED_TOKEN` / `INVALID_TOKEN`, (b) show "you're joining workspace X" copy on workspace invites, and (c) show generic "create your RIM account" copy on instance invites.
+Per the frontend spec, the FE needs to inspect a token *before* rendering the signup form so it can (a) bail out early on `EXPIRED_TOKEN` / `INVALID_TOKEN`, (b) show "you're joining workspace X" copy on workspace invites, and (c) show generic "create your RIM account" copy on instance invites.
 
 **New top-level query:**
 
@@ -270,7 +270,7 @@ Note (FE cross-reference): the form copy ("Create your RIM account") is shared b
 **Trade-off accepted:**
 - (+) Zero boot-panic risk for the limiter wiring path; one fewer thing for an operator to misconfigure.
 - (−) No way to inject a custom limiter (e.g., a NoopLimiter for an integration test, or a Redis-backed limiter for multi-node). When that need materializes, retrofit DI at that point — until then YAGNI.
-- (−) The marker-token cleanup landed: the dead `PreviewInviteRateLimiter` / `SignupRateLimiter` newtype wrappers in `rim_infra_services/src/registration_rate_limiter.rs` were removed (per Hawkeye SF1), and the cosmetic `let _ = &..._rate_limiter;` lines in `rim_server/src/app.rs` were replaced with real wiring: the `PreviewInviteRateLimiterToken` / `SignupRateLimiterToken` marker types in `rim_services::auth::dto` are now passed through `RegistrationContext` (`app.rs:264-297`) and annotated with `// marker: see spec §4.7 R2`. Only the marker-token sentinel pattern remains, kept as a typed seam for a future swap to a Redis-backed limiter.
+- (−) The marker-token cleanup landed: the dead `PreviewInviteRateLimiter` / `SignupRateLimiter` newtype wrappers in `rim_infra_services/src/registration_rate_limiter.rs` were removed (per review finding SF1), and the cosmetic `let _ = &..._rate_limiter;` lines in `rim_server/src/app.rs` were replaced with real wiring: the `PreviewInviteRateLimiterToken` / `SignupRateLimiterToken` marker types in `rim_services::auth::dto` are now passed through `RegistrationContext` (`app.rs:264-297`) and annotated with `// marker: see spec §4.7 R2`. Only the marker-token sentinel pattern remains, kept as a typed seam for a future swap to a Redis-backed limiter.
 
 ### 4.8 Login path unaffected
 
@@ -411,7 +411,7 @@ And one new `mod m20260428_add_registration_invites;` line at the bottom.
 
 ## 8. Test List (Required)
 
-Every new function gets unit tests AND rustdoc. Hulk: if either is missing, this comes back. No exceptions.
+Every new function gets unit tests AND rustdoc. Implementer: if either is missing, this comes back. No exceptions.
 
 ### 8.1 Unit tests (`rim_infra_services::auth_unit_tests` — using `mockall`)
 
@@ -470,7 +470,7 @@ Placed in **`rim_api/tests/registration_resolvers_e2e.rs`** behind the **`e2e-te
 31. ~~`boot_fails_when_open_mode_without_rate_limiter`~~ **DROPPED (R2).** Rate limiter is constructed inside `DefaultAuthService::new()`; "missing" is unrepresentable.
 32. ~~`boot_fails_when_preview_rate_limiter_missing`~~ **DROPPED (R2).** Same reason.
 
-**Total: 30 tests** (was 32; R2 drops 2; R1 drops 1; R3 adds 3 — net +0 against the original 32, but composition changed: 25 unit + 2 db + 2 e2e + 3 resolver-e2e + 1 boot-warning = 33. Updated floor: **33 tests**.) Hulk may add more.
+**Total: 30 tests** (was 32; R2 drops 2; R1 drops 1; R3 adds 3 — net +0 against the original 32, but composition changed: 25 unit + 2 db + 2 e2e + 3 resolver-e2e + 1 boot-warning = 33. Updated floor: **33 tests**.) The implementer may add more.
 
 > **See Amendment 2026-04-28b (§13)** — adds 7 tests on top, raising the floor to **40 tests**.
 
@@ -481,13 +481,13 @@ Every new public function gets `///` doc with:
 - `# Errors` section listing every `ServiceError` variant it can return and under what condition.
 - `# Examples` section for service-trait methods (mock-based).
 
-Specifically: `AuthService::signup_with_bootstrap`, `AuthService::signup_with_instance_invite`, `AuthService::signup_open`, `AuthService::create_instance_invite`, `AuthService::revoke_instance_invite`, `BootstrapTokenRepository::*`, `InstanceInviteRepository::*`. No exceptions; ship without docs and the Hawkeye review will block.
+Specifically: `AuthService::signup_with_bootstrap`, `AuthService::signup_with_instance_invite`, `AuthService::signup_open`, `AuthService::create_instance_invite`, `AuthService::revoke_instance_invite`, `BootstrapTokenRepository::*`, `InstanceInviteRepository::*`. No exceptions; ship without docs and the review will block.
 
 ---
 
 ## 9. GraphQL SDL Diff
 
-This is what `vision` will see after re-running `npm run codegen`. Listed for the parallel frontend spec.
+This is what the frontend will see after re-running `npm run codegen`. Listed for the parallel frontend spec.
 
 ### 9.1 New input types
 
@@ -611,20 +611,20 @@ type WorkspaceInvitePreview {
 
 - Email-domain allowlist for open mode. Phase-7 follow-up; spec hook is `RIM_OPEN_REGISTRATION_ALLOWED_DOMAINS=foo.com,bar.com` (not implemented).
 - SAML / OIDC JIT provisioning.
-- Frontend implementation (vision is parallel).
+- Frontend implementation (the frontend runs in parallel).
 - Plugin marketplace registration.
 - Multi-node coordination of the signup rate limiter (single-node `DashMap`-based rate limiter is fine for now per `rim_infra_services::command::rate_limiter`).
 - Email delivery of bootstrap/instance invite links. Operator copies the stdout URL by hand or via shell pipe.
 
-### 11.1 Open question — flag back to Fury / Jakub
+### 11.1 Open question — flag back to the coordinator / Jakub
 
 **The "anyone with at least one Owner ServerMember" gate for `createInstanceInvite` is a placeholder.** It says "if you own a workspace on this instance, you can mint instance-level invites that create accounts not bound to your workspace." That bleeds workspace-owner authority into instance-admin authority. It's defensible for now (closed beta, single-operator instances), but if RIM ever ships to a deployment with multiple unrelated workspace owners on one instance, this is the wrong model.
 
-**Decision needed from Jakub:** is this acceptable for the current phase, or do we ship `createInstanceInvite` gated only on the operator's CLI (i.e., **no GraphQL mutation at all in this phase, all instance invites issued from `rim_server` CLI**)? The CLI-only path is more conservative, smaller surface area, and dodges the question entirely. I lean toward CLI-only. Fury — confirm.
+**Decision needed from Jakub:** is this acceptable for the current phase, or do we ship `createInstanceInvite` gated only on the operator's CLI (i.e., **no GraphQL mutation at all in this phase, all instance invites issued from `rim_server` CLI**)? The CLI-only path is more conservative, smaller surface area, and dodges the question entirely. I lean toward CLI-only. Coordinator — confirm.
 
 ---
 
-## 12. Handoff Checklist for Hulk
+## 12. Handoff Checklist for the Implementer
 
 Before opening review:
 
@@ -640,16 +640,16 @@ Before opening review:
 - [ ] All 40 tests written and passing under `cargo test --workspace -- --test-threads=1` (25 unit + 2 db-integration + 2 e2e + 3 resolver-e2e + 1 boot-warning + 7 amendment tests per §13.4). Resolver-e2e tests live in `rim_api/tests/registration_resolvers_e2e.rs` under the `e2e-tests` feature.
 - [ ] `cargo fmt --all` + `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [ ] `/api/sdl` re-fetched into `rim-ui/schema.graphql` and frontend codegen run.
-- [ ] Hawkeye review opened. BLOCK findings fixed before reporting done.
-- [ ] No `git commit` / `git push` / `git merge` from your end. Surface a PR; Fury merges.
+- [ ] Review opened. BLOCK findings fixed before reporting done.
+- [ ] No `git commit` / `git push` / `git merge` from your end. Surface a PR; the coordinator merges.
 
 ---
 
 ## Amendment 2026-04-28b — email + displayName at signup
 
-**Status:** Spec amendment. Backend and frontend for the original spec have already landed; this amendment closes a real product gap surfaced post-impl by Spider-Man (no email = no password reset, no notifications, no recovery). Jakub's call: full redesign — email is required at signup, not deferred to a later "claim email" flow.
+**Status:** Spec amendment. Backend and frontend for the original spec have already landed; this amendment closes a real product gap surfaced post-impl by the frontend implementer (no email = no password reset, no notifications, no recovery). Jakub's call: full redesign — email is required at signup, not deferred to a later "claim email" flow.
 
-**Author:** Tony Stark.
+**Author:** the backend architect.
 **Date:** 2026-04-28 (b suffix to disambiguate from the original same-day rev).
 **Scope:** input shape, validation, schema migration for `user.email`, error mapping, tests. No changes to bootstrap/instance-invite token flow itself — they just plumb two more fields through the cmd → service → repo path.
 
@@ -813,7 +813,7 @@ Resolver-e2e in `rim_api/tests/registration_resolvers_e2e.rs` under `e2e-tests`:
 
 (Note: the displayName-fallback case is already covered by Test 36/37 at the unit layer; we don't duplicate it at the e2e layer.)
 
-Every new function gets rustdoc per §8.4 — `validate_email`, `normalize_display_name`, the new `EmailTaken` arm in `map_service_error`, and any new repo method (e.g., `UserRepository::find_by_email_lower` if hulk needs one for the uniqueness check) all ship with `# Errors` and `# Examples` sections. No exceptions.
+Every new function gets rustdoc per §8.4 — `validate_email`, `normalize_display_name`, the new `EmailTaken` arm in `map_service_error`, and any new repo method (e.g., `UserRepository::find_by_email_lower` if the implementer needs one for the uniqueness check) all ship with `# Errors` and `# Examples` sections. No exceptions.
 
 ### 13.7 Cmd / DTO changes
 
@@ -828,9 +828,9 @@ The resolver normalizes `email` (trim + lowercase) before constructing the cmd, 
 
 `AcceptInviteCmd` is intentionally **excluded** per Q2 ruling — see the supersedure note immediately below.
 
-~~`AcceptInviteCmd` is the existing path (workspace-invite signup). It also gets `email` + `display_name` so workspace-invite signups are no different from instance/bootstrap signups w.r.t. the new fields. **This is a behavior change to `acceptInvite`** — that mutation's input gains the same two fields. The `AcceptInviteInput` GraphQL type adds them per the same shape; the SDL diff for `acceptInvite` is parallel to the `signupWithInvite` diff above. Tests 33–38 above all run against both paths or get a parallel pair (hulk's call on parametrization vs. duplication).~~
+~~`AcceptInviteCmd` is the existing path (workspace-invite signup). It also gets `email` + `display_name` so workspace-invite signups are no different from instance/bootstrap signups w.r.t. the new fields. **This is a behavior change to `acceptInvite`** — that mutation's input gains the same two fields. The `AcceptInviteInput` GraphQL type adds them per the same shape; the SDL diff for `acceptInvite` is parallel to the `signupWithInvite` diff above. Tests 33–38 above all run against both paths or get a parallel pair (the implementer's call on parametrization vs. duplication).~~
 
-**SUPERSEDED by Q2 ruling (Hawkeye SD1).** `AcceptInviteCmd` is **not** modified. The `accept_invite` GraphQL mutation and its cmd remain at the original `(invite_token, username, password)` shape — verified against the live `AcceptInviteCmd` definition in `rim_services/src/auth/command.rs:37–41`. Amendment 2026-04-28b is scoped to `signupWithInvite` only; the workspace-invite path is intentionally left alone.
+**SUPERSEDED by Q2 ruling (review finding SD1).** `AcceptInviteCmd` is **not** modified. The `accept_invite` GraphQL mutation and its cmd remain at the original `(invite_token, username, password)` shape — verified against the live `AcceptInviteCmd` definition in `rim_services/src/auth/command.rs:37–41`. Amendment 2026-04-28b is scoped to `signupWithInvite` only; the workspace-invite path is intentionally left alone.
 
 **Implementation note (legacy path):** because `user.email` is `NOT NULL` post-amendment, the legacy `accept_invite` path supplies a synthetic placeholder email of the form `"<username>@local.invalid"` (verified at `rim_infra_services/src/auth.rs:730` — `email: format!("{}@local.invalid", username.to_lowercase())`; a parallel placeholder is also issued for the deprecated `bootstrap` mutation at `rim_infra_services/src/auth.rs:462`). RFC 2606 reserves `.invalid` for exactly this kind of placeholder. Operators created via `accept_invite` must update their email through a future profile-edit flow before relying on password reset / notifications. This is the same pattern used by the `m20260428_add_user_email` migration's backfill (§13.4 phase 2).
 
@@ -838,17 +838,17 @@ The downstream consequence is that `signup_with_bootstrap`, `signup_with_instanc
 
 ### 13.8 Frontend coordination
 
-Vision needs the input-shape pre-spec so `JoinForm` changes can be planned before Spider-Man picks up implementation. Per the team operating model, this is a SendMessage ping. **See §13.9 — operating constraint.** The agreed contract Vision needs to know:
+The frontend lead needs the input-shape pre-spec so `JoinForm` changes can be planned before the frontend implementer picks up implementation. Per the team operating model, this is a SendMessage ping. **See §13.9 — operating constraint.** The agreed contract the frontend lead needs to know:
 
 - `email: String!` — required, max 254 chars, regex per §13.3, case-insensitive uniqueness (server lowercases).
 - `displayName: String` — optional, 1–80 chars when present, trimmed, falls back to `username` if absent or blank.
 - New error code: `EMAIL_TAKEN` (highlight email field specifically; do not lump into generic `CONFLICT`).
 - No change to existing `userId` / `serverId` payload shape.
 
-### 13.9 Operating constraint — Vision ping
+### 13.9 Operating constraint — frontend ping
 
-This thread does not have a SendMessage tool available; only file/grep tools are exposed to Tony in the current session. The Vision ping must be relayed by **Nick Fury** (who runs the team-coordination layer) using §13.8 as the message body, kept under 100 words.
+This thread does not have a SendMessage tool available; only file/grep tools are exposed to the architect in the current session. The frontend ping must be relayed by **the coordinator** (who runs the team-coordination layer) using §13.8 as the message body, kept under 100 words.
 
 **Suggested message body (under 100 words):**
 
-> Vision — registration-redesign amendment 2026-04-28b. `SignupWithInviteInput` adds `email: String!` (required, max 254, server lowercases + trims, case-insensitive unique) and `displayName: String` (optional, 1–80 chars, falls back to username if absent/blank). New error code `EMAIL_TAKEN` for collisions — highlight the email field, do not reuse generic `CONFLICT`. `acceptInvite` is **out of scope** per Q2 ruling — its input is unchanged; legacy users get a synthetic `<username>@local.invalid` placeholder. Pre-plan `JoinForm` accordingly; Spider-Man will pick up impl after Hawkeye review of hulk's backend changes. Spec at `docs/design/registration-redesign-2026-04-28.md` §13. — Tony
+> Frontend — registration-redesign amendment 2026-04-28b. `SignupWithInviteInput` adds `email: String!` (required, max 254, server lowercases + trims, case-insensitive unique) and `displayName: String` (optional, 1–80 chars, falls back to username if absent/blank). New error code `EMAIL_TAKEN` for collisions — highlight the email field, do not reuse generic `CONFLICT`. `acceptInvite` is **out of scope** per Q2 ruling — its input is unchanged; legacy users get a synthetic `<username>@local.invalid` placeholder. Pre-plan `JoinForm` accordingly; The frontend implementer will pick up impl after review of the backend changes. Spec at `docs/decisions/registration-redesign-2026-04-28.md` §13. — the architect

@@ -2,7 +2,7 @@
 
 `searchMessages` runs Postgres full-text search over message text, scoped to conversations the
 requesting actor can see. This document covers the query operator syntax, the ranking/pagination
-design, and the visibility contract. Implementation: Track B1 (2026-07-08/09).
+design, and the visibility contract.
 
 ## Operator syntax
 

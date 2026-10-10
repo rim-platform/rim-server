@@ -2,7 +2,7 @@
 
 The change feed lets a client ask "what changed in these channels since I last synced" and get
 every message created, edited or deleted since then, in order, with a cursor it can store. It is
-the server half of the client-side history cache (master plan, Stage 2). This document is the
+the server half of the client-side history cache. This document is the
 contract the cache builds on: **the GraphQL shape and the cursor semantics below are frozen.**
 Additive changes (a new optional input field, a new output field) are fine; anything else needs a
 new field or query next to this one.

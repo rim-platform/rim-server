@@ -1,11 +1,11 @@
-# Server-to-server v1 (Stage 5, S5-0)
+# Server-to-server v1
 
-_Spec written 2026-10-09 for Stage 5 (`docs/plans/stage-5-2026-10-09.md`, `ROADMAP.md` Track 7.4)
-under `docs/decisions/decentralization-2026-10-08.md` and
+_Status: implemented, normative. Follows `docs/decisions/decentralization-2026-10-08.md` and
 `docs/decisions/relay-proxied-workspaces-2026-10-09.md`. Read `key-identity-v1.md`,
-`device-linking-v1.md` and `e2ee-mls-v1.md` first. This document is the contract between the server
-PRs (S5-1, S5-2, S5-4, S5-6) and the client PRs (S5-3, S5-5): server identity, the signed HTTP API
-between servers, relays, hosts, and what the client verifies._
+`device-linking-v1.md` and `e2ee-mls-v1.md` first. This document is the contract between servers
+and between a server and its clients: server identity, the signed HTTP API between servers,
+relays, hosts, and what the client verifies. Labels of the form S5-n below name the change that
+introduced an item._
 
 ## Summary
 
