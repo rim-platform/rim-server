@@ -1,7 +1,7 @@
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::ConnectionTrait;
 
-/// P6-M1: widen the `outcome` CHECK constraint on `command_audit_log` to
+/// Widens the `outcome` CHECK constraint on `command_audit_log` to
 /// include all 7 variants now emitted by the service layer.
 ///
 /// The original constraint in `m20260425_000001_create_command_audit_log` only

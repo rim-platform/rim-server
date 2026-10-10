@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-/// Message change feed (master plan PR 8, `docs/message-change-feed.md`).
+/// Message change feed.
 ///
 /// Additive only, so an operator can roll back by running `down`:
 ///

@@ -2,7 +2,7 @@ use sea_orm_migration::prelude::*;
 
 /// Adds `incident.alert_fingerprint` and `incident.source`, plus a partial unique index
 /// enforcing "at most one non-resolved incident per (server, fingerprint)" — the DB-level
-/// dedup guarantee for Track B2 alert ingestion (see `docs/alerts.md`).
+/// dedup guarantee for alert ingestion.
 ///
 /// `source` defaults to `'manual'` so every existing row (and every human-declared incident
 /// going forward) is correct with no backfill. No CHECK constraint is added on `source` here —
