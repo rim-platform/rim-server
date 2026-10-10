@@ -12,7 +12,7 @@ listener of its own. The API port never serves them.
 On a host, `127.0.0.1:9090` keeps the endpoint on the machine; run Prometheus there or scrape it
 through an SSH tunnel. In a container, `127.0.0.1` is the container itself, so bind
 `0.0.0.0:9090` and do not publish the port: Prometheus reaches it over the compose network.
-`deploy/compose.relay.yml` has the line commented out.
+`deploy/compose.yml` has the line commented out in the `rim` service.
 
 The endpoint has no authentication. Keep it on an internal network, and never route it through
 Caddy or any other public reverse proxy: it shows request rates, limiter names and queue sizes
