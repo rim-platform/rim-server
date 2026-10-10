@@ -1000,7 +1000,8 @@ Every new mutation but `applyRemoteRevocation` needs the CSRF header. A peer tha
 is the new code `UPSTREAM_UNAVAILABLE` with `hostServerId`, the peer's server id. When only its
 origin is known (a relay URL from a card or contact that could not be pinned), `hostServerId` is
 null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FORBIDDEN`,
-`NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`).
+`NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`); `RATE_LIMITED`'s `retryAfterSeconds` is the peer's
+`Retry-After` (at most a day), or 60 when the peer sent none.
 
 ## Limits and audit
 
