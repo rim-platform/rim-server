@@ -77,6 +77,10 @@ services:
       RIM_RELAY_RETENTION_DAYS: ${RIM_RELAY_RETENTION_DAYS:-30}
       # Peers refused before they are ever pinned, comma-separated server ids.
       RIM_S2S_DENIED_PEERS: ${RIM_S2S_DENIED_PEERS:-}
+      # Prometheus metrics at /metrics on their own port (docs/operations/metrics.md). The port
+      # stays unpublished and must stay on the internal network: scrape it from a Prometheus
+      # container attached there, never route it through Caddy.
+      # RIM_METRICS_ADDR: 0.0.0.0:9090
     volumes:
       - rim_data:/data
     # `egress` lets it reach other servers; no port is published, so only Caddy reaches it.

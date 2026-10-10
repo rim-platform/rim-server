@@ -260,9 +260,12 @@ impl DefaultWorkspacePluginService {
             RateLimitDecision::Allowed => Ok(()),
             RateLimitDecision::Limited {
                 retry_after_seconds,
-            } => Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            }),
+            } => {
+                crate::metrics::rate_limited(CHANGE_KEY);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 

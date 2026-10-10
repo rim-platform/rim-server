@@ -71,6 +71,9 @@ USER rim
 #   RIM_ROLE              — relay, host or both (default: both)
 #   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
 #   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
+#   RIM_METRICS_ADDR      — ip:port of the Prometheus /metrics listener (default: off). In a
+#                           container bind 0.0.0.0:9090 and do not publish it: keep it on an
+#                           internal network, never behind the public proxy
 
 ENV RIM_SERVER_HOST=0.0.0.0 \
     RIM_SERVER_PORT=8080 \

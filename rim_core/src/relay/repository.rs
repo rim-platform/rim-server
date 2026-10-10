@@ -8,8 +8,8 @@ use crate::key_identity::model::DeviceKeyId;
 use crate::relay::model::{
     AbuseReport, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus,
     DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope,
-    NewRelayItem, PrincipalBlock, RelayItemRecord, RelaySubscription, RevocationFanout,
-    SubscriptionStatus,
+    NewRelayItem, PrincipalBlock, RelayItemRecord, RelayQueueStats, RelaySubscription,
+    RevocationFanout, SubscriptionStatus,
 };
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -35,6 +35,9 @@ pub trait RelayRepository: Send + Sync {
 
     /// Bytes queued for a user, held items included.
     async fn queued_bytes(&self, user_id: UserId) -> RepoResult<i64>;
+
+    /// Items and bytes queued for every user, split into waiting and held.
+    async fn queue_stats(&self) -> RepoResult<RelayQueueStats>;
 
     /// Delete a user's oldest items that are not held until at least `bytes` are freed.
     /// Returns the spaces they belonged to.
