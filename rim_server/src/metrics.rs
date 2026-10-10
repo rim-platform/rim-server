@@ -296,8 +296,9 @@ pub(crate) fn configure(state: MetricsState) -> impl FnOnce(&mut web::ServiceCon
     }
 }
 
-/// Install the recorder, bind `addr` and serve `/metrics` there until `shutdown` changes or
-/// its sender is dropped. The database gauges are sampled on the same schedule.
+/// Install the recorder, bind `addr` and serve `/metrics` there, and read the relay queue and
+/// pending migrations every [`SAMPLE_INTERVAL`], until `shutdown` changes or its sender is
+/// dropped.
 ///
 /// # Errors
 /// When the recorder cannot be installed or the address cannot be bound.
