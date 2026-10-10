@@ -256,8 +256,7 @@ async fn export(
         .await
         .map_err(PurgeError::Export)?;
     let mut last_key = (oldest, first.id);
-    loop {
-        let Some(last) = rows.last() else { break };
+    while let Some(last) = rows.last() {
         last_key = (last.created_at, last.id);
         let full = rows.len() >= batch as usize;
         writer = blocking(move || writer.write_rows(&rows).map(|()| writer))
