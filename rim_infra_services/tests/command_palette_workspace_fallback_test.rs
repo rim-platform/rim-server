@@ -1,9 +1,8 @@
-//! Palette-path integration tests from the `command-context-workspace-fallback` spec §7.3
-//! (`docs/specs/command-context-workspace-fallback-2026-04-30.md`, deleted once implemented;
-//! see git history).
+//! Palette-path integration tests for the command-context workspace fallback: a command
+//! without `args.server_id` takes the workspace from `context.workspace_id`.
 //!
-//! These tests lock the palette code path for the two commands that prompted
-//! the bug report (`chat.list_channels` and `chat.list_members`):
+//! These tests lock the palette code path for `chat.list_channels` and
+//! `chat.list_members`:
 //!
 //!   - `palette_chat_list_channels_uses_context_workspace_id_when_args_omit_server_id`
 //!     — palette sends no `args.server_id`, only `context.workspace_id`. Assert
@@ -13,16 +12,16 @@
 //!     — same shape against `chat.list_members`. Assert `members` non-empty.
 //!
 //! Both tests use `CommandInitiator::Palette` and pass `args: None`, exactly
-//! matching what the palette sends before this fix caused a silent
-//! `Validation("missing string arg \`server_id\`")` error.
+//! matching what the palette sends; without the fallback this fails with
+//! `Validation("missing string arg \`server_id\`")`.
 //!
 //! Implementation note: `DefaultConversationService` and
-//! `DefaultServerMemberService` are `pub(crate)`, so real-DB-backed services
+//! `DefaultServerMemberService` live in `pub(crate)` modules, so real-DB-backed services
 //! cannot be constructed in the integration test binary. The tests use the
 //! same mock pattern as `chat_list_channels_agent_test.rs` (the agent-path
 //! sister test) — the mock's `withf` predicate asserts that `server_id`
 //! arriving at the service matches `context.workspace_id`, which is the
-//! correctness property this spec locks. The `infra-db-tests` gate is
+//! correctness property under test. The `infra-db-tests` gate is
 //! preserved so these tests run in the same CI slot as the DB-backed tests
 //! and are excluded from the no-DB unit-test run.
 
@@ -127,7 +126,7 @@ fn context_with_workspace(ws: ServerId) -> CommandContextDto {
 /// matching what the palette sends. Asserts `status == Success` and the
 /// `channels` payload is non-empty. The mock's `withf` predicate asserts that
 /// `context.workspace_id` is the `server_id` that reached the service — which
-/// is the core correctness property this spec introduces.
+/// is the core correctness property of the fallback.
 #[tokio::test]
 async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_server_id() {
     // Verify DATABASE_URL is set (required by infra-db-tests feature guard).
@@ -172,7 +171,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
         .execute_command(ExecuteCommandCmd {
             actor: actor(),
             command_id: "chat.list_channels".to_string(),
-            // Palette sends no args — this is the bug scenario.
+            // Palette sends no args; the workspace comes from the context.
             args: None,
             context: Some(context_with_workspace(workspace)),
             confirmation: None,
@@ -259,7 +258,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
         .execute_command(ExecuteCommandCmd {
             actor: actor(),
             command_id: "chat.list_members".to_string(),
-            // Palette sends no args — this is the bug scenario.
+            // Palette sends no args; the workspace comes from the context.
             args: None,
             context: Some(context_with_workspace(workspace)),
             confirmation: None,

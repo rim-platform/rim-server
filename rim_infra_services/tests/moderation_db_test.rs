@@ -1,5 +1,5 @@
-//! Track 1.2 against a live database: a ban blocks re-joining through the auth service, and a
-//! guest invite grants the restricted role without the public-channel auto-join.
+//! Roles and moderation against a live database: a ban blocks re-joining through the auth
+//! service, and a guest invite grants the restricted role without the public-channel auto-join.
 //!
 //! Only compiled with `--features infra-db-tests`; needs `DATABASE_URL` (see `support`).
 

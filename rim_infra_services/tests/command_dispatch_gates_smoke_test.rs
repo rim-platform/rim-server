@@ -1,25 +1,24 @@
-//! Phase 1 end-to-end smoke test (dispatch plan §Task 9).
+//! End-to-end smoke test of the command dispatch gates.
 //!
-//! Single integration test that exercises every Phase 1 primitive in a
+//! Single integration test that exercises every dispatch gate in a
 //! single dispatch path:
 //!
-//! 1. **Capability gate (§3.3 / C1)** — denied actor never reaches confirmation.
-//! 2. **Confirmation challenge (§3.5 / H1)** — first call on a dangerous
+//! 1. **Capability gate** — denied actor never reaches confirmation.
+//! 2. **Confirmation challenge** — first call on a dangerous
 //!    command returns `ConfirmationRequired` with a fresh challenge.
-//! 3. **Confirmation verify (§3.5 / H1)** — second call with a matching
+//! 3. **Confirmation verify** — second call with a matching
 //!    `InBandToken` proof passes verify and dispatches to the executor.
-//! 4. **Stale-proof rejection (§3.5)** — submitting an expired token surfaces
+//! 4. **Stale-proof rejection** — submitting an expired token surfaces
 //!    `ServiceError::ConfirmationStale` (caller-recoverable).
-//! 5. **Initiator round-trip (§3.11 / H4)** — `CommandInitiator` is set on
-//!    every call so the audit-emission path (Phase 4) sees the right
-//!    provenance from day one.
+//! 5. **Initiator round-trip** — `CommandInitiator` is set on
+//!    every call so the audit entry records the right provenance.
 //!
 //! The test uses the existing `chat.delete_message` builtin, which has the
-//! exact shape Phase 1 cares about:
+//! exact shape the gates care about:
 //!
-//! - `dangerous: true` (triggers H1 gate)
-//! - `required_capabilities: ["chat.write"]` (triggers C1 gate)
-//! - `sensitivity: Restricted` (exercises the §3.1 metadata)
+//! - `dangerous: true` (triggers the confirmation gate)
+//! - `required_capabilities: ["chat.write"]` (triggers the capability gate)
+//! - `sensitivity: Restricted` (exercises the sensitivity metadata)
 //! - executes via `MessageService::delete_message` (mockable, no DB)
 //!
 //! ## Why integration-level
@@ -28,11 +27,10 @@
 //! (`confirmation::tests`, `capability_gate_test`). What's NOT tested
 //! anywhere else is the *interaction* between them — specifically that the
 //! confirmation gate and capability gate compose correctly under the
-//! dispatch ordering Phase 1 chose (cap → confirmation → execute), and
-//! that a real challenge issued by the service round-trips cleanly through
-//! a real proof on a follow-up call. A future refactor that, say, moved
-//! the cap gate inside the confirmation block would silently break the
-//! anti-probe ordering — this test would catch it.
+//! dispatch ordering (cap → confirmation → execute), and that a real
+//! challenge issued by the service round-trips cleanly through a real proof
+//! on a follow-up call. Moving the cap gate inside the confirmation block
+//! would silently break the anti-probe ordering — this test catches it.
 
 use std::sync::Arc;
 
@@ -121,8 +119,8 @@ impl Fixture {
 ///   the test exercises a path that actually dispatches),
 /// - a *shared* `InMemoryConfirmationStore` (returned alongside the service
 ///   as a typed handle) so tests can both pre-seed tokens via
-///   `issue_in_band_with_ttl` AND introspect `len()` for token-leak
-///   regressions (Hawkeye S1 closure).
+///   `issue_in_band_with_ttl` AND introspect `len()` for token leaks
+///   (scenario 1).
 fn build_service(
     capability_service: MockCapabilityService,
     message_service: MockMessageService,
@@ -222,11 +220,11 @@ fn cap_denies_chat_write() -> MockCapabilityService {
 // The smoke test — all five primitives in one path
 // ---------------------------------------------------------------------------
 
-/// Phase 1 end-to-end: cap-deny → cap-grant+no-proof → cap-grant+proof →
+/// End-to-end: cap-deny → cap-grant+no-proof → cap-grant+proof →
 /// cap-grant+stale-proof → TOCTOU-args-mismatch → audit-entry-with-initiator.
 /// All six scenarios against `chat.delete_message`, exercising the live dispatcher.
 #[tokio::test]
-async fn phase1_end_to_end_smoke_test() {
+async fn dispatch_gates_end_to_end_smoke_test() {
     let fx = Fixture::new();
 
     // ── Scenario 1 ────────────────────────────────────────────────────────
@@ -250,7 +248,7 @@ async fn phase1_end_to_end_smoke_test() {
         match result {
             Err(ServiceError::PermissionDenied) => {}
             other => {
-                panic!("Phase 1 smoke S1: expected PermissionDenied from cap gate, got {other:?}")
+                panic!("S1: expected PermissionDenied from cap gate, got {other:?}")
             }
         }
         assert!(
@@ -383,7 +381,7 @@ async fn phase1_end_to_end_smoke_test() {
     }
 
     // ── Scenario 5 ────────────────────────────────────────────────────────
-    // TOCTOU defense (H1 closure). Caller obtains a valid challenge, then
+    // TOCTOU defense. Caller obtains a valid challenge, then
     // submits the proof with a tampered `args_hash`. The service must reject
     // with `ConfirmationStale` (ArgsMismatch maps to is_stale → ConfirmationStale).
     //
@@ -431,7 +429,7 @@ async fn phase1_end_to_end_smoke_test() {
     }
 
     // ── Scenario 6 ────────────────────────────────────────────────────────
-    // Audit entry integrity (Phase 1 §3.11 / H4). After a successful dispatch
+    // Audit entry integrity. After a successful dispatch
     // the audit log entry must record:
     // - `initiator` matching the CommandInitiator variant used ("agent")
     // - `sensitivity` matching the command definition ("restricted" for

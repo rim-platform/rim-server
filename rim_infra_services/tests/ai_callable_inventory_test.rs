@@ -1,5 +1,4 @@
-//! Integration test for F1 startup AI-callable inventory audit emission
-//! (Phase 1 Task 8 / Widow §7.5 F1).
+//! Integration test for the AI-callable inventory audit event emitted at startup.
 //!
 //! Verifies that `emit_ai_callable_inventory_audit` emits a structured
 //! `ai_callable_inventory` audit event with the correct count when the live
@@ -50,7 +49,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturingWriter {
 /// Verifies that `emit_ai_callable_inventory_audit` emits a log line
 /// containing the `ai_callable_inventory` event and a non-zero `count` field.
 ///
-/// Uses the live builtin command registry (no synthetic commands) — the Phase 1
+/// Uses the live builtin command registry (no synthetic commands) — the
 /// builtins include at least `chat.post_message` as ai_callable, so count >= 1.
 ///
 /// A scoped tracing subscriber captures JSON output to an in-memory buffer.
@@ -88,9 +87,9 @@ fn emit_ai_callable_inventory_audit_writes_structured_event() {
         output.contains("count="),
         "expected `count=` field in captured log output; got:\n{output}"
     );
-    // The live registry has 45 ai_callable builtins (P4-A5, C2, Tracks 1.1-1.3, Track 4.1).
-    // Assert `count=0` is NOT present — exact-count is pinned in the unit
-    // test `collect_ai_callable_inventory_matches_reviewed_set`.
+    // The live registry has many ai_callable builtins. Assert `count=0` is
+    // NOT present — the exact set is pinned in the unit test
+    // `collect_ai_callable_inventory_matches_reviewed_set`.
     assert!(
         !output.contains("count=0"),
         "ai_callable_inventory count must be non-zero; got:\n{output}"
