@@ -259,7 +259,7 @@ async fn signup_with_instance_invite_commits_atomically() {
     let token_hash = hash_token(raw_token);
     let invite = ii_repo
         .create(NewInstanceInvite {
-            created_by_user_id: admin.id,
+            created_by_user_id: Some(admin.id),
             token_hash,
             expires_at: Utc::now() + Duration::hours(1),
             max_uses: 1,
@@ -433,7 +433,7 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
     let repo = SeaOrmInstanceInviteRepository::new(handle.clone());
     let invite = repo
         .create(NewInstanceInvite {
-            created_by_user_id: admin.id,
+            created_by_user_id: Some(admin.id),
             token_hash: hash_token("rim_iinv_race_token"),
             expires_at: Utc::now() + Duration::hours(1),
             max_uses: 1,

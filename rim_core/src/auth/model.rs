@@ -91,7 +91,8 @@ pub struct NewBootstrapToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceInvite {
     pub id: InstanceInviteId,
-    pub created_by_user_id: UserId,
+    /// The user who issued it; `None` for one the operator issued from the command line.
+    pub created_by_user_id: Option<UserId>,
     pub token_hash: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -103,7 +104,8 @@ pub struct InstanceInvite {
 /// Fields required to persist a new instance invite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewInstanceInvite {
-    pub created_by_user_id: UserId,
+    /// The issuing user; `None` for the operator.
+    pub created_by_user_id: Option<UserId>,
     pub token_hash: String,
     pub expires_at: DateTime<Utc>,
     pub max_uses: i32,
