@@ -5,8 +5,6 @@ use rim_core::relay::model::{DmRequestId, DmRequestStatus};
 
 /// Most pending requests per recipient.
 pub(crate) const MAX_PENDING_PER_USER: i64 = 100;
-/// Most requests one sender principal files on this relay per day.
-pub(crate) const MAX_REQUESTS_PER_SENDER_PER_DAY: i64 = 20;
 /// Most items a pending request holds; later ones are dropped until it is accepted.
 pub(crate) const MAX_HELD_ITEMS: i64 = 3;
 
@@ -25,6 +23,8 @@ pub(crate) struct InboxFacts {
     pub request: Option<(DmRequestId, DmRequestStatus, i64)>,
     pub pending_for_user: i64,
     pub filed_by_sender_today: i64,
+    /// Most requests one sender principal files on this relay per day.
+    pub sender_daily_limit: i64,
 }
 
 /// Where an item goes for one recipient.
@@ -64,7 +64,7 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
         }
         None if facts.trusted => Filing::FileAccepted,
         None if facts.pending_for_user >= MAX_PENDING_PER_USER
-            || facts.filed_by_sender_today >= MAX_REQUESTS_PER_SENDER_PER_DAY =>
+            || facts.filed_by_sender_today >= facts.sender_daily_limit =>
         {
             Filing::Refuse("limited")
         }
@@ -76,6 +76,8 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
 mod tests {
     use super::*;
 
+    const SENDER_LIMIT: i64 = 20;
+
     fn invite() -> InboxFacts {
         InboxFacts {
             is_invite: true,
@@ -85,6 +87,7 @@ mod tests {
             request: None,
             pending_for_user: 0,
             filed_by_sender_today: 0,
+            sender_daily_limit: SENDER_LIMIT,
         }
     }
 
@@ -131,14 +134,14 @@ mod tests {
         );
         assert_eq!(
             file(&InboxFacts {
-                filed_by_sender_today: MAX_REQUESTS_PER_SENDER_PER_DAY,
+                filed_by_sender_today: SENDER_LIMIT,
                 ..invite()
             }),
             Filing::Refuse("limited")
         );
         assert_eq!(
             file(&InboxFacts {
-                filed_by_sender_today: MAX_REQUESTS_PER_SENDER_PER_DAY - 1,
+                filed_by_sender_today: SENDER_LIMIT - 1,
                 ..invite()
             }),
             Filing::FileRequest

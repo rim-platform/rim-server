@@ -1,6 +1,6 @@
 use rim_logging::{LoggingHandle, init_tracing_json};
 use rim_server::server::start_server;
-use rim_server::{bootstrap_cmd, config, franking_key_cmd, server_key_cmd};
+use rim_server::{abuse_cmd, bootstrap_cmd, config, franking_key_cmd, server_key_cmd};
 
 fn initialize() -> Option<LoggingHandle> {
     // Avoid panicking if logger is already initialized (tests, embedding, etc.).
@@ -27,6 +27,7 @@ async fn main() {
             "bootstrap-user" => Some(bootstrap_cmd::run(args).await),
             "server-key" | "peer" => Some(server_key_cmd::run(&subcmd, args).await),
             "franking-key" => Some(franking_key_cmd::run(args)),
+            "principal" | "abuse-reports" => Some(abuse_cmd::run(&subcmd, args).await),
             _ => None,
         };
         if let Some(code) = exit_code {

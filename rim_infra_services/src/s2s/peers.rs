@@ -13,7 +13,7 @@ use rim_s2s::{
     verify_descriptor,
 };
 use rim_services::command::rate_limit::RateLimitDecision;
-use rim_services::s2s::dto::{PeerDto, PeerKeysDto, PeerLookup};
+use rim_services::s2s::dto::{PeerBlockChange, PeerDto, PeerKeysDto, PeerLookup};
 use rim_services::s2s::service::PeerService;
 use rim_services::{ServiceError, ServiceResult};
 use serde::Deserialize;
@@ -513,6 +513,39 @@ impl PeerService for DefaultPeerService {
             );
         }
         Ok(existed)
+    }
+
+    async fn set_blocked(&self, server_id: &str, blocked: bool) -> ServiceResult<PeerBlockChange> {
+        let Some(peer) = self.repo.find(server_id).await? else {
+            return Ok(PeerBlockChange::NotPinned);
+        };
+        let (from, to) = if blocked {
+            (PeerStatus::Active, PeerStatus::Blocked)
+        } else {
+            (PeerStatus::Blocked, PeerStatus::Active)
+        };
+        if peer.status == PeerStatus::Forked {
+            return Ok(PeerBlockChange::Forked);
+        }
+        if peer.status == to {
+            return Ok(PeerBlockChange::Unchanged);
+        }
+        if !self.repo.replace_status(server_id, from, to).await? {
+            // Changed since it was read: report what is stored now.
+            return Ok(match self.repo.find(server_id).await?.map(|p| p.status) {
+                None => PeerBlockChange::NotPinned,
+                Some(PeerStatus::Forked) => PeerBlockChange::Forked,
+                Some(_) => PeerBlockChange::Unchanged,
+            });
+        }
+        tracing::info!(
+            target = "audit",
+            event = if blocked { "s2s.peer_blocked" } else { "s2s.peer_unblocked" },
+            peer_server_id = %server_id,
+            "an operator {} a peer server",
+            if blocked { "blocked" } else { "unblocked" }
+        );
+        Ok(PeerBlockChange::Changed)
     }
 }
 

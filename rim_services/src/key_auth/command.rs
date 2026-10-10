@@ -52,9 +52,13 @@ pub struct SignupWithKeyCmd {
     pub device: SignedPayload,
     /// A `login` statement signed by that device over a fresh challenge from this server.
     pub proof: SignedPayload,
-    /// The deployment's mode: invite-only requires `token`, open refuses one.
+    /// The deployment's mode: invite-only requires `token`, open refuses one, pow takes
+    /// `token` or `proof_of_work`.
     pub registration_mode: RegistrationMode,
     pub token: Option<SignupToken>,
+    /// An 8-byte nonce, unpadded base64url, whose hash over this server's id and the
+    /// inception has the mode's leading zero bits.
+    pub proof_of_work: Option<String>,
     /// Client IP for the open-mode signup rate limit (`"unknown"` when unavailable).
     pub remote_ip: String,
 }

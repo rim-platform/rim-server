@@ -33,13 +33,17 @@ impl From<rim_services::auth::dto::InviteDto> for Invite {
 /// GraphQL enum for the deployment-wide registration mode.
 ///
 /// Mirrors [`rim_services::auth::dto::RegistrationMode`].
-/// Variants appear in the SDL as `INVITE_ONLY` and `OPEN`.
+/// Variants appear in the SDL as `INVITE_ONLY`, `OPEN` and `POW`.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum RegistrationModeGql {
     /// Default: signup requires a valid token (bootstrap, instance, or workspace invite).
     InviteOnly,
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,
+    /// `RIM_REGISTRATION_POW_BITS`: `signupWithKey` takes a token or a proof-of-work whose
+    /// difficulty the discovery document's `registration.powBits` gives; a password signup
+    /// takes a token.
+    Pow,
 }
 
 impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
@@ -48,6 +52,7 @@ impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
         match m {
             D::InviteOnly => Self::InviteOnly,
             D::Open => Self::Open,
+            D::Pow { .. } => Self::Pow,
         }
     }
 }

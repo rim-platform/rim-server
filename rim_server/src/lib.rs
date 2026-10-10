@@ -3,6 +3,7 @@
 //! The binary (`main.rs`) and the two-server tests (`rim_api/tests/s2s_e2e.rs`) are the
 //! consumers of the public modules.
 
+pub mod abuse_cmd;
 mod alert_handlers;
 pub mod app;
 pub mod bootstrap_cmd;
