@@ -46,7 +46,6 @@ use rim_services::remote_workspace::service::{
 };
 use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
-#[allow(dead_code)] // shutdown_tx is held to keep the watch channel open
 pub struct AppRuntime {
     pub schema: AppSchema,
     pub request_authenticator: Arc<dyn RequestAuthenticator>,
@@ -62,6 +61,7 @@ pub struct AppRuntime {
     pub s2s: S2sRuntime,
     /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
+    /// The background tasks' stop signal: they stop once it is dropped.
     pub shutdown_tx: watch::Sender<bool>,
 }
 
@@ -121,7 +121,7 @@ fn descriptor_settings(
     config: &RIMConfig,
     role: ServerRole,
     s2s_origin: Option<&str>,
-    registration: crate::config::RegistrationMode,
+    registration: &rim_services::auth::dto::RegistrationMode,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
     let websocket = match origin.split_once("://") {
@@ -141,16 +141,16 @@ fn descriptor_settings(
             clock_skew_seconds: 300,
             max_deliver_items: 256,
         },
-        registration: match registration {
-            crate::config::RegistrationMode::Open => Registration {
+        registration: match *registration {
+            rim_services::auth::dto::RegistrationMode::Open => Registration {
                 mode: RegistrationMode::Open,
                 pow_bits: None,
             },
-            crate::config::RegistrationMode::InviteOnly => Registration {
+            rim_services::auth::dto::RegistrationMode::InviteOnly => Registration {
                 mode: RegistrationMode::Invite,
                 pow_bits: None,
             },
-            crate::config::RegistrationMode::Pow { bits } => Registration {
+            rim_services::auth::dto::RegistrationMode::Pow { bits } => Registration {
                 mode: RegistrationMode::Pow,
                 pow_bits: Some(bits),
             },
@@ -164,6 +164,7 @@ async fn build_s2s(
     config: &RIMConfig,
     db: &DbHandle,
     raw_db: &sea_orm::DatabaseConnection,
+    registration: &rim_services::auth::dto::RegistrationMode,
 ) -> std::io::Result<S2sRuntime> {
     let role = config.server_role().map_err(io_error("RIM_ROLE"))?;
     let denied_peers = config
@@ -179,9 +180,6 @@ async fn build_s2s(
     let loaded = server_key::load_or_create(identity_repo.as_ref(), &key_files)
         .await
         .map_err(|e| io_error("server key")(format!("{e:#}")))?;
-    let registration = config
-        .registration_mode()
-        .map_err(io_error("registration"))?;
     let settings = descriptor_settings(config, role, s2s_origin.as_deref(), registration);
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
@@ -322,6 +320,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
     let email_disabled = feature_gate.state(ServerFeature::Email).is_disabled();
+    let registration_mode = config.registration_mode().map_err(std::io::Error::other)?;
     let db = config
         .connect_database()
         .await
@@ -360,7 +359,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // a real exploit.
     rim_infra_services::command::emit_ai_callable_inventory_audit();
 
-    let s2s = build_s2s(config, &db, &raw_db).await?;
+    let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
 
     let broadcaster = InMemoryBroadcaster::new(1024);
     let broadcaster_arc: Arc<dyn Broadcaster> = Arc::new(broadcaster.clone());
@@ -697,25 +696,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let moderation_service = service_provider.moderation_service();
     let plugin_bundle_service = service_provider.plugin_bundle_service();
 
-    // ── Registration mode boot-time validation (§6.3) ──────────────────────
-    let registration_mode = config.registration_mode().map_err(std::io::Error::other)?;
-
-    // marker: see spec §4.7 R2 — limiter lives inside DefaultAuthService;
-    // this token is a typed marker carried through RegistrationContext for
-    // future-extensibility (e.g. swapping in a Redis-backed limiter).
-    let preview_rate_limiter = Arc::new(rim_services::auth::dto::PreviewInviteRateLimiterToken);
-
-    // marker: see spec §6.3 R2 — same rationale as preview_rate_limiter above.
-    let signup_rate_limiter = Arc::new(rim_services::auth::dto::SignupRateLimiterToken);
-
-    if registration_mode == crate::config::RegistrationMode::Open {
+    if registration_mode == rim_services::auth::dto::RegistrationMode::Open {
         tracing::warn!(
             target: "audit",
             "RIM_OPEN_REGISTRATION=true: open registration mode is active; \
              instance accepts signups without invitation"
         );
     }
-    if let crate::config::RegistrationMode::Pow { bits } = registration_mode {
+    if let rim_services::auth::dto::RegistrationMode::Pow { bits } = registration_mode {
         tracing::warn!(
             target: "audit",
             pow_bits = bits,
@@ -724,16 +712,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         );
     }
 
-    let registration_mode_dto = match registration_mode {
-        crate::config::RegistrationMode::InviteOnly => {
-            rim_services::auth::dto::RegistrationMode::InviteOnly
-        }
-        crate::config::RegistrationMode::Open => rim_services::auth::dto::RegistrationMode::Open,
-        crate::config::RegistrationMode::Pow { bits } => {
-            rim_services::auth::dto::RegistrationMode::Pow { bits }
-        }
-    };
-
     let schema = build_schema(
         Arc::clone(&service_provider),
         broadcaster,
@@ -741,9 +719,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         typing_tracker as Arc<dyn TypingService>,
         observers_for_schema,
         rim_api::RegistrationContext {
-            registration_mode: Arc::new(registration_mode_dto),
-            preview_rate_limiter,
-            signup_rate_limiter,
+            registration_mode: Arc::new(registration_mode),
         },
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,

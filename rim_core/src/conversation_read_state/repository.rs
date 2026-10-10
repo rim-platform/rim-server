@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use mockall::automock;
 
 use crate::conversation::model::ConversationId;
-use crate::conversation_read_state::model::ConversationReadState;
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
@@ -17,12 +16,6 @@ pub trait ConversationReadStateRepository: Send + Sync {
         conversation_id: ConversationId,
         last_read_at: DateTime<Utc>,
     ) -> RepoResult<()>;
-
-    async fn get(
-        &self,
-        user_id: UserId,
-        conversation_id: ConversationId,
-    ) -> RepoResult<Option<ConversationReadState>>;
 
     async fn get_unread_counts(
         &self,

@@ -29,9 +29,6 @@
 //!   replica won't see tokens issued on the first. Phase 1 ships single-node
 //!   only — Fury §5 risk #3. Phase 5+ will swap the store for a Redis-backed
 //!   impl behind the same trait without changing call sites.
-//! - **Out-of-band proofs.** The `OutOfBand` variant is a placeholder
-//!   (M5 / MCP forward-compat). `verify_in_band` returns `Unsupported` for
-//!   it — the actual MCP capability/consent integration ships with Phase 6.
 //! - **Audit emission.** Issue/verify success+failure are surfaced via
 //!   structured `tracing` events at this layer, but the dedicated
 //!   `target: "audit"` sink does not yet exist (N3 / Phase 4).
@@ -63,14 +60,9 @@ pub const MAX_CONFIRMATION_TTL_SECS: i64 = 60;
 // Public types — wire surface
 // ---------------------------------------------------------------------------
 
-/// A proof submitted by a caller to attempt execution of a dangerous command.
-///
-/// `InBandToken` is the standard flow: the server previously issued
-/// `token` along with `args_hash`, and the caller now submits both.
-///
-/// `OutOfBand` is reserved for MCP-style flows where the user's consent
-/// arrives via a side channel (e.g. an MCP capability grant). Phase 1 only
-/// records the request-id; verification returns `Unsupported`.
+/// A proof submitted by a caller to attempt execution of a dangerous command:
+/// the server previously issued `token` along with `args_hash`, and the
+/// caller now submits both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmationProof {
     InBandToken {
@@ -79,9 +71,6 @@ pub enum ConfirmationProof {
         /// recomputes this from the args actually passed to `execute_command`
         /// — mismatch ⇒ TOCTOU attempt ⇒ rejection.
         args_hash: String,
-    },
-    OutOfBand {
-        request_id: String,
     },
 }
 
@@ -93,20 +82,6 @@ pub struct ConfirmationChallengeDto {
     pub token: String,
     pub args_hash: String,
     pub expires_at: DateTime<Utc>,
-}
-
-/// High-level outcome of the confirmation gate, surfaced by
-/// `execute_command` so the caller knows whether to retry with a proof.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfirmationFlowDto {
-    /// Command was executed (either non-dangerous, or proof verified).
-    NotRequired,
-    /// Caller must re-submit with [`ConfirmationProof::InBandToken`] built
-    /// from these challenge parameters.
-    ConfirmationRequired(ConfirmationChallengeDto),
-    /// Caller submitted a proof but it was expired, single-use-consumed,
-    /// args-mismatched, or context-mismatched — re-issue and retry.
-    ConfirmationStale,
 }
 
 /// Failure modes for `verify_in_band`. Mapped to `ServiceError` at the
@@ -125,8 +100,6 @@ pub enum ConfirmationError {
     ContextMismatch,
     #[error("actor mismatch — proof was issued for a different user")]
     ActorMismatch,
-    #[error("out-of-band proofs are not supported in Phase 1")]
-    Unsupported,
 }
 
 impl ConfirmationError {
@@ -477,12 +450,6 @@ pub fn issue_in_band_with_ttl(
 /// verification subsequently fails on args / command / context / actor /
 /// expiry. This defeats probe attacks that try to enumerate token
 /// validity without spending it.
-///
-/// `OutOfBand` proofs short-circuit at the top with `Unsupported` — no
-/// token exists to consume because none was ever issued (the
-/// `OutOfBand` flow doesn't go through `issue_in_band`). Phase 6 / MCP
-/// will add a separate `verify_out_of_band` entry point with its own
-/// store backing.
 pub fn verify_in_band(
     store: &dyn ConfirmationStore,
     proof: &ConfirmationProof,
@@ -491,10 +458,10 @@ pub fn verify_in_band(
     args: &Option<serde_json::Value>,
     context: &Option<CommandContextDto>,
 ) -> Result<(), ConfirmationError> {
-    let (token, claimed_args_hash) = match proof {
-        ConfirmationProof::InBandToken { token, args_hash } => (token, args_hash),
-        ConfirmationProof::OutOfBand { .. } => return Err(ConfirmationError::Unsupported),
-    };
+    let ConfirmationProof::InBandToken {
+        token,
+        args_hash: claimed_args_hash,
+    } = proof;
 
     let claims = store.take(token).ok_or(ConfirmationError::UnknownToken)?;
     let claims = claims.0;
@@ -744,21 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn out_of_band_proof_returns_unsupported_in_phase1() {
-        let store = InMemoryConfirmationStore::new();
-        let actor = actor();
-        let proof = ConfirmationProof::OutOfBand {
-            request_id: "mcp_grant_123".to_string(),
-        };
-        let err = verify_in_band(&store, &proof, &actor, "test.cmd", &None, &None).unwrap_err();
-        assert_eq!(err, ConfirmationError::Unsupported);
-        assert!(
-            !err.is_stale(),
-            "Unsupported is fundamental, not stale — caller cannot recover by retry",
-        );
-    }
-
-    #[test]
     fn unknown_token_rejected() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
@@ -802,7 +754,6 @@ mod tests {
         assert!(!ConfirmationError::CommandMismatch.is_stale());
         assert!(!ConfirmationError::ContextMismatch.is_stale());
         assert!(!ConfirmationError::ActorMismatch.is_stale());
-        assert!(!ConfirmationError::Unsupported.is_stale());
     }
 
     #[test]

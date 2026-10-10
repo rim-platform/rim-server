@@ -80,20 +80,4 @@ impl CommandQueries {
 
         Ok(commands.into_iter().map(Into::into).collect())
     }
-
-    async fn command(&self, ctx: &Context<'_>, command_id: String) -> Result<Option<Command>> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
-        let ai_commands = feature_state(ctx, ServerFeature::AiCommands)?;
-
-        let command = svc
-            .get_command(rim_services::command::request::GetCommandQuery {
-                actor: Actor::new(actor),
-                command_id,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(command.map(|c| shown_command(&ai_commands, c.into())))
-    }
 }

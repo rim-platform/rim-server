@@ -1,7 +1,7 @@
 # Pagination Contract
 
-This repo uses cursor-based pagination for any list that can grow without bound (threads, messages,
-inbox conversations, etc.). The goal is: stable ordering, no duplicates between pages, and
+This repo uses cursor-based pagination for any list that can grow without bound (messages, inbox
+conversations, etc.). The goal is: stable ordering, no duplicates between pages, and
 consistent semantics across all storage backends.
 
 ## Definitions
@@ -57,9 +57,6 @@ If `items` is empty, both cursors are `None`.
 - Messages in a thread:
   - `ORDER BY sent_at DESC, id DESC` (DB fetches newest-first; API returns in display order oldest-first)
   - cursor: `(sent_at, message_id)`
-- Threads in a conversation:
-  - `ORDER BY last_message_at DESC, id DESC` (thread-first view)
-  - cursor: `(last_message_at, thread_id)`
 - Inbox conversations (DM + Group):
   - `ORDER BY last_activity_at DESC, id DESC`
   - cursor: `(last_activity_at, conversation_id)`

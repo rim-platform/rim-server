@@ -17,7 +17,7 @@ pub enum ServerFeature {
     /// The workspace plugin registry and plugin bundle hosting.
     WorkspacePlugins,
     /// The surface an AI agent uses: command discovery, the agent-facing command metadata and
-    /// commands or macros run with an agent or MCP initiator.
+    /// commands or macros run with an agent initiator.
     AiCommands,
 }
 

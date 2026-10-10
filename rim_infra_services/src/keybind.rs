@@ -4,11 +4,10 @@ use rim_core::keybind::model::{Keybind, KeybindSubject, NewKeybind, UpdateKeybin
 use rim_services::command::request::GetCommandQuery;
 use rim_services::command::service::CommandService;
 use rim_services::keybind::dto::{
-    DefaultKeybindDto, KeybindDto, KeybindLayersDto, KeybindScopeDto, KeybindSourceDto,
+    DefaultKeybindDto, KeybindDto, KeybindScopeDto, KeybindSourceDto,
 };
 use rim_services::keybind::request::{
-    CreateKeybindCmd, DeleteKeybindCmd, InspectKeybindLayersQuery, ListDefaultKeybindsQuery,
-    ListKeybindsQuery, ResolveKeybindQuery, ResolveKeybindsQuery, UpdateKeybindCmd,
+    CreateKeybindCmd, DeleteKeybindCmd, ResolveKeybindsQuery, UpdateKeybindCmd,
 };
 use rim_services::keybind::service::KeybindService;
 use rim_services::{ServiceError, ServiceResult};
@@ -365,78 +364,6 @@ impl DefaultKeybindService {
         Ok(effective)
     }
 
-    async fn inspect_layers(
-        &self,
-        actor: rim_services::Actor,
-        workspace_id: Option<rim_core::server::model::WorkspaceId>,
-        keystroke: &str,
-        context: rim_services::keybind::dto::KeybindContextDto,
-    ) -> ServiceResult<KeybindLayersDto> {
-        let default_keybind = Self::default_keybinds()
-            .into_iter()
-            .find(|keybind| keybind.keystroke == keystroke && keybind.context == context);
-
-        let user_keybind = self
-            .repos
-            .keybind_repo
-            .get_by_binding(
-                rim_core::keybind::model::KeybindScope::User,
-                KeybindSubject::User(actor.user_id),
-                context.into(),
-                keystroke,
-            )
-            .await?
-            .filter(|keybind| keybind.is_enabled)
-            .map(Self::to_dto);
-
-        let workspace_keybind = if let Some(workspace_id) = workspace_id {
-            ensure_server_member(
-                self.repos.server_member_repo.as_ref(),
-                workspace_id,
-                actor.user_id,
-            )
-            .await?;
-
-            self.repos
-                .keybind_repo
-                .get_by_binding(
-                    rim_core::keybind::model::KeybindScope::Workspace,
-                    KeybindSubject::Workspace(workspace_id),
-                    context.into(),
-                    keystroke,
-                )
-                .await?
-                .filter(|keybind| keybind.is_enabled)
-                .map(Self::to_dto)
-        } else {
-            None
-        };
-
-        let resolved_persisted_keybind = workspace_keybind
-            .clone()
-            .or_else(|| user_keybind.clone())
-            .or_else(|| {
-                default_keybind.clone().map(|keybind| KeybindDto {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: KeybindScopeDto::User,
-                    source: keybind.source,
-                    workspace_id: None,
-                    keystroke: keybind.keystroke,
-                    command_id: keybind.command_id,
-                    context: keybind.context,
-                    preset_args: keybind.preset_args,
-                    is_enabled: true,
-                })
-            });
-
-        Ok(KeybindLayersDto {
-            default_keybind,
-            user_keybind,
-            workspace_keybind,
-            resolved_persisted_keybind,
-        })
-    }
-
     async fn validate_command_bindable(
         &self,
         actor: rim_services::Actor,
@@ -463,37 +390,6 @@ impl DefaultKeybindService {
 
 #[async_trait]
 impl KeybindService for DefaultKeybindService {
-    async fn list_default_keybinds(
-        &self,
-        _query: ListDefaultKeybindsQuery,
-    ) -> ServiceResult<Vec<DefaultKeybindDto>> {
-        Ok(Self::default_keybinds())
-    }
-
-    async fn list_keybinds(&self, query: ListKeybindsQuery) -> ServiceResult<Vec<KeybindDto>> {
-        let subject =
-            Self::subject_for_request(query.actor.user_id, query.scope, query.workspace_id)?;
-        match subject {
-            KeybindSubject::User(user_id) => {
-                if user_id != query.actor.user_id {
-                    return Err(ServiceError::PermissionDenied);
-                }
-            }
-            KeybindSubject::Workspace(workspace_id) => {
-                ensure_server_member(
-                    self.repos.server_member_repo.as_ref(),
-                    workspace_id,
-                    query.actor.user_id,
-                )
-                .await?;
-            }
-        }
-
-        let mut keybinds = self.repos.keybind_repo.list_for_subject(subject).await?;
-        Self::sort_keybinds(&mut keybinds);
-        Ok(keybinds.into_iter().map(Self::to_dto).collect())
-    }
-
     async fn resolve_keybinds(
         &self,
         query: ResolveKeybindsQuery,
@@ -503,34 +399,6 @@ impl KeybindService for DefaultKeybindService {
             .await?
             .into_values()
             .collect())
-    }
-
-    async fn resolve_keybind(
-        &self,
-        query: ResolveKeybindQuery,
-    ) -> ServiceResult<Option<KeybindDto>> {
-        Ok(self
-            .inspect_layers(
-                query.actor,
-                query.workspace_id,
-                &query.keystroke,
-                query.context,
-            )
-            .await?
-            .resolved_persisted_keybind)
-    }
-
-    async fn inspect_keybind_layers(
-        &self,
-        query: InspectKeybindLayersQuery,
-    ) -> ServiceResult<KeybindLayersDto> {
-        self.inspect_layers(
-            query.actor,
-            query.workspace_id,
-            &query.keystroke,
-            query.context,
-        )
-        .await
     }
 
     async fn create_keybind(&self, cmd: CreateKeybindCmd) -> ServiceResult<KeybindDto> {
@@ -672,8 +540,7 @@ mod tests {
     };
     use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::MockCommandService;
-    use rim_services::keybind::dto::{KeybindContextDto, KeybindScopeDto};
-    use rim_services::keybind::request::InspectKeybindLayersQuery;
+    use rim_services::keybind::dto::KeybindScopeDto;
 
     struct FakeKeybindRepository {
         entries: std::sync::Mutex<Vec<Keybind>>,
@@ -748,7 +615,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(
                 &self,
                 server_id: rim_core::server::model::ServerId,
@@ -1058,122 +924,5 @@ mod tests {
         assert_eq!(ctrl_r.source, KeybindSourceDto::Workspace);
         let ctrl_k = resolved.iter().find(|k| k.keystroke == "Ctrl+K").unwrap();
         assert_eq!(ctrl_k.source, KeybindSourceDto::Default);
-    }
-
-    #[tokio::test]
-    async fn resolve_single_keybind_returns_highest_precedence_binding() {
-        let actor = actor();
-        let workspace_id = rim_core::server::model::WorkspaceId::new();
-        let keybind_repo = FakeKeybindRepository {
-            entries: std::sync::Mutex::new(vec![Keybind {
-                id: rim_core::keybind::model::KeybindId::new(),
-                scope: KeybindScope::Workspace,
-                subject: KeybindSubject::Workspace(workspace_id),
-                keystroke: "Ctrl+R".to_string(),
-                command_id: "workspace.open_command_palette".to_string(),
-                context: KeybindContext::Global,
-                preset_args: None,
-                is_enabled: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            }]),
-            created: std::sync::Mutex::new(None),
-        };
-        let svc = service(keybind_repo, MockCommandService::new());
-
-        let resolved = svc
-            .resolve_keybind(ResolveKeybindQuery {
-                actor,
-                workspace_id: Some(workspace_id),
-                keystroke: "Ctrl+R".to_string(),
-                context: rim_services::keybind::dto::KeybindContextDto::Global,
-            })
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(resolved.command_id, "workspace.open_command_palette");
-        assert_eq!(resolved.source, KeybindSourceDto::Workspace);
-    }
-
-    #[tokio::test]
-    async fn inspect_keybind_layers_returns_layered_state() {
-        let actor = actor();
-        let workspace_id = rim_core::server::model::WorkspaceId::new();
-        let keybind_repo = FakeKeybindRepository {
-            entries: std::sync::Mutex::new(vec![
-                Keybind {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: KeybindScope::User,
-                    subject: KeybindSubject::User(actor.user_id),
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.cycle_recent_activity".to_string(),
-                    context: KeybindContext::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                    created_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                },
-                Keybind {
-                    id: rim_core::keybind::model::KeybindId::new(),
-                    scope: KeybindScope::Workspace,
-                    subject: KeybindSubject::Workspace(workspace_id),
-                    keystroke: "Ctrl+R".to_string(),
-                    command_id: "workspace.open_command_palette".to_string(),
-                    context: KeybindContext::Global,
-                    preset_args: None,
-                    is_enabled: true,
-                    created_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                },
-            ]),
-            created: std::sync::Mutex::new(None),
-        };
-        let svc = service(keybind_repo, MockCommandService::new());
-
-        let layers = svc
-            .inspect_keybind_layers(InspectKeybindLayersQuery {
-                actor,
-                workspace_id: Some(workspace_id),
-                keystroke: "Ctrl+R".to_string(),
-                context: KeybindContextDto::Global,
-            })
-            .await
-            .unwrap();
-
-        assert!(layers.default_keybind.is_some());
-        assert!(layers.user_keybind.is_some());
-        assert!(layers.workspace_keybind.is_some());
-        assert_eq!(
-            layers.resolved_persisted_keybind.as_ref().map(|k| k.source),
-            Some(KeybindSourceDto::Workspace)
-        );
-    }
-
-    #[tokio::test]
-    async fn list_default_keybinds_returns_defaults() {
-        let svc = service(
-            FakeKeybindRepository {
-                entries: std::sync::Mutex::new(vec![]),
-                created: std::sync::Mutex::new(None),
-            },
-            MockCommandService::new(),
-        );
-
-        let defaults = svc
-            .list_default_keybinds(ListDefaultKeybindsQuery { actor: actor() })
-            .await
-            .unwrap();
-
-        assert!(
-            defaults
-                .iter()
-                .any(|k| k.command_id == "workspace.open_command_palette")
-        );
-        assert!(
-            defaults
-                .iter()
-                .all(|k| k.source == KeybindSourceDto::Default)
-        );
     }
 }

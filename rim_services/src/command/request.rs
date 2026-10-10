@@ -25,13 +25,9 @@ pub struct ExecuteCommandCmd {
     /// Server-issued, server-verified confirmation proof. `None` means the
     /// caller is not asserting any prior confirmation — the gate decides
     /// based on the command's `dangerous` flag whether to issue a fresh
-    /// challenge (returning [`crate::command::confirmation::ConfirmationFlowDto::ConfirmationRequired`])
-    /// or to execute. Closes H1 (TOCTOU) by binding the proof to
+    /// challenge (a `ConfirmationRequired` result carrying it) or to
+    /// execute. Closes H1 (TOCTOU) by binding the proof to
     /// `(actor, command_id, args, context)` server-side.
-    ///
-    /// Replaces the pre-Phase-1 `confirmed_dangerous: bool` flag. The
-    /// GraphQL boundary keeps a deprecated `confirmed_dangerous`
-    /// back-compat alias until the frontend modal lands in Phase 4.
     pub confirmation: Option<ConfirmationProof>,
     pub is_pipe: bool,
     /// Who issued this command. Drives the audit-log entry, the

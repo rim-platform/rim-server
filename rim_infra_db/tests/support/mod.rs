@@ -108,7 +108,6 @@ TRUNCATE TABLE
   device_key,
   device_link,
   device_request_seen,
-  franking_key,
   host_delegation,
   host_event_stream,
   instance_invite,
@@ -289,7 +288,6 @@ impl TestCtx {
             forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
-            attachments: vec![],
         })
         .await
         .unwrap()
@@ -310,7 +308,6 @@ impl TestCtx {
             forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
-            attachments: vec![],
         })
         .await
         .unwrap()

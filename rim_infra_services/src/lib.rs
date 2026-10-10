@@ -136,18 +136,12 @@ mod relay_unit_tests;
 mod encrypted_message_unit_tests;
 
 pub use auth::DefaultAuthService;
-pub use channel_lens::ChannelLensRepos;
-pub use custom_emoji::CustomEmojiRepos;
 pub use keyed_rate_limiter::KeyedRateLimiter;
-pub use macro_def::MacroRepos;
-pub use notification::NotificationRepos;
-pub use notification_preference::NotificationPreferenceRepos;
-pub use pipeline::PipelineRepos;
 pub use provider::{DefaultAppServiceProvider, FederationHooks};
 pub use registration_rate_limiter::RegistrationRateLimiter;
-pub use repos::{
-    AppRepos, AttachmentRepos, AuthRepos, CommandRepos, ConversationRepos, KeybindRepos,
-    MentionRepos, MessageRepos, PinRepos, ReactionRepos, ReadStateRepos, RequestAuthRepos,
-    ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
+// pub: rim_server builds `AppRepos` at boot; the integration tests build both directly.
+pub use repos::{AppRepos, CommandRepos};
+pub(crate) use repos::{
+    AttachmentRepos, AuthRepos, ConversationRepos, MessageRepos, PinRepos, ReactionRepos,
+    ReadStateRepos, RequestAuthRepos, ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
 };
-pub use workspace_state::WorkspaceStateRepos;

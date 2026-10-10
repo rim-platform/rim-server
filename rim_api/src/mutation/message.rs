@@ -44,7 +44,6 @@ impl MessageMutations {
                 conversation_id,
                 text: Some(input.text),
                 parent_message_id,
-                attachments: vec![],
                 forwarded_from_message_id,
             })
             .await
@@ -84,7 +83,6 @@ impl MessageMutations {
                 root_message_id,
                 text: text_for_preview.clone(),
                 parent_message_id,
-                attachments: vec![],
             })
             .await
             .map_err(map_service_error)?;

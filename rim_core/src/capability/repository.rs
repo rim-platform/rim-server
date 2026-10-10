@@ -13,15 +13,9 @@ use crate::repository::error::RepoResult;
 #[async_trait]
 pub trait CapabilityRegistryRepository: Send + Sync {
     /// Insert-only seed semantics: write the row when missing, **leave
-    /// existing rows untouched** (including their `retired_at` value).
-    ///
-    /// This is the boot-path entrypoint for builtin-cap seeding. It is
-    /// deliberately distinct from [`Self::upsert`] so a deploy cannot
-    /// silently un-retire an operator-disabled builtin (Black Widow Gate 4
-    /// finding M3): an operator who soft-retires `audit.read` company-wide
-    /// expects that policy to survive every redeploy. The boot path calls
-    /// this method; only plugin-install / explicit re-classify paths call
-    /// the active-write `upsert`.
+    /// existing rows untouched** (including their `retired_at` value), so a
+    /// deploy cannot un-retire an operator-disabled builtin: an operator who
+    /// soft-retires `audit.read` expects that policy to survive every redeploy.
     ///
     /// `is_self_scoped` — P6-FU5: stored alongside the key so
     /// `CapabilityService::check()` can enforce workspace-context requirements
@@ -36,25 +30,6 @@ pub trait CapabilityRegistryRepository: Send + Sync {
         plugin_id: Option<uuid::Uuid>,
         is_self_scoped: bool,
     ) -> RepoResult<()>;
-
-    /// Active upsert: insert when missing; on existing row, refresh
-    /// `source_kind` / `plugin_id` / `is_self_scoped` AND clear `retired_at`.
-    ///
-    /// Reserved for **plugin lifecycle** (re-install lifts a prior
-    /// soft-retire cleanly) and explicit operator re-classify flows. The
-    /// boot path MUST NOT call this — see [`Self::upsert_if_missing`].
-    async fn upsert(
-        &self,
-        capability_key: &str,
-        source_kind: CapabilitySourceKind,
-        plugin_id: Option<uuid::Uuid>,
-        is_self_scoped: bool,
-    ) -> RepoResult<()>;
-
-    /// Marks every still-active row matching the predicate as retired.
-    /// Used at plugin uninstall (Phase 5) — kept on the trait now so the
-    /// service surface is stable across phases.
-    async fn retire_for_plugin(&self, plugin_id: uuid::Uuid) -> RepoResult<()>;
 
     /// Returns the full registry row, retired or not. The runtime gate treats a
     /// missing row or one with `retired_at` set as unregistered.

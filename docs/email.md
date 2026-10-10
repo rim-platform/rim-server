@@ -67,9 +67,9 @@ the reset link and sends `templates::password_reset(to, link)`. **Send failure i
 the request still returns `Ok(())` either way, so reset requests never leak whether a username
 exists and never fail because of an SMTP hiccup.
 
-### Invites (server invites and instance invites)
+### Invites
 
-Both `createInvite` and `createInstanceInvite` accept an optional `recipientEmail`. If provided:
+`createInvite` accepts an optional `recipientEmail`. If provided:
 1. The address is validated server-side (same format check used for signup emails) **before**
    the invite is persisted — a malformed address returns a validation error immediately, rather
    than silently dropping the invite email after the invite is already created.

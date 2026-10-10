@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use rim_core::macro_def::model::{MacroDef, MacroId};
 use rim_core::server::model::ServerId;
-use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+use rim_core::server_member::model::{ServerMember, ServerMemberRole};
 use rim_core::user::model::UserId;
 use rim_infra_services::macro_def::{DefaultMacroService, MacroRepos, MacroServices};
 use rim_services::Actor;
@@ -73,7 +73,6 @@ mockall::mock! {
             server_id: ServerId,
             user_id: UserId,
         ) -> RepoResult<Vec<MacroDef>>;
-        async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>>;
         async fn count_for_user(
             &self,
             server_id: ServerId,
@@ -89,7 +88,6 @@ mockall::mock! {
     TestServerMemberRepository {}
     #[async_trait]
     impl ServerMemberRepository for TestServerMemberRepository {
-        async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
         async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
         async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
         async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;

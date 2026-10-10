@@ -1,4 +1,4 @@
-use rim_logging::{LoggingHandle, init_tracing_json};
+use rim_logging::{LoggingHandle, init_logging};
 use rim_server::server::start_server;
 use rim_server::{
     abuse_cmd, audit_cmd, bootstrap_cmd, config, franking_key_cmd, invite_cmd, server_key_cmd,
@@ -7,7 +7,7 @@ use rim_server::{
 /// Starts logging and returns the handle that keeps the audit file writer alive. Without
 /// logging the audit trail would be lost, so a failure ends the process.
 fn initialize() -> LoggingHandle {
-    let handle = match init_tracing_json() {
+    let handle = match init_logging() {
         Ok(handle) => handle,
         Err(e) => {
             eprintln!("fatal: could not start logging: {e}");

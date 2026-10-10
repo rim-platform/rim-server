@@ -17,13 +17,11 @@ mod tests {
     use rim_core::user::model::UserId;
     use rim_core::user::repository::MockUserRepository;
     use rim_services::message::command::{
-        DeleteMessageCmd, EditMessageCmd, GetMessageQuery, GetMessageReferenceQuery,
-        ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, MessageChangeCursor,
-        SearchMessagesQuery, SendMessageCmd,
+        DeleteMessageCmd, EditMessageCmd, GetMessageQuery, ListMessageChangesQuery,
+        ListMessagesQuery, ListThreadMessagesQuery, MessageChangeCursor, SearchMessagesQuery,
+        SendMessageCmd,
     };
-    use rim_services::message::dto::{
-        ConversationChangesStatus, MessageChangeKind, MessageReferenceDto,
-    };
+    use rim_services::message::dto::{ConversationChangesStatus, MessageChangeKind};
     use rim_services::message::service::MessageService;
     use rim_services::{Actor, ServiceError};
 
@@ -162,7 +160,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("   ".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await
@@ -251,7 +248,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("hi".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await
@@ -670,81 +666,6 @@ mod tests {
         assert_eq!(dto.thread_id, None);
     }
 
-    #[tokio::test]
-    async fn get_message_reference_returns_timeline_permalink() {
-        let actor_id = UserId::new();
-        let server_id = ServerId::new();
-        let conv_id = ConversationId::new();
-        let conv = conversation(server_id);
-        let msg = message(actor_id, conv_id);
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_, _| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let mut conversation_repo = MockConversationRepository::new();
-        let conv_for_repo = conv.clone();
-        conversation_repo.expect_get_by_id().returning(move |_| {
-            let c = conv_for_repo.clone();
-            Box::pin(async move { Ok(Some(c)) })
-        });
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-
-        let mut message_repo = MockMessageRepository::new();
-        let msg_for_repo = msg.clone();
-        message_repo
-            .expect_get_by_id()
-            .return_once(move |_| Box::pin(async move { Ok(Some(msg_for_repo)) }));
-
-        let svc = DefaultMessageService::new(
-            MessageRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
-                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
-                message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
-                server_member_repo: Arc::new(server_member_repo),
-                user_repo: Arc::new(MockUserRepository::new()),
-            },
-            None,
-            test_observers(),
-        );
-
-        let reference: MessageReferenceDto = svc
-            .get_message_reference(GetMessageReferenceQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                conversation_id: conv_id,
-                message_id: msg.id,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(reference.message_id, msg.id);
-        assert!(reference.thread_id.is_none());
-        assert_eq!(
-            reference.permalink_path,
-            format!(
-                "/workspaces/{}/conversations/{}/messages/{}",
-                server_id, conv_id, msg.id
-            )
-        );
-        assert_eq!(reference.anchor, format!("message-{}", msg.id));
-    }
-
     /// Unlike the pre-FTS implementation, an empty/whitespace-only query is no longer an error —
     /// `parse_search_query` accepts it (operator-only or fully-empty searches are valid; see
     /// `rim_services::message::search_query`). What the service still must reject, *before*
@@ -1076,7 +997,6 @@ mod tests {
             conversation_id,
             text: Some("hello".to_string()),
             parent_message_id: None,
-            attachments: vec![],
             forwarded_from_message_id: None,
         }
     }
@@ -1494,7 +1414,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("hi".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await

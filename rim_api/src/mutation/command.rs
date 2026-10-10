@@ -27,47 +27,13 @@ impl CommandMutations {
 
         let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
 
-        // ── H1 back-compat bridge ──────────────────────────────────────
-        //
-        // The pre-reframe wire field `confirmed_dangerous: Option<bool>`
-        // is still on the input for back-compat with the unmigrated
-        // frontend. Resolution:
-        //
-        // 1. If the new `confirmation` field is populated, use it
-        //    (modern flow — frontend has the modal).
-        // 2. Else if `confirmed_dangerous: Some(true)` AND the new field
-        //    is absent, log a deprecation warning. The proof stays
-        //    `None` here; the service-layer gate will issue a fresh
-        //    challenge and return `CONFIRMATION_REQUIRED`. Pre-Phase-1
-        //    behavior (silent execute on bool=true) is intentionally
-        //    NOT preserved — passing a bool used to be the bypass; we
-        //    are closing it on purpose.
-        // 3. Both `None` ⇒ no proof; gate issues a challenge.
-        //
-        // Removed entirely in Phase 4 when the frontend modal lands.
-        let proof = match input.confirmation {
-            Some(c) => Some(c.into_proof()?),
-            None => {
-                if input.confirmed_dangerous == Some(true) {
-                    tracing::warn!(
-                        target: "audit",
-                        event = "deprecated_confirmed_dangerous_bool",
-                        command_id = %input.command_id,
-                        "client sent legacy confirmed_dangerous=true; ignoring (H1 closure). \
-                         Frontend must migrate to ConfirmationProof flow.",
-                    );
-                }
-                None
-            }
-        };
-
         let result = svc
             .execute_command(ExecuteCommandCmd {
                 actor: Actor::new(actor),
                 command_id: input.command_id,
                 args: input.args.map(|json| json.0),
                 context: input.command_context.map(TryInto::try_into).transpose()?,
-                confirmation: proof,
+                confirmation: input.confirmation.map(|c| c.into_proof()),
                 is_pipe: input.is_pipe.unwrap_or(false),
                 // Default to Palette per Fury v2 §3.11 conservative-default
                 // rule. Until Phase 4's IPC proxy stamps the initiator from
@@ -166,12 +132,6 @@ pub struct ExecuteCommandInput {
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
     pub command_context: Option<CommandContextInput>,
-    /// **Deprecated** — use `confirmation` instead. Pre-Phase-1 callers
-    /// (the unmigrated frontend) set this to `true` after `window.confirm()`.
-    /// When `confirmation` is absent and this is `Some(true)`, the server
-    /// synthesizes a self-issued in-band proof so the H1 gate has a single
-    /// authoritative path. Removed in Phase 4 once the frontend modal lands.
-    pub confirmed_dangerous: Option<bool>,
     /// Server-issued, server-verified confirmation proof. Required when
     /// re-submitting after a previous `executeCommand` returned
     /// `status: CONFIRMATION_REQUIRED`. Closes H1 (TOCTOU) by binding the

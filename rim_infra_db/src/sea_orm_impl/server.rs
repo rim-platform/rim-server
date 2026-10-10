@@ -57,17 +57,6 @@ impl ServerRepository for SeaOrmServerRepository {
         })
     }
 
-    async fn find_by_name(&self, name: &str) -> RepoResult<Option<Server>> {
-        let res = server::Entity::find()
-            .filter(server::Column::Name.eq(name.to_owned()))
-            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(res.map(Into::into))
-    }
-
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>> {
         let servers = server::Entity::find()
             .join(JoinType::InnerJoin, server::Relation::ServerMember.def())

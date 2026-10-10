@@ -104,31 +104,12 @@ impl MacroMutations {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
 
-        // Same H1 back-compat bridge as executeCommand. The legacy
-        // `confirmed_dangerous: true` is no longer self-confirming —
-        // the inner ExecuteCommandCmd's confirmation gate will issue a
-        // per-step challenge when it hits a dangerous step.
-        let proof = match input.confirmation {
-            Some(c) => Some(c.into_proof()?),
-            None => {
-                if input.confirmed_dangerous == Some(true) {
-                    tracing::warn!(
-                        target: "audit",
-                        event = "deprecated_confirmed_dangerous_bool",
-                        macro_id = %input.macro_id.as_str(),
-                        "client sent legacy confirmed_dangerous=true on executeMacro; ignoring (H1 closure).",
-                    );
-                }
-                None
-            }
-        };
-
         let result = svc
             .execute_macro(ExecuteMacroCmd {
                 actor: Actor::new(actor),
                 macro_id: parse_uuid_id(&input.macro_id)?,
                 command_context: input.command_context.map(TryInto::try_into).transpose()?,
-                confirmation: proof,
+                confirmation: input.confirmation.map(|c| c.into_proof()),
                 // Same back-compat default rule as `executeCommand` — `Macro`
                 // here means "the macro execution itself"; nested
                 // `ExecuteCommandCmd` calls produced by macro expansion will
@@ -189,9 +170,6 @@ struct MacroStepInput {
 struct ExecuteMacroInput {
     macro_id: ID,
     command_context: Option<CommandContextInput>,
-    /// **Deprecated** — see `ExecuteCommandInput.confirmed_dangerous`.
-    /// Removed in Phase 4.
-    confirmed_dangerous: Option<bool>,
     /// Server-issued confirmation proof. Same shape and semantics as
     /// `ExecuteCommandInput.confirmation`. Phase 1 note: macros are an
     /// "all-or-nothing" confirmation surface — a single proof issued

@@ -56,5 +56,5 @@ async fn create_and_list_user_commands() {
     assert!(!updated.is_enabled);
 
     repo.delete_user_command(created.id).await.unwrap();
-    assert!(repo.get_by_id(created.id).await.unwrap().is_none());
+    assert!(repo.list_for_user(user.id).await.unwrap().is_empty());
 }

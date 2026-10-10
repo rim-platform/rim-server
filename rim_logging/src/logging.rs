@@ -36,8 +36,7 @@ const AUDIT_LOG_PATH_ENV: &str = "RIM_AUDIT_LOG_PATH";
 /// `tracing_appender::non_blocking`, which spawns a background flusher and
 /// returns a `WorkerGuard`. **The guard must outlive every `info!` emit on
 /// the audit target** — dropping it shuts the worker down and pending
-/// audit lines are lost. `main.rs` binds the return into a `let _guard =
-/// init_tracing_json()?;` so the guard lives for the whole program.
+/// audit lines are lost. `main.rs` binds the return for the whole program.
 ///
 /// Wrapped (rather than returning `WorkerGuard` directly) so we can grow
 /// the structure without breaking callers — Phase 5 may add a second
@@ -47,6 +46,10 @@ pub struct LoggingHandle {
     _audit_guard: WorkerGuard,
 }
 
+/// Install the JSON log on stdout and the `audit.log` file sink for `target: "audit"` events.
+///
+/// # Errors
+/// When a global subscriber is installed already.
 pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
     dotenv().ok();
 
@@ -99,10 +102,6 @@ where
         .with_target(true)
         .with_writer(writer)
         .with_filter(filter_fn(|metadata| metadata.target() == AUDIT_TARGET))
-}
-
-pub fn init_tracing_json() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
-    init_logging()
 }
 
 /// Resolves the directory to write `audit.log` into. `RIM_AUDIT_LOG_PATH`

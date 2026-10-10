@@ -9,24 +9,6 @@ pub(crate) struct PipelineQueries;
 
 #[Object]
 impl PipelineQueries {
-    async fn pipeline(
-        &self,
-        ctx: &Context<'_>,
-        pipeline_id: async_graphql::ID,
-    ) -> Result<crate::types::PipelineGql> {
-        let actor = require_actor(ctx)?;
-        let svc =
-            ctx.data::<std::sync::Arc<dyn rim_services::pipeline::service::PipelineService>>()?;
-        let pipeline_id = parse_uuid_id::<rim_core::pipeline::model::PipelineId>(&pipeline_id)?;
-
-        let pipeline = svc
-            .get(Actor::new(actor), pipeline_id)
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(pipeline.into())
-    }
-
     async fn pipelines(
         &self,
         ctx: &Context<'_>,

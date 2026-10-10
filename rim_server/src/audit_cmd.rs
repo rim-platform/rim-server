@@ -93,18 +93,6 @@ pub async fn run(args: impl Iterator<Item = String>) -> i32 {
     }
 }
 
-/// Run a subcommand against the database and data directory `config` names and return what
-/// it prints.
-///
-/// # Errors
-/// A usage error or what the command failed with.
-pub async fn run_with(
-    config: &RIMConfig,
-    args: impl Iterator<Item = String>,
-) -> Result<String, String> {
-    execute(parse(args)?, config).await
-}
-
 /// The retention to purge with: the flag, else `RIM_AUDIT_RETENTION_DAYS`.
 fn retention_days(config: &RIMConfig, older_than_days: Option<u32>) -> Result<u32, String> {
     match older_than_days {

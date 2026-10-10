@@ -50,29 +50,6 @@ pub struct Message {
     pub encryption: Option<super::MessageEncryption>,
 }
 
-#[derive(SimpleObject, Clone, Debug)]
-pub struct MessageReference {
-    pub server_id: async_graphql::ID,
-    pub conversation_id: async_graphql::ID,
-    pub message_id: async_graphql::ID,
-    pub thread_id: Option<async_graphql::ID>,
-    pub permalink_path: String,
-    pub anchor: String,
-}
-
-impl From<rim_services::message::dto::MessageReferenceDto> for MessageReference {
-    fn from(value: rim_services::message::dto::MessageReferenceDto) -> Self {
-        Self {
-            server_id: async_graphql::ID(value.server_id.to_string()),
-            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
-            message_id: async_graphql::ID(value.message_id.to_string()),
-            thread_id: value.thread_id.map(|id| async_graphql::ID(id.to_string())),
-            permalink_path: value.permalink_path,
-            anchor: value.anchor,
-        }
-    }
-}
-
 impl From<rim_services::message::dto::MessageDto> for Message {
     fn from(value: rim_services::message::dto::MessageDto) -> Self {
         Self {

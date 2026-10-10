@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::conversation::model::ConversationId;
 use crate::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, MlsCommit, MlsDesiredDevice,
-    MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
+    ClaimedKeyPackage, E2eeDevice, FrankingRevision, MlsCommit, MlsDesiredDevice, MlsGroup,
+    MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
     MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage,
     NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
     NewMlsWelcome,
@@ -40,13 +40,6 @@ pub trait E2eeRepository: Send + Sync {
     // ── Devices ──────────────────────────────────────────────────────────
 
     async fn get_device(&self, device_key_id: DeviceKeyId) -> RepoResult<Option<E2eeDevice>>;
-
-    /// The device `device_id` of the user holding `principal_id`.
-    async fn find_device(
-        &self,
-        principal_id: &str,
-        device_id: Uuid,
-    ) -> RepoResult<Option<E2eeDevice>>;
 
     /// Lock the device row until the transaction ends. Returns `false` when it does not exist.
     async fn lock_device(&self, device_key_id: DeviceKeyId) -> RepoResult<bool>;
@@ -331,10 +324,6 @@ pub trait E2eeRepository: Send + Sync {
 
     /// Every recorded version of a message, oldest first.
     async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>>;
-
-    /// The franking keys an older server kept in the `franking_key` table, oldest first. Read
-    /// only to move them into the key file.
-    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>>;
 
     /// The highest `franking_key_id` any message carries.
     async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>>;

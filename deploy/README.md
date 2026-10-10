@@ -103,7 +103,6 @@ rim-relay bootstrap-user --email ops@example.org --public-url https://relay.exam
 `signupWithKey`, so it is how the operator lets people in without the proof-of-work: up to 50
 signups per link, for at most 30 days. `invite list` shows the live ones with their use counts and
 `invite revoke <id>` ends one. `bootstrap-user` prints a single-use link for one address.
-(`createInstanceInvite` in the app needs the owner of a workspace, and a relay has none.)
 
 `audit purge --dry-run` counts the command audit rows past `RIM_AUDIT_RETENTION_DAYS` and
 `audit purge` exports them to `/data/audit-exports/` and deletes them; with the variable set the

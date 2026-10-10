@@ -11,21 +11,18 @@ mod tests {
     use rim_core::conversation::repository::{
         ConversationActivityCursor, ConversationCreatedCursor,
     };
-    use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+    use rim_core::conversation_member::model::ConversationMember;
     use rim_core::message::model::{Message, MessageId, NewMessage};
     use rim_core::message::repository::{
         ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
     };
     use rim_core::message_thread::model::{MessageThread, MessageThreadId};
-    use rim_core::message_thread::repository::ThreadCursor;
     use rim_core::repository::error::RepoResult;
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::user::model::UserId;
-    use rim_services::message_thread::command::{
-        GetThreadByRootMessageQuery, GetThreadQuery, ListThreadsQuery,
-    };
+    use rim_services::message_thread::command::{GetThreadByRootMessageQuery, GetThreadQuery};
     use rim_services::message_thread::service::ThreadService;
     use rim_services::{Actor, ServiceError};
 
@@ -113,7 +110,6 @@ mod tests {
         ConversationMemberRepository {}
         #[async_trait]
         impl rim_core::conversation_member::repository::ConversationMemberRepository for ConversationMemberRepository {
-            async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
             async fn add_member(
                 &self,
                 conversation_id: ConversationId,
@@ -194,13 +190,6 @@ mod tests {
                 thread_id: MessageThreadId,
                 at: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<()>;
-            async fn list_threads_for_conversation(
-                &self,
-                conversation_id: ConversationId,
-                limit: u32,
-                dir: PageDir,
-                cursor: Option<ThreadCursor>,
-            ) -> RepoResult<Page<MessageThread, ThreadCursor>>;
         }
     }
 
@@ -208,7 +197,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn get_member(
                 &self,
                 server_id: ServerId,
@@ -379,95 +367,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(dto.id, existing_thread.id);
-    }
-
-    #[tokio::test]
-    async fn list_threads_maps_page() {
-        let actor_id = UserId::new();
-        let server_id = ServerId::new();
-        let conv = conversation(server_id);
-        let conv_id = conv.id;
-        let root_id = MessageId::new();
-        let mut t = thread(conv_id);
-        t.first_message_id = Some(root_id);
-        let t_id = t.id;
-
-        let mut conversation_repo = MockConversationRepository::new();
-        let conv_for_repo = conv.clone();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conv_for_repo.clone())));
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_cid, _uid| Ok(true));
-
-        let mut message_repo = MockMessageRepository::new();
-        message_repo.expect_get_by_ids().return_once(move |ids| {
-            let mut out = std::collections::HashMap::new();
-            if ids.contains(&root_id) {
-                out.insert(
-                    root_id,
-                    Message {
-                        id: root_id,
-                        conversation_id: conv_id,
-                        thread_id: None,
-                        sent_by: actor_id,
-                        text: Some("root".to_string()),
-                        has_attachments: false,
-                        encryption: None,
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                    },
-                );
-            }
-            Ok(out)
-        });
-
-        let mut message_thread_repo = MockMessageThreadRepository::new();
-        let t_for_repo = t.clone();
-        message_thread_repo
-            .expect_list_threads_for_conversation()
-            .returning(move |_cid, _limit, _dir, _cursor| {
-                Ok(Page::new(vec![t_for_repo.clone()], None, None))
-            });
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let svc = DefaultThreadService::new(ThreadRepos {
-            conversation_repo: Arc::new(conversation_repo),
-            conversation_member_repo: Arc::new(conversation_member_repo),
-            message_repo: Arc::new(message_repo),
-            message_thread_repo: Arc::new(message_thread_repo),
-            server_member_repo: Arc::new(server_member_repo),
-        });
-
-        let page = svc
-            .list_threads(ListThreadsQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                conversation_id: conv_id,
-                limit: 10,
-                dir: PageDir::After,
-                cursor: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, t_id);
     }
 
     #[tokio::test]

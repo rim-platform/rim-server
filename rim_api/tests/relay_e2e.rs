@@ -746,16 +746,12 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         .await;
     assert_eq!(own.bytes, png);
 
-    // Only avatars are served; a legacy upload path is gone.
-    let (denied, _) = bob
-        .forward(&a, "GET", "/api/files/other/x", Vec::new(), None, None)
-        .await;
-    assert_eq!(denied.status, 403);
-    assert!(denied.host_signed);
-    let (gone, _) = bob
-        .forward(&a, "GET", "/api/files/uploads/x", Vec::new(), None, None)
-        .await;
-    assert_eq!(gone.status, 410);
+    // Only avatars are served.
+    for path in ["/api/files/other/x", "/api/files/uploads/x"] {
+        let (denied, _) = bob.forward(&a, "GET", path, Vec::new(), None, None).await;
+        assert_eq!(denied.status, 403, "{path}");
+        assert!(denied.host_signed);
+    }
 
     // A device request for another path than the one forwarded never reaches the handler.
     let (replaced, _) = bob
@@ -1430,7 +1426,7 @@ async fn a_pure_relays_operator_hands_out_signup_invites() {
     );
     assert!(created.contains("issued by operator"), "{created}");
     let token = invite_token(&created);
-    let (body, cookies) = key_signup(
+    let (body, _) = key_signup(
         &http,
         &node,
         "ada",
@@ -1452,22 +1448,6 @@ async fn a_pure_relays_operator_hands_out_signup_invites() {
     assert!(body.get("errors").is_some(), "a used invite: {body}");
     let listed = invite(&first, &["list"]).await;
     assert!(listed.contains("used 1/1"), "{listed}");
-
-    // Ada owns no workspace here, so she cannot issue invites herself.
-    let session = cookies.get("rim_session").expect("session");
-    let csrf = cookies.get("rim_csrf").expect("csrf");
-    let refused: Value = http
-        .post(format!("{}/api", node.origin))
-        .header("cookie", format!("rim_session={session}; rim_csrf={csrf}"))
-        .header("x-csrf-token", csrf)
-        .json(&json!({ "query": "mutation { createInstanceInvite(input: {}) { inviteToken } }" }))
-        .send()
-        .await
-        .expect("send")
-        .json()
-        .await
-        .expect("json");
-    assert_eq!(error_code(&refused), "FORBIDDEN", "{refused}");
 
     // A revoked invite admits no one.
     let created = invite(&first, &["create", "--max-uses", "5"]).await;

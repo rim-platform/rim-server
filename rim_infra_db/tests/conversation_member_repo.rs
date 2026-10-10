@@ -33,11 +33,8 @@ async fn add_get_is_member_list_member_ids_and_get_members() {
     let u1 = ctx.create_user("u1").await.id;
     let u2 = ctx.create_user("u2").await.id;
 
-    let cm1 = repo.add_member(conv.id, u1).await.unwrap();
-    let _cm2 = repo.add_member(conv.id, u2).await.unwrap();
-
-    let by_id = repo.get_by_id(cm1.id).await.unwrap().unwrap();
-    assert_eq!(by_id.user_id, u1);
+    repo.add_member(conv.id, u1).await.unwrap();
+    repo.add_member(conv.id, u2).await.unwrap();
 
     assert!(repo.is_member(conv.id, u1).await.unwrap());
     assert!(!repo.is_member(conv.id, UserId::new()).await.unwrap());

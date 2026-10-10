@@ -10,19 +10,14 @@ use rim_core::server_member::repository::ServerMemberRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
 #[tokio::test]
-async fn create_get_and_find_by_name() {
+async fn create_and_get() {
     let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerRepository::new(ctx.db.clone());
-    assert!(repo.find_by_name("missing").await.unwrap().is_none());
-
     let created = repo.create_server("s_test").await.unwrap();
     let fetched = repo.get_by_id(created.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, created.id);
     assert_eq!(fetched.name, "s_test");
-
-    let by_name = repo.find_by_name("s_test").await.unwrap().unwrap();
-    assert_eq!(by_name.id, created.id);
 }
 
 #[tokio::test]

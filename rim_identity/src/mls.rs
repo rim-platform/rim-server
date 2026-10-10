@@ -137,6 +137,7 @@ struct RawCredential {
 
 /// The identity bytes of an MLS basic credential: the UTF-8 JSON
 /// `{"payload":"<payload>","signature":"<signature>"}` of an `mls-key` statement.
+#[cfg(any(test, feature = "testing"))]
 pub fn mls_credential_identity(statement: &SignedStatement) -> Vec<u8> {
     // Two string fields always serialize.
     serde_json::to_vec(&RawCredential {

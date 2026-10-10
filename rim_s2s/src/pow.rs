@@ -73,6 +73,7 @@ pub fn check_pow(
 
 /// Find the smallest counter (as a big-endian nonce) that meets `bits`: what a client does,
 /// for tests and tools. Expect about `2^bits` hashes.
+#[cfg(any(test, feature = "testing"))]
 pub fn solve_pow(server_id: &str, inception_payload: &str, bits: u32) -> [u8; POW_NONCE_LEN] {
     let mut counter: u64 = 0;
     loop {

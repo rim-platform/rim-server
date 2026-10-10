@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use mockall::automock;
 use rim_core::server::model::ServerId;
 
-use crate::capability::dto::CapabilityDto;
 use crate::{Actor, ServiceResult};
 
 /// Phase 1 §3.3 — closes Black Widow C1 ("real capability gate from Phase 1,
@@ -40,10 +39,6 @@ use crate::{Actor, ServiceResult};
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
 pub trait CapabilityService: Send + Sync {
-    /// Catalogue listing for the Settings UI. Distinct surface from the
-    /// runtime gate.
-    async fn list_capabilities(&self, actor: Actor) -> ServiceResult<Vec<CapabilityDto>>;
-
     /// Returns `Ok(())` iff the actor is allowed to invoke `capability` in
     /// the optional workspace context. Otherwise `Err(PermissionDenied)`
     /// (or `Validation` for empty-string input).

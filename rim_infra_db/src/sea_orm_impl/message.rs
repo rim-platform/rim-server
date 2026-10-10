@@ -111,7 +111,7 @@ impl MessageRepository for SeaOrmMessageRepository {
             sent_by: Set(new_message.sent_by.into()),
             text: Set(new_message.text.to_owned()),
             is_deleted: Set(false),
-            has_attachments: Set(!new_message.attachments.is_empty()),
+            has_attachments: Set(false),
             ..Default::default()
         };
 

@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 
-use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,11 +24,4 @@ pub struct UserPresence {
     pub user_id: UserId,
     pub status: PresenceStatus,
     pub last_seen_at: DateTime<Utc>,
-}
-
-/// Command sent by a client heartbeat.
-pub struct HeartbeatCmd {
-    pub user_id: UserId,
-    pub workspace_id: ServerId,
-    pub status: PresenceStatus,
 }

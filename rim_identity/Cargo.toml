@@ -20,7 +20,8 @@ uuid = { version = "1.19.0", features = ["serde"] }
 zeroize = "1.8"
 
 [features]
-# Deterministic signing helpers for tests in other crates (`rim_identity::testing`).
+# Deterministic signing helpers and the client halves (device linking, delegation payloads, MLS
+# credentials) for tests in other crates.
 testing = []
 
 [package.metadata.cargo-machete]

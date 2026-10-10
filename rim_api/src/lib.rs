@@ -21,7 +21,6 @@ pub mod graphql;
 pub mod ids;
 pub mod loaders;
 pub mod mutation;
-pub mod observers;
 pub mod pagination;
 pub mod query;
 pub mod resolve;
@@ -33,32 +32,21 @@ mod tests;
 
 /// Extra per-deployment context injected into the GraphQL schema at boot.
 pub struct RegistrationContext {
-    /// The registration mode (invite-only vs open).
+    /// The registration mode (invite-only, open or proof-of-work).
     pub registration_mode: Arc<rim_services::auth::dto::RegistrationMode>,
-    /// Typed marker for the `previewInviteToken` rate limiter.
-    ///
-    /// The real limiter lives inside `DefaultAuthService`; this marker is
-    /// carried here for future-extensibility. See spec §4.7 R2.
-    pub preview_rate_limiter: Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>,
-    /// Typed marker for the open-mode signup rate limiter.
-    ///
-    /// The real limiter lives inside `DefaultAuthService`; this marker is
-    /// carried here for future-extensibility. See spec §6.3 R2.
-    pub signup_rate_limiter: Arc<rim_services::auth::dto::SignupRateLimiterToken>,
 }
 
-/// Wire the loaders and all shared `.data(...)` context onto a fresh schema
-/// builder. Both [`build_schema`] and [`export_sdl`] call this; they differ only
-/// in registration-context data and depth/complexity limits, which each applies
-/// after this returns. Kept private — the two public entry points are the API.
-fn wire_common_schema_data(
-    builder: async_graphql::SchemaBuilder<Query, Mutation, Subscription>,
+/// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
+/// to depth 10 and complexity 200.
+pub fn build_schema(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
     presence_manager: Arc<dyn rim_services::presence::PresenceService>,
     typing_tracker: Arc<dyn rim_services::typing::TypingService>,
     observers: Arc<rim_services::events::Observers>,
-) -> async_graphql::SchemaBuilder<Query, Mutation, Subscription> {
+    registration: RegistrationContext,
+    federation: Option<federation::FederationContext>,
+) -> AppSchema {
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
     use async_graphql::dataloader::DataLoader;
 
@@ -80,7 +68,7 @@ fn wire_common_schema_data(
         tokio::spawn,
     );
 
-    builder
+    let builder = Schema::build(Query::default(), Mutation::default(), Subscription)
         // Default per-request auth intent container.
         // Actix inserts a fresh one per request; tests that execute schema directly may rely on this.
         .data(std::sync::Arc::new(
@@ -92,7 +80,6 @@ fn wire_common_schema_data(
         .data(Arc::clone(&service_provider))
         .data(service_provider.audit_log_service())
         .data(service_provider.auth_service())
-        .data(service_provider.capability_service())
         .data(service_provider.command_service())
         .data(service_provider.conversation_service())
         .data(service_provider.key_auth_service())
@@ -129,65 +116,11 @@ fn wire_common_schema_data(
         .data(mention_loader)
         .data(pin_loader)
         .data(link_preview_loader)
-}
-
-pub fn build_schema(
-    service_provider: Arc<dyn AppServiceProvider>,
-    broadcaster: InMemoryBroadcaster,
-    presence_manager: Arc<dyn rim_services::presence::PresenceService>,
-    typing_tracker: Arc<dyn rim_services::typing::TypingService>,
-    observers: Arc<rim_services::events::Observers>,
-    registration: RegistrationContext,
-    federation: Option<federation::FederationContext>,
-) -> AppSchema {
-    let builder = wire_common_schema_data(
-        Schema::build(Query::default(), Mutation::default(), Subscription),
-        service_provider,
-        broadcaster,
-        presence_manager,
-        typing_tracker,
-        observers,
-    )
-    // Registration context — §6.3
-    .data(registration.registration_mode)
-    .data(registration.preview_rate_limiter)
-    .data(registration.signup_rate_limiter)
-    .limit_depth(10)
-    .limit_complexity(200);
+        .data(registration.registration_mode)
+        .limit_depth(10)
+        .limit_complexity(200);
     match federation {
         Some(federation) => builder.data(federation).finish(),
         None => builder.finish(),
     }
-}
-
-/// Build the schema SDL string for codegen tooling.
-/// Uses the same schema as `build_schema` but without depth/complexity limits
-/// so introspection queries succeed. Shares its loader/service wiring with
-/// [`build_schema`] via [`wire_common_schema_data`].
-pub fn export_sdl(
-    service_provider: Arc<dyn AppServiceProvider>,
-    broadcaster: InMemoryBroadcaster,
-    presence_manager: Arc<dyn rim_services::presence::PresenceService>,
-    typing_tracker: Arc<dyn rim_services::typing::TypingService>,
-    observers: Arc<rim_services::events::Observers>,
-) -> String {
-    let schema = wire_common_schema_data(
-        Schema::build(Query::default(), Mutation::default(), Subscription),
-        service_provider,
-        broadcaster,
-        presence_manager,
-        typing_tracker,
-        observers,
-    )
-    // Registration context defaults for SDL export (unused at runtime).
-    .data(Arc::new(
-        rim_services::auth::dto::RegistrationMode::InviteOnly,
-    ))
-    .data(Arc::new(
-        rim_services::auth::dto::PreviewInviteRateLimiterToken,
-    ))
-    .data(Arc::new(rim_services::auth::dto::SignupRateLimiterToken))
-    .finish();
-
-    schema.sdl()
 }

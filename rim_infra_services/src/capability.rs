@@ -13,7 +13,6 @@ use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 
-use rim_services::capability::dto::CapabilityDto;
 use rim_services::capability::service::CapabilityService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -29,8 +28,6 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 /// mode than silently allowing.
 pub struct BuiltinCapabilitySpec {
     pub id: &'static str,
-    pub title: &'static str,
-    pub description: &'static str,
     /// When `true` the capability is self-scoped: it does not require a
     /// workspace context and `check()` accepts `workspace_id = None`.
     ///
@@ -45,44 +42,30 @@ pub fn builtin_capabilities() -> &'static [BuiltinCapabilitySpec] {
     &[
         BuiltinCapabilitySpec {
             id: "chat.read",
-            title: "Read Chat",
-            description: "Read conversations, messages, and threads.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "chat.write",
-            title: "Write Chat",
-            description: "Create messages, threads, and attachment changes.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "action.invoke",
-            title: "Invoke Actions",
-            description: "Invoke registered workspace actions.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "event.emit",
-            title: "Emit Events",
-            description: "Emit structured workspace events.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "audit.read",
-            title: "Read Audit Log",
-            description: "Read the workspace audit log (requires workspace membership).",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "audit.read.self",
-            title: "Read Own Audit Log",
-            description: "Read the caller's own command audit history. Self-scoped: does not require workspace membership.",
             is_self_scoped: true,
         },
         BuiltinCapabilitySpec {
             id: "admin.manage_members",
-            title: "Manage Members",
-            description: "Invite, remove, and modify workspace member roles.",
             is_self_scoped: false,
         },
     ]
@@ -130,20 +113,6 @@ impl DefaultCapabilityService {
 
 #[async_trait]
 impl CapabilityService for DefaultCapabilityService {
-    async fn list_capabilities(&self, _actor: Actor) -> ServiceResult<Vec<CapabilityDto>> {
-        // Static catalogue, exactly as pre-Phase-1. The runtime gate is the
-        // surface the security review hardens; the catalogue stays
-        // human-curated.
-        Ok(builtin_capabilities()
-            .iter()
-            .map(|spec| CapabilityDto {
-                id: spec.id.to_string(),
-                title: spec.title.to_string(),
-                description: spec.description.to_string(),
-            })
-            .collect())
-    }
-
     async fn check(
         &self,
         actor: &Actor,
@@ -265,36 +234,6 @@ impl CapabilityService for DefaultCapabilityService {
         }
         Ok(out)
     }
-}
-
-/// Register plugin-declared capabilities into the capability registry.
-///
-/// This is the **only** sanctioned write path for plugin capabilities.
-/// `is_self_scoped` is unconditionally `false` — plugins cannot declare
-/// self-scoped capabilities because doing so would let a malicious manifest
-/// claim workspace-gate bypass (a plugin that convinces the host to install
-/// `plugin.evil.foo` with `is_self_scoped=true` could invoke arbitrary
-/// commands without supplying a workspace context, bypassing the membership
-/// check in `CapabilityService::check`).
-///
-/// Callers pass validated capability keys (from `validate_plugin_capability`)
-/// and the `plugin_uuid` that owns them. `upsert` semantics: a re-install
-/// lifts any prior soft-retire cleanly.
-pub async fn register_plugin_capabilities(
-    repo: &dyn CapabilityRegistryRepository,
-    plugin_uuid: uuid::Uuid,
-    capability_keys: &[String],
-) -> Result<(), rim_core::repository::error::RepoError> {
-    for key in capability_keys {
-        repo.upsert(
-            key,
-            rim_core::capability::model::CapabilitySourceKind::Plugin,
-            Some(plugin_uuid),
-            false, // is_self_scoped: always false for plugins — see fn doc
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -667,30 +606,5 @@ mod tests {
             .await
             .expect("empty-string entry should not propagate as error");
         assert_eq!(map.get(""), Some(&false));
-    }
-
-    /// P5-PLUGIN-SCOPE: `register_plugin_capabilities` must always pass
-    /// `is_self_scoped=false` to the repo — a malicious manifest cannot
-    /// claim workspace-gate bypass by declaring a self-scoped plugin cap.
-    #[tokio::test]
-    async fn p5_plugin_scope_register_never_passes_is_self_scoped_true() {
-        let plugin_uuid = uuid::Uuid::new_v4();
-        let keys = vec![
-            "plugin.evil.bypass_auth".to_string(),
-            "plugin.evil.read_all".to_string(),
-        ];
-
-        let mut registry = MockCapabilityRegistryRepository::new();
-        registry
-            .expect_upsert()
-            .withf(|_key, source_kind, _plugin_id, is_self_scoped| {
-                *source_kind == CapabilitySourceKind::Plugin && !is_self_scoped
-            })
-            .times(2)
-            .returning(|_, _, _, _| Ok(()));
-
-        register_plugin_capabilities(&registry, plugin_uuid, &keys)
-            .await
-            .expect("registration must succeed");
     }
 }

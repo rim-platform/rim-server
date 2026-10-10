@@ -26,7 +26,7 @@
 //!
 //! Exposed as a GraphQL enum `CommandInitiator` with SCREAMING_SNAKE wire
 //! values (`PALETTE`, `AGENT`, `MACRO`, `KEYBIND`, `CONTEXT_MENU`, `PLUGIN`,
-//! `CLI`, `MCP`). The GraphQL `ExecuteCommandInput.initiator` field is
+//! `CLI`). The GraphQL `ExecuteCommandInput.initiator` field is
 //! **optional** with backend default `Palette` so existing clients (and the
 //! current frontend dispatcher, which has not been retrofitted) keep working
 //! without a coordinated breaking change.
@@ -76,15 +76,12 @@ pub enum CommandInitiator {
     Plugin,
     /// Out-of-process CLI client (rim-cli) invoked over the GraphQL API.
     Cli,
-    /// MCP (Model Context Protocol) server — forward-compat for Phase 5+
-    /// when external MCP clients can drive commands.
-    Mcp,
 }
 
 impl CommandInitiator {
     /// Returns `true` when this initiator is non-human and therefore subject
     /// to the agent-style mutating-call cap and always-confirm-for-Mutating
-    /// rules. `Plugin` and `Mcp` count as agentic for safety; only `Palette`,
+    /// rules. `Plugin` counts as agentic for safety; only `Palette`,
     /// `Keybind`, `ContextMenu`, `Cli`, and (transitively) `Macro` are human.
     ///
     /// `Macro` is treated as human here because a macro is a recorded series
@@ -92,7 +89,7 @@ impl CommandInitiator {
     /// policy preserves the agent's initiator on the nested calls instead of
     /// reclassifying as `Macro`.
     pub fn is_agentic(self) -> bool {
-        matches!(self, Self::Agent | Self::Plugin | Self::Mcp)
+        matches!(self, Self::Agent | Self::Plugin)
     }
 
     /// Lowercase ASCII identifier suitable for inclusion in audit-log
@@ -107,7 +104,6 @@ impl CommandInitiator {
             Self::ContextMenu => "context_menu",
             Self::Plugin => "plugin",
             Self::Cli => "cli",
-            Self::Mcp => "mcp",
         }
     }
 }
@@ -135,10 +131,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_plugin_mcp_are_agentic() {
+    fn agent_and_plugin_are_agentic() {
         assert!(CommandInitiator::Agent.is_agentic());
         assert!(CommandInitiator::Plugin.is_agentic());
-        assert!(CommandInitiator::Mcp.is_agentic());
     }
 
     #[test]
@@ -171,7 +166,6 @@ mod tests {
         assert_eq!(CommandInitiator::ContextMenu.as_audit_str(), "context_menu");
         assert_eq!(CommandInitiator::Plugin.as_audit_str(), "plugin");
         assert_eq!(CommandInitiator::Cli.as_audit_str(), "cli");
-        assert_eq!(CommandInitiator::Mcp.as_audit_str(), "mcp");
     }
 
     #[test]
@@ -187,7 +181,6 @@ mod tests {
             CommandInitiator::ContextMenu,
             CommandInitiator::Plugin,
             CommandInitiator::Cli,
-            CommandInitiator::Mcp,
         ] {
             assert_eq!(format!("{}", v), v.as_audit_str());
         }

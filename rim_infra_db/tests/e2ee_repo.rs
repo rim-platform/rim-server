@@ -777,12 +777,7 @@ async fn groups_devices_and_readiness() {
     assert!(f.repo.mark_conversation_encrypted(f.conv.id).await.unwrap());
     assert!(!f.repo.mark_conversation_encrypted(f.conv.id).await.unwrap());
 
-    let found = f
-        .repo
-        .find_device("rimp1_alice", f.alice.device_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let found = f.repo.get_device(f.alice.device).await.unwrap().unwrap();
     assert_eq!(found.device_key_id, f.alice.device);
     assert!(found.last_key_package_upload_at.is_some());
     assert!(f.repo.lock_device(f.alice.device).await.unwrap());
@@ -1093,13 +1088,11 @@ async fn finding_9_a_readd_nonce_is_accepted_once_per_device_and_incarnation() {
 }
 
 #[tokio::test]
-async fn finding_7_franking_key_ids_come_from_the_key_file_not_the_table() {
+async fn max_message_franking_key_id_reads_the_messages() {
     let f = fixture().await;
     create_group(&f).await;
-    assert!(f.repo.legacy_franking_keys().await.unwrap().is_empty());
     assert_eq!(f.repo.max_message_franking_key_id().await.unwrap(), None);
 
-    // A message may name a key the table never held.
     f.repo
         .insert_encrypted_message(NewEncryptedMessage {
             id: MessageId::new(),
@@ -1111,21 +1104,8 @@ async fn finding_7_franking_key_ids_come_from_the_key_file_not_the_table() {
             envelope: envelope(1, f.alice.device, b"hi", 5),
         })
         .await
-        .expect("a key id outside the table");
+        .expect("insert");
     assert_eq!(f.repo.max_message_franking_key_id().await.unwrap(), Some(5));
-
-    // An older server's table rows are read for the move into the key file.
-    f.ctx
-        .db
-        .execute_unprepared(
-            "INSERT INTO franking_key (id, secret) VALUES \
-             (2, decode(repeat('22', 32), 'hex')), (1, decode(repeat('11', 32), 'hex'))",
-        )
-        .await
-        .unwrap();
-    let legacy = f.repo.legacy_franking_keys().await.unwrap();
-    assert_eq!(legacy.iter().map(|k| k.id).collect::<Vec<_>>(), vec![1, 2]);
-    assert_eq!(legacy[0].secret.as_slice(), &[0x11; 32]);
 }
 
 #[tokio::test]

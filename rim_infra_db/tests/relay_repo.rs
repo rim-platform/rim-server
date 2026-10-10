@@ -748,13 +748,6 @@ async fn the_direct_space_is_unique_and_unlisted_and_remote_users_are_members() 
             .unwrap()
             .is_empty()
     );
-    assert!(
-        servers
-            .find_by_name("Direct messages")
-            .await
-            .unwrap()
-            .is_none()
-    );
 
     let remote = repo
         .create_remote_user(NewRemoteUser {
@@ -862,19 +855,17 @@ async fn the_migration_refuses_down_while_remote_users_or_items_exist() {
 }
 
 /// What a user sees of one conversation: notifications listed, the bell's count, digest rows,
-/// whether the digest picks them, unread count and mentions.
+/// whether the digest picks them and the unread count.
 async fn visible_signals(
     db: &DbHandle,
     user_id: UserId,
     server_id: rim_core::server::model::ServerId,
     conversation_id: rim_core::conversation::model::ConversationId,
-) -> (usize, u64, usize, bool, usize, usize) {
+) -> (usize, u64, usize, bool, usize) {
     use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
-    use rim_core::message_mention::repository::MessageMentionRepository;
     use rim_core::notification::repository::{ListUserNotificationsParams, NotificationRepository};
     use rim_core::repository::pagination::PageDir;
     use rim_infra_db::sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository;
-    use rim_infra_db::sea_orm_impl::message_mention::SeaOrmMessageMentionRepository;
     use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
 
     let notifications = SeaOrmNotificationRepository::new(db.clone());
@@ -912,32 +903,18 @@ async fn visible_signals(
         .await
         .unwrap()
         .len();
-    let mentions = SeaOrmMessageMentionRepository::new(db.clone())
-        .get_messages_mentioning_user(user_id, &[conversation_id], 50)
-        .await
-        .unwrap()
-        .len();
-    (
-        listed,
-        bell,
-        digest_rows,
-        digest_candidate,
-        unread,
-        mentions,
-    )
+    (listed, bell, digest_rows, digest_candidate, unread)
 }
 
 #[tokio::test]
-async fn a_hidden_conversation_stays_out_of_notifications_counts_and_mentions() {
+async fn a_hidden_conversation_stays_out_of_notifications_and_counts() {
     use rim_core::conversation::model::{ConversationType, NewConversation};
     use rim_core::conversation::repository::ConversationRepository;
-    use rim_core::message_mention::repository::MessageMentionRepository;
     use rim_core::notification::model::{
         DigestFrequency, NewUserNotification, NotificationReason, UserNotificationSettings,
     };
     use rim_core::notification::repository::NotificationRepository;
     use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
-    use rim_infra_db::sea_orm_impl::message_mention::SeaOrmMessageMentionRepository;
     use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
 
     let ctx = support::TestCtx::new().await;
@@ -961,10 +938,6 @@ async fn a_hidden_conversation_stays_out_of_notifications_counts_and_mentions() 
     let message = ctx
         .create_message(conversation.id, alice.id, "hello <@bob>")
         .await;
-    SeaOrmMessageMentionRepository::new(ctx.db.clone())
-        .create_mentions(message.id, &[bob.id])
-        .await
-        .unwrap();
     let notifications = SeaOrmNotificationRepository::new(ctx.db.clone());
     notifications
         .upsert_settings(UserNotificationSettings {
@@ -986,8 +959,8 @@ async fn a_hidden_conversation_stays_out_of_notifications_counts_and_mentions() 
         )
         .await
         .unwrap();
-    let shown = (1, 1, 1, true, 1, 1);
-    let hidden = (0, 0, 0, false, 0, 0);
+    let shown = (1, 1, 1, true, 1);
+    let hidden = (0, 0, 0, false, 0);
     let signals = || visible_signals(&ctx.db, bob.id, direct, conversation.id);
     assert_eq!(signals().await, shown);
 

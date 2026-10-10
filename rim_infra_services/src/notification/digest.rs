@@ -103,7 +103,7 @@ fn conversation_label(conversation: Option<&Conversation>) -> String {
     }
 }
 
-/// The message permalink, the same path `MessageService::get_message_reference` returns.
+/// The message permalink: the thread path for a reply, the timeline path otherwise.
 fn message_link(base_url: Option<&str>, server_id: ServerId, message: &Message) -> Option<String> {
     let base = base_url?.trim_end_matches('/');
     Some(match message.thread_id {

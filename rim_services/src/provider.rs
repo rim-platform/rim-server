@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::audit::service::AuditLogService;
 use crate::auth::service::{AuthService, RequestAuthenticator};
-use crate::capability::service::CapabilityService;
 use crate::channel_lens::service::ChannelLensService;
 use crate::command::service::CommandService;
 use crate::conversation::service::ConversationService;
@@ -31,7 +30,6 @@ use crate::workspace_state::service::WorkspaceStateService;
 pub trait AppServiceProvider: Send + Sync {
     fn audit_log_service(&self) -> Arc<dyn AuditLogService>;
     fn auth_service(&self) -> Arc<dyn AuthService>;
-    fn capability_service(&self) -> Arc<dyn CapabilityService>;
     fn channel_lens_service(&self) -> Arc<dyn ChannelLensService>;
     fn command_service(&self) -> Arc<dyn CommandService>;
     fn conversation_service(&self) -> Arc<dyn ConversationService>;

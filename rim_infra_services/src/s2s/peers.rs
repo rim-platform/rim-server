@@ -482,10 +482,6 @@ impl PeerService for DefaultPeerService {
         Ok(to_dto(&peer))
     }
 
-    async fn get(&self, server_id: &str) -> ServiceResult<Option<PeerDto>> {
-        Ok(self.repo.find(server_id).await?.as_ref().map(to_dto))
-    }
-
     async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>> {
         let Some(peer) = self.repo.find(server_id).await? else {
             return Ok(None);

@@ -134,6 +134,7 @@ pub fn verify_host_event(
     Ok(event)
 }
 
+#[cfg(any(test, feature = "testing"))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawHostResponse {
@@ -148,6 +149,7 @@ struct RawHostResponse {
 }
 
 /// A verified host response.
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostResponse {
     pub host: String,
@@ -158,6 +160,7 @@ pub struct HostResponse {
     pub body_sha256: String,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl HostResponse {
     /// Check that this response answers `device_request_payload` with `status` and `body`.
     pub fn check(&self, device_request_payload: &str, status: u16, body: &[u8]) -> bool {
@@ -199,7 +202,8 @@ pub fn sign_host_response(
     )
 }
 
-/// Check a host response's signature by `key` and read it.
+/// Check a host response's signature by `key` and read it: what a client does.
+#[cfg(any(test, feature = "testing"))]
 pub fn verify_host_response(
     key: &PublicKey,
     statement: &SignedStatement,

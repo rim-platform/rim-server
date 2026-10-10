@@ -320,18 +320,15 @@ impl WorkspaceStateService for DefaultWorkspaceStateService {
 mod tests {
     use super::*;
     use rim_core::repository::error::RepoResult;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
-    use rim_core::workspace_state::model::{
-        UpdateWorkspaceState, WorkspaceState, WorkspaceStateId,
-    };
+    use rim_core::workspace_state::model::{WorkspaceState, WorkspaceStateId};
     use rim_services::Actor;
 
     mockall::mock! {
         WorkspaceStateRepository {}
         #[async_trait]
         impl WorkspaceStateRepository for WorkspaceStateRepository {
-            async fn get_by_id(&self, id: WorkspaceStateId) -> RepoResult<Option<WorkspaceState>>;
             async fn get_by_key(
                 &self,
                 server_id: ServerId,
@@ -354,12 +351,6 @@ mod tests {
                 user_id: Option<UserId>,
             ) -> RepoResult<u64>;
             async fn upsert(&self, new: NewWorkspaceState) -> RepoResult<WorkspaceState>;
-            async fn update(
-                &self,
-                id: WorkspaceStateId,
-                update: UpdateWorkspaceState,
-            ) -> RepoResult<WorkspaceState>;
-            async fn delete(&self, id: WorkspaceStateId) -> RepoResult<()>;
             async fn delete_by_key(
                 &self,
                 server_id: ServerId,
@@ -384,7 +375,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
             async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;

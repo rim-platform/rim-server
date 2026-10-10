@@ -17,8 +17,7 @@ pub struct AttachmentDto {
     pub content_type: String,
     pub size_bytes: u64,
 
-    /// Storage key for downloading the file (e.g. via `/api/files/{storage_key}`).
-    /// `None` when the attachment is still pending upload.
+    /// Where the file is stored; `None` while the attachment is still pending upload.
     pub storage_key: Option<String>,
 
     /// Timestamp extracted from the UUID v7 attachment ID.

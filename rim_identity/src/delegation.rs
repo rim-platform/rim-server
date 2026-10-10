@@ -173,11 +173,13 @@ impl UnverifiedDelegation {
 }
 
 /// A JSON string literal.
+#[cfg(any(test, feature = "testing"))]
 fn quoted(text: &str) -> String {
     serde_json::Value::from(text).to_string()
 }
 
 /// The payload text of a delegation, in the field order clients write.
+#[cfg(any(test, feature = "testing"))]
 pub fn delegation_payload(d: &Delegation) -> String {
     let time = |t: DateTime<Utc>| quoted(&t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
     format!(

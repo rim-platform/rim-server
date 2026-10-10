@@ -20,17 +20,15 @@ pub(crate) fn feature_state(ctx: &Context<'_>, feature: ServerFeature) -> Result
     Ok(ctx.data::<Arc<dyn FeatureGate>>()?.state(feature))
 }
 
-/// `FEATURE_DISABLED` for a command or macro an AI agent or MCP server runs while the AI
-/// surface is off; any other initiator passes.
+/// `FEATURE_DISABLED` for a command or macro an AI agent runs while the AI surface is off; any
+/// other initiator passes.
 pub(crate) fn require_initiator(
     ctx: &Context<'_>,
     initiator: Option<crate::types::CommandInitiator>,
 ) -> Result<()> {
     use crate::types::CommandInitiator;
     match initiator {
-        Some(CommandInitiator::Agent | CommandInitiator::Mcp) => {
-            require_feature(ctx, ServerFeature::AiCommands)
-        }
+        Some(CommandInitiator::Agent) => require_feature(ctx, ServerFeature::AiCommands),
         _ => Ok(()),
     }
 }

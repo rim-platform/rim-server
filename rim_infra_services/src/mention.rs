@@ -1,18 +1,13 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use rim_core::message::model::MessageId;
 use rim_core::user::model::UserId;
-use rim_services::mention::command::MyMentionsQuery;
 use rim_services::mention::service::MentionService;
-use rim_services::message::dto::MessageDto;
-use rim_services::message::service::MessageService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::MentionRepos;
-use crate::util::member_standing;
 
 /// Regex-free mention parser: extracts user IDs from `<@uuid>` tokens.
 pub fn parse_mention_ids(text: &str) -> Vec<UserId> {
@@ -48,54 +43,16 @@ pub fn parse_mention_ids(text: &str) -> Vec<UserId> {
 #[derive(Clone)]
 pub struct DefaultMentionService {
     repos: MentionRepos,
-    message_service: Arc<dyn MessageService>,
 }
 
 impl DefaultMentionService {
-    pub fn new(repos: MentionRepos, message_service: Arc<dyn MessageService>) -> Self {
-        Self {
-            repos,
-            message_service,
-        }
+    pub fn new(repos: MentionRepos) -> Self {
+        Self { repos }
     }
 }
 
 #[async_trait]
 impl MentionService for DefaultMentionService {
-    async fn get_my_mentions(&self, query: MyMentionsQuery) -> ServiceResult<Vec<MessageDto>> {
-        let standing = member_standing(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
-            query.actor.user_id,
-        )
-        .await?;
-
-        // A guest reads only conversations they are a member of (Track 1.2).
-        let conversation_ids = if standing.role.is_guest() {
-            self.repos
-                .conversation_repo
-                .list_joined_conversation_ids(query.server_id, query.actor.user_id)
-                .await?
-        } else {
-            self.repos
-                .conversation_repo
-                .list_accessible_conversation_ids(query.server_id, query.actor.user_id)
-                .await?
-        };
-
-        let message_ids = self
-            .repos
-            .message_mention_repo
-            .get_messages_mentioning_user(query.actor.user_id, &conversation_ids, query.limit)
-            .await?;
-
-        if message_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        self.message_service.get_messages_by_ids(&message_ids).await
-    }
-
     async fn get_mentions_for_messages(
         &self,
         message_ids: &[MessageId],

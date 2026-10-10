@@ -251,23 +251,6 @@ pub struct NewEncryptedMessage {
     pub envelope: MessageEncryption,
 }
 
-/// A franking key as the `franking_key` table holds it.
-#[derive(Clone, PartialEq, Eq)]
-pub struct FrankingKey {
-    pub id: i32,
-    pub secret: zeroize::Zeroizing<Vec<u8>>,
-    pub created_at: DateTime<Utc>,
-}
-
-impl std::fmt::Debug for FrankingKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FrankingKey")
-            .field("id", &self.id)
-            .field("created_at", &self.created_at)
-            .finish_non_exhaustive()
-    }
-}
-
 /// How long each kind of row is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MlsRetention {
