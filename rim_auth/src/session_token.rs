@@ -10,7 +10,7 @@ pub fn generate_session_token() -> String {
         // Log to the audit channel before unwinding so the failure is visible
         // in forensics even if the logging worker guard drops during panic.
         tracing::error!(
-            target = "audit",
+            target: "audit",
             error = %e,
             "fatal: OS entropy source failed; cannot generate session token"
         );
@@ -27,7 +27,7 @@ pub fn generate_ingest_token() -> String {
     let mut bytes = [0u8; 32];
     if let Err(e) = fill(&mut bytes) {
         tracing::error!(
-            target = "audit",
+            target: "audit",
             error = %e,
             "fatal: OS entropy source failed; cannot generate ingest token"
         );
@@ -55,7 +55,7 @@ fn random_b64url<const N: usize>(what: &str) -> String {
     let mut bytes = [0u8; N];
     if let Err(e) = fill(&mut bytes) {
         tracing::error!(
-            target = "audit",
+            target: "audit",
             error = %e,
             "fatal: OS entropy source failed; cannot generate {what}"
         );

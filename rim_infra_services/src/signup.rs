@@ -127,7 +127,7 @@ pub(crate) fn check_open_signup_rate(
     {
         // Audited so operators see rate-limited signups.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "signup_rate_limited",
             remote_ip = %remote_ip,
             retry_after_seconds = %retry_after_seconds,
@@ -253,7 +253,7 @@ pub(crate) async fn claim_token(
                 .await?
             {
                 tracing::info!(
-                    target = "audit",
+                    target: "audit",
                     event = "bootstrap_token_double_spend_rejected",
                     bootstrap_token_id = %token.id,
                     "bootstrap token already consumed by concurrent request"
@@ -302,7 +302,7 @@ pub(crate) fn announce_claimed(
     match token {
         CheckedToken::Bootstrap(token) => {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "bootstrap_token_consumed",
                 bootstrap_token_id = %token.id,
                 consumed_by_user_id = %user_id,
@@ -312,7 +312,7 @@ pub(crate) fn announce_claimed(
         }
         CheckedToken::InstanceInvite(invite) => {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "instance_invite_consumed",
                 instance_invite_id = %invite.id,
                 consumed_by_user_id = %user_id,
@@ -327,7 +327,7 @@ pub(crate) fn announce_claimed(
                 username: username.to_string(),
             });
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "accept_invite_success",
                 user_id = %user_id,
                 invite_id = %invite.id,
@@ -364,7 +364,7 @@ pub(crate) async fn create_user(
     {
         // Audited so operators can detect enumeration attacks or signup bot activity.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "email_taken_attempt",
             email = %email,
             username = %new_user.username,

@@ -288,7 +288,7 @@ impl PluginBundleService for DefaultPluginBundleService {
             }
         };
         info!(
-            target = "audit",
+            target: "audit",
             event = "plugin_bundle_uploaded",
             server_id = %server_id,
             actor_id = %actor_id,

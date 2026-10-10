@@ -91,7 +91,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
             .ignore_requests_from(&principal_id, Utc::now() + IGNORED_REQUEST_TTL)
             .await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "relay.principal_blocked",
             scope = "server",
             principal_id = %principal_id,
@@ -119,7 +119,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
             .await?;
         if lifted {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "relay.principal_unblocked",
                 scope = "server",
                 principal_id = %principal_id,
@@ -174,7 +174,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
             })
             .await?;
         info!(
-            target = "audit",
+            target: "audit",
             event = "relay.abuse_report_filed",
             report_id = %stored.id,
             principal_id = ?stored.subject_principal_id,
@@ -200,7 +200,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         let resolved = self.repos.relay_abuse_repo.resolve_report(id).await?;
         if resolved.is_some() {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "relay.abuse_report_resolved",
                 report_id = %id,
                 "an operator resolved an abuse report"
