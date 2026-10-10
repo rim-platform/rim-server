@@ -1,0 +1,18 @@
+# TLS for one server; certificates come from Let's Encrypt for RIM_DOMAIN. The web client
+# and the API share this origin.
+{$RIM_DOMAIN} {
+	# Attachments are up to 25 MiB and forwarded requests up to 32 MiB.
+	request_body {
+		max_size 32MiB
+	}
+
+	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
+	@rim path /api /api/* /s2s/* /.well-known/* /healthz /readyz
+	handle @rim {
+		reverse_proxy rim:8080
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}

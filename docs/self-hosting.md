@@ -1,0 +1,233 @@
+# Self-hosting a RIM server
+
+`deploy/compose.yml` runs one RIM server on one domain: rim-server with `RIM_ROLE=both` (it
+hosts workspaces and is its users' relay), PostgreSQL 17, the web client, and Caddy terminating
+TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…`, `/s2s/…`, `/healthz` and `/readyz` to
+rim-server and every other path to the web client, so the client and the API share one origin.
+A public relay is the same file with `deploy/compose.relay.yml` on top; `deploy/README.md`
+covers it.
+
+Everything marked **FILL** waits for the decision about the organisation and its image
+registry.
+
+## Before the first start
+
+1. A Linux host with Docker (Compose v2.20 or later), ports 80 and 443 reachable from the
+   internet, and DNS `A`/`AAAA` records of your domain pointing at it. Caddy gets the
+   certificate from Let's Encrypt on the first request.
+2. The images. Until they are published (**FILL**: the registry and image names), they are
+   built on the host from two checkouts side by side:
+
+   ```sh
+   git clone <rim-server repository> rim-server     # FILL: the repository URL
+   git clone <rim-ui repository> rim-ui             # FILL: the repository URL
+   cd rim-server
+   ```
+
+   `up --build` builds `rim-server:local` from this repository and `rim-web:local` from
+   `../rim-ui`. With published images, set `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in
+   `deploy/.env` to them and use `pull` instead of `--build`; the rim-ui checkout is then not
+   needed.
+3. `deploy/.env` from the example, filled in:
+
+   ```sh
+   cp deploy/.env.example deploy/.env
+   chmod 600 deploy/.env
+   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')|" deploy/.env
+   $EDITOR deploy/.env          # RIM_DOMAIN, and SMTP for password resets and invites
+   ```
+
+   Every variable the compose files read is in `.env.example` with what it does. Without
+   `POSTGRES_PASSWORD` or `RIM_DOMAIN` every compose command stops and names the variable.
+4. Check the configuration:
+
+   ```sh
+   alias dc='docker compose -f deploy/compose.yml'
+   dc config >/dev/null && echo ok
+   ```
+
+The commands below use that alias, from the repository root.
+
+### The web client's endpoint
+
+The web client finds the API through `VITE_GRAPHQL_ENDPOINT`, baked in when its image is built.
+The compose file passes `RIM_WEB_GRAPHQL_ENDPOINT`, default `/api`: the client resolves it
+against the page's own address, so one image serves any domain and needs no CORS. The image's
+content security policy allows `connect-src 'self'`, which covers the API and its WebSocket on
+that origin; the browser console notes that it ignores the extra `/api` source the image adds.
+`https://<your domain>/api` gives the same result without that note and ties the image to the
+domain.
+
+Browsers send an `Origin` header with the client's requests even on one origin, and the server
+answers `400 Origin is not allowed` to any origin but `RIM_CORS_ALLOWED_ORIGIN`. The compose
+file sets it to `https://<RIM_DOMAIN>`; a client served from elsewhere needs it set to that
+origin.
+
+## First start
+
+```sh
+dc up -d --build
+dc logs -f rim
+```
+
+The `migrate` service applies the migrations and exits; the server starts after it. `dc ps`
+shows `rim` as `healthy` once `/readyz` passes.
+
+### The server recovery key
+
+On its first start the server creates its key and writes the recovery key to
+`/data/server-recovery-key.txt`, and it logs a warning at every start until the file is gone.
+The recovery key replaces a lost or stolen server key; whoever holds it can make any key this
+server's, so it never stays on the host:
+
+```sh
+dc exec rim cat /data/server-recovery-key.txt
+# store the line offline: a password manager and a printed copy, held by two people
+dc exec rim rm /data/server-recovery-key.txt
+```
+
+`dc exec rim /app/rim-server server-key show` names the recovery key's public half, so a copy can
+be checked without using it. Backups never include the file (below). `docs/server-identity.md`
+has the key commands, rotation and recovery.
+
+### The first account
+
+Signups are invite-only by default. Issue a single-use link for your own account; it works for
+15 minutes:
+
+```sh
+dc exec rim /app/rim-server bootstrap-user --email you@example.org --public-url https://rim.example.org
+```
+
+Open the link it prints (`https://rim.example.org/join/…`) and sign up. For other people, a link
+for up to 50 signups that lasts up to 30 days:
+
+```sh
+dc exec rim /app/rim-server invite create --max-uses 10 --expires-in-days 7 --public-url https://rim.example.org
+dc exec rim /app/rim-server invite list
+dc exec rim /app/rim-server invite revoke <id>
+```
+
+The owner of a workspace can also invite from the app. `RIM_OPEN_REGISTRATION=true` lets
+anyone sign up, rate-limited per address; `RIM_REGISTRATION_POW_BITS` asks a proof-of-work of
+signups without an invite.
+
+### Check it answers
+
+```sh
+curl -s https://rim.example.org/readyz; echo
+curl -s https://rim.example.org/.well-known/rim-server | head -c 300; echo
+curl -sI https://rim.example.org/ | head -n 1                 # the web client
+dc exec rim /app/rim-server --version
+```
+
+## Updates
+
+Take a backup first (below): migrations only go forward, so a backup is the way back.
+
+```sh
+deploy/backup.sh
+git pull && git -C ../rim-ui pull            # FILL: or set the new image tags in deploy/.env
+dc up -d --build                             # with published images: dc pull && dc up -d
+dc logs -f rim
+```
+
+`up` runs `migrate` before it starts the new server. To run the migrations alone,
+`dc run --rm migrate`. Rolling the image back leaves the migrations in place, so the way back
+past a migration is the backup taken before the update.
+
+## Backups
+
+`deploy/backup.sh` writes one archive, `rim-backup-<project>-<UTC time>.tar`, under
+`RIM_BACKUP_DIR` (default `./backups`, which Git ignores). It holds:
+
+| File | What |
+|---|---|
+| `rim.dump` | `pg_dump -Fc` of the database, checked to read back |
+| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, uploads, the audit log and audit exports |
+| `env` | `deploy/.env` |
+| `MANIFEST`, `SHA256SUMS` | project, time, server version, checksums |
+
+The recovery key file is never in it; the script warns while it is still on the host. The
+database and the data volume are one set: the server key file must match the key log in the
+database, and the server refuses to start on a mixed set. Never restore one without the other.
+
+With `RIM_BACKUP_AGE_RECIPIENT` set (an `age1…` recipient or a file of recipients), the archive
+is encrypted with [age](https://age-encryption.org) to `….tar.age` and nothing unencrypted is
+left on disk. Keep the identity that decrypts it off the host, with the recovery key's holders.
+
+```sh
+deploy/backup.sh
+COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh     # a relay
+```
+
+The scripts read `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` the way docker compose does,
+`RIM_ENV_FILE` for another env file, and the `RIM_BACKUP_*` settings from the environment or
+`deploy/.env`.
+
+**How often.** Nightly, and before every update or key rotation. A cron entry on the host:
+
+```cron
+15 3 * * * cd /srv/rim-server && deploy/backup.sh >>/var/log/rim-backup.log 2>&1
+```
+
+**Where copies go.** Off the host, encrypted: **FILL** the destination (object storage, another
+machine) and how long copies are kept. The archive holds the server's private key and every
+user's data; treat it like the host itself.
+
+### Restore
+
+`deploy/restore.sh` restores an archive into a stopped stack: it drops and recreates the
+database from the dump, empties the data volume and refills it, starts the stack and waits for
+`/readyz`. It asks for the project name before it replaces anything (`RIM_RESTORE_YES=1` skips
+that).
+
+```sh
+dc stop rim
+deploy/restore.sh backups/rim-backup-rim-20261010T031500Z.tar
+RIM_BACKUP_AGE_IDENTITY=~/rim-backup.key deploy/restore.sh backups/….tar.age
+```
+
+On a new host, check out the repositories, take `deploy/.env` from the archive's `env` file, build
+or pull the images, and run the same command. A newer image applies its migrations to the
+restored database when it starts.
+
+### The restore drill
+
+A backup is good once it has been restored. `deploy/restore-drill.sh` restores the newest archive
+(or the one given) into a throwaway project, `rim-drill`, waits for `/readyz`, prints the server
+key and the row counts of a few tables, and removes the project and its volumes. The drill's
+server has server-to-server traffic and mail off and publishes no port, so it never speaks for the
+real one; it runs next to the live stack on the same host.
+
+```sh
+deploy/restore-drill.sh
+deploy/restore-drill.sh backups/rim-backup-rim-20261010T031500Z.tar
+```
+
+Run it after the first backup, every quarter, and after changing the backup setup. Compare the
+server id and key seq with `dc exec rim /app/rim-server server-key show` and the row counts with
+production's. Record each drill: **FILL** where.
+
+## Monitoring
+
+- **Readiness.** `https://<domain>/readyz` answers 200 when the database answers, no migration
+  is pending and the key files are readable, else 503 naming the failing checks; `/healthz`
+  answers 200 while the process runs. Point an outside uptime check at `/readyz`. Inside, `dc ps`
+  shows the health of `rim`, `postgres` and `web`.
+- **Metrics.** Uncomment `RIM_METRICS_ADDR: 0.0.0.0:9090` in the `rim` service and run
+  Prometheus in a container on the compose project's `internal` network, scraping `rim:9090`.
+  Never publish the port or route it through Caddy. `docs/operations/metrics.md` lists the
+  metrics and what to alert on.
+- **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
+  to `/data/audit.log`; `docs/operations/audit-retention.md` covers its rotation and
+  `RIM_AUDIT_RETENTION_DAYS` for the audit table.
+- **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.
+
+## Another proxy
+
+Caddy is an example. Any TLS proxy works if it sends `/api` (with `/api/ws` as a WebSocket
+upgrade), `/.well-known/…`, `/s2s/…`, `/healthz` and `/readyz` to `rim:8080` unchanged and the
+rest to `web:80`; accepts bodies up to 32 MiB; sets `X-Forwarded-For` itself, replacing what the
+client sent; and is the only way in. `deploy/README.md` has an nginx example for the relay's
+paths.
