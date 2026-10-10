@@ -27,12 +27,8 @@ const MAX_PREFIX_LENGTH: usize = 512;
 const MAX_INCREMENT_DELTA: i64 = 1_000_000;
 const MIN_INCREMENT_DELTA: i64 = -1_000_000;
 
-// SECURITY: Plugin namespace (plugin.*) enforcement deferred to Phase 2.
-// Plugins should only write under their own prefix (e.g., plugin.<plugin_id>.*).
-
-// SECURITY: Rate limiting — Phase 2.
-// Target: 60 writes/min/user/server to prevent abuse and runaway scripts.
-// Implement as middleware or service-level check before write operations (set, delete, increment).
+// Any workspace member may read and write every key of the workspace scope and of their own
+// user scope. Writes are bounded by the entry counts, value size, TTL and increment limits above.
 
 #[derive(Clone)]
 pub struct WorkspaceStateRepos {
