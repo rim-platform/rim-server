@@ -69,7 +69,7 @@ impl ConversationMutations {
             .map_err(map_service_error)?;
 
         if let Some(predecessor) = input.predecessor {
-            let federation = crate::federation::relay(ctx)?;
+            let federation = crate::federation::direct_space(ctx)?;
             let predecessor_id = parse_uuid_id::<rim_core::conversation::model::ConversationId>(
                 &predecessor.conversation_id,
             )?;
@@ -408,9 +408,10 @@ struct UnmuteConversationInput {
     conversation_id: ID,
 }
 
-/// The users for a new conversation's remote members: each fetched from their relays and made
-/// a member of the direct space. Remote members need the direct space and a caller with a
-/// published profile card, which their relays show in the request inbox.
+/// The users for a new conversation's `remoteMembers`: each a user of this server or fetched
+/// from their relays, and made a member of the direct space. They need the direct space and a
+/// caller with a published profile card, which the request inbox shows; a conversation with
+/// someone on another relay is created encrypted only.
 async fn remote_member_ids(
     ctx: &Context<'_>,
     actor: rim_core::user::model::UserId,
@@ -421,7 +422,7 @@ async fn remote_member_ids(
         Some(members) if !members.is_empty() => members,
         _ => return Ok(Vec::new()),
     };
-    let federation = crate::federation::relay(ctx)?;
+    let federation = crate::federation::direct_space(ctx)?;
     if server_id != federation.host.direct_space_id() {
         return Err(Error::new(
             "people from other servers join conversations in the direct space",
@@ -441,8 +442,9 @@ async fn remote_member_ids(
         ));
     }
     let mut ids = Vec::with_capacity(members.len());
+    let mut any_remote = false;
     for member in members {
-        let id = federation
+        let resolved = federation
             .host
             .ensure_remote_member(
                 Actor::new(actor),
@@ -453,9 +455,15 @@ async fn remote_member_ids(
             )
             .await
             .map_err(map_service_error)?;
-        if id != actor && !ids.contains(&id) {
-            ids.push(id);
+        any_remote |= resolved.remote;
+        if resolved.user_id != actor && !ids.contains(&resolved.user_id) {
+            ids.push(resolved.user_id);
         }
+    }
+    if any_remote && !input.encrypted.unwrap_or(false) {
+        return Err(map_service_error(rim_services::ServiceError::Validation(
+            "a conversation with someone on another relay is encrypted".to_string(),
+        )));
     }
     Ok(ids)
 }

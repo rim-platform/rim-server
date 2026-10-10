@@ -71,10 +71,19 @@ while the relay was down arrives on the next pull.
 ### The request inbox
 
 A relay files a conversation as a DM request when its invite (`DmInvite`) comes from someone who
-is not the recipient's contact and was never accepted by them. The request keeps the sender's card
+is not the recipient's contact, was never accepted by them and shares no workspace this server
+hosts with them. The request keeps the sender's card
 and holds up to three items of the conversation; later ones are dropped until it is accepted.
 Conversations from contacts are recorded as accepted at once. Items of a conversation the relay
 has no invite for are refused (`not_subscribed`), so a host cannot skip the inbox.
+
+The same rule covers conversations of this server's own direct space whose creator is someone
+else: a person from another relay creating a DM with a local user through the forward path, or a
+local stranger. The server files its own invite for the local member; until they accept, the
+conversation is left out of their `inboxConversations` and its events out of their
+`workspaceEvents`, and its first events are held with the request. This needs
+server-to-server traffic to be on; with it off, conversations in the direct space are live at
+once.
 
 | Action | Effect |
 |---|---|
@@ -131,7 +140,9 @@ requests, outbox rows over 7 days and accepted `seq` values out of the window. A
   without `?`, `#` or `@`.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
-  group with people on other servers; people on this relay may be named the same way. Any
+  group with people on other servers; people on this relay may be named the same way. A
+  conversation with someone on another relay must be `encrypted` (`VALIDATION` otherwise), and
+  every member needs an MLS-active device. Any
   `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
   card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`
   records the conversation a successor replaces, and `Conversation.predecessor` returns it.

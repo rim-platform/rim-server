@@ -128,6 +128,21 @@ impl From<ContactRow> for Contact {
 }
 
 #[derive(FromQueryResult)]
+struct HolderRow {
+    user_id: Uuid,
+    principal_id: String,
+}
+
+/// Whether conversation `c` stays out of user `$1`'s list: a pending or ignored request, or a
+/// blocked creator of a direct-space conversation.
+pub const HIDDEN: &str = r#"(EXISTS (SELECT 1 FROM relay_dm_request r
+        WHERE r.user_id = $1 AND r.conversation_id = c.id AND r.status <> 'accepted')
+    OR EXISTS (SELECT 1 FROM relay_block b
+        JOIN "user" cu ON cu.principal_id = b.principal_id
+        JOIN server s ON s.id = c.server_id AND s.kind = 'direct'
+        WHERE b.user_id = $1 AND cu.id = c.created_by))"#;
+
+#[derive(FromQueryResult)]
 struct IdentityRow {
     principal_id: String,
     served_by: String,
@@ -586,6 +601,33 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.execute(
             "DELETE FROM relay_dm_request WHERE expires_at < $1",
             vec![now.into()],
+        )
+        .await
+    }
+
+    async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>> {
+        Ok(self
+            .all::<HolderRow>(
+                r#"SELECT r.user_id, u.principal_id FROM relay_dm_request r
+                   JOIN "user" u ON u.id = r.user_id
+                   WHERE r.conversation_id = $1 AND r.status = 'pending'
+                     AND u.kind = 'local' AND u.principal_id IS NOT NULL"#,
+                vec![conversation_id.into()],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (r.user_id.into(), r.principal_id))
+            .collect())
+    }
+
+    async fn conversation_hidden(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+    ) -> RepoResult<bool> {
+        self.flag(
+            &format!("SELECT {HIDDEN} AS flag FROM conversation c WHERE c.id = $2"),
+            vec![uuid(user_id), conversation_id.into()],
         )
         .await
     }

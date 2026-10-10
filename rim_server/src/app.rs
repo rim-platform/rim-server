@@ -604,7 +604,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             s2s.direct_space_id,
             Arc::clone(&refusals),
             Arc::clone(&wake),
-        );
+        )
+        .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>);
         let sender = OutboxSender::new(repos.for_host(), Arc::clone(&s2s.client), refusals, wake);
         tokio::spawn(writer.run(events, shutdown_tx.subscribe()));
         tokio::spawn(sender.run(shutdown_tx.subscribe()));

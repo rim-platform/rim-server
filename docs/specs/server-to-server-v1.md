@@ -525,6 +525,9 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    `remoteMembers` and no `memberIds` makes a DM, more make a group; the app names every member
    this way, those on R_A included. The app creates a conversation with anyone on another relay
    only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
+   R_A refuses such a conversation unencrypted (`VALIDATION`), and an encrypted one when a member
+   has no MLS-active device. A person from another relay may create one too, through the forward
+   path, naming R_A's members the same way.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
    `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"},"cipherSuite":79}`
    (`cipherSuite` optional, the preferred suite when absent; `conversation.host` must be the
@@ -562,8 +565,8 @@ the earlier) and members leave the other. Members learn a conversation is a succ
 
 ### The request inbox
 
-R_B files a `DmInvite` from a principal outside Bob's contacts and never accepted as a **DM
-request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it,
+R_B files a `DmInvite` from a principal outside Bob's contacts, never accepted and sharing no
+workspace R_B hosts with him as a **DM request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it,
 the `DmInvite` first (later ones dropped until accepted; the app reads them from the host). The
 app verifies the held `DmInvite` like any relay item to bind the conversation's space to its home
 before it reads or leaves it; ignoring or blocking keeps it with the request until the row
@@ -571,6 +574,13 @@ expires. Only `DmRequestReceived` is pushed. An invite from a contact or a princ
 before is recorded as a row accepted at once (`decided_at = created_at`), not listed by
 `dmRequests` and not counted by the limits, so every conversation R_B delivers for has a row and
 items of any other conversation are refused.
+
+When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
+its creator is someone else, from another relay or not), the home files its own `DmInvite` for
+Bob through the same rule instead of delivering it. The invite and the conversation's events are
+held as above, and until Bob accepts, the conversation is left out of his `inboxConversations` and
+its events out of his `workspaceEvents`; ignoring keeps it out, and so does blocking its creator.
+Once accepted it is an ordinary conversation of the space he uses directly.
 
 | Action | Effect |
 |---|---|

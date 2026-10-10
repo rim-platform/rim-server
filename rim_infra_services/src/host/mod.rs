@@ -34,7 +34,7 @@ use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
     ConversationPredecessorDto, ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest,
-    HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, StreamHeadDto,
+    HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
 };
 use rim_services::host::service::{DelegationCheck, HostService, RemoteKeyPackages};
 use rim_services::relay::dto::{
@@ -433,14 +433,14 @@ impl HostService for DefaultHostService {
         &self,
         _actor: Actor,
         member: RemoteMemberRef,
-    ) -> ServiceResult<UserId> {
+    ) -> ServiceResult<ResolvedMember> {
         if !rim_identity::is_principal_id(&member.principal_id) {
             return Err(ServiceError::Validation(
                 "principalId is not a principal id".to_string(),
             ));
         }
-        let user_id = match self.repos.host_repo.find_user(&member.principal_id).await? {
-            Some((user_id, UserKind::Local)) => user_id,
+        let (user_id, remote) = match self.repos.host_repo.find_user(&member.principal_id).await? {
+            Some((user_id, UserKind::Local)) => (user_id, false),
             existing => {
                 check_relay_urls(&member.relay_urls)?;
                 let fetched = fetch_from_relays(
@@ -450,7 +450,7 @@ impl HostService for DefaultHostService {
                     &member.relay_urls,
                 )
                 .await;
-                match (fetched, existing) {
+                let user_id = match (fetched, existing) {
                     (Ok((document, served_by)), _) => {
                         self.store_identity(&document, &served_by)
                             .await?
@@ -463,11 +463,12 @@ impl HostService for DefaultHostService {
                         user_id
                     }
                     (Err(e), None) => return Err(e),
-                }
+                };
+                (user_id, true)
             }
         };
         self.join_direct_space(user_id).await?;
-        Ok(user_id)
+        Ok(ResolvedMember { user_id, remote })
     }
 
     async fn set_predecessor(

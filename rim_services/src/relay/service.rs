@@ -10,7 +10,7 @@ use crate::e2ee::command::MlsCaller;
 use crate::relay::dto::{
     ContactDto, DeliverItem, DeliverResponse, DmRequestDto, IdentityDocument, PeerClaimRequest,
     PeerClaimResponse, RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto,
-    RemoteServerDto,
+    RemoteServerDto, SignedJson,
 };
 use crate::{Actor, ServiceResult};
 
@@ -117,6 +117,23 @@ pub trait RelayService: Send + Sync {
         peer_server_id: String,
         request: PeerClaimRequest,
     ) -> ServiceResult<PeerClaimResponse>;
+
+    /// File an event of this server's direct space for local members through the request
+    /// inbox: an invite from a stranger files a request and is held, and a pending request holds
+    /// the conversation's events. What a member already accepted flows live, not through the
+    /// queue.
+    async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()>;
+
+    /// Whether a conversation stays out of a local user's list and live events: its request is
+    /// pending or ignored, or the user blocked the direct-space conversation's creator.
+    async fn conversation_hidden(
+        &self,
+        user_id: UserId,
+        conversation_id: uuid::Uuid,
+    ) -> ServiceResult<bool>;
+
+    /// Local users whose request for a direct-space conversation is pending, by principal id.
+    async fn pending_holders(&self, conversation_id: uuid::Uuid) -> ServiceResult<Vec<String>>;
 
     /// Pull what a host's outbox holds above what was received from it. Returns how many items
     /// were taken.

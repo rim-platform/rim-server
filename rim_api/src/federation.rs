@@ -50,6 +50,16 @@ pub(crate) fn relay<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationContext, E
     Ok(federation)
 }
 
+/// The federation context of a server running the relay role, which holds the direct space;
+/// forwarded requests included.
+pub(crate) fn direct_space<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationContext, Error> {
+    let federation = federation(ctx)?;
+    if !federation.relay_role {
+        return Err(forbidden("this server is not a relay"));
+    }
+    Ok(federation)
+}
+
 /// `FORBIDDEN` on a server that runs only the relay role: it creates no workspaces.
 pub(crate) fn ensure_may_create_workspace(ctx: &Context<'_>) -> Result<(), Error> {
     match ctx.data::<FederationContext>() {

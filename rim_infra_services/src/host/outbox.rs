@@ -22,6 +22,7 @@ use rim_s2s::host::{HostEventFields, sign_host_event};
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
 use rim_services::relay::dto::{DeliverItem, DeliverRequest, DeliverResponse, SignedJson};
+use rim_services::relay::service::RelayService;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest};
 use rim_services::s2s::service::S2sClient;
 use rim_services::{ServiceError, ServiceResult};
@@ -82,6 +83,8 @@ pub(crate) struct Planned {
     pub stream: String,
     pub recipients: Vec<RemoteMember>,
     pub device_id: Option<Uuid>,
+    /// Local members, by principal id, whose request inbox files the envelope.
+    pub local: Vec<String>,
 }
 
 fn user_stream(member: &RemoteMember) -> String {
@@ -113,6 +116,7 @@ pub(crate) fn plan(
                 stream,
                 recipients,
                 device_id: None,
+                local: Vec::new(),
             }]
         }
     };
@@ -123,6 +127,7 @@ pub(crate) fn plan(
                 stream: user_stream(&m),
                 recipients: vec![m],
                 device_id,
+                local: Vec::new(),
             })
             .collect(),
         Route::Directory => {
@@ -133,6 +138,7 @@ pub(crate) fn plan(
                 stream: user_stream(&m),
                 recipients: vec![m],
                 device_id: None,
+                local: Vec::new(),
             }));
             planned
         }
@@ -208,6 +214,15 @@ pub struct HostEventWriter {
     direct_space_id: ServerId,
     refusals: Arc<RefusalCache>,
     wake: Arc<Notify>,
+    /// Files direct-space events for local members through the request inbox.
+    relay: Option<Arc<dyn RelayService>>,
+}
+
+/// Who a `DmInvite` is for.
+enum Invitee {
+    Remote(RemoteMember),
+    /// A local member, by principal id.
+    Local(String),
 }
 
 impl HostEventWriter {
@@ -226,7 +241,15 @@ impl HostEventWriter {
             direct_space_id,
             refusals,
             wake,
+            relay: None,
         }
+    }
+
+    /// Let local members of the direct space get invites and held events through the request
+    /// inbox.
+    pub fn with_relay(mut self, relay: Arc<dyn RelayService>) -> Self {
+        self.relay = Some(relay);
+        self
     }
 
     /// Write events until the channel closes or shutdown is signalled.
@@ -256,29 +279,56 @@ impl HostEventWriter {
             return Ok(0);
         };
         let workspace_id = ServerId::from(workspace_id);
+        let direct = workspace_id == self.direct_space_id && self.relay.is_some();
         let members = self.repos.host_repo.remote_members(workspace_id).await?;
-        if members.is_empty() {
+        if members.is_empty() && !direct {
             return Ok(0);
         }
         let event_json = serde_json::to_value(event).map_err(ServiceError::internal)?;
         let mut rows = 0;
         if workspace_id == self.direct_space_id {
-            for (invite, member) in self.dm_invites(event, &members).await? {
+            for (invite, invitee) in self.dm_invites(event, &members).await? {
+                let planned = match invitee {
+                    Invitee::Remote(member) => Planned {
+                        stream: user_stream(&member),
+                        recipients: vec![member],
+                        device_id: None,
+                        local: Vec::new(),
+                    },
+                    Invitee::Local(principal_id) if direct => Planned {
+                        stream: format!("u:{principal_id}"),
+                        recipients: Vec::new(),
+                        device_id: None,
+                        local: vec![principal_id],
+                    },
+                    Invitee::Local(_) => continue,
+                };
                 rows += self
-                    .append(
-                        workspace_id,
-                        &Planned {
-                            stream: user_stream(&member),
-                            recipients: vec![member],
-                            device_id: None,
-                        },
-                        &invite.to_string(),
-                    )
+                    .append(workspace_id, &planned, &invite.to_string())
                     .await?;
             }
         }
+        let mut plans = plan(event, &event_json, &members);
+        if direct
+            && let Route::Conversation(conversation_id) = route(event, &event_json)
+            && let Some(relay) = &self.relay
+        {
+            let holders = relay.pending_holders(conversation_id).await?;
+            if !holders.is_empty() {
+                let stream = format!("c:{conversation_id}");
+                match plans.iter_mut().find(|p| p.stream == stream) {
+                    Some(planned) => planned.local = holders,
+                    None => plans.push(Planned {
+                        stream,
+                        recipients: Vec::new(),
+                        device_id: None,
+                        local: holders,
+                    }),
+                }
+            }
+        }
         let text = event_json.to_string();
-        for planned in plan(event, &event_json, &members) {
+        for planned in plans {
             rows += self.append(workspace_id, &planned, &text).await?;
         }
         if rows > 0 {
@@ -287,13 +337,13 @@ impl HostEventWriter {
         Ok(rows)
     }
 
-    /// `DmInvite` events for remote members a direct-space conversation was created with or
-    /// added them to.
+    /// `DmInvite` events for the members a direct-space conversation was created with or added
+    /// them to, but its creator: remote members, and local ones with a principal id.
     async fn dm_invites(
         &self,
         event: &WorkspaceEvent,
         members: &[RemoteMember],
-    ) -> ServiceResult<Vec<(Value, RemoteMember)>> {
+    ) -> ServiceResult<Vec<(Value, Invitee)>> {
         let (conversation_id, added): (_, Vec<UserId>) = match event {
             WorkspaceEvent::ConversationCreated {
                 conversation_id,
@@ -307,11 +357,7 @@ impl HostEventWriter {
             } => (*conversation_id, vec![*user_id]),
             _ => return Ok(Vec::new()),
         };
-        let invited: Vec<&RemoteMember> = members
-            .iter()
-            .filter(|m| added.contains(&m.user_id))
-            .collect();
-        if invited.is_empty() {
+        if added.is_empty() {
             return Ok(Vec::new());
         }
         let Some(conversation) = self
@@ -343,17 +389,22 @@ impl HostEventWriter {
             .conversation_member_repo
             .list_member_ids(conversation_id)
             .await?;
-        let member_principal_ids: Vec<String> = self
-            .repos
-            .user_repo
-            .get_by_ids(&member_ids)
-            .await?
-            .into_iter()
-            .filter_map(|u| u.principal_id)
+        let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
+        let member_principal_ids: Vec<String> = users
+            .iter()
+            .filter_map(|u| u.principal_id.clone())
             .collect();
-        Ok(invited
-            .into_iter()
-            .filter(|m| m.user_id != creator)
+        let invitees = added.iter().filter(|id| **id != creator).filter_map(|id| {
+            match members.iter().find(|m| m.user_id == *id) {
+                Some(member) => Some(Invitee::Remote(member.clone())),
+                None => users
+                    .iter()
+                    .find(|u| u.id == *id)
+                    .and_then(|u| u.principal_id.clone())
+                    .map(Invitee::Local),
+            }
+        });
+        Ok(invitees
             .map(|m| {
                 (
                     json!({
@@ -367,7 +418,7 @@ impl HostEventWriter {
                         },
                         "member_principal_ids": member_principal_ids,
                     }),
-                    m.clone(),
+                    m,
                 )
             })
             .collect())
@@ -402,7 +453,7 @@ impl HostEventWriter {
                     .push(member.principal_id.clone());
             }
         }
-        if by_relay.is_empty() {
+        if by_relay.is_empty() && planned.local.is_empty() {
             return Ok(0);
         }
         let scope = match &self.db {
@@ -458,6 +509,19 @@ impl HostEventWriter {
         }
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        if !planned.local.is_empty()
+            && let Some(relay) = &self.relay
+        {
+            relay
+                .file_local(
+                    SignedJson {
+                        payload: envelope.payload.clone(),
+                        signature: envelope.signature.clone(),
+                    },
+                    planned.local.clone(),
+                )
+                .await?;
         }
         debug!(stream = %planned.stream, ?seq, relays = rows, "queued a host event");
         Ok(rows)

@@ -183,6 +183,7 @@ struct ReadEnvelope {
     seq: Option<i64>,
     conversation_id: Option<Uuid>,
     invite: Option<Invite>,
+    local: bool,
 }
 
 /// The parts of a `DmInvite` the request inbox keeps.
@@ -323,6 +324,14 @@ impl DefaultRelayService {
         };
         let key = rim_identity::PublicKey::parse(&key_text, "peer key").ok()?;
         let event = verify_host_event(&key, &statement).ok()?;
+        envelope_fields(event, false)
+    }
+}
+
+/// Where a host event belongs. `local` marks an event of this server's own direct space, filed
+/// for a local member: only the request inbox keeps it, the live path carries the rest.
+fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadEnvelope> {
+    {
         let workspace_id = Uuid::parse_str(&event.workspace_id).ok()?;
         let seq = match event.seq {
             Some(seq) => Some(i64::try_from(seq).ok()?),
@@ -355,9 +364,12 @@ impl DefaultRelayService {
             seq,
             conversation_id,
             invite,
+            local,
         })
     }
+}
 
+impl DefaultRelayService {
     /// File one recipient's copy of an envelope. Returns a refusal reason, if any.
     #[allow(clippy::too_many_arguments)]
     async fn file_for(
@@ -422,7 +434,8 @@ impl DefaultRelayService {
             let from = invite.from_principal_id.as_str();
             facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?;
             facts.trusted = repos.relay_repo.is_contact(user_id, from).await?
-                || repos.relay_repo.accepted_from(user_id, from).await?;
+                || repos.relay_repo.accepted_from(user_id, from).await?
+                || repos.host_repo.shares_workspace(user_id, from).await?;
             if facts.request.is_none() {
                 facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
                 facts.filed_by_sender_today = repos
@@ -435,6 +448,8 @@ impl DefaultRelayService {
         let request_id = match file(&facts) {
             Filing::Refuse(reason) => return Ok(Some(reason)),
             Filing::Drop => return Ok(None),
+            // Local members read a conversation they accepted live, not from the queue.
+            Filing::Deliver if read.local => return Ok(None),
             Filing::Deliver => None,
             Filing::Hold(id) => Some(id),
             filing @ (Filing::FileAccepted | Filing::FileRequest) => {
@@ -467,6 +482,9 @@ impl DefaultRelayService {
                         },
                     })
                     .await?;
+                if !pending && read.local {
+                    return Ok(None);
+                }
                 if pending {
                     notices.push(RelayNotice::DmRequestReceived {
                         user_id,
@@ -1181,6 +1199,62 @@ impl RelayService for DefaultRelayService {
             "handed out key packages to a host"
         );
         Ok(PeerClaimResponse { key_packages })
+    }
+
+    async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()> {
+        let statement = SignedStatement {
+            payload: envelope.payload.clone(),
+            signature: envelope.signature.clone(),
+        };
+        let event = read_host_event(&statement).map_err(ServiceError::internal)?;
+        let own_id = self.own_id();
+        let read = envelope_fields(event, true).ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("an own host event has no space id"))
+        })?;
+        let (scope, repos) = self.begin().await?;
+        let mut notices = Vec::new();
+        let mut envelope_id = None;
+        for principal_id in &recipients {
+            self.file_for(
+                &repos,
+                &own_id,
+                &read,
+                &envelope,
+                &mut envelope_id,
+                principal_id,
+                None,
+                &mut notices,
+            )
+            .await?;
+        }
+        Self::commit(scope).await?;
+        for notice in notices {
+            self.notify(notice);
+        }
+        Ok(())
+    }
+
+    async fn conversation_hidden(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .repos
+            .relay_repo
+            .conversation_hidden(user_id, conversation_id)
+            .await?)
+    }
+
+    async fn pending_holders(&self, conversation_id: Uuid) -> ServiceResult<Vec<String>> {
+        Ok(self
+            .repos
+            .relay_repo
+            .pending_holders(conversation_id)
+            .await?
+            .into_iter()
+            .map(|(_, principal_id)| principal_id)
+            .collect())
     }
 
     async fn pull_outbox(&self, peer_server_id: String) -> ServiceResult<u64> {
