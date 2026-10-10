@@ -90,7 +90,7 @@ impl From<CommandSensitivity> for rim_services::command::sensitivity::CommandSen
 /// enum + the match below is a compile error.
 ///
 /// Wire contract: SCREAMING_SNAKE variants (`PALETTE`, `AGENT`, `MACRO`,
-/// `KEYBIND`, `CONTEXT_MENU`, `PLUGIN`, `CLI`, `MCP`) — async-graphql's
+/// `KEYBIND`, `CONTEXT_MENU`, `PLUGIN`, `CLI`) — async-graphql's
 /// `Enum` derive handles the conversion. Auto-discovered by the schema
 /// because it's referenced from `ExecuteCommandInput.initiator` and
 /// `ExecuteMacroInput.initiator` — no explicit registration in `lib.rs`
@@ -113,8 +113,6 @@ pub enum CommandInitiator {
     Plugin,
     /// Out-of-process CLI client (rim-cli).
     Cli,
-    /// MCP (Model Context Protocol) server.
-    Mcp,
 }
 
 impl From<rim_services::command::initiator::CommandInitiator> for CommandInitiator {
@@ -128,7 +126,6 @@ impl From<rim_services::command::initiator::CommandInitiator> for CommandInitiat
             D::ContextMenu => Self::ContextMenu,
             D::Plugin => Self::Plugin,
             D::Cli => Self::Cli,
-            D::Mcp => Self::Mcp,
         }
     }
 }
@@ -144,7 +141,6 @@ impl From<CommandInitiator> for rim_services::command::initiator::CommandInitiat
             CommandInitiator::ContextMenu => D::ContextMenu,
             CommandInitiator::Plugin => D::Plugin,
             CommandInitiator::Cli => D::Cli,
-            CommandInitiator::Mcp => D::Mcp,
         }
     }
 }

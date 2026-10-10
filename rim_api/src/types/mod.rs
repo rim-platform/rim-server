@@ -47,7 +47,7 @@ pub use command::{
 };
 pub use command_result::{
     CommandResult, CommandResultStatus, ConfirmationChallenge, ConfirmationProofInput,
-    InBandTokenInput, OutOfBandProofInput, PipeStageResult,
+    InBandTokenInput, PipeStageResult,
 };
 pub use conversation::{
     ChannelListFilterInput, Conversation, ConversationTypeEnum, MutedConversation, UnreadCount,

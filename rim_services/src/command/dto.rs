@@ -224,7 +224,7 @@ impl CommandDefinitionDto {
             return true;
         }
         // Agent-initiator policy: Mutating+ commands require confirmation when
-        // the caller is agentic (Agent, Plugin, Mcp).
+        // the caller is agentic (Agent, Plugin).
         if initiator.is_agentic()
             && self.sensitivity >= super::sensitivity::CommandSensitivityDto::Mutating
         {
