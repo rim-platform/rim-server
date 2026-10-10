@@ -75,8 +75,29 @@ fn host_answer(answer: S2sResponse) -> HttpResponse {
     response.body(answer.body)
 }
 
-/// Forward a local user's device-signed request to the host it names.
+/// Marks the response to a forward the host gave no verified answer to.
+struct UpstreamUnavailable;
+
+/// Forward a local user's device-signed request to the host it names, and count it.
 pub async fn handle_remote(
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    payload: web::Payload,
+    state: web::Data<S2sState>,
+    authenticator: web::Data<Arc<dyn RequestAuthenticator>>,
+) -> HttpResponse {
+    let response = forward(req, path, payload, state, authenticator).await;
+    let outcome = if response.extensions().contains::<UpstreamUnavailable>() {
+        "upstream_unavailable"
+    } else {
+        crate::metrics::forward_outcome(response.status())
+    };
+    crate::metrics::forwarded("outgoing", outcome);
+    response
+}
+
+/// Check a local user's device-signed request and forward it to the host it names.
+async fn forward(
     req: HttpRequest,
     path: web::Path<(String, String)>,
     payload: web::Payload,
@@ -199,11 +220,13 @@ pub async fn handle_remote(
         Ok(answer) => host_answer(answer),
         Err(e) => {
             tracing::warn!(host_server_id = %host, error = %e, "a forwarded request found no verified answer");
-            HttpResponse::BadGateway().json(serde_json::json!({
+            let mut response = HttpResponse::BadGateway().json(serde_json::json!({
                 "error": "upstream_unavailable",
                 "message": "the host could not be reached",
                 "hostServerId": host,
-            }))
+            }));
+            response.extensions_mut().insert(UpstreamUnavailable);
+            response
         }
     }
 }
