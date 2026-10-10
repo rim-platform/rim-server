@@ -43,6 +43,8 @@ rim_server server-key show      # server id, key seq, keys, key hash
 rim_server server-key rotate    # a routine rotation, signed by the current key
 rim_server server-key recover --recovery-key-file /path/to/recovery.txt [--new-recovery-key]
 rim_server peer reset <server-id>
+rim_server peer block <server-id>
+rim_server peer unblock <server-id>
 ```
 
 They read the same configuration as the server (`DATABASE_URL`, `RIM_DATA_DIR`,
@@ -62,6 +64,9 @@ rotation up and keep signing with the old key until they get it.
 - **Peer reset** forgets a peer this server refuses because its key log forked (its history was
   rewritten: a restored backup, a stolen key, or an attack). Check with the peer's operator first,
   out of band; its next request pins it afresh.
+- **Peer block** refuses a pinned peer both ways from its next request, without a restart: its
+  requests get `403 peer_not_allowed` and nothing is sent to it. **Peer unblock** lifts it. A
+  peer never pinned cannot be blocked this way; list it in `RIM_S2S_DENIED_PEERS`.
 
 ## The franking key file
 
@@ -153,4 +158,5 @@ document from the origin, checks that the log hashes to the id, and pins the log
 accepts only requests and answers signed by the pinned key (or the previous key for 24 hours after
 a routine rotation). If the log it fetches later does not extend the pin, it refuses this server
 until its operator resets the pin. Each peer appears in the log as `s2s.peer_pinned`,
-`s2s.peer_rotated` and `s2s.peer_forked` events (target `audit`), with server ids only.
+`s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked` and `s2s.peer_unblocked` events (target
+`audit`), with server ids only.
