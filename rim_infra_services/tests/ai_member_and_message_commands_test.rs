@@ -1,5 +1,6 @@
-//! P4-A5 integration tests — the five new AI-callable backend builtins
-//! (#49 dispatch). Covers, per command:
+//! Integration tests for five AI-callable backend builtins (`chat.list_members`,
+//! `chat.search_messages`, `chat.get_recent_messages`, `chat.pin_message`,
+//! `chat.toggle_reaction`). Covers, per command:
 //!
 //!   - AI surface listing: command appears when the actor holds the
 //!     required cap, omitted when they don't.
@@ -13,14 +14,13 @@
 //!   - **DataLoader confirmation** on `search_messages` /
 //!     `get_recent_messages`: when the result set spans N authors, the
 //!     executor must call `UserService::get_users_by_ids` exactly once
-//!     regardless of N (Widow no-go against N+1). Verified via mockall's
+//!     regardless of N (no N+1 queries). Verified via mockall's
 //!     single-expectation semantics — a second call would panic.
 //!   - **Toggle round-trip** on `chat.toggle_reaction`: two successive
 //!     toggles on the same `(message, emoji, actor)` flip `action` from
-//!     `"added"` to `"removed"`. Locks the bidirectional semantics so a
-//!     future "add-only" refactor can't silently regress.
+//!     `"added"` to `"removed"`. Locks the bidirectional semantics.
 //!
-//! Sister to `p4_a4_metadata_flips_test.rs`; anyone adding a new
+//! Companion to `ai_chat_and_navigation_commands_test.rs`; anyone adding a new
 //! `ai_callable` builtin also updates the "surface listing" legs in
 //! both files.
 
@@ -92,7 +92,7 @@ impl Mocks {
     }
 }
 
-/// Build service with an explicit confirmation store (P6-M2: Agent+Mutating
+/// Build service with an explicit confirmation store (Agent + Mutating
 /// commands require a pre-issued ConfirmationProof).
 fn build_service_with_store(mocks: Mocks) -> (DefaultCommandService, Arc<dyn ConfirmationStore>) {
     let mut user_repo = MockUserCommandRepository::new();
@@ -211,7 +211,7 @@ fn user_dto(id: UserId, username: &str) -> UserDto {
 // =====================================================================
 
 #[tokio::test]
-async fn ai_surface_lists_all_five_p4_a5_commands_when_caps_granted() {
+async fn ai_surface_lists_all_five_commands_when_caps_granted() {
     let mut mocks = Mocks::new();
     mocks.capability = grant_all_caps();
     let svc = build_service(mocks);
@@ -235,13 +235,13 @@ async fn ai_surface_lists_all_five_p4_a5_commands_when_caps_granted() {
     ] {
         assert!(
             ids.contains(&expected),
-            "P4-A5 ai_callable command {expected} missing from Ai surface; got: {ids:?}"
+            "ai_callable command {expected} missing from Ai surface; got: {ids:?}"
         );
     }
 }
 
 #[tokio::test]
-async fn ai_surface_omits_all_five_p4_a5_commands_when_caps_denied() {
+async fn ai_surface_omits_all_five_commands_when_caps_denied() {
     let mut mocks = Mocks::new();
     mocks.capability = deny_all_caps();
     let svc = build_service(mocks);
@@ -353,7 +353,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
         assert!(m.get("role").and_then(|v| v.as_str()).is_some());
         assert!(m.get("joined").and_then(|v| v.as_str()).is_some());
 
-        // PII no-leak guard — Widow §7 no-go. Same pattern as
+        // PII no-leak guard. Same pattern as
         // `chat.list_channels` → member_ids assertion.
         for banned in [
             "email",
@@ -380,7 +380,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
     // Core DataLoader assertion: N results with N distinct authors + N
     // distinct channels must trigger EXACTLY ONE `get_users_by_ids` and
     // ONE `get_conversations_by_ids`. mockall's `return_once` makes a
-    // second call panic — if a future refactor drops the batch helper
+    // second call panic — if a refactor drops the batch helper
     // and falls back to per-message lookups, this test catches it.
     let workspace = ServerId::new();
     let conv_a = ConversationId::new();
@@ -694,7 +694,7 @@ async fn execute_pin_message_calls_pin_service_and_returns_success_payload() {
 
     let (svc, store) = build_service_with_store(mocks);
 
-    // P6-M2: chat.pin_message is Mutating → Agent must supply a proof.
+    // chat.pin_message is Mutating → Agent must supply a proof.
     let challenge = issue_in_band(store.as_ref(), &actor, "chat.pin_message", &args, &None);
     let proof = ConfirmationProof::InBandToken {
         token: challenge.token,
@@ -726,9 +726,9 @@ async fn execute_pin_message_calls_pin_service_and_returns_success_payload() {
 
 #[tokio::test]
 async fn execute_toggle_reaction_flips_action_added_then_removed() {
-    // Tony's P4-A5 naming decision: the tool's payload `action` must flip
-    // from "added" to "removed" on two successive calls with the same
-    // (message, emoji, actor). Locks the bidirectional contract; any
+    // The tool's payload `action` must flip from "added" to "removed" on two
+    // successive calls with the same (message, emoji, actor). Locks the
+    // bidirectional contract; any
     // refactor that hardcodes `action: "added"` regresses the LLM's
     // ability to reason about the effect of its own call.
     let workspace = ServerId::new();
@@ -774,7 +774,7 @@ async fn execute_toggle_reaction_flips_action_added_then_removed() {
     }));
 
     let (svc1, store1) = build_service_with_store(mocks1);
-    // P6-M2: chat.toggle_reaction is Mutating → Agent must supply a proof.
+    // chat.toggle_reaction is Mutating → Agent must supply a proof.
     let challenge1 = issue_in_band(
         store1.as_ref(),
         &actor1,

@@ -1,21 +1,21 @@
-//! Phase 2 P2-A3 integration test — AI surface filter end-to-end.
+//! Integration test — AI surface filter end-to-end.
 //!
 //! Drives `DefaultCommandService::filter_ai_surface_test_only` against the
 //! real `DefaultCapabilityService` (with mocked underlying repos for the
-//! registry + member lookups). The unit tests in `src/command.rs` cover the
+//! registry + member lookups). The unit tests in `src/command_tests.rs` cover the
 //! filter logic in isolation against a `MockCapabilityService`; this file
 //! locks the wire contract end-to-end so a refactor that decouples the
 //! filter from the gate's two-leg semantics (registry ∧ membership) fails
 //! the build here.
 //!
-//! Test commands (per dispatch task #24):
+//! Test commands:
 //!   A — ai_callable=true,  required_capabilities=[chat.read]
 //!   B — ai_callable=true,  required_capabilities=[admin.x]
 //!   C — ai_callable=false, required_capabilities=[chat.read]
 //!
 //! Actor wiring: workspace member, only `chat.read` is registered. Expected
 //! AI-surface result: [A]. (B is dropped because admin.x is unregistered →
-//! strict default-deny via the C1 gate. C is dropped because ai_callable is
+//! strict default-deny via the capability gate. C is dropped because ai_callable is
 //! false.) `Surface::Palette` is exercised through the unit-test path; this
 //! file's "sanity" branch confirms the real DefaultCapabilityService never
 //! gets consulted for non-Ai surfaces, satisfying the regression-guard
@@ -81,7 +81,7 @@ fn ai_cmd(id: &str, ai_callable: bool, caps: &[&str]) -> CommandDefinitionDto {
 /// `registered_caps` — capability keys the registry recognises (returns an
 /// active `RegisteredCapability` row). Anything else → `Ok(None)` (strict
 /// default-deny). `is_self_scoped` is inferred from `builtin_capabilities()`
-/// so the P6-FU5 scope enforcement uses the same classification as production.
+/// so the workspace-scope enforcement uses the same classification as production.
 /// `is_member` — return value for the workspace membership lookup.
 fn build_service(
     registered_caps: &'static [&'static str],
@@ -165,7 +165,7 @@ fn workspace_context() -> CommandContextDto {
 
 #[tokio::test]
 async fn ai_surface_returns_only_ai_callable_commands_actor_can_invoke() {
-    // The headline scenario from dispatch task #24: A passes (ai_callable +
+    // The headline scenario: A passes (ai_callable +
     // chat.read registered + member), B drops (admin.x unregistered, strict
     // default-deny), C drops (ai_callable=false).
     let actor = Actor::new(UserId::new());
@@ -207,14 +207,14 @@ async fn ai_surface_drops_command_when_actor_not_workspace_member() {
 
     assert!(
         kept.is_empty(),
-        "non-member must be filtered even with registered cap (C1 membership leg)",
+        "non-member must be filtered even with registered cap (membership leg)",
     );
 }
 
 #[tokio::test]
 async fn ai_surface_with_no_workspace_context_denies_workspace_scoped_caps() {
-    // P6-FU5: workspace-scoped caps (chat.read) must be denied when
-    // workspace_id is None — previously this bypassed the membership check.
+    // Workspace-scoped caps (chat.read) must be denied when workspace_id is
+    // None, so they cannot bypass the membership check.
     // Self-scoped caps (audit.read.self) still pass with workspace_id=None,
     // and the registry leg still runs for them (unregistered → denied).
     let actor = Actor::new(UserId::new());
@@ -223,7 +223,7 @@ async fn ai_surface_with_no_workspace_context_denies_workspace_scoped_caps() {
     let svc = build_service(&["chat.read", "audit.read.self"], false);
 
     let input = vec![
-        // workspace-scoped: must be denied without workspace context (P6-FU5)
+        // workspace-scoped: must be denied without workspace context
         ai_cmd("a.workspace_cap", true, &["chat.read"]),
         // self-scoped + registered: must pass without workspace context
         ai_cmd("b.self_scoped", true, &["audit.read.self"]),
@@ -239,7 +239,7 @@ async fn ai_surface_with_no_workspace_context_denies_workspace_scoped_caps() {
     assert_eq!(
         ids,
         vec!["b.self_scoped"],
-        "workspace-scoped cap must be denied without workspace_id (P6-FU5); \
+        "workspace-scoped cap must be denied without workspace_id; \
          self-scoped registered cap must pass; unregistered cap must be denied"
     );
 }
@@ -257,7 +257,7 @@ async fn list_commands_palette_does_not_consult_capability_service() {
     // Palette listing must NOT call into the capability gate at all — this
     // expectation matches chat.read only; any other key would panic (no
     // matching expectation) which is exactly the guard we want. Using `get()`
-    // since that's what check/check_many now call (P6-FU5 refactor).
+    // since that's what check/check_many call.
     registry
         .expect_get()
         .with(eq("chat.read"))

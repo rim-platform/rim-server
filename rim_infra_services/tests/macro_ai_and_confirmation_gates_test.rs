@@ -1,8 +1,7 @@
-//! P5-A4 integration tests — Skill Macros AI exposure gate coverage.
+//! Integration tests for the macro AI exposure and confirmation gates.
 //!
 //! These tests drive `DefaultMacroService` through its public `execute_macro`
-//! entry point with mock repos and services. Nine scenarios mandated by the
-//! Hawkeye BLOCK-6 finding:
+//! entry point with mock repos and services. Nine scenarios:
 //!
 //! 1. **AI gate** — agentic initiator denied on a non-`ai_callable` macro.
 //! 2. **Sensitivity max-rule** — `effective_sensitivity` raises the macro's
@@ -709,11 +708,10 @@ async fn list_commands_ai_surface_includes_synthesized_macro_definitions() {
     );
 }
 
-// ── P6-H1 regression tests ────────────────────────────────────────────────────
+// ── Confirmation propagation through macro steps ──────────────────────────────
 
-/// Bug 1 regression: `ConfirmationRequired` must carry a non-None
-/// `confirmation_required` so the client actually gets a token to re-submit.
-/// Previously, the challenge was `None` so the client had no proof to present.
+/// `ConfirmationRequired` must carry a non-None `confirmation_required` so the
+/// client gets a token to re-submit.
 #[tokio::test]
 async fn confirmation_required_carries_non_none_challenge_token() {
     let user_id = UserId::new();
@@ -759,10 +757,9 @@ async fn confirmation_required_carries_non_none_challenge_token() {
     );
 }
 
-/// Bug 2 regression: a Restricted step inside a macro must execute when the
-/// outer proof is valid. Previously, `confirmation: None` was passed to the
-/// inner execute_command, causing the step's gate to return ConfirmationRequired
-/// which was then silently swallowed as Ok — the step never ran.
+/// A Restricted step inside a macro must execute when the outer proof is valid:
+/// the step's own confirmation gate must not stop it, and the step must not be
+/// skipped while the macro reports Ok.
 ///
 /// This test wires a real store, issues a valid outer proof, and asserts the
 /// step's execute_command is actually reached.
@@ -841,7 +838,7 @@ async fn restricted_step_executes_when_outer_proof_is_valid() {
     );
 }
 
-/// Bug 3 regression: if a step's inner execute_command returns ConfirmationRequired
+/// If a step's inner execute_command returns ConfirmationRequired
 /// (e.g. confirmation: None passed, inner gate fires), it must be treated as
 /// MacroPartialFailure — not silently swallowed as Ok.
 #[tokio::test]

@@ -1,7 +1,7 @@
-//! P4-A4 integration tests — verify the 6 backend metadata-flip commands
-//! (#48 dispatch) behave correctly through the public service surface:
+//! Integration tests for six AI-callable chat and navigation builtins through the public
+//! service surface:
 //!
-//!   - **AI surface listing** — all 6 newly-`ai_callable: true` commands
+//!   - **AI surface listing** — all 6 `ai_callable: true` commands
 //!     appear in `Surface::Ai` listing when the actor holds the required
 //!     caps. The 4 DesktopLocal commands have empty `required_capabilities`
 //!     so they survive even when caps are denied.
@@ -21,9 +21,8 @@
 //!     `initiator = Agent`, exercising the executor wiring (including
 //!     the new optional `description` arg path on `chat.create_channel`).
 //!
-//! This is a Phase-4 sister test to `chat_list_channels_agent_test.rs`
-//! (Phase 3). Anyone adding a new `ai_callable` builtin should also add
-//! a leg here.
+//! Companion to `chat_list_channels_agent_test.rs`. Anyone adding a new
+//! `ai_callable` builtin should also add a leg here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,7 +59,7 @@ fn actor() -> Actor {
 }
 
 /// Build a service paired with an explicit confirmation store so that tests
-/// exercising Agent-initiator Mutating commands (P6-M2) can pre-issue a
+/// exercising Agent-initiator Mutating commands can pre-issue a
 /// `ConfirmationProof` against the same store the service uses.
 fn build_service_with_store(
     capability_service: MockCapabilityService,
@@ -129,7 +128,7 @@ fn cap_grant_all() -> MockCapabilityService {
 }
 
 #[tokio::test]
-async fn ai_surface_lists_all_six_p4_a4_commands() {
+async fn ai_surface_lists_all_six_chat_and_navigation_commands() {
     let svc = build_service(
         cap_grant_all(),
         MockConversationService::new(),
@@ -156,17 +155,16 @@ async fn ai_surface_lists_all_six_p4_a4_commands() {
     ] {
         assert!(
             ids.contains(&expected),
-            "P4-A4 ai_callable command {expected} missing from Ai surface; got: {ids:?}"
+            "ai_callable command {expected} missing from Ai surface; got: {ids:?}"
         );
     }
 }
 
 #[tokio::test]
 async fn ai_surface_preserves_desktop_local_target_on_navigation_commands() {
-    // The 4 DesktopLocal flips MUST keep `execution_target: DesktopLocal` so
-    // the frontend dispatcher (Phase 4 #53 commandContext bridge / Phase 4
-    // FE work) routes them client-side instead of trying to reach an
-    // executor arm that doesn't (and shouldn't) exist.
+    // The 4 DesktopLocal commands MUST keep `execution_target: DesktopLocal`
+    // so the frontend dispatcher routes them client-side instead of trying to
+    // reach an executor arm that doesn't (and shouldn't) exist.
     let svc = build_service(
         cap_grant_all(),
         MockConversationService::new(),
@@ -209,7 +207,7 @@ async fn ai_surface_preserves_desktop_local_target_on_navigation_commands() {
 #[tokio::test]
 async fn execute_command_post_message_round_trips_through_executor() {
     // chat.post_message is `ai_callable: true, sensitivity: Mutating`.
-    // P6-M2: Agent initiator + Mutating sensitivity requires a ConfirmationProof.
+    // Agent initiator + Mutating sensitivity requires a ConfirmationProof.
     // We pre-issue a proof against the service's own store and pass it in.
     use rim_services::command::confirmation::ConfirmationProof;
 
@@ -302,11 +300,11 @@ async fn execute_command_post_message_round_trips_through_executor() {
 
 #[tokio::test]
 async fn execute_command_create_channel_with_description_calls_update_topic() {
-    // P4-A4 added an optional `description` arg to chat.create_channel.
+    // chat.create_channel takes an optional `description` arg.
     // The executor must: (1) create the channel, (2) if description is
     // present, call `update_topic` with it. Asserting both legs in one
     // test catches a regression where the description silently drops.
-    // P6-M2: Agent + Mutating requires a pre-issued ConfirmationProof.
+    // Agent + Mutating requires a pre-issued ConfirmationProof.
     use rim_services::command::confirmation::ConfirmationProof;
 
     let workspace = ServerId::new();
@@ -316,7 +314,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
     let args = Some(serde_json::json!({
         "server_id": workspace.to_string(),
         "name": "migration-2026",
-        "description": "Phase-4 reframe migration coordination",
+        "description": "Database migration coordination",
     }));
 
     let mut cap = MockCapabilityService::new();
@@ -352,7 +350,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
         .withf(move |cmd| {
             cmd.server_id == workspace_for_topic
                 && cmd.conversation_id == new_channel_id
-                && cmd.topic.as_deref() == Some("Phase-4 reframe migration coordination")
+                && cmd.topic.as_deref() == Some("Database migration coordination")
         })
         .return_once(move |_cmd| {
             Box::pin(async move {
@@ -361,7 +359,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
                     server_id: workspace_for_topic,
                     conversation_type: ConversationType::Channel,
                     title: Some("migration-2026".to_string()),
-                    topic: Some("Phase-4 reframe migration coordination".to_string()),
+                    topic: Some("Database migration coordination".to_string()),
                     member_ids: vec![],
                     is_private: false,
                     archived_at: None,
@@ -423,7 +421,7 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
     // Mirror of the above for the no-description path. We do NOT set up
     // an `expect_update_topic` — mockall will panic on any unexpected
     // call, which is exactly the regression we want to catch.
-    // P6-M2: Agent + Mutating requires a pre-issued ConfirmationProof.
+    // Agent + Mutating requires a pre-issued ConfirmationProof.
     use rim_services::command::confirmation::ConfirmationProof;
 
     let workspace = ServerId::new();
@@ -511,7 +509,7 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
     // Defense-in-depth: an empty string `description: ""` from the agent
     // should NOT trigger an `update_topic` call. The executor uses
     // `.filter(|s| !s.is_empty())` to guard this.
-    // P6-M2: Agent + Mutating requires a pre-issued ConfirmationProof.
+    // Agent + Mutating requires a pre-issued ConfirmationProof.
     use rim_services::command::confirmation::ConfirmationProof;
 
     let workspace = ServerId::new();
