@@ -16,11 +16,14 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev
 sea migrate up
 RIM_SERVER_HOST=127.0.0.1 RIM_SERVER_PORT=8080 RIM_OPEN_REGISTRATION=true \
 RIM_KEY_LOGIN_AUDIENCES=localhost:8080,127.0.0.1:8080 \
+RIM_CORS_ALLOWED_ORIGIN=http://localhost:1420 \
 cargo run -p rim_server
 ```
 
-Both audience variables matter: a non-loopback bind without `RIM_KEY_LOGIN_AUDIENCES` or `RIM_PUBLIC_BASE_URL` refuses to start (rim-server #74). The first start writes `data/server-key.json`, `data/franking-key.json` and a recovery key file it tells you to move away. Open registration makes signup easy; the web app also needs the CORS origin of the Vite dev
-server allowed (`cors_allowed_origin` in `rim_server/src/config.rs`; `http://localhost:1420`).
+Both audience variables matter: a non-loopback bind without `RIM_KEY_LOGIN_AUDIENCES` or `RIM_PUBLIC_BASE_URL` refuses to start (rim-server #74). The first start writes `data/server-key.json`, `data/franking-key.json` and a recovery key file it tells you to move away. `RIM_CORS_ALLOWED_ORIGIN` is required for **both** the desktop dev app and the web app: `npm run
+tauri dev` serves the webview from `http://localhost:1420`, so every call to the server is
+cross-origin, and without the variable the server blocks them and the sign-in page says "Backend
+unreachable". Open registration makes signup easy.
 Keep `psql` open on `rim_dev` for the server-side checks below.
 
 **Desktop, two instances.** Each instance needs its own secret vault and credential store
@@ -40,7 +43,7 @@ the step number here.
 
 | # | Do | Expected |
 |---|---|---|
-| 1.1 | On A, open the join page, choose **Create account with a key**, username `ada`, device name `Ada desktop` | Keys are created; a 12-word recovery phrase and the account id are shown as a numbered grid; "Create account" is disabled until "I saved it" is ticked |
+| 1.1 | On A, sign-in page > **Join** (the link under the form; needs `RIM_OPEN_REGISTRATION=true`, or paste a link from `cargo run -p rim_server -- bootstrap-user --email you@example.com`), choose **Create account with a key**, username `ada`, device name `Ada desktop` | Keys are created; a 12-word recovery phrase and the account id are shown as a numbered grid; "Create account" is disabled until "I saved it" is ticked |
 | 1.2 | Copy the kit (keep it in a text file for later), tick, create | Signed in; Settings > Security shows the key identity, this device listed, "Key sign-in is on" and the **Sign out other sessions** offer |
 | 1.3 | `psql`: `select username, password_hash, email, principal_id from "user";` | `ada` has `NULL` password and email and a `rimp1_…` id |
 | 1.4 | Sign out on A; on the sign-in screen choose **Sign in with this device** | Signed in without a password |
@@ -124,11 +127,11 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_a sea migrate u
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_b sea migrate up
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_a RIM_SERVER_HOST=127.0.0.1 RIM_SERVER_PORT=8080 \
 RIM_PUBLIC_BASE_URL=http://127.0.0.1:8080 RIM_S2S_ALLOW_HTTP=true RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true \
-RIM_DATA_DIR=./data-a RIM_OPEN_REGISTRATION=true cargo run -p rim_server
+RIM_DATA_DIR=./data-a RIM_OPEN_REGISTRATION=true RIM_CORS_ALLOWED_ORIGIN=http://localhost:1420 cargo run -p rim_server
 # Server B (Bob's relay), in a second terminal
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_b RIM_SERVER_HOST=127.0.0.1 RIM_SERVER_PORT=8090 \
 RIM_PUBLIC_BASE_URL=http://127.0.0.1:8090 RIM_S2S_ALLOW_HTTP=true RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true \
-RIM_DATA_DIR=./data-b RIM_OPEN_REGISTRATION=true cargo run -p rim_server
+RIM_DATA_DIR=./data-b RIM_OPEN_REGISTRATION=true RIM_CORS_ALLOWED_ORIGIN=http://localhost:1420 cargo run -p rim_server
 ```
 
 `RIM_PUBLIC_BASE_URL` is also the login audience, so `RIM_KEY_LOGIN_AUDIENCES` is not needed.
