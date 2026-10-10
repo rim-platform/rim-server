@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 use async_graphql::parser::types::{ExecutableDocument, OperationType, Selection, SelectionSet};
 use async_graphql::{Context, Error, ErrorExtensions, Value};
+use rim_core::user::model::UserId;
 use rim_services::host::service::HostService;
 use rim_services::relay::dto::RelayInfoDto;
 use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
+
+use crate::errors::map_service_error;
 
 /// The relay and host services and this server's roles, injected into the schema.
 #[derive(Clone)]
@@ -75,6 +78,29 @@ pub(crate) fn ensure_may_create_workspace(ctx: &Context<'_>) -> Result<(), Error
     }
 }
 
+/// `FORBIDDEN` when a person from another server sets their display name here: a remote
+/// member's display name comes from their profile card. Their avatar, status text and bio are
+/// stored per host and may be set.
+pub(crate) async fn ensure_may_set_display_name(
+    ctx: &Context<'_>,
+    user_id: UserId,
+) -> Result<(), Error> {
+    let Ok(federation) = ctx.data::<FederationContext>() else {
+        return Ok(());
+    };
+    let remote = federation
+        .host
+        .is_remote_user(user_id)
+        .await
+        .map_err(map_service_error)?;
+    if remote {
+        return Err(forbidden(
+            "a remote member's display name comes from their profile card",
+        ));
+    }
+    Ok(())
+}
+
 /// Mutations that change an account rather than a space, which a person from another server
 /// runs at their own relay, never here.
 pub const ACCOUNT_MUTATIONS: &[&str] = &[
@@ -92,7 +118,6 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "revokeDeviceKey",
     "rotateIdentityKey",
     "publishProfileCard",
-    "updateMyProfile",
     "createServer",
     "createIngestToken",
     "revokeIngestToken",

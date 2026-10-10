@@ -7,7 +7,7 @@ use tracing::{info, instrument, warn};
 
 use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_session_token, hash_token};
-use rim_core::auth::model::{NewInstanceInvite, NewInvite};
+use rim_core::auth::model::NewInvite;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
@@ -419,13 +419,6 @@ impl DefaultAuthService {
             }
         }
         Err(ServiceError::PermissionDenied)
-    }
-
-    fn generate_invite_token_with_prefix(prefix: &str) -> String {
-        let t = generate_session_token();
-        t.strip_prefix("rim_sess_")
-            .map(|s| format!("{prefix}{s}"))
-            .unwrap_or_else(|| format!("{prefix}{t}"))
     }
 
     fn to_instance_invite_dto(inv: rim_core::auth::model::InstanceInvite) -> InstanceInviteDto {
@@ -1106,42 +1099,17 @@ impl AuthService for DefaultAuthService {
             .map(|email| Self::validate_email(&email))
             .transpose()?;
 
-        // Validate expires_at: mandatory, must be in the future, at most 30 days out.
-        let expires_at = cmd
-            .expires_at
-            .unwrap_or_else(|| Utc::now() + Duration::days(7));
-        let now = Utc::now();
-        if expires_at <= now {
-            return Err(ServiceError::Validation(
-                "expires_at must be in the future".to_string(),
-            ));
-        }
-        if expires_at > now + Duration::days(30) {
-            return Err(ServiceError::Validation(
-                "expires_at may not be more than 30 days from now".to_string(),
-            ));
-        }
-
-        let max_uses = cmd.max_uses.unwrap_or(1);
-        if max_uses <= 0 || max_uses > 50 {
-            return Err(ServiceError::Validation(
-                "max_uses must be between 1 and 50 inclusive".to_string(),
-            ));
-        }
-
-        let raw_token = Self::generate_invite_token_with_prefix("rim_iinv_");
-        let token_hash = hash_token(&raw_token);
-
-        let invite = self
-            .repos
-            .instance_invite_repo
-            .create(NewInstanceInvite {
-                created_by_user_id: cmd.actor.user_id,
-                token_hash,
-                expires_at,
-                max_uses,
-            })
-            .await?;
+        let crate::instance_invite::IssuedInvite {
+            invite,
+            token: raw_token,
+        } = crate::instance_invite::issue(
+            self.repos.instance_invite_repo.as_ref(),
+            Some(cmd.actor.user_id),
+            cmd.expires_at,
+            cmd.max_uses,
+            Utc::now(),
+        )
+        .await?;
 
         tracing::info!(
             target = "audit",

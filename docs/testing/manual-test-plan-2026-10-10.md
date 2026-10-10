@@ -154,6 +154,13 @@ Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at 
 | 6.11 | On B: `cargo run -p rim_server -- principal block <bob's rimp1_ id> --reason test` (same env as the server) | Bob's desktop is signed out and cannot sign in ("blocked on this server"); `principal unblock` restores it |
 | 6.12 | On B: `cargo run -p rim_server -- peer block <A's rims1_ id>`; send a message from A to Bob | A's server log shows `403 peer_not_allowed` from B and the message does not reach Bob until `peer unblock`; then it does |
 | 6.13 | On B as Carl (a stranger to Ada): send a DM request to Ada; on A, in the request, choose **Report** | `cargo run -p rim_server -- abuse-reports list --open` on A lists it; `resolve <id>` clears it |
+| 6.14 | B still runs `RIM_ROLE=relay` (6.10). On B: `cargo run -p rim_server -- invite create --max-uses 2` (same env as the server) | The first line is `http://127.0.0.1:8090/join/rim_iinv_…`, the second `… used 0/2 … active  issued by operator`. A fresh desktop pointed at B signs up with that link instead of the proof of work; `invite list` then shows `used 1/2`; after `invite revoke <id>` a signup with it is refused |
+
+A remote member's avatar, status text and bio are stored by the host: after uploading the image
+through the relay (`POST /api/files/avatar` forwarded), a forwarded `updateMyProfile` with
+`avatarUrl` sets it, and a `displayName` in it is refused (`FORBIDDEN`), since the name comes
+from the profile card. The desktop does not offer this for a workspace hosted elsewhere yet; the
+two-server e2e test covers it.
 
 ## 7. Regressions for Stage 5
 
