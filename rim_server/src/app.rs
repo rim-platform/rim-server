@@ -848,14 +848,9 @@ async fn seed_builtin_capabilities(
         // soft-retired by an operator (e.g. company-wide `audit.read`
         // disable) is NOT silently re-activated on the next deploy
         // (Gate 4 M3).
-        repo.upsert_if_missing(
-            spec.id,
-            rim_core::capability::model::CapabilitySourceKind::Builtin,
-            None,
-            spec.is_self_scoped,
-        )
-        .await
-        .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
+        repo.upsert_if_missing(spec.id, spec.is_self_scoped)
+            .await
+            .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
     }
     tracing::info!(
         target: "audit",
