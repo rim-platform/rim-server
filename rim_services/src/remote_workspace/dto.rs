@@ -14,6 +14,19 @@ pub struct JoinChallengeDto {
     pub challenge_id: Uuid,
     pub nonce: String,
     pub expires_at: DateTime<Utc>,
+    /// The workspace the invite names, for the delegation the device signs next; null when the
+    /// request named no invite.
+    #[serde(default)]
+    pub workspace_id: Option<Uuid>,
+}
+
+/// `POST /s2s/v1/join/challenge` body.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JoinChallengeRequest {
+    /// The invite the person is joining with; it is looked up, not used.
+    #[serde(default)]
+    pub invite_token: Option<String>,
 }
 
 /// A device of the person joining: its certificate and any revocation.

@@ -17,17 +17,18 @@ pub(crate) struct RemoteWorkspaceMutations;
 #[Object]
 impl RemoteWorkspaceMutations {
     /// Pin the host at `hostOrigin` as `hostServerId` and fetch a login challenge from it for a
-    /// join.
+    /// join, with the workspace `inviteToken` names (the invite is not used).
     async fn remote_join_challenge(
         &self,
         ctx: &Context<'_>,
         host_server_id: String,
         host_origin: String,
+        invite_token: Option<String>,
     ) -> Result<RemoteJoinChallenge> {
         let actor = require_actor(ctx)?;
         Ok(relay(ctx)?
             .workspace_relay
-            .remote_join_challenge(Actor::new(actor), host_server_id, host_origin)
+            .remote_join_challenge(Actor::new(actor), host_server_id, host_origin, invite_token)
             .await
             .map_err(map_service_error)?
             .into())

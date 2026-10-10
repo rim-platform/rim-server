@@ -24,10 +24,10 @@ use rim_s2s::revocation::{read_revocation_ack, verify_revocation_ack};
 use rim_services::relay::dto::{RelayNotice, SignedJson};
 use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::dto::{
-    CancelEntry, CancelRequest, JoinAnswer, JoinChallengeDto, JoinDevice, JoinRequest,
-    PresenceRequest, PresenceUpdate, RemoteJoinInput, RemoteJoinResultDto, RemoteSubscriptionDto,
-    RemoteWorkspaceCleanup, RevocationAnswer, RevocationFanoutDto, RevocationRequest,
-    SubscriptionResult, SubscriptionsAnswer, SubscriptionsRequest,
+    CancelEntry, CancelRequest, JoinAnswer, JoinChallengeDto, JoinChallengeRequest, JoinDevice,
+    JoinRequest, PresenceRequest, PresenceUpdate, RemoteJoinInput, RemoteJoinResultDto,
+    RemoteSubscriptionDto, RemoteWorkspaceCleanup, RevocationAnswer, RevocationFanoutDto,
+    RevocationRequest, SubscriptionResult, SubscriptionsAnswer, SubscriptionsRequest,
 };
 use rim_services::remote_workspace::service::{RevocationFanout, WorkspaceRelayService};
 use rim_services::s2s::dto::{PeerLookup, S2sMethod, S2sRequest, S2sResponse};
@@ -387,12 +387,13 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
         actor: Actor,
         host_server_id: String,
         host_origin: String,
+        invite_token: Option<String>,
     ) -> ServiceResult<JoinChallengeDto> {
         self.principal(actor.user_id).await?;
         self.pin_host(&host_server_id, &host_origin).await?;
-        let response = self
-            .post(&host_server_id, "/join/challenge", b"{}".to_vec())
-            .await?;
+        let body = serde_json::to_vec(&JoinChallengeRequest { invite_token })
+            .map_err(ServiceError::internal)?;
+        let response = self.post(&host_server_id, "/join/challenge", body).await?;
         if response.status != 200 {
             return Err(peer_refusal(&host_server_id, &response));
         }

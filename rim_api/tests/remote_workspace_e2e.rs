@@ -66,8 +66,10 @@ query Presence($w: ID!) { workspacePresence(workspaceId: $w) { userId status } }
 const HEADS: &str = r#"
 query Heads($s: ID!, $streams: [String!]!) { streamHeads(serverId: $s, streams: $streams) { stream seq } }"#;
 const REMOTE_CHALLENGE: &str = r#"
-mutation Challenge($h: String!, $o: String!) {
-  remoteJoinChallenge(hostServerId: $h, hostOrigin: $o) { challengeId nonce expiresAt }
+mutation Challenge($h: String!, $o: String!, $t: String) {
+  remoteJoinChallenge(hostServerId: $h, hostOrigin: $o, inviteToken: $t) {
+    challengeId nonce expiresAt workspaceId
+  }
 }"#;
 const JOIN: &str = r#"
 mutation Join($input: JoinRemoteWorkspaceInput!) {
@@ -388,7 +390,8 @@ impl Person {
         )
     }
 
-    /// Join `workspace` on `host` through this person's relay `relay`.
+    /// Join `workspace` on `host` through this person's relay `relay`. With an invite the
+    /// workspace comes from the challenge, as an app learns it.
     async fn join(
         &self,
         host: &Node,
@@ -399,10 +402,23 @@ impl Person {
         let challenge = self
             .ok(
                 REMOTE_CHALLENGE,
-                json!({ "h": host.id(), "o": host.origin }),
+                json!({ "h": host.id(), "o": host.origin, "t": invite }),
             )
             .await["remoteJoinChallenge"]
             .clone();
+        let workspace = match invite {
+            Some(_) => {
+                let named = challenge["workspaceId"]
+                    .as_str()
+                    .expect("the invite's workspace");
+                assert_eq!(named, workspace);
+                named
+            }
+            None => {
+                assert!(challenge["workspaceId"].is_null());
+                workspace
+            }
+        };
         let proof = device_login(
             &self.device_key,
             &self.state,
@@ -608,6 +624,15 @@ async fn a_remote_member_joins_through_the_relay_and_channel_traffic_flows_both_
     let hannah = sign_up(&h, "hannah", 1).await;
     let mut rita = sign_up(&r, "rita", 2).await;
     let (ws, general, invite) = workspace(&h, &hannah).await;
+
+    assert_eq!(
+        rita.err(
+            REMOTE_CHALLENGE,
+            json!({ "h": h.id(), "o": h.origin, "t": "not-an-invite" })
+        )
+        .await,
+        "NOT_FOUND"
+    );
 
     let joined = rita.join(&h, &r, &ws, Some(&invite)).await;
     assert_eq!(joined["hostServerId"], json!(h.id()));
@@ -1110,7 +1135,7 @@ async fn the_sdl_names_every_remote_workspace_type_and_field() {
         "input JoinRemoteWorkspaceInput",
         "remoteSubscriptions: [RemoteSubscription!]!",
         "deviceRevocationStatus(deviceId: ID!): [RevocationFanout!]!",
-        "remoteJoinChallenge(hostServerId: String!, hostOrigin: String!): RemoteJoinChallenge!",
+        "remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String): RemoteJoinChallenge!",
         "joinRemoteWorkspace(input: JoinRemoteWorkspaceInput!): RemoteJoinResult!",
         "renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!",
         "applyRemoteRevocation(revocation: SignedStatementInput!): SignedStatement!",

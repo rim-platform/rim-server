@@ -19,8 +19,17 @@ use crate::{Actor, ServiceResult};
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait WorkspaceHostService: Send + Sync {
-    /// A single-use login challenge for a person joining through `peer_server_id`.
-    async fn join_challenge(&self, peer_server_id: String) -> ServiceResult<JoinChallengeDto>;
+    /// A single-use login challenge for a person joining through `peer_server_id`, with the
+    /// workspace `invite_token` names when one is given. The invite is checked as a preview
+    /// checks it and is not used.
+    ///
+    /// # Errors
+    /// `NotFound` for an unknown invite; `Forbidden` for one that is revoked, used up or expired.
+    async fn join_challenge(
+        &self,
+        peer_server_id: String,
+        invite_token: Option<String>,
+    ) -> ServiceResult<JoinChallengeDto>;
 
     /// Admit a person a relay presents: verify their identity and proof, join them by invite
     /// (or as a current member), store them, and accept the delegation.
@@ -69,12 +78,13 @@ pub trait WorkspaceHostService: Send + Sync {
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait WorkspaceRelayService: Send + Sync {
-    /// Pin the host and fetch a join challenge from it.
+    /// Pin the host and fetch a join challenge from it, with the workspace the invite names.
     async fn remote_join_challenge(
         &self,
         actor: Actor,
         host_server_id: String,
         host_origin: String,
+        invite_token: Option<String>,
     ) -> ServiceResult<JoinChallengeDto>;
 
     /// Present the caller to a host with their proof and delegation, and record the
