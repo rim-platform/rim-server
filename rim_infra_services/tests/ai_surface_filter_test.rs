@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use mockall::predicate::eq;
-use rim_core::capability::model::{CapabilitySourceKind, RegisteredCapability};
+use rim_core::capability::model::RegisteredCapability;
 use rim_core::capability::repository::MockCapabilityRegistryRepository;
 use rim_core::command::repository::MockUserCommandRepository;
 use rim_core::macro_def::repository::MockMacroRepository;
@@ -98,11 +98,9 @@ fn build_service(
                     .iter()
                     .find(|s| s.id == cap_key)
                     .map(|s| s.is_self_scoped)
-                    .unwrap_or(false); // unknown / plugin caps default to workspace-scoped
+                    .unwrap_or(false); // unknown caps default to workspace-scoped
                 Ok(Some(RegisteredCapability {
                     capability_key: cap_key.to_string(),
-                    source_kind: CapabilitySourceKind::Builtin,
-                    plugin_id: None,
                     registered_at: chrono::Utc::now(),
                     retired_at: None,
                     is_self_scoped,
@@ -266,8 +264,6 @@ async fn list_commands_palette_does_not_consult_capability_service() {
         .returning(|_| {
             Ok(Some(RegisteredCapability {
                 capability_key: "chat.read".to_string(),
-                source_kind: CapabilitySourceKind::Builtin,
-                plugin_id: None,
                 registered_at: chrono::Utc::now(),
                 retired_at: None,
                 is_self_scoped: false,
