@@ -115,8 +115,8 @@ marked **Done** are merged on both repositories.
 3. **Done** (audit retention still waits on its variant). **Repo hygiene** (S): merge `rim-ui`
    `feature/initial-code` to `master`; `cargo audit` blocking; close stale issues; schedule
    the audit retention job once the variant is picked; delete the dead server-side
-   `plugin_host` module; messaging e2e test that walks pagination both ways; split
-   `mutation.rs`/`query.rs`/`types.rs` by domain before more resolvers land.
+   `plugin_host` module; messaging e2e test that walks pagination both ways; split the GraphQL resolvers and types
+   by domain (`rim_api/src/query/`, `mutation/`, `types/`) before more resolvers land.
 4. **Done.** **Make the showcase vertical optional** (S/M): a per-workspace feature flag that hides
    the incident and on-call commands, settings and AI surface. Communities that do not run
    services never see SEV levels. This also starts the mechanism Track 2.4 needs for

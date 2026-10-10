@@ -1,6 +1,6 @@
 # Capability And Security Model
 
-This document defines the Phase 0 capability and security model for RIM.
+This document defines the capability and security model for RIM.
 
 RIM is a chat app on steroids, but plugins, commands, integrations, and local behaviors must not
 turn into a hidden privilege surface. Capabilities are the core language for controlling what
@@ -107,7 +107,7 @@ Potential later split:
 
 These can be added once the settings model becomes more active.
 
-## Phase 0 Decisions
+## Decisions
 
 - `http.outbound` starts as one broad capability.
 - `chat.read` and `chat.write` stay broad for now.
@@ -198,13 +198,12 @@ This is especially important for:
 - `local.filesystem`
 - broad external network access
 
-Full admin policy enforcement does not need to be implemented in the first version of this spec, but
-the roadmap should assume it will exist.
+Admin policy enforcement over capabilities does not exist yet; designs should leave room for it.
 
 ## Command Execution Gate Order
 
 `execute_command` checks, in order: C1 capability (every required capability, workspace
-membership included) → H1 confirmation (dangerous commands) → T1 timeout (Track 1.2: a
+membership included) → H1 confirmation (dangerous commands) → T1 timeout (a
 timed-out actor cannot run `Mutating`/`Restricted` commands in that workspace) → R1 rate limit.
 Every rejection is audited. T1 also runs on nested dispatch (user-command steps, pipe stages).
 Workspace roles (Owner, Moderator, Member, Guest) are not capabilities: they are enforced by the services the commands call (`docs/messaging.md`, Roles
@@ -263,18 +262,17 @@ Recommended persistence split:
 - dangerous confirmation preferences -> persisted where appropriate
 - policy restrictions -> later persisted once policy/admin controls exist
 
-## Non-Goals For Phase 0
+## Non-Goals
 
-The first capability/security spec should not try to fully solve:
+This model does not define:
 
 - a complete policy engine
-- per-host outbound network allowlists
 - fully general sandbox DSLs
-- E2EE-specific extension access rules
-- final audit schema
 - delegated impersonation flows
 
-Those belong in later hardening phases.
+Per-origin network grants for web plugins (`network.fetch`) are defined in
+`docs/specs/web-plugins-v1.md`. Plugin access to encrypted conversations (`chat.read.encrypted`,
+`chat.write.encrypted`) is defined in `docs/specs/e2ee-mls-v1.md`.
 
 ## Summary Of Decisions
 

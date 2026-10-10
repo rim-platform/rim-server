@@ -111,11 +111,11 @@ macro commands, and client-side plugins.
 | Macro commands        | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
 | Client-side plugins   | ❌    | ❌      | ✅         | ❌    | ❌      | ✅    |
 | Non-Electron desktop  | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
-| Text E2EE             | ❌    | ❌      | ❌         | ❌    | ✅      | ❌ *  |
+| Text E2EE             | ❌    | ❌      | ❌         | ❌    | ✅      | ✅ *  |
 
-\* Committed for a future version, DMs and private groups first. It conflicts with server-side
-search, pipelines and AI grounding, so those move to the client for encrypted conversations
-(see Track 7 and the architecture guardrails in `ROADMAP.md`).
+\* DMs and private groups, with MLS (`docs/specs/e2ee-mls-v1.md`). Channels stay plaintext so
+server search, pipelines and AI grounding keep working there; in encrypted conversations those
+run on the client (see the architecture guardrails in `ROADMAP.md`).
 
 ## Product Positioning — One Sentence
 
