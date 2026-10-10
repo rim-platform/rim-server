@@ -9,6 +9,7 @@
 //! - [`statement`]: signing and verifying server-signed statements by kind.
 //! - [`host`]: host events and host responses, the statements a host signs for relays and
 //!   clients.
+//! - [`revocation`]: a host's signed acknowledgement of a device revocation.
 //! - [`http_sig`]: signature bases, signing and verifying requests and responses.
 //! - [`SharedIdentity`]: this server's key, log and descriptor, shared by everything that
 //!   signs.
@@ -19,6 +20,7 @@ pub mod host;
 pub mod http_sig;
 mod identity;
 mod key_log;
+pub mod revocation;
 mod signer;
 pub mod statement;
 #[cfg(test)]
@@ -33,8 +35,8 @@ pub use http_sig::KeyId;
 pub use identity::{ServerIdentity, SharedIdentity};
 pub use key_log::{
     LogRelation, MAX_LOG_ENTRIES, SERVER_ID_PREFIX, ServerKeyState, ServerRotationSigner,
-    compare_logs, is_server_id, key_hash, server_id_for_inception, sign_inception, sign_rotation,
-    timestamp,
+    compare_logs, delegable_key_hashes, is_server_id, key_hash, server_id_for_inception,
+    sign_inception, sign_rotation, timestamp,
 };
 pub use signer::ServerSigner;
 pub use statement::{STATEMENT_VERSION, ServerStatement};

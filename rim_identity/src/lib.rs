@@ -17,9 +17,12 @@
 //!   be added to a group again, both signed by its device key.
 //! - [`UnverifiedDeviceRequest`]: a device's signature over one request it sends to a space
 //!   hosted on another server.
+//! - [`UnverifiedDelegation`]: a device's grant to its relay to carry one workspace's traffic
+//!   to and from its host, for at most 24 hours.
 //! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
 //!   and tests use it; the server only relays the sealed bytes.
 
+mod delegation;
 mod device;
 pub mod device_link;
 mod device_request;
@@ -37,6 +40,10 @@ mod vectors;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use delegation::{
+    DELEGATION_NONCE_LEN, DELEGATION_SCOPE, Delegation, DelegationError, DelegationParties,
+    MAX_DELEGATION_LIFETIME, UnverifiedDelegation, delegation_payload,
+};
 pub use device::{
     DeviceCert, DeviceRevocation, MAX_DEVICE_NAME_CHARS, RevocationSigner, UnverifiedRevocation,
     verify_device_cert,
