@@ -115,6 +115,22 @@ impl Conversation {
             .map_err(crate::errors::map_service_error)?;
         Ok(group.map(Into::into))
     }
+
+    /// The conversation this one succeeds, on the host that held it; null for any other.
+    async fn predecessor(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<super::ConversationPredecessor>> {
+        let Ok(federation) = ctx.data::<crate::federation::FederationContext>() else {
+            return Ok(None);
+        };
+        let predecessor = federation
+            .host
+            .predecessor(crate::ids::parse_uuid_id(&self.id)?)
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        Ok(predecessor.map(Into::into))
+    }
 }
 
 impl Conversation {

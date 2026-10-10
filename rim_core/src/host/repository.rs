@@ -80,6 +80,12 @@ pub trait HostRepository: Send + Sync {
         predecessor_id: uuid::Uuid,
     ) -> RepoResult<()>;
 
+    /// The conversation a successor replaces: its host's server id and its id there.
+    async fn conversation_predecessor(
+        &self,
+        conversation_id: ConversationId,
+    ) -> RepoResult<Option<(String, uuid::Uuid)>>;
+
     /// Take the next `seq` of a stream: 1 for its first event.
     async fn next_stream_seq(&self, workspace_id: ServerId, stream: &str) -> RepoResult<i64>;
 

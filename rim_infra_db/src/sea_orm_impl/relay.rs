@@ -521,7 +521,8 @@ impl RelayRepository for SeaOrmRelayRepository {
 
     async fn delete_held(&self, request_id: DmRequestId) -> RepoResult<u64> {
         self.execute(
-            "DELETE FROM relay_item WHERE request_id = $1",
+            "DELETE FROM relay_item WHERE request_id = $1 \
+             AND id > (SELECT min(id) FROM relay_item WHERE request_id = $1)",
             vec![uuid(request_id)],
         )
         .await
@@ -567,8 +568,9 @@ impl RelayRepository for SeaOrmRelayRepository {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64> {
         self.execute(
-            "DELETE FROM relay_item WHERE request_id IN (SELECT id FROM relay_dm_request \
-             WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending')",
+            "DELETE FROM relay_item i WHERE i.request_id IN (SELECT id FROM relay_dm_request \
+             WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending') \
+             AND i.id > (SELECT min(j.id) FROM relay_item j WHERE j.request_id = i.request_id)",
             vec![uuid(user_id), principal_id.into()],
         )
         .await?;
