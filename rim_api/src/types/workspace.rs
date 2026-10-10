@@ -1,8 +1,7 @@
 use async_graphql::{ComplexObject, Context, Enum, Result, SimpleObject};
 
-/// GraphQL exposure of `rim_core::server_member::model::ServerMemberRole`. Reused (not
-/// duplicated) across every place a member's role needs to cross the wire — `Server.viewerRole`,
-/// `ServerMember.memberRole`, `CreateInviteInput.role`, `setMemberRole`.
+/// A member's role in a workspace, from most to least privileged. Used by `Server.viewerRole`,
+/// `ServerMember.memberRole`, `CreateInviteInput.role` and `setMemberRole`.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ServerMemberRoleGql {
     Owner,
@@ -89,7 +88,7 @@ pub struct ServerMember {
     pub bio: Option<String>,
     pub member_role: ServerMemberRoleGql,
     pub joined_at: chrono::DateTime<chrono::Utc>,
-    /// End of the member's timeout while one is in force (Track 1.2), else null.
+    /// End of the member's timeout while one is in force, else null.
     pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
     /// The member's key identity (`rimp1_…`), once enrolled; null for a password-only account.
     pub principal_id: Option<String>,

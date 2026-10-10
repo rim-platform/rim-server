@@ -1,8 +1,7 @@
-//! Through-the-stack e2e tests for messaging and cursor pagination (findings A-H1, A-M7).
+//! Through-the-stack e2e tests for messaging and cursor pagination.
 //!
 //! Every assertion goes through GraphQL: resolver → `MessageService` → `SeaOrmMessageRepository`
-//! → Postgres, which is the path the client uses. The cursor contract under test is
-//! `docs/pagination.md`:
+//! → Postgres, which is the path the client uses. The cursor contract under test:
 //!
 //! - `messages` / `threadMessages` are `DESC` endpoints (`sent_at DESC, id DESC`) whose items are
 //!   returned in display order, oldest-first. `AFTER` walks toward older messages, `BEFORE` toward
@@ -656,8 +655,8 @@ async fn assert_pagination_matrix(
     .await;
 
     // Turning around at the oldest row: the last AFTER page's `prev` points at the oldest row;
-    // walking BEFORE from it must visit everything newer, starting right next to it (A-H1's
-    // "far end" defect returned the newest rows here and skipped the ones in between).
+    // walking BEFORE from it must visit everything newer, starting right next to it, not jump
+    // to the newest rows and skip the ones in between.
     let last = after.last().expect("at least one page");
     if let Some(turn) = last.prev {
         let back = f
@@ -716,7 +715,7 @@ async fn timeline_pagination_visits_every_message_exactly_once() {
         ids(&sent[1..4]),
         "scroll-up loads the next-older page"
     );
-    // `BEFORE` is the newer direction (docs/pagination.md): nothing is newer than the newest
+    // `BEFORE` is the newer direction: nothing is newer than the newest
     // message, so `BEFORE` from it is empty. A client that scrolls up with `BEFORE` dead-ends.
     let newer_than_newest = f
         .page(&timeline, Dir::Before, &sent[6].cursor(), 3, false)
@@ -996,7 +995,7 @@ async fn non_members_cannot_page_messages() {
     );
 }
 
-// ── Message change feed (`docs/message-change-feed.md`) ─────────────────────
+// ── Message change feed ─────────────────────────────────────────────────────
 
 const CHANGES_QUERY: &str = r#"
 query Changes($input: MessageChangesInput!) {

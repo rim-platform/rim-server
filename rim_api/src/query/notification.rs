@@ -19,7 +19,7 @@ pub(crate) struct NotificationQueries;
 
 #[Object]
 impl NotificationQueries {
-    // ── Notification rules (Track 1.3) ────────────────────────────────
+    // ── Notification rules ────────────────────────────────────────────
 
     /// The viewer's notification settings in the workspace (defaults until first saved).
     async fn my_notification_settings(

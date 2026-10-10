@@ -2,10 +2,7 @@ use async_graphql::SimpleObject;
 
 // ── Registration types ─────────────────────────────────────────────────────
 
-/// GraphQL enum for the deployment-wide registration mode.
-///
-/// Mirrors [`rim_services::auth::dto::RegistrationMode`].
-/// Variants appear in the SDL as `INVITE_ONLY`, `OPEN` and `POW`.
+/// How new accounts may sign up on this instance.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum RegistrationModeGql {
     /// Default: signup requires a valid token (instance or workspace invite).
@@ -29,9 +26,7 @@ impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
     }
 }
 
-/// GraphQL enum for the type of an invite token, used by `InviteTokenPreview`.
-///
-/// Mirrors [`rim_services::auth::dto::InviteTokenType`].
+/// The type of an invite token, used by `InviteTokenPreview`.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum InviteTokenTypeGql {
     /// Instance invite: routes to `instanceInviteToken` input on `signupWithInvite`.
@@ -50,10 +45,8 @@ impl From<rim_services::auth::dto::InviteTokenType> for InviteTokenTypeGql {
     }
 }
 
-/// Minimal workspace info included in a workspace-invite preview.
-///
-/// See spec §4.7 — inviter name and server name are disclosed because
-/// the user was already shown them on the invite-link landing page.
+/// Minimal workspace info included in a workspace-invite preview. The workspace name and the
+/// inviter's display name are shown to anyone holding the invite link.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct WorkspaceInvitePreviewGql {
     pub server_id: async_graphql::ID,

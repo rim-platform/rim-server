@@ -1,5 +1,5 @@
-//! Through-the-stack e2e tests for Track 1.1: private channels, channel join/leave/invite, and
-//! archiving (`docs/specs/track-1-1-private-channels.md`).
+//! Through-the-stack e2e tests for private channels, channel join/leave/invite, and
+//! archiving.
 //!
 //! Every assertion goes through GraphQL: resolver → `ConversationService` / `MessageService` /
 //! `PinService` → SeaORM repositories → Postgres. The rules under test:

@@ -53,20 +53,14 @@ impl MessageQueries {
         Ok(MessagePage::from_page(page))
     }
 
-    /// Full-text search over messages. Supports the `from:`/`in:`/`has:`/`before:`/`after:`
-    /// operator syntax in `input.query` — see `docs/search.md`.
+    /// Full-text search over the messages of a workspace the caller can read. `input.query`
+    /// accepts free text plus the operators `from:@user`, `in:#channel`, `has:link`,
+    /// `has:attachment`, `after:YYYY-MM-DD` and `before:YYYY-MM-DD`.
     ///
-    /// **Breaking change (Track B1):** this replaced a flat, unpaginated `[SearchResultMessage!]!`
-    /// return with top-level `limit`/`includeDeleted` args. It now takes a single
-    /// `SearchMessagesInput` and returns a cursor-paginated `SearchResultPage`. Frontend codegen
-    /// must be re-run against the updated schema.
-    ///
-    /// **Why cursor-paginated by recency, not relevance:** results are ordered `(sentAt, id)` —
-    /// the same contract as every other message list (`docs/pagination.md`) — rather than by
-    /// `SearchResultMessage.rank`. `ts_rank` is neither unique nor stable across concurrent
-    /// inserts, so paginating by it would produce skips/duplicates across pages. `rank` and
-    /// `headline` are still returned on every item for client-side display or a page-local sort.
-    /// See `docs/search.md` for the full rationale.
+    /// Results are cursor-paginated by recency, `(sentAt, id)`, like every other message list.
+    /// They are not ordered by `rank`: a relevance score is neither unique nor stable, so paging
+    /// by it would skip or repeat results. `rank` and `headline` come with every item for display
+    /// or a sort within the page.
     async fn search_messages(
         &self,
         ctx: &Context<'_>,
@@ -187,8 +181,7 @@ impl MessageQueries {
 
     /// The message change feed: for each conversation, the messages created, edited or deleted
     /// after its cursor (timeline and thread replies alike), oldest change first. A client cache
-    /// stores each returned `cursor` and passes it back as `after`. Contract (frozen):
-    /// `docs/message-change-feed.md`.
+    /// stores each returned `cursor` and passes it back as `after`.
     async fn message_changes(
         &self,
         ctx: &Context<'_>,

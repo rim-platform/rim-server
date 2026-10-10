@@ -30,17 +30,14 @@ async fn execute_command_mutation_returns_result() {
     assert_no_errors(&res);
 }
 
-/// Round-trip test for Phase 1 Task 4 (Fury v2 §3.11, H4 part 1).
-///
 /// Verifies that the GraphQL `initiator` field on `ExecuteCommandInput`
 /// is correctly translated to `CommandInitiator` on the
 /// `ExecuteCommandCmd` passed to the service. The mock asserts on the
 /// captured value — if the resolver dropped the field, defaulted it
 /// silently, or mapped to the wrong variant, the assertion fires.
 ///
-/// Covers all 7 wire variants. Phase 4 audit-log + per-turn cap will
-/// read this field on the service side; this test pins the wire contract
-/// so a future GraphQL refactor can't quietly break the audit trail.
+/// Covers all 7 wire variants. The audit log and the confirmation policy read this field on
+/// the service side, so the test pins the wire contract.
 #[tokio::test]
 async fn execute_command_initiator_round_trips_through_graphql() {
     use rim_services::command::initiator::CommandInitiator;
@@ -88,8 +85,7 @@ async fn execute_command_initiator_round_trips_through_graphql() {
 /// Companion to the round-trip test above: when the GraphQL caller omits
 /// `initiator`, the resolver MUST default to `Palette` (the conservative
 /// human-attributed default per `CommandInitiator::default()`). Anything
-/// else would silently re-tag legacy clients (frontend pre-Phase-4) as
-/// agentic.
+/// else would tag clients that omit the field as agentic.
 #[tokio::test]
 async fn execute_command_omitted_initiator_defaults_to_palette() {
     use rim_services::command::initiator::CommandInitiator;

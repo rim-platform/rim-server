@@ -9,8 +9,7 @@ pub struct User {
     pub status_text: Option<String>,
     pub bio: Option<String>,
     /// Key-based principal id (`rimp1_...`) once the account enrolled a key; null before. Plugins
-    /// see this id, and the host maps a provisional `rimp0_` id to it once
-    /// (`docs/specs/key-identity-v1.md`).
+    /// see this id, and the host maps a provisional `rimp0_` id to it once.
     pub principal_id: Option<String>,
 }
 
