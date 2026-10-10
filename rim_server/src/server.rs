@@ -45,6 +45,8 @@ pub struct RunningServer {
     pub schema: AppSchema,
     /// Keeps the background tasks running while the server is alive.
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// The server's connection pool, for closing once the server has stopped.
+    pub db: sea_orm::DatabaseConnection,
 }
 
 /// Bind `RIM_SERVER_HOST:RIM_SERVER_PORT` and run until shutdown.
@@ -53,6 +55,9 @@ pub async fn start_server(config: &RIMConfig) -> std::io::Result<()> {
     let running = serve(config, listener).await?;
     let result = running.server.await;
     drop(running.shutdown_tx);
+    if let Err(e) = running.db.close().await {
+        tracing::warn!(error = %e, "could not close the database pool");
+    }
     result
 }
 
@@ -97,6 +102,7 @@ pub async fn serve(
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
+    let db = runtime.db;
 
     let server = HttpServer::new(move || {
         let schema = schema.clone();
@@ -210,6 +216,7 @@ pub async fn serve(
         schema: schema_handle,
         s2s: s2s_runtime,
         shutdown_tx,
+        db,
     })
 }
 

@@ -9,7 +9,7 @@ use rim_services::events::{Broadcaster, Observers};
 use rim_services::presence::PresenceService;
 use rim_services::storage::service::StorageService;
 use rim_services::typing::TypingService;
-use sea_orm::Database;
+use sea_orm::DatabaseConnection;
 use tokio::sync::watch;
 
 use crate::config::{RIMConfig, ServerRole};
@@ -63,6 +63,8 @@ pub struct AppRuntime {
     pub alert_max_body_bytes: usize,
     pub s2s: S2sRuntime,
     pub shutdown_tx: watch::Sender<bool>,
+    /// The server's connection pool, closed once the server has stopped.
+    pub db: DatabaseConnection,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -315,7 +317,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let mut key_login_audiences = config
         .key_login_audiences()
         .map_err(std::io::Error::other)?;
-    let db = Database::connect(&config.database_url)
+    let db = config
+        .connect_database()
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let raw_db = db.clone(); // Keep raw DatabaseConnection for UoW
@@ -834,6 +837,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         alert_max_body_bytes,
         s2s,
         shutdown_tx,
+        db: raw_db_for_tasks,
     })
 }
 
