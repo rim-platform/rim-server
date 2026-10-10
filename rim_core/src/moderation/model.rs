@@ -12,7 +12,7 @@ use crate::user::model::UserId;
 
 model_id!(MessageReportId);
 
-/// A user banned from a workspace (Track 1.2). While the ban is active (no `expires_at`, or
+/// A user banned from a workspace. While the ban is active (no `expires_at`, or
 /// `expires_at` in the future) every workspace join path refuses the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerBan {
@@ -31,7 +31,7 @@ impl ServerBan {
     }
 }
 
-/// A member muted until `until` (Track 1.2). Only a timeout with `until` in the future takes
+/// A member muted until `until`. Only a timeout with `until` in the future takes
 /// effect; expired rows are ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberTimeout {
@@ -97,7 +97,7 @@ impl FromStr for MessageReportStatus {
     }
 }
 
-/// A member's report of a message to the workspace moderators (Track 1.2). One per
+/// A member's report of a message to the workspace moderators. One per
 /// `(message_id, reporter_user_id)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageReport {

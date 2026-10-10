@@ -30,8 +30,7 @@ pub trait NotificationPreferenceRepository: Send + Sync {
     /// Muted now: a timed mute in effect, or level `NONE`.
     async fn is_muted(&self, user_id: UserId, conversation_id: ConversationId) -> RepoResult<bool>;
 
-    /// Preferences that mute: level `NONE`, or any `muted_until` (expired ones included, as
-    /// before Track 1.3).
+    /// Preferences that mute: level `NONE`, or any `muted_until` (expired ones included).
     async fn get_muted_conversations(
         &self,
         user_id: UserId,

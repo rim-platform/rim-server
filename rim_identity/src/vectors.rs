@@ -1,5 +1,4 @@
-//! Known-answer vectors, also printed in `docs/specs/key-identity-v1.md` (appendix A) so client
-//! implementations can check their signing and hashing against the server's.
+//! Known-answer vectors that client implementations check their signing and hashing against.
 
 use uuid::Uuid;
 
