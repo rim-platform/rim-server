@@ -46,6 +46,34 @@ pub(crate) struct SystemProbe {
     pub(crate) franking_key_file: PathBuf,
 }
 
+/// The names of the migrations recorded as applied. Only reads `seaql_migrations`: a missing
+/// table is an error, never created.
+pub(crate) async fn applied_migrations(db: &DatabaseConnection) -> anyhow::Result<HashSet<String>> {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT version FROM seaql_migrations",
+        ))
+        .await?;
+    rows.iter()
+        .map(|row| Ok(row.try_get::<String>("", "version")?))
+        .collect()
+}
+
+/// The names of the migrations this build registers.
+pub(crate) fn registered_migrations() -> Vec<String> {
+    migration::Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect()
+}
+
+/// How many migrations this build registers that the database has not applied.
+pub(crate) async fn count_pending_migrations(db: &DatabaseConnection) -> anyhow::Result<usize> {
+    let applied = applied_migrations(db).await?;
+    Ok(pending_migrations(&registered_migrations(), &applied))
+}
+
 async fn readable_file(path: &PathBuf) -> anyhow::Result<()> {
     let metadata = tokio::fs::metadata(path).await?;
     anyhow::ensure!(metadata.is_file(), "not a regular file");
@@ -61,23 +89,11 @@ impl ReadinessProbe for SystemProbe {
     }
 
     async fn applied_migrations(&self) -> anyhow::Result<HashSet<String>> {
-        let rows = self
-            .db
-            .query_all_raw(Statement::from_string(
-                DbBackend::Postgres,
-                "SELECT version FROM seaql_migrations",
-            ))
-            .await?;
-        rows.iter()
-            .map(|row| Ok(row.try_get::<String>("", "version")?))
-            .collect()
+        applied_migrations(&self.db).await
     }
 
     fn registered_migrations(&self) -> Vec<String> {
-        migration::Migrator::migrations()
-            .iter()
-            .map(|m| m.name().to_string())
-            .collect()
+        registered_migrations()
     }
 
     async fn server_key_file(&self) -> anyhow::Result<()> {
