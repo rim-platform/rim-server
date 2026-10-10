@@ -499,6 +499,7 @@ impl AuthService for DefaultAuthService {
                 retry_after_seconds = %retry_after_seconds,
                 "login rate limited"
             );
+            crate::metrics::rate_limited("login");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });
@@ -1223,6 +1224,7 @@ impl AuthService for DefaultAuthService {
                 remote_ip = %query.remote_ip,
                 "preview_invite_token rate limit exceeded"
             );
+            crate::metrics::rate_limited("preview_invite");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });

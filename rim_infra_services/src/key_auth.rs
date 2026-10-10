@@ -319,6 +319,7 @@ impl DefaultKeyAuthService {
             .ok_or_else(|| ServiceError::Validation("the key log is empty".to_string()))?;
         rim_s2s::pow::check_pow(server_id, &inception.payload, nonce, bits).map_err(|e| {
             info!(reason = %e, pow_bits = bits, "refused a signup's proof-of-work");
+            crate::metrics::pow_rejected();
             ServiceError::Validation(e.to_string())
         })
     }
@@ -480,9 +481,12 @@ impl DefaultKeyAuthService {
             RateLimitDecision::Allowed => Ok(now),
             RateLimitDecision::Limited {
                 retry_after_seconds,
-            } => Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            }),
+            } => {
+                crate::metrics::rate_limited(FAILURE_KEY);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 
@@ -740,6 +744,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .challenge_rate_limiter
             .check_and_record(&cmd.remote_ip, "key_challenge", now)
         {
+            crate::metrics::rate_limited("key_challenge");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });

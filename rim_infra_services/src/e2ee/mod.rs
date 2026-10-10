@@ -518,14 +518,21 @@ impl DefaultE2eeService {
         Ok(())
     }
 
-    fn limit(limiter: &RegistrationRateLimiter, bucket: &str, key: &str) -> ServiceResult<()> {
+    fn limit(
+        limiter: &RegistrationRateLimiter,
+        bucket: &str,
+        key: &'static str,
+    ) -> ServiceResult<()> {
         match limiter.check_and_record(bucket, key, Utc::now()) {
             RateLimitDecision::Allowed => Ok(()),
             RateLimitDecision::Limited {
                 retry_after_seconds,
-            } => Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            }),
+            } => {
+                crate::metrics::rate_limited(key);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 

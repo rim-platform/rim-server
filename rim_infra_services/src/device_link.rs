@@ -233,16 +233,19 @@ impl DefaultDeviceLinkService {
     fn limit(
         limiter: &RegistrationRateLimiter,
         bucket: &str,
-        key: &str,
+        key: &'static str,
     ) -> ServiceResult<DateTime<Utc>> {
         let now = Utc::now();
         match limiter.check_and_record(bucket, key, now) {
             RateLimitDecision::Allowed => Ok(now),
             RateLimitDecision::Limited {
                 retry_after_seconds,
-            } => Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            }),
+            } => {
+                crate::metrics::rate_limited(key);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 

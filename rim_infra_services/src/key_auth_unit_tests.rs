@@ -1208,6 +1208,37 @@ mod tests {
         assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
     }
 
+    #[test]
+    fn refused_challenges_and_proofs_of_work_are_counted() {
+        use crate::metrics::test_support::{block_on, recorded};
+        use crate::metrics::{POW_REJECTIONS, RATE_LIMIT_REJECTIONS};
+
+        let ((), got) = recorded(|| {
+            block_on(async {
+                let h = harness_with_limits(1, 100);
+                let cmd = || IssueKeyChallengeCmd {
+                    remote_ip: IP.to_string(),
+                };
+                assert!(h.svc.issue_challenge(cmd()).await.is_ok());
+                assert!(h.svc.issue_challenge(cmd()).await.is_err());
+
+                let h = relay_harness(100, crate::quota::Quotas::default());
+                let p = h.present(1).await;
+                assert!(
+                    h.svc
+                        .signup_with_key(pow_cmd(&p, "ada", 16, "AAAAAAAAkaI"))
+                        .await
+                        .is_err()
+                );
+            })
+        });
+        assert_eq!(
+            got.counter(RATE_LIMIT_REJECTIONS, &[("limiter", "key_challenge")]),
+            1
+        );
+        assert_eq!(got.counter(POW_REJECTIONS, &[]), 1);
+    }
+
     #[tokio::test]
     async fn challenges_are_rate_limited_per_ip() {
         let h = harness_with_limits(2, 100);
