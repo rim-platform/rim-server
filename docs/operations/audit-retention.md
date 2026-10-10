@@ -110,5 +110,6 @@ keeps the file open, so rotate it with `copytruncate`:
 }
 ```
 
-In the relay deployment the file is in the `rim-relay_rim_data` volume; run logrotate on the
-host against the volume's mount point, or ship stdout to your log store and keep the file short.
+In the compose deployments the file is in the `rim_rim_data` volume (`rim-relay_rim_data` on a
+relay); run logrotate on the host against the volume's mount point, or ship stdout to your log
+store and keep the file short.

@@ -40,3 +40,6 @@ audit.log
 coverage/
 .claude/
 .codex
+
+# Archives written by deploy/backup.sh
+backups/

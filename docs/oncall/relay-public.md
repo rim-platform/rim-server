@@ -3,9 +3,9 @@
 The public relay is the server anyone's app can use as its relay: accounts, devices, profile
 cards, the queue of what other servers send, the request inbox, and the forward path to the
 servers that host people's workspaces. It runs the stock image with `RIM_ROLE=relay` from
-`deploy/compose.relay.yml` (`deploy/README.md` brings it up). Its working name is
-`relay.rim.chat`; that domain is not registered, so read it as "the relay's domain" wherever this
-page or the compose file says it.
+`deploy/compose.yml` with the `deploy/compose.relay.yml` override (`deploy/README.md` brings it
+up). Its working name is `relay.rim.chat`; that domain is not registered, so read it as "the
+relay's domain" wherever this page or the compose files say it.
 
 Everything marked **FILL** is a decision or a fact the operator records here before the relay
 opens to the public.
@@ -13,17 +13,20 @@ opens to the public.
 The commands below assume, on the host, in the repository checkout:
 
 ```sh
-alias dc='docker compose -f deploy/compose.relay.yml'
-alias rim-relay='docker compose -f deploy/compose.relay.yml exec rim /app/rim-server'
-alias rim-sql='docker compose -f deploy/compose.relay.yml exec -T postgres psql -U rim -d rim'
+export COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml
+alias dc='docker compose'
+alias rim-relay='docker compose exec rim /app/rim-server'
+alias rim-sql='docker compose exec -T postgres psql -U rim -d rim'
 ```
+
+`COMPOSE_FILE` points docker compose and the backup scripts at the relay's two files.
 
 ## What lives where
 
 | What | Where | Backed up |
 |---|---|---|
-| Configuration | `deploy/.env` on the host (secrets) and `deploy/compose.relay.yml` | `.env` with the key backups; the compose file is in Git |
-| Database | volume `rim-relay_postgres_data` | nightly dump, "Backups" |
+| Configuration | `deploy/.env` on the host (secrets), `deploy/compose.yml` and `deploy/compose.relay.yml` | `.env` in every backup; the compose files are in Git |
+| Database | volume `rim-relay_postgres_data` | nightly backup, "Backups" |
 | Server key | `/data/server-key.json` in volume `rim-relay_rim_data` | with every dump |
 | Server recovery key | offline only, "The server recovery key" | its own copies |
 | Franking keys | `/data/franking-key.json` | with every dump |
@@ -97,54 +100,64 @@ messages sent before: back it up with everything else in `/data`.
 
 ## Backups
 
-Nightly (**FILL**: the time and the cron or timer that runs it), off the host, encrypted
-(**FILL**: the tool, e.g. `age`, and who holds the decryption key), kept for **FILL** days:
+`deploy/backup.sh` writes one archive of the database dump, the `/data` volume and `deploy/.env`;
+`docs/self-hosting.md`, "Backups", says what is in it. It never includes the recovery key file.
+
+Nightly (**FILL**: the time and the cron or timer that runs it), before every update and right
+after every key rotation; encrypted with `age` to **FILL**: the recipient, whose identity is held
+by **FILL**; copied off the host to **FILL**: the destination; kept for **FILL** days.
 
 ```sh
-day=$(date +%F)
-rim-sql -c 'SELECT 1' >/dev/null                                   # the database answers
-dc exec -T postgres pg_dump -U rim -Fc rim > "rim-$day.dump"
-docker run --rm -v rim-relay_rim_data:/data:ro -v "$PWD":/backup alpine \
-    tar czf "/backup/rim-data-$day.tgz" -C /data .
-cp deploy/.env "rim-env-$day"
-# encrypt the three files and copy them off the host (FILL: destination)
+RIM_BACKUP_AGE_RECIPIENT=age1… deploy/backup.sh       # or set it in deploy/.env
+# copy the archive it names off the host (FILL: destination)
+```
+
+Cron, with `RIM_BACKUP_AGE_RECIPIENT` in `deploy/.env`:
+
+```cron
+15 3 * * * cd /srv/rim-server && COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh >>/var/log/rim-backup.log 2>&1
 ```
 
 The dump and the data archive are one set: the key file must match the head of the key log in
-the database. Never mix sets.
+the database. The scripts restore both from one archive; never mix sets.
 
 ### Restore
 
-On the new host, with the repository checked out and `deploy/.env` from the set:
+On the new host, with the repository checked out, `deploy/.env` taken from the archive's `env`
+file, and the image built (`dc build rim`) or pulled:
 
 ```sh
-dc up -d postgres
-dc exec -T postgres pg_restore -U rim -d rim --clean --if-exists < rim-$day.dump
-docker volume create rim-relay_rim_data
-docker run --rm -v rim-relay_rim_data:/data -v "$PWD":/backup alpine \
-    sh -c 'tar xzf /backup/rim-data-'"$day"'.tgz -C /data && chown -R 1001:1001 /data'
-dc up -d --build
+dc stop rim                                            # restore.sh refuses while it runs
+RIM_BACKUP_AGE_IDENTITY=/path/to/identity deploy/restore.sh rim-backup-rim-relay-<time>.tar.age
 rim-relay server-key show
 ```
 
-The server refuses to start when the key file and the log head disagree: that is a mixed set,
-or a rotation after the backup. Use a matching set, or `server-key recover` if the key file of
-the newest log is gone.
+It drops and recreates the database from the dump, empties `/data` and refills it, starts the
+stack and waits for `/readyz`. The server refuses to start when the key file and the log head
+disagree: that is a mixed set, or a rotation after the backup. Use a matching set, or
+`server-key recover` if the key file of the newest log is gone.
 
 ### Restore drill
 
 Every quarter (**FILL**: the months; record each drill's date and result below), restore the
-latest set on a scratch host with server-to-server traffic off, so the copy never speaks for
-the relay: leave `RIM_PUBLIC_BASE_URL` empty and set `RIM_KEY_LOGIN_AUDIENCES=localhost:8080`.
-Check:
+latest set:
 
-- `rim-relay server-key show` names the production server id and key seq;
-- `rim-sql -c 'SELECT count(*) FROM "user"'` is close to production's;
-- `rim-relay abuse-reports list` and `rim-relay principal list` match production's;
+```sh
+RIM_BACKUP_AGE_IDENTITY=/path/to/identity deploy/restore-drill.sh rim-backup-rim-relay-<time>.tar.age
+```
+
+The drill runs in its own project, `rim-drill`, with server-to-server traffic and mail off and no
+port published, so the copy never speaks for the relay; it removes the project and its volumes
+when it ends. Check its output:
+
+- `server-key show` names the production server id and key seq;
+- the row counts (`user`, `session`, `device_key`, `relay_item`, …) are close to production's;
 - the recovery key copies read back (see above).
 
-Then destroy the scratch host and its volumes: two running servers with one key are one server
-to every peer.
+For `abuse-reports list` and `principal list` against the copy, keep it running with
+`RIM_DRILL_KEEP=1`, run `docker compose -p rim-drill exec rim /app/rim-server principal list`,
+and remove it with `docker compose -p rim-drill down -v`: two running servers with one key are
+one server to every peer.
 
 | Date | Set restored | Result | By |
 |---|---|---|---|
