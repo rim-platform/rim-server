@@ -19,6 +19,8 @@ pub mod email;
 // above.
 pub mod escalation;
 pub mod file_storage;
+/// Public for `rim_server`, which loads the key file at boot and runs `franking-key rotate`.
+pub mod franking_keys;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
 // writer and sender tasks.
 pub mod host;
@@ -55,6 +57,7 @@ pub mod relay;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
 pub mod s2s;
+pub(crate) mod secret_file;
 pub(crate) mod server;
 pub(crate) mod server_member;
 pub(crate) mod signup;

@@ -459,3 +459,93 @@ async fn second_signup_with_the_same_principal_is_a_conflict() {
     let request = signup_request(&schema, "second", &id, 26, json!({})).await;
     assert_eq!(exec_err_code(&schema, request).await, "CONFLICT");
 }
+
+/// A revoked device's proof answers `FORBIDDEN` only when its challenge and audience are
+/// right; a proof for another server, over an unknown challenge or replayed answers
+/// `UNAUTHENTICATED` like any other refusal.
+#[tokio::test]
+async fn finding_14_revocation_is_disclosed_only_to_a_proof_that_would_pass() {
+    let ctx = TestCtx::new().await;
+    let user = ctx.create_user("lin").await;
+    let caller = Caller {
+        user_id: user.id,
+        session_id: ctx.create_session(&user).await,
+    };
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let id = TestIdentity::with_version(4, StatementVersion::V2);
+    let inception = id.inception();
+    let state = KeyState::from_inception(&inception).expect("inception");
+    let device_id = Uuid::now_v7();
+    let device = signing_key(24);
+    let cert = id.device_cert(&state, device_id, &device, "Laptop");
+    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    exec_ok(
+        &schema,
+        caller.request(
+            ENROLL,
+            json!({ "input": {
+                "keyLog": [statement(&inception)],
+                "device": statement(&cert),
+                "proof": statement(&proof),
+            } }),
+        ),
+    )
+    .await;
+    let revocation = id.revoke_device(&state, device_id);
+    exec_ok(
+        &schema,
+        caller.request(REVOKE, json!({ "revocation": statement(&revocation) })),
+    )
+    .await;
+
+    let login = |proof: &SignedStatement| {
+        anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(proof) }))
+            .data(RemoteIp::new("198.51.100.4"))
+    };
+    let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
+    let challenge = &challenge["keyLoginChallenge"];
+    let challenge_id: Uuid = challenge["challengeId"]
+        .as_str()
+        .expect("challengeId")
+        .parse()
+        .expect("uuid");
+    let nonce = challenge["nonce"].as_str().expect("nonce");
+
+    let other_server = device_login(
+        &device,
+        &state,
+        device_id,
+        challenge_id,
+        nonce,
+        "evil.example.com",
+    );
+    assert_eq!(
+        exec_err_code(&schema, login(&other_server)).await,
+        "UNAUTHENTICATED"
+    );
+    let unknown_challenge = device_login(
+        &device,
+        &state,
+        device_id,
+        Uuid::now_v7(),
+        nonce,
+        KEY_LOGIN_AUDIENCE,
+    );
+    assert_eq!(
+        exec_err_code(&schema, login(&unknown_challenge)).await,
+        "UNAUTHENTICATED"
+    );
+    let valid = device_login(
+        &device,
+        &state,
+        device_id,
+        challenge_id,
+        nonce,
+        KEY_LOGIN_AUDIENCE,
+    );
+    assert_eq!(exec_err_code(&schema, login(&valid)).await, "FORBIDDEN");
+    assert_eq!(
+        exec_err_code(&schema, login(&valid)).await,
+        "UNAUTHENTICATED"
+    );
+}

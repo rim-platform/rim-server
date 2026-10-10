@@ -8,6 +8,7 @@ pub mod app;
 pub mod bootstrap_cmd;
 pub mod config;
 mod file_handlers;
+pub mod franking_key_cmd;
 mod graphql_support;
 mod plugin_bundle_handlers;
 mod remote_handlers;

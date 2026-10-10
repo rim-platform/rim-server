@@ -71,14 +71,17 @@ cargo run -p rim_server
 
 Configuration is read from the environment (or a local, untracked `.env`) — see
 `rim_server/src/config.rs`. The essentials are `DATABASE_URL`, `RIM_SERVER_HOST`,
-`RIM_SERVER_PORT`; the log level comes from `RUST_LOG` (default `info`). Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
+`RIM_SERVER_PORT`; the log level comes from `RUST_LOG` (default `info`). A server bound to
+anything but a loopback address (the default `0.0.0.0` included) needs `RIM_PUBLIC_BASE_URL` or
+`RIM_KEY_LOGIN_AUDIENCES` set, or it refuses to start (`docs/server-identity.md`). Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
 without it, emails are logged (recipient and subject only) instead of sent. Behind a reverse
 proxy, set `RIM_TRUST_FORWARDED_HEADERS=true` (and make the proxy the only entry point);
 otherwise per-IP limits on login, signup and password-reset requests see every client as the
 proxy's address. Attachments count against a per-workspace quota,
 `RIM_MAX_WORKSPACE_STORAGE_BYTES` (default 1 GiB), reserved when an upload is declared. The
 first start creates the server key in `RIM_DATA_DIR` (`RIM_SERVER_KEY_FILE`) and a recovery key
-to move offline; server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
+to move offline, and the franking key file for encrypted-message reports
+(`RIM_FRANKING_KEY_FILE`); server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
 `RIM_PUBLIC_BASE_URL` is an `https` URL (`docs/server-identity.md`).
 
 ## Development

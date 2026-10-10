@@ -27,7 +27,7 @@ use rim_infra_db::{DbHandle, begin_transaction};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use uuid::Uuid;
 
-const MIGRATION_NAME: &str = "m20261009_223433_add_relay_delivery";
+const MIGRATION_NAME: &str = "m20261010_002421_add_relay_delivery";
 const HOST: &str = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
 
 async fn device(db: &DbHandle, user_id: UserId, n: u8) -> DeviceKey {

@@ -3,11 +3,11 @@ use chrono::{DateTime, Duration, Utc};
 use entity::message;
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
-    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS,
+    MlsCommit, MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
-    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit, NewMlsGroup,
-    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
+    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -295,15 +295,45 @@ impl From<ReaddRow> for MlsReaddRequest {
 struct FrankingKeyRow {
     id: i32,
     secret: Vec<u8>,
+    created_at: DateTimeWithTimeZone,
 }
 
 impl From<FrankingKeyRow> for FrankingKey {
     fn from(row: FrankingKeyRow) -> Self {
         Self {
             id: row.id,
-            secret: row.secret,
+            secret: zeroize::Zeroizing::new(row.secret),
+            created_at: row.created_at.into(),
         }
     }
+}
+
+#[derive(FromQueryResult)]
+struct FrankingRevisionRow {
+    message_id: Uuid,
+    revision: i32,
+    franking_commitment: Vec<u8>,
+    sent_at_us: i64,
+    sender_device_id: Uuid,
+    created_at: DateTimeWithTimeZone,
+}
+
+impl From<FrankingRevisionRow> for FrankingRevision {
+    fn from(row: FrankingRevisionRow) -> Self {
+        Self {
+            message_id: row.message_id.into(),
+            revision: row.revision,
+            franking_commitment: row.franking_commitment,
+            sent_at_us: row.sent_at_us,
+            sender_device_id: row.sender_device_id,
+            created_at: row.created_at.into(),
+        }
+    }
+}
+
+#[derive(FromQueryResult)]
+struct MaxKeyIdRow {
+    max_id: Option<i32>,
 }
 
 pub struct SeaOrmE2eeRepository {
@@ -1274,20 +1304,28 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         let id: Uuid = MlsReaddRequestId::new().into();
         let conversation: Uuid = request.conversation_id.into();
         let device: Uuid = request.device_key_id.into();
-        self.execute(
-            "INSERT INTO mls_readd_request \
-             (id, conversation_id, incarnation, device_key_id, payload, signature) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            vec![
-                id.into(),
-                conversation.into(),
-                request.incarnation.into(),
-                device.into(),
-                request.payload.into(),
-                request.signature.into(),
-            ],
-        )
-        .await?;
+        let inserted = self
+            .execute(
+                "WITH nonce AS ( \
+                   INSERT INTO mls_readd_nonce (conversation_id, incarnation, device_key_id, nonce) \
+                   VALUES ($2, $3, $4, $7) ON CONFLICT DO NOTHING RETURNING 1) \
+                 INSERT INTO mls_readd_request \
+                 (id, conversation_id, incarnation, device_key_id, payload, signature) \
+                 SELECT $1, $2, $3, $4, $5, $6 FROM nonce",
+                vec![
+                    id.into(),
+                    conversation.into(),
+                    request.incarnation.into(),
+                    device.into(),
+                    request.payload.into(),
+                    request.signature.into(),
+                    request.nonce.into(),
+                ],
+            )
+            .await?;
+        if inserted == 0 {
+            return Err(RepoError::new(RepoErrorKind::Conflict));
+        }
         let row: Option<ReaddRow> = self
             .one(&format!("{READD_SELECT} WHERE r.id = $1"), vec![id.into()])
             .await?;
@@ -1393,30 +1431,55 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         self.message(id).await
     }
 
-    async fn current_franking_key(&self, secret: Vec<u8>) -> RepoResult<FrankingKey> {
+    async fn append_franking_revision(&self, revision: NewFrankingRevision) -> RepoResult<()> {
+        let message: Uuid = revision.message_id.into();
         self.execute(
-            "INSERT INTO franking_key (id, secret) VALUES (1, $1) ON CONFLICT (id) DO NOTHING",
-            vec![secret.into()],
+            "INSERT INTO message_franking_revision \
+             (message_id, revision, franking_commitment, sent_at_us, sender_device_id) \
+             SELECT $1, COALESCE(max(revision) + 1, 0), $2, $3, $4 \
+             FROM message_franking_revision WHERE message_id = $1",
+            vec![
+                message.into(),
+                revision.franking_commitment.into(),
+                revision.sent_at_us.into(),
+                revision.sender_device_id.into(),
+            ],
         )
         .await?;
-        let row: Option<FrankingKeyRow> = self
-            .one(
-                "SELECT id, secret FROM franking_key ORDER BY id DESC LIMIT 1",
+        Ok(())
+    }
+
+    async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>> {
+        let message: Uuid = message_id.into();
+        let rows: Vec<FrankingRevisionRow> = self
+            .all(
+                "SELECT message_id, revision, franking_commitment, sent_at_us, sender_device_id, \
+                        created_at \
+                 FROM message_franking_revision WHERE message_id = $1 ORDER BY revision",
+                vec![message.into()],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
+        let rows: Vec<FrankingKeyRow> = self
+            .all(
+                "SELECT id, secret, created_at FROM franking_key ORDER BY id",
                 vec![],
             )
             .await?;
-        row.map(Into::into)
-            .ok_or_else(|| internal("franking key missing after insert"))
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn get_franking_key(&self, id: i32) -> RepoResult<Option<FrankingKey>> {
-        let row: Option<FrankingKeyRow> = self
+    async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>> {
+        let row: Option<MaxKeyIdRow> = self
             .one(
-                "SELECT id, secret FROM franking_key WHERE id = $1",
-                vec![id.into()],
+                "SELECT max(franking_key_id) AS max_id FROM message WHERE encrypted",
+                vec![],
             )
             .await?;
-        Ok(row.map(Into::into))
+        Ok(row.and_then(|r| r.max_id))
     }
 
     async fn purge(&self, retention: MlsRetention) -> RepoResult<MlsPurged> {
@@ -1443,6 +1506,12 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                 vec![seconds(retention.readd_requests)],
             )
             .await?;
+        let readd_nonces = self
+            .execute(
+                "DELETE FROM mls_readd_nonce WHERE created_at < now() - make_interval(secs => $1)",
+                vec![seconds(retention.readd_nonces)],
+            )
+            .await?;
         let franked_contents = self
             .execute(
                 "UPDATE message_report SET franked_content = NULL \
@@ -1456,6 +1525,7 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             welcomes,
             key_packages,
             readd_requests,
+            readd_nonces,
             franked_contents,
         })
     }

@@ -376,10 +376,31 @@ pub fn mls_readd_payload(
     last_epoch: Option<u64>,
     nonce: &[u8],
 ) -> String {
+    mls_readd_payload_at(
+        principal_id,
+        device_id,
+        conversation_id,
+        incarnation,
+        last_epoch,
+        nonce,
+        TEST_TIME,
+    )
+}
+
+/// An `mls-readd` payload issued at `issued_at` (RFC 3339).
+pub fn mls_readd_payload_at(
+    principal_id: &str,
+    device_id: Uuid,
+    conversation_id: Uuid,
+    incarnation: u32,
+    last_epoch: Option<u64>,
+    nonce: &[u8],
+    issued_at: &str,
+) -> String {
     use base64::Engine;
     let last_epoch = last_epoch.map_or("null".to_string(), |e| e.to_string());
     format!(
-        r#"{{"v":2,"type":"mls-readd","principalId":"{principal_id}","deviceId":"{device_id}","conversationId":"{conversation_id}","incarnation":{incarnation},"lastEpoch":{last_epoch},"nonce":"{}","issuedAt":"{TEST_TIME}"}}"#,
+        r#"{{"v":2,"type":"mls-readd","principalId":"{principal_id}","deviceId":"{device_id}","conversationId":"{conversation_id}","incarnation":{incarnation},"lastEpoch":{last_epoch},"nonce":"{}","issuedAt":"{issued_at}"}}"#,
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce),
     )
 }
@@ -394,17 +415,42 @@ pub fn device_mls_readd(
     last_epoch: Option<u64>,
     nonce: &[u8],
 ) -> SignedStatement {
+    device_mls_readd_at(
+        device,
+        principal_id,
+        device_id,
+        conversation_id,
+        incarnation,
+        last_epoch,
+        nonce,
+        TEST_TIME,
+    )
+}
+
+/// A re-add request issued at `issued_at` (RFC 3339).
+#[allow(clippy::too_many_arguments)]
+pub fn device_mls_readd_at(
+    device: &SigningKey,
+    principal_id: &str,
+    device_id: Uuid,
+    conversation_id: Uuid,
+    incarnation: u32,
+    last_epoch: Option<u64>,
+    nonce: &[u8],
+    issued_at: &str,
+) -> SignedStatement {
     sign(
         Purpose::MlsReadd,
         StatementVersion::V2,
         device,
-        mls_readd_payload(
+        mls_readd_payload_at(
             principal_id,
             device_id,
             conversation_id,
             incarnation,
             last_epoch,
             nonce,
+            issued_at,
         ),
     )
 }

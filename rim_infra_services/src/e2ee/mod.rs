@@ -19,6 +19,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
+use subtle::ConstantTimeEq;
 use tracing::{info, instrument};
 
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
@@ -66,6 +67,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::e2ee::aad::{CommitAad, parse_commit};
 use crate::e2ee::franking::{FRANKING_LEN, ReceiptFields, commitment, verify_receipt};
+use crate::franking_keys::SharedFrankingKeys;
 use crate::moderation::{ModerationAuditEntry, record_audit_action};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
@@ -78,6 +80,10 @@ use crate::util::{
 const CLAIM_VALIDITY: Duration = Duration::hours(1);
 /// How long a re-add request stays open.
 const READD_REQUEST_TTL: Duration = Duration::days(7);
+/// How far a re-add request's `issuedAt` may be from the server's clock.
+const READD_FRESHNESS: Duration = Duration::minutes(10);
+/// How long a re-add request's nonce is kept; longer than a request stays fresh.
+const READD_NONCE_TTL: Duration = Duration::days(1);
 /// How long a device that asked to be re-added waits before it may start a new incarnation.
 const RECOVERY_WAIT: Duration = Duration::minutes(10);
 /// How long only the creator's devices may create the group of a conversation created
@@ -87,6 +93,8 @@ const CREATOR_HEAD_START: Duration = Duration::seconds(60);
 const WELCOME_TTL: Duration = Duration::days(30);
 /// Furthest a key package may expire.
 const MAX_KEY_PACKAGE_LIFETIME: Duration = Duration::days(90);
+/// Slack on that limit for a client clock ahead of the server's.
+const KEY_PACKAGE_CLOCK_MARGIN: Duration = Duration::minutes(5);
 /// Most Welcomes one acknowledgement names.
 const MAX_ACKS: usize = 100;
 /// Most principals one `principalDevices` call names.
@@ -192,10 +200,14 @@ fn check_device_key_package(
             info.cipher_suite
         ));
     }
-    let statement =
-        rim_identity::read_mls_credential(&info.credential_identity).map_err(|e| e.to_string())?;
-    let mls_key = rim_identity::verify_mls_key(&device_key, &statement)
-        .map_err(|e| format!("mls-key statement: {e}"))?;
+    let statement = rim_identity::read_mls_credential(&info.credential_identity).map_err(|e| {
+        crate::util::log_statement_detail(&e);
+        e.to_string()
+    })?;
+    let mls_key = rim_identity::verify_mls_key(&device_key, &statement).map_err(|e| {
+        crate::util::log_statement_detail(&e);
+        format!("mls-key statement: {e}")
+    })?;
     if mls_key.principal_id != principal_id || mls_key.device_id != device.device_id {
         return Err("the mls-key statement names another device".to_string());
     }
@@ -206,7 +218,7 @@ fn check_device_key_package(
         .ok()
         .and_then(|secs| DateTime::from_timestamp(secs, 0))
         .ok_or_else(|| "its lifetime is out of range".to_string())?;
-    if not_after <= now || not_after > now + MAX_KEY_PACKAGE_LIFETIME {
+    if not_after <= now || not_after > now + MAX_KEY_PACKAGE_LIFETIME + KEY_PACKAGE_CLOCK_MARGIN {
         return Err("it must expire in the future and within 90 days".to_string());
     }
     Ok(NewMlsKeyPackage {
@@ -377,6 +389,9 @@ pub struct DefaultE2eeService {
     readd_rate_limiter: RegistrationRateLimiter,
     /// Claims key packages of remote users' devices from their relays.
     remote_key_packages: Option<Arc<dyn RemoteKeyPackages>>,
+    /// Verifies franking receipts. `None` in unit tests that are not about reports; the
+    /// composition root always wires it.
+    franking_keys: Option<SharedFrankingKeys>,
 }
 
 /// Why an incarnation's first Commit is allowed over an existing group.
@@ -427,8 +442,14 @@ impl DefaultE2eeService {
             claim_rate_limiter: RegistrationRateLimiter::new(3600, 600),
             one_time_claim_rate_limiter: RegistrationRateLimiter::new(86_400, 100),
             readd_rate_limiter: RegistrationRateLimiter::new(86_400, 3),
+            franking_keys: None,
             remote_key_packages: None,
         }
+    }
+
+    pub fn with_franking_keys(mut self, franking_keys: SharedFrankingKeys) -> Self {
+        self.franking_keys = Some(franking_keys);
+        self
     }
 
     pub fn with_remote_key_packages(mut self, remote: Arc<dyn RemoteKeyPackages>) -> Self {
@@ -1736,7 +1757,12 @@ impl E2eeService for DefaultE2eeService {
             signature: cmd.signature.clone(),
         };
         let request = rim_identity::verify_mls_readd(&device_key, &statement)
-            .map_err(|e| ServiceError::Validation(e.to_string()))?;
+            .map_err(crate::util::statement_refused)?;
+        if (request.issued_at - Utc::now()).abs() > READD_FRESHNESS {
+            return Err(ServiceError::Validation(
+                "issuedAt must be within 10 minutes of the server's clock".to_string(),
+            ));
+        }
         if Some(&request.principal_id) != device.principal_id.as_ref()
             || request.device_id != device.device_id
         {
@@ -1766,33 +1792,41 @@ impl E2eeService for DefaultE2eeService {
                 "incarnation {incarnation} does not exist"
             )));
         }
-        if request
-            .last_epoch
-            .is_some_and(|e| i64::try_from(e).map_or(true, |e| e > group.epoch))
-        {
-            return Err(ServiceError::Validation(
-                "lastEpoch is past the group's epoch".to_string(),
-            ));
-        }
         let devices = self
             .repos
             .e2ee_repo
             .group_devices(conversation.id, group.incarnation)
             .await?;
-        if !devices
+        let Some(member) = devices
             .iter()
-            .any(|d| d.device.device_key_id == device.device_key_id)
-        {
+            .find(|d| d.device.device_key_id == device.device_key_id)
+        else {
             return Err(ServiceError::Validation(
                 "this device is not in the group".to_string(),
             ));
+        };
+        // A device holding state reached at least the epoch it was last added at, so a request
+        // made before its latest add is refused.
+        if let Some(last_epoch) = request.last_epoch {
+            let last_epoch = i64::try_from(last_epoch).unwrap_or(i64::MAX);
+            if last_epoch > group.epoch {
+                return Err(ServiceError::Validation(
+                    "lastEpoch is past the group's epoch".to_string(),
+                ));
+            }
+            if last_epoch < member.added_epoch {
+                return Err(ServiceError::Validation(
+                    "lastEpoch is before the epoch this device was added at".to_string(),
+                ));
+            }
         }
         Self::limit(
             &self.readd_rate_limiter,
             &format!("{}:{}", device.device_key_id, conversation.id),
             READD_KEY,
         )?;
-        self.repos
+        match self
+            .repos
             .e2ee_repo
             .insert_readd_request(NewMlsReaddRequest {
                 conversation_id: conversation.id,
@@ -1800,8 +1834,18 @@ impl E2eeService for DefaultE2eeService {
                 device_key_id: device.device_key_id,
                 payload: cmd.payload,
                 signature: cmd.signature,
+                nonce: request.nonce.to_vec(),
             })
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == RepoErrorKind::Conflict => {
+                return Err(ServiceError::Conflict(
+                    "this re-add request was already sent".to_string(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        }
         info!(device_key_id = %device.device_key_id, conversation_id = %conversation.id, incarnation = group.incarnation, "MLS re-add requested");
         self.emit_membership_changed(&conversation).await;
         Ok(())
@@ -1956,11 +2000,11 @@ impl E2eeService for DefaultE2eeService {
         })?;
         let mismatch =
             || ServiceError::Validation("the report does not match the message".to_string());
-        let server_key = self
-            .repos
-            .e2ee_repo
-            .get_franking_key(cmd.receipt_key_id)
-            .await?
+        let franking_keys = self.franking_keys.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("franking keys are not configured"))
+        })?;
+        let server_key = franking_keys
+            .verifying(cmd.receipt_key_id)
             .ok_or_else(mismatch)?;
         let fields = ReceiptFields {
             message_id: message.id.into(),
@@ -1970,8 +2014,41 @@ impl E2eeService for DefaultE2eeService {
             sent_at_us,
         };
         let c = commitment(&franking_key, &content);
+        // The receipt alone proves only that someone holding a franking key signed it, so the
+        // report must also name a version the server recorded: the commitment, send time and
+        // sender device of the message as sent or as any later edit. The row as it is now also
+        // counts, for a message whose versions were recorded without its sender device.
+        let revisions = self.repos.e2ee_repo.franking_revisions(message.id).await?;
+        let stored = message
+            .encryption
+            .as_ref()
+            .map(|e| e.franking_commitment.as_slice())
+            .unwrap_or_default();
+        let row_device = match message
+            .encryption
+            .as_ref()
+            .and_then(|e| e.sender_device_key_id)
+        {
+            Some(id) => self
+                .repos
+                .e2ee_repo
+                .get_device(id)
+                .await?
+                .map(|d| d.device_id),
+            None => None,
+        };
+        // Every version is compared, without stopping at a match.
+        let mut recorded = bool::from(stored.ct_eq(&c[..]))
+            & (sent_at_us == crate::e2ee::franking::sent_at_us(message.sent_at))
+            & row_device.is_none_or(|d| d == cmd.sender_device_id);
+        for revision in &revisions {
+            recorded |= bool::from(revision.franking_commitment.ct_eq(&c[..]))
+                & (revision.sent_at_us == sent_at_us)
+                & (revision.sender_device_id == cmd.sender_device_id);
+        }
         if cmd.sender_user_id != message.sent_by
-            || !verify_receipt(&server_key.secret, &fields, &c, &receipt)
+            || !verify_receipt(server_key.as_ref(), &fields, &c, &receipt)
+            || !recorded
         {
             return Err(mismatch());
         }
@@ -2036,6 +2113,7 @@ impl E2eeService for DefaultE2eeService {
                 commits: Duration::days(90),
                 claimed_key_packages: Duration::days(7),
                 readd_requests: READD_REQUEST_TTL,
+                readd_nonces: READD_NONCE_TTL,
                 franked_content: Duration::days(90),
             })
             .await?)

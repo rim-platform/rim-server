@@ -116,6 +116,7 @@ impl DefaultAppServiceProvider {
         public_base_url: Option<String>,
         escalation_scheduler: Arc<dyn EscalationScheduler>,
         key_login_audiences: Vec<String>,
+        franking_keys: crate::franking_keys::SharedFrankingKeys,
         federation: FederationHooks,
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
@@ -183,7 +184,11 @@ impl DefaultAppServiceProvider {
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
             .with_notification_service(Arc::clone(&notification_service))
-            .with_e2ee(Arc::clone(&repos.e2ee_repo), Arc::clone(&mls_wire))
+            .with_e2ee(
+                Arc::clone(&repos.e2ee_repo),
+                Arc::clone(&mls_wire),
+                franking_keys.clone(),
+            )
             .with_moderation_repo(Arc::clone(&repos.moderation_repo)),
         );
         let mut e2ee_concrete = crate::e2ee::DefaultE2eeService::new(
@@ -192,7 +197,8 @@ impl DefaultAppServiceProvider {
             Arc::clone(&mls_wire),
             observers.clone(),
         )
-        .with_audit_log_service(Arc::clone(&audit_log_service));
+        .with_audit_log_service(Arc::clone(&audit_log_service))
+        .with_franking_keys(franking_keys);
         if let Some(remote) = &federation.remote_key_packages {
             e2ee_concrete = e2ee_concrete.with_remote_key_packages(Arc::clone(remote));
         }

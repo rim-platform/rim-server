@@ -13,8 +13,8 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::model::{
-        E2eeDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId,
-        MlsReaddRequest, MlsReaddRequestId, MlsWelcomeId,
+        E2eeDevice, FrankingRevision, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+        MlsKeyPackageId, MlsReaddRequest, MlsReaddRequestId, MlsWelcomeId,
     };
     use rim_core::e2ee::repository::E2eeRepository;
     use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
@@ -32,7 +32,7 @@ mod tests {
     use rim_core::user::model::UserId;
     use rim_identity::StatementVersion;
     use rim_identity::testing::{
-        SigningKey, TestIdentity, device_mls_key, device_mls_readd, signing_key,
+        SigningKey, TestIdentity, device_mls_key, device_mls_readd_at, signing_key,
     };
     use rim_services::e2ee::command::{
         AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery,
@@ -48,6 +48,7 @@ mod tests {
     use crate::e2ee::franking::{ReceiptFields, commitment, receipt, sent_at_us};
     use crate::e2ee::openmls_wire::OpenMlsWire;
     use crate::e2ee::{DefaultE2eeService, E2eeRepos};
+    use crate::franking_keys::{FrankingKey, FrankingKeys, SharedFrankingKeys};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
 
     use crate::e2ee_test_support::{
@@ -332,6 +333,7 @@ mod tests {
                 Arc::new(FakeWire(OpenMlsWire::new())),
                 Observers::new(Arc::clone(events) as Arc<dyn Broadcaster>),
             )
+            .with_franking_keys(SharedFrankingKeys::fixed(server_keys()))
         }
 
         /// Rebuild the service, e.g. after changing the conversation.
@@ -1315,6 +1317,15 @@ mod tests {
             Lifetime::new(days * 86_400)
         }
 
+        /// A lifetime ending `days` days and `secs` seconds from now.
+        pub(super) fn until(days: u64, secs: u64) -> Lifetime {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_secs();
+            Lifetime::init(now - 3600, now + days * 86_400 + secs)
+        }
+
         pub(super) fn expired() -> Lifetime {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1438,6 +1449,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finding_10_a_client_clock_minutes_ahead_still_uploads() {
+        let f = Fixture::new();
+        let a = &f.alice;
+        let package = |secs| {
+            b64(&packages::build(
+                packages::SUITE,
+                &a.mls,
+                identity_of(a, a.device_id, &a.key),
+                false,
+                packages::until(90, secs),
+            ))
+        };
+        assert_eq!(upload(&f, a, vec![package(4 * 60)]).await.unwrap(), 1);
+        let err = upload(&f, a, vec![package(6 * 60)]).await.unwrap_err();
+        assert!(validation(err).contains("within 90 days"));
+    }
+
+    #[tokio::test]
     async fn a_new_last_resort_package_replaces_the_old_one() {
         let f = Fixture::new();
         f.group(1, 1, &[&f.alice, &f.bob]);
@@ -1506,6 +1535,7 @@ mod tests {
         assert!(validation(err).contains("at most 100"));
     }
 
+    /// A re-add request of `d` issued now, with a fresh nonce and `lastEpoch` 1.
     fn readd_cmd(
         f: &Fixture,
         d: &Device,
@@ -1514,14 +1544,48 @@ mod tests {
         conversation: Uuid,
         incarnation: u32,
     ) -> RequestMlsReaddCmd {
-        let statement = device_mls_readd(
+        readd_cmd_with(
+            f,
+            d,
+            signer,
+            device_id,
+            conversation,
+            incarnation,
+            ReaddFields {
+                last_epoch: Some(1),
+                nonce: *Uuid::now_v7().as_bytes(),
+                issued_at: Utc::now(),
+            },
+        )
+    }
+
+    /// The fields of a re-add request that freshness is judged on.
+    struct ReaddFields {
+        last_epoch: Option<u64>,
+        nonce: [u8; 16],
+        issued_at: DateTime<Utc>,
+    }
+
+    fn readd_cmd_with(
+        f: &Fixture,
+        d: &Device,
+        signer: &SigningKey,
+        device_id: Uuid,
+        conversation: Uuid,
+        incarnation: u32,
+        fields: ReaddFields,
+    ) -> RequestMlsReaddCmd {
+        let statement = device_mls_readd_at(
             signer,
             &d.principal,
             device_id,
             conversation,
             incarnation,
-            Some(1),
-            &[7; 16],
+            fields.last_epoch,
+            &fields.nonce,
+            &fields
+                .issued_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
         RequestMlsReaddCmd {
             caller: d.caller(),
@@ -1606,6 +1670,72 @@ mod tests {
             .expect("group");
         assert_eq!(group.readd_requests.len(), 2);
         assert_eq!(group.readd_requests[0].device_id, bob.device_id);
+    }
+
+    #[tokio::test]
+    async fn finding_9_readd_requests_must_be_fresh_and_used_once() {
+        let f = Fixture::new().with_limits(600, 100, 10);
+        let conv: Uuid = f.conv.id.into();
+        let bob = &f.bob;
+        f.group(1, 6, &[&f.alice, bob]);
+        f.repo
+            .state()
+            .group_devices
+            .iter_mut()
+            .filter(|(_, _, d)| d.device.device_key_id == bob.id)
+            .for_each(|(_, _, d)| d.added_epoch = 4);
+        let cmd = |last_epoch: Option<u64>, nonce: u8, issued_at: DateTime<Utc>| {
+            readd_cmd_with(
+                &f,
+                bob,
+                &bob.key,
+                bob.device_id,
+                conv,
+                1,
+                ReaddFields {
+                    last_epoch,
+                    nonce: [nonce; 16],
+                    issued_at,
+                },
+            )
+        };
+        let now = Utc::now();
+        let refusals = [
+            (cmd(Some(5), 1, now - Duration::minutes(11)), "issuedAt"),
+            (cmd(Some(5), 2, now + Duration::minutes(11)), "issuedAt"),
+            (
+                cmd(Some(3), 3, now),
+                "before the epoch this device was added",
+            ),
+            (cmd(Some(7), 4, now), "past the group's epoch"),
+        ];
+        for (request, why) in refusals {
+            let err = f.service.request_readd(request).await.unwrap_err();
+            assert!(validation(err).contains(why), "{why}");
+        }
+
+        // Nine minutes either way, the epoch it was added at and no state at all are accepted.
+        f.service
+            .request_readd(cmd(Some(4), 5, now - Duration::minutes(9)))
+            .await
+            .expect("added epoch");
+        f.service
+            .request_readd(cmd(Some(6), 6, now + Duration::minutes(9)))
+            .await
+            .expect("current epoch");
+        f.service
+            .request_readd(cmd(None, 7, now))
+            .await
+            .expect("no state");
+
+        // A replayed request is refused while the rate limit would still allow it.
+        let err = f
+            .service
+            .request_readd(cmd(Some(4), 5, now - Duration::minutes(9)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+        assert_eq!(f.repo.state().readds.len(), 3);
     }
 
     #[tokio::test]
@@ -1697,7 +1827,24 @@ mod tests {
 
     // ── Franked reports ────────────────────────────────────────────────────────────────
 
-    fn encrypted_message(f: &Fixture, sent_at: DateTime<Utc>, receipt: &[u8]) -> Message {
+    /// The server's franking keys in these tests: key 1, replaced by key 2 31 days ago.
+    const SERVER_KEY_1: [u8; 32] = [0x42; 32];
+    const SERVER_KEY_2: [u8; 32] = [0x43; 32];
+
+    fn server_keys() -> FrankingKeys {
+        FrankingKeys::new(vec![
+            FrankingKey::new(1, SERVER_KEY_1, Utc::now() - Duration::days(60)),
+            FrankingKey::new(2, SERVER_KEY_2, Utc::now() - Duration::days(31)),
+        ])
+        .expect("keys")
+    }
+
+    fn encrypted_message(
+        f: &Fixture,
+        sent_at: DateTime<Utc>,
+        commitment: &[u8],
+        receipt: &[u8],
+    ) -> Message {
         Message {
             id: MessageId::new(),
             conversation_id: f.conv.id,
@@ -1714,7 +1861,7 @@ mod tests {
                 epoch: 1,
                 sender_device_key_id: Some(f.bob.id),
                 ciphertext: Some(vec![1]),
-                franking_commitment: vec![0; 32],
+                franking_commitment: commitment.to_vec(),
                 franking_receipt: receipt.to_vec(),
                 franking_key_id: 1,
             }),
@@ -1724,12 +1871,12 @@ mod tests {
     #[tokio::test]
     async fn a_franked_report_proves_the_message() {
         let f = Fixture::new();
-        let server_key = f.repo.current_franking_key(vec![0x42; 32]).await.unwrap();
+        f.repo.state().devices.push(stored_device(&f.bob));
         let content = br#"{"v":1,"type":"message","body":"hi"}"#.to_vec();
         let franking_key = [0x60u8; 32];
         let sent_at = Utc::now();
-        let mut message = encrypted_message(&f, sent_at, &[]);
         let c = commitment(&franking_key, &content);
+        let mut message = encrypted_message(&f, sent_at, &c, &[]);
         let fields = ReceiptFields {
             message_id: message.id.into(),
             conversation_id: f.conv.id.into(),
@@ -1737,7 +1884,7 @@ mod tests {
             sender_device_id: f.bob.device_id,
             sent_at_us: sent_at_us(sent_at),
         };
-        let r = receipt(&server_key.secret, &fields, &c);
+        let r = receipt(&SERVER_KEY_2, &fields, &c);
         // The sender deleted it first: it stays reportable.
         message.is_deleted = true;
         let message_id = message.id;
@@ -1760,23 +1907,24 @@ mod tests {
         let mismatch = "the report does not match the message";
         let tampered = br#"{"v":1,"type":"message","body":"ho"}"#;
         for cmd in [
-            report(tampered, &franking_key, 1),
-            report(&content, &[0x61; 32], 1),
-            report(&content, &franking_key, 2),
+            report(tampered, &franking_key, 2),
+            report(&content, &[0x61; 32], 2),
+            report(&content, &franking_key, 1),
+            report(&content, &franking_key, 3),
         ] {
             let err = f.service.report_encrypted_message(cmd).await.unwrap_err();
             assert_eq!(validation(err), mismatch);
         }
-        let mut later = report(&content, &franking_key, 1);
+        let mut later = report(&content, &franking_key, 2);
         later.sent_at_us = (sent_at_us(sent_at) + 1).to_string();
         let err = f.service.report_encrypted_message(later).await.unwrap_err();
         assert_eq!(validation(err), mismatch);
-        let short = report(&content, &[0x60; 31], 1);
+        let short = report(&content, &[0x60; 31], 2);
         let err = f.service.report_encrypted_message(short).await.unwrap_err();
         assert!(validation(err).contains("32 bytes"));
 
         f.service
-            .report_encrypted_message(report(&content, &franking_key, 1))
+            .report_encrypted_message(report(&content, &franking_key, 2))
             .await
             .expect("verified");
         assert_eq!(
@@ -1788,21 +1936,191 @@ mod tests {
         );
         let second = f
             .service
-            .report_encrypted_message(report(&content, &franking_key, 1))
+            .report_encrypted_message(report(&content, &franking_key, 2))
             .await
             .unwrap_err();
         assert!(matches!(second, ServiceError::Conflict(_)));
 
         // A plaintext message is reported the usual way.
-        let mut plain = encrypted_message(&f, sent_at, &r);
+        let mut plain = encrypted_message(&f, sent_at, &c, &r);
         plain.encryption = None;
         plain.text = Some("plain".to_string());
         let plain_id = plain.id;
         f.messages.lock().unwrap().insert(plain_id, plain);
-        let mut cmd = report(&content, &franking_key, 1);
+        let mut cmd = report(&content, &franking_key, 2);
         cmd.message_id = plain_id;
         let err = f.service.report_encrypted_message(cmd).await.unwrap_err();
         assert!(validation(err).contains("not encrypted"));
+    }
+
+    #[tokio::test]
+    async fn finding_7_a_stolen_franking_key_cannot_forge_a_report() {
+        let f = Fixture::new();
+        f.repo.state().devices.push(stored_device(&f.bob));
+        let sent = br#"{"v":1,"type":"message","body":"hi"}"#.to_vec();
+        let forged = br#"{"v":1,"type":"message","body":"something bob never said"}"#.to_vec();
+        let franking_key = [0x60u8; 32];
+        let sent_at = Utc::now();
+        let message = encrypted_message(&f, sent_at, &commitment(&franking_key, &sent), &[]);
+        let message_id = message.id;
+        f.messages.lock().unwrap().insert(message_id, message);
+        let fields = ReceiptFields {
+            message_id: message_id.into(),
+            conversation_id: f.conv.id.into(),
+            sender_user_id: f.bob.user.into(),
+            sender_device_id: f.bob.device_id,
+            sent_at_us: sent_at_us(sent_at),
+        };
+        // Whoever holds the server key makes a valid receipt over any commitment.
+        let report = |content: &[u8], fields: ReceiptFields, key_id: i32, key: &[u8; 32]| {
+            let c = commitment(&franking_key, content);
+            ReportEncryptedMessageCmd {
+                actor: Actor::new(f.alice.user),
+                server_id: f.server,
+                conversation_id: f.conv.id,
+                message_id,
+                reason: "abuse".to_string(),
+                content: b64(content),
+                franking_key: b64(&franking_key),
+                receipt: b64(&receipt(key, &fields, &c)),
+                receipt_key_id: key_id,
+                sender_user_id: f.bob.user,
+                sender_device_id: fields.sender_device_id,
+                sent_at_us: fields.sent_at_us.to_string(),
+            }
+        };
+        let mismatch = "the report does not match the message";
+        let other_device = ReceiptFields {
+            sender_device_id: Uuid::now_v7(),
+            ..fields
+        };
+        let other_time = ReceiptFields {
+            sent_at_us: fields.sent_at_us - 1,
+            ..fields
+        };
+        for cmd in [
+            report(&forged, fields, 2, &SERVER_KEY_2),
+            report(&sent, other_device, 2, &SERVER_KEY_2),
+            report(&sent, other_time, 2, &SERVER_KEY_2),
+            // A key id the server never had.
+            report(&sent, fields, 3, &SERVER_KEY_2),
+        ] {
+            let err = f.service.report_encrypted_message(cmd).await.unwrap_err();
+            assert_eq!(validation(err), mismatch);
+        }
+        assert!(f.reports.lock().unwrap().is_empty());
+        f.service
+            .report_encrypted_message(report(&sent, fields, 2, &SERVER_KEY_2))
+            .await
+            .expect("the content the row committed to");
+    }
+
+    #[tokio::test]
+    async fn an_earlier_revision_stays_reportable_after_an_edit() {
+        let f = Fixture::new();
+        f.repo.state().devices.push(stored_device(&f.bob));
+        let franking_key = [0x60u8; 32];
+        let sent = br#"{"v":1,"type":"message","rev":0,"body":"abuse"}"#.to_vec();
+        let edited = br#"{"v":1,"type":"message","rev":1,"body":"nothing to see"}"#.to_vec();
+        let forged = br#"{"v":1,"type":"message","rev":0,"body":"never sent"}"#.to_vec();
+        let sent_at = Utc::now();
+        // The row holds the edit; the sent version is only a recorded revision.
+        let message = encrypted_message(&f, sent_at, &commitment(&franking_key, &edited), &[]);
+        let message_id = message.id;
+        f.messages.lock().unwrap().insert(message_id, message);
+        for (revision, content) in [(0, &sent), (1, &edited)] {
+            f.repo.state().revisions.push(FrankingRevision {
+                message_id,
+                revision,
+                franking_commitment: commitment(&franking_key, content).to_vec(),
+                sent_at_us: sent_at_us(sent_at),
+                sender_device_id: f.bob.device_id,
+                created_at: Utc::now(),
+            });
+        }
+        let fields = ReceiptFields {
+            message_id: message_id.into(),
+            conversation_id: f.conv.id.into(),
+            sender_user_id: f.bob.user.into(),
+            sender_device_id: f.bob.device_id,
+            sent_at_us: sent_at_us(sent_at),
+        };
+        let report = |actor: UserId, content: &[u8]| {
+            let c = commitment(&franking_key, content);
+            ReportEncryptedMessageCmd {
+                actor: Actor::new(actor),
+                server_id: f.server,
+                conversation_id: f.conv.id,
+                message_id,
+                reason: "abuse".to_string(),
+                content: b64(content),
+                franking_key: b64(&franking_key),
+                receipt: b64(&receipt(&SERVER_KEY_2, &fields, &c)),
+                receipt_key_id: 2,
+                sender_user_id: f.bob.user,
+                sender_device_id: f.bob.device_id,
+                sent_at_us: fields.sent_at_us.to_string(),
+            }
+        };
+        let err = f
+            .service
+            .report_encrypted_message(report(f.alice.user, &forged))
+            .await
+            .unwrap_err();
+        assert_eq!(validation(err), "the report does not match the message");
+        f.service
+            .report_encrypted_message(report(f.alice.user, &sent))
+            .await
+            .expect("the version the receiver saw before the edit");
+        assert_eq!(
+            f.reports.lock().unwrap()[0].2.as_ref().map(|r| &r.content),
+            Some(&sent)
+        );
+    }
+
+    #[tokio::test]
+    async fn finding_7_a_replaced_key_still_verifies() {
+        let mut f = Fixture::new();
+        f.service = Fixture::build(&f.repo, &f.events, &f.conv, &f.messages, &f.reports)
+            .with_franking_keys(SharedFrankingKeys::fixed(
+                FrankingKeys::new(vec![
+                    FrankingKey::new(1, SERVER_KEY_1, Utc::now() - Duration::days(800)),
+                    FrankingKey::new(2, SERVER_KEY_2, Utc::now() - Duration::days(400)),
+                ])
+                .expect("keys"),
+            ));
+        f.repo.state().devices.push(stored_device(&f.bob));
+        let content = br#"{"v":1,"type":"message","body":"hi"}"#.to_vec();
+        let franking_key = [0x60u8; 32];
+        let sent_at = Utc::now() - Duration::days(500);
+        let c = commitment(&franking_key, &content);
+        let message = encrypted_message(&f, sent_at, &c, &[]);
+        let message_id = message.id;
+        f.messages.lock().unwrap().insert(message_id, message);
+        let fields = ReceiptFields {
+            message_id: message_id.into(),
+            conversation_id: f.conv.id.into(),
+            sender_user_id: f.bob.user.into(),
+            sender_device_id: f.bob.device_id,
+            sent_at_us: sent_at_us(sent_at),
+        };
+        f.service
+            .report_encrypted_message(ReportEncryptedMessageCmd {
+                actor: Actor::new(f.alice.user),
+                server_id: f.server,
+                conversation_id: f.conv.id,
+                message_id,
+                reason: "abuse".to_string(),
+                content: b64(&content),
+                franking_key: b64(&franking_key),
+                receipt: b64(&receipt(&SERVER_KEY_1, &fields, &c)),
+                receipt_key_id: 1,
+                sender_user_id: f.bob.user,
+                sender_device_id: f.bob.device_id,
+                sent_at_us: fields.sent_at_us.to_string(),
+            })
+            .await
+            .expect("key 1 still verifies, a year after key 2 replaced it");
     }
 
     #[test]
