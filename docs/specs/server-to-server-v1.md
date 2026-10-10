@@ -973,7 +973,7 @@ A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `d
 rows, relay items and orphaned envelopes, expired requests and outbox rows older than 7 days, and
 ends expired delegations. Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
 `S2sService`, `RelayService` and `HostService` traits in `rim_services`, implementations in
-`rim_infra_services`, handlers in `rim_server` (`s2s_handlers.rs`, `remote_handlers.rs`), wired in
+`rim_infra_services`, handlers in `rim_server` (the `s2s` module and `remote_handlers.rs`), wired in
 `app.rs`.
 
 ## GraphQL
