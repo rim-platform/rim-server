@@ -16,10 +16,34 @@ use rim_s2s::http_sig::{
 use rim_services::ServiceError;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::relay::dto::{DeliverRequest, IdentityDocument, PeerClaimRequest};
+use rim_services::remote_workspace::dto::{
+    CancelRequest, JoinChallengeRequest, JoinRequest, PresenceRequest, RevocationAnswer,
+    RevocationRequest, SubscriptionsAnswer, SubscriptionsRequest,
+};
 use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::s2s::S2sState;
+
+/// A request body as `T`; `400 bad_request` naming `what` when it is not one.
+fn body_as<T: DeserializeOwned>(body: &[u8], what: &str) -> Result<T, Reply> {
+    serde_json::from_slice(body).map_err(|_| {
+        Reply::error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            &format!("malformed {what}"),
+        )
+    })
+}
+
+/// A service answer as a `200` reply of its JSON, or the refusal it maps to.
+fn answer<T: serde::Serialize>(result: Result<T, ServiceError>) -> Reply {
+    match result {
+        Ok(value) => Reply::ok(serde_json::to_value(value).unwrap_or_default()),
+        Err(e) => Reply::from_service_error(e),
+    }
+}
 
 /// `GET /outbox` parameters.
 #[derive(serde::Deserialize)]
@@ -86,6 +110,9 @@ impl Reply {
             }
             ServiceError::PermissionDenied => {
                 Self::error(StatusCode::FORBIDDEN, "forbidden", "refused")
+            }
+            ServiceError::Conflict(message) => {
+                Self::error(StatusCode::CONFLICT, "conflict", &message)
             }
             ServiceError::RateLimited {
                 retry_after_seconds,
@@ -430,6 +457,65 @@ async fn dispatch(
             }
         }
         Endpoint::Forward => crate::s2s::forward::run(state, req, verified).await,
+        Endpoint::JoinChallenge => {
+            match body_as::<JoinChallengeRequest>(&verified.body, "join challenge request") {
+                Ok(request) => answer(
+                    state
+                        .workspace_host
+                        .join_challenge(peer, request.invite_token)
+                        .await,
+                ),
+                Err(reply) => reply,
+            }
+        }
+        Endpoint::Join => match body_as::<JoinRequest>(&verified.body, "join") {
+            Ok(request) => answer(state.workspace_host.join(peer, request).await),
+            Err(reply) => reply,
+        },
+        Endpoint::Subscriptions => {
+            match body_as::<SubscriptionsRequest>(&verified.body, "subscriptions") {
+                Ok(request) => answer(
+                    state
+                        .workspace_host
+                        .subscribe(peer, request.delegations)
+                        .await
+                        .map(|subscriptions| SubscriptionsAnswer { subscriptions }),
+                ),
+                Err(reply) => reply,
+            }
+        }
+        Endpoint::SubscriptionsCancel => {
+            match body_as::<CancelRequest>(&verified.body, "cancellation") {
+                Ok(request) => answer(
+                    state
+                        .workspace_host
+                        .cancel(peer, request.subscriptions)
+                        .await
+                        .map(|cancelled| json!({ "cancelled": cancelled })),
+                ),
+                Err(reply) => reply,
+            }
+        }
+        Endpoint::Presence => match body_as::<PresenceRequest>(&verified.body, "presence") {
+            Ok(request) => answer(
+                state
+                    .workspace_host
+                    .presence(peer, request.updates)
+                    .await
+                    .map(|applied| json!({ "applied": applied })),
+            ),
+            Err(reply) => reply,
+        },
+        Endpoint::Revocations => match body_as::<RevocationRequest>(&verified.body, "revocation") {
+            Ok(request) => answer(
+                state
+                    .workspace_host
+                    .apply_revocation(Some(peer), Some(request.principal_id), request.revocation)
+                    .await
+                    .map(|ack| RevocationAnswer { ack }),
+            ),
+            Err(reply) => reply,
+        },
         Endpoint::Ping => {
             let identity = state.identity.current();
             let roles: Vec<&str> = state

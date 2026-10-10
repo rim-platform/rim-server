@@ -103,11 +103,12 @@ impl RelayMutations {
             .map_err(map_service_error)
     }
 
-    /// Delete the caller's queue, requests, contacts and blocks on this relay.
+    /// Cancel the caller's subscriptions at every host, then delete their queue, requests,
+    /// contacts and blocks on this relay.
     async fn leave_relay(&self, ctx: &Context<'_>) -> Result<bool> {
         let actor = require_actor(ctx)?;
         relay(ctx)?
-            .relay
+            .workspace_relay
             .leave_relay(Actor::new(actor))
             .await
             .map_err(map_service_error)

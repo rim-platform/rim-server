@@ -14,6 +14,7 @@ use rim_infra_services::AlertRateLimiter;
 use rim_s2s::SharedIdentity;
 use rim_services::host::service::HostService;
 use rim_services::relay::service::RelayService;
+use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
 use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
 
 use crate::config::ServerRole;
@@ -48,4 +49,8 @@ pub struct S2sState {
     pub relay: Arc<dyn RelayService>,
     /// This server as the host of spaces with remote members.
     pub host: Arc<dyn HostService>,
+    /// This server as the host of workspaces with members whose relay is elsewhere.
+    pub workspace_host: Arc<dyn WorkspaceHostService>,
+    /// This server as the relay of members of workspaces hosted elsewhere.
+    pub workspace_relay: Arc<dyn WorkspaceRelayService>,
 }

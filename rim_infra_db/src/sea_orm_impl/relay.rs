@@ -716,7 +716,9 @@ impl RelayRepository for SeaOrmRelayRepository {
             .all::<TextRow>(
                 "SELECT e.host_server_id AS value FROM relay_item i \
                  JOIN relay_envelope e ON e.id = i.envelope_id WHERE i.user_id = $1 \
-                 UNION SELECT host_server_id AS value FROM relay_dm_request WHERE user_id = $1",
+                 UNION SELECT host_server_id AS value FROM relay_dm_request WHERE user_id = $1 \
+                 UNION SELECT host_server_id AS value FROM relay_subscription \
+                 WHERE user_id = $1 AND status = 'active'",
                 vec![uuid(user_id)],
             )
             .await?

@@ -16,7 +16,8 @@ use rim_core::auth::repository::SessionRepository;
 use rim_core::host::model::UserKind;
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{
-    DeviceKey, KeyLogEntry, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
+    DeviceKey, DeviceKeyId, KeyLogEntry, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry,
+    StoredProfileCard,
 };
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::repository::error::RepoErrorKind;
@@ -31,6 +32,7 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::auth::dto::{AuthSessionDto, LoginResultDto, RegistrationMode, SignupResultDto};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::Observers;
+use rim_services::host::service::HostService;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
     IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
@@ -41,6 +43,7 @@ use rim_services::key_auth::dto::{
 };
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::relay::service::RelayService;
+use rim_services::remote_workspace::service::RevocationFanout;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::registration_rate_limiter::RegistrationRateLimiter;
@@ -52,6 +55,13 @@ const CHALLENGE_TTL_SECONDS: i64 = 120;
 
 /// Failure-limiter key shared by key logins and unauthenticated recoveries.
 const FAILURE_KEY: &str = "key_auth_failure";
+
+/// How long a session lasts for someone whose relay is another server, signing in directly
+/// while their relay is unreachable.
+const REMOTE_SESSION_TTL: Duration = Duration::hours(24);
+
+/// How long a direct sign-in waits for the person's relays to refresh their identity.
+const REMOTE_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Most entries a key log may have: at enrollment and key-only signup (every entry is verified
 /// before the transaction starts, so the bound keeps one request's work small), and grown by
@@ -106,6 +116,10 @@ pub struct DefaultKeyAuthService {
     e2ee_service: Option<Arc<dyn rim_services::e2ee::service::E2eeService>>,
     /// Told when a user's card or devices change, so hosts holding them get the new identity.
     relay_service: Option<Arc<dyn RelayService>>,
+    /// Refreshes a remote user's identity from their relays before they sign in directly.
+    host_service: Option<Arc<dyn HostService>>,
+    /// Sends a revoked device's revocation to every host holding its person.
+    revocation_fanout: Option<Arc<dyn RevocationFanout>>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -237,7 +251,68 @@ impl DefaultKeyAuthService {
             observers,
             e2ee_service: None,
             relay_service: None,
+            host_service: None,
+            revocation_fanout: None,
         }
+    }
+
+    pub fn with_host_service(mut self, host_service: Arc<dyn HostService>) -> Self {
+        self.host_service = Some(host_service);
+        self
+    }
+
+    pub fn with_revocation_fanout(mut self, fanout: Arc<dyn RevocationFanout>) -> Self {
+        self.revocation_fanout = Some(fanout);
+        self
+    }
+
+    /// Start sending a revocation to the hosts holding the user, in the background.
+    fn revocation_committed(&self, user_id: UserId, device_key_id: DeviceKeyId) {
+        if let Some(fanout) = &self.revocation_fanout {
+            let fanout = Arc::clone(fanout);
+            tokio::spawn(async move {
+                if let Err(e) = fanout.revocation_committed(user_id, device_key_id).await {
+                    warn!(error = %e, user_id = %user_id, "could not send a revocation to hosts");
+                }
+            });
+        }
+    }
+
+    /// Before a person from another server signs in directly, refetch their identity from
+    /// their relays, so a device revoked there is revoked here; a relay that does not answer
+    /// in time leaves the stored copy. Returns whether the principal is held here as remote.
+    async fn refresh_if_remote(&self, proof: &SignedPayload) -> ServiceResult<bool> {
+        let Ok(unverified) = UnverifiedLogin::read(&to_statement(proof)) else {
+            return Ok(false);
+        };
+        let Some(user_id) = self
+            .repos
+            .key_identity_repo
+            .find_user_by_principal_id(&unverified.principal_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if self.repos.host_repo.user_kind(user_id).await? != Some(UserKind::Remote) {
+            return Ok(false);
+        }
+        if let Some(host) = &self.host_service {
+            match tokio::time::timeout(
+                REMOTE_REFRESH_TIMEOUT,
+                host.refresh_identity(unverified.principal_id.clone(), None),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    warn!(error = %e, user_id = %user_id, "could not refresh a remote identity before a direct sign-in")
+                }
+                Err(_) => {
+                    warn!(user_id = %user_id, "the relays did not answer before a direct sign-in")
+                }
+            }
+        }
+        Ok(true)
     }
 
     pub fn with_relay_service(mut self, relay_service: Arc<dyn RelayService>) -> Self {
@@ -622,6 +697,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         // A slot is reserved up front, so concurrent attempts can't all pass the check before
         // any of them fails, and refunded unless the attempt turns out to be a failed login.
         let reserved_at = self.reserve_failure(&cmd.remote_ip)?;
+        let remote = self.refresh_if_remote(&cmd.proof).await?;
         let verified = self.verify_login(&cmd.proof).await;
         if !matches!(
             verified,
@@ -660,7 +736,12 @@ impl KeyAuthService for DefaultKeyAuthService {
             .create_session(NewSession {
                 user_id,
                 token_hash: hash_token(&raw_token),
-                expires_at: Utc::now() + self.session_ttl,
+                expires_at: Utc::now()
+                    + if remote {
+                        self.session_ttl.min(REMOTE_SESSION_TTL)
+                    } else {
+                        self.session_ttl
+                    },
                 user_agent: None,
                 ip: None,
             })
@@ -675,6 +756,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         info!(
             target = "audit",
             event = "key_login_success",
+            remote,
             user_id = %user_id,
             device_id = %device.device_id,
             session_id = %session.id,
@@ -936,6 +1018,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         if newly_revoked {
             self.devices_changed(user_id).await;
             self.identity_changed(user_id);
+            self.revocation_committed(user_id, device.id);
             info!(
                 target = "audit",
                 event = "device_key_revoked",
