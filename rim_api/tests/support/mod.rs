@@ -544,6 +544,7 @@ pub fn build_test_provider_with(
             .expect("franking keys"),
         ),
         rim_infra_services::FederationHooks::default(),
+        Arc::new(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled()),
     ));
 
     (service_provider, observers)

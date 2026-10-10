@@ -76,6 +76,9 @@ USER rim
 #                           internal network, never behind the public proxy
 #   RIM_AUDIT_RETENTION_DAYS — days command audit rows are kept, 1-3650 (default: forever); older
 #                           rows are exported to $RIM_DATA_DIR/audit-exports and deleted daily
+#   RIM_FEATURES_DISABLED — comma-separated optional features to switch off: attachments,
+#                           link_previews, email, custom_emoji, workspace_plugins, ai_commands
+#                           (default: none); an unknown name stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

@@ -8,6 +8,7 @@ use crate::command::service::CommandService;
 use crate::conversation::service::ConversationService;
 use crate::custom_emoji::service::CustomEmojiService;
 use crate::device_link::service::DeviceLinkService;
+use crate::feature::service::FeatureGate;
 use crate::key_auth::service::KeyAuthService;
 use crate::keybind::service::KeybindService;
 use crate::link_preview::service::LinkPreviewService;
@@ -64,4 +65,6 @@ pub trait AppServiceProvider: Send + Sync {
     fn plugin_bundle_service(
         &self,
     ) -> Arc<dyn crate::workspace_plugin::service::PluginBundleService>;
+    /// The instance's feature switches.
+    fn feature_gate(&self) -> Arc<dyn FeatureGate>;
 }

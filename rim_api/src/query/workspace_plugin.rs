@@ -1,11 +1,13 @@
 use async_graphql::*;
 use rim_core::server::model::ServerId;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::workspace_plugin::command::ListWorkspacePluginsQuery;
 use rim_services::workspace_plugin::service::WorkspacePluginService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::features::require_feature;
 use crate::ids::parse_uuid_id;
 use crate::types::WorkspacePlugin;
 
@@ -20,6 +22,7 @@ impl WorkspacePluginQueries {
         ctx: &Context<'_>,
         server_id: ID,
     ) -> Result<Vec<WorkspacePlugin>> {
+        require_feature(ctx, ServerFeature::WorkspacePlugins)?;
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn WorkspacePluginService>>()?;
         let entries = svc

@@ -31,6 +31,7 @@ pub mod relay;
 pub mod repository;
 pub mod s2s;
 pub mod server;
+pub mod server_feature;
 pub mod server_member;
 pub mod storage;
 pub mod user;

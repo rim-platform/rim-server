@@ -111,7 +111,7 @@ pub use remote_workspace::{
     JoinRemoteWorkspaceInput, RemoteJoinChallenge, RemoteJoinResult, RemoteSubscription,
     RevocationFanout, RevocationFanoutStatus,
 };
-pub use server_info::{API_VERSION, ServerInfo};
+pub use server_info::{API_VERSION, ServerFeatureInfo, ServerFeatureState, ServerInfo};
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
 pub use workspace::{Server, ServerMember, ServerMemberRoleGql};
