@@ -13,6 +13,8 @@ use rim_auth::csrf::generate_csrf_token;
 use rim_auth::session_token::{generate_challenge_nonce, generate_session_token, hash_token};
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
+use rim_core::host::model::UserKind;
+use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{
     DeviceKey, KeyLogEntry, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
 };
@@ -38,6 +40,7 @@ use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
 };
 use rim_services::key_auth::service::KeyAuthService;
+use rim_services::relay::service::RelayService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::registration_rate_limiter::RegistrationRateLimiter;
@@ -67,6 +70,9 @@ pub struct KeyAuthRepos {
     pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
     /// Registration tokens and workspace joins, for key-only signup.
     pub signup: SignupRepos,
+    /// Whether a user holding a principal is someone from another server, whom a key-only
+    /// signup turns into a local user.
+    pub host_repo: Arc<dyn HostRepository>,
 }
 
 /// An audience as compared: a server id (`rims1_…`) as it is, since base64url is
@@ -98,6 +104,8 @@ pub struct DefaultKeyAuthService {
     /// Told when a user's devices change, so their encrypted groups are updated. `None` in
     /// unit tests; the composition root wires it.
     e2ee_service: Option<Arc<dyn rim_services::e2ee::service::E2eeService>>,
+    /// Told when a user's card or devices change, so hosts holding them get the new identity.
+    relay_service: Option<Arc<dyn RelayService>>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -228,6 +236,24 @@ impl DefaultKeyAuthService {
             signup_rate_limiter,
             observers,
             e2ee_service: None,
+            relay_service: None,
+        }
+    }
+
+    pub fn with_relay_service(mut self, relay_service: Arc<dyn RelayService>) -> Self {
+        self.relay_service = Some(relay_service);
+        self
+    }
+
+    /// Push the user's identity to the hosts that know them, in the background.
+    fn identity_changed(&self, user_id: UserId) {
+        if let Some(relay) = &self.relay_service {
+            let relay = Arc::clone(relay);
+            tokio::spawn(async move {
+                if let Err(e) = relay.identity_changed(user_id).await {
+                    warn!(error = %e, user_id = %user_id, "could not push an identity change to hosts");
+                }
+            });
         }
     }
 
@@ -404,17 +430,96 @@ impl DefaultKeyAuthService {
         repos: &KeyAuthRepos,
         principal_id: &str,
     ) -> ServiceResult<()> {
-        if repos
+        match Self::remote_holder(repos, principal_id).await? {
+            None => Ok(()),
+            Some(_) => Err(Self::principal_taken()),
+        }
+    }
+
+    fn principal_taken() -> ServiceError {
+        ServiceError::Conflict(
+            "another account on this server already uses this key identity".to_string(),
+        )
+    }
+
+    /// The user holding `principal_id`: `Some(Some(id))` for someone from another server,
+    /// `Some(None)` for a local account, `None` for nobody.
+    async fn remote_holder(
+        repos: &KeyAuthRepos,
+        principal_id: &str,
+    ) -> ServiceResult<Option<Option<UserId>>> {
+        let Some(user_id) = repos
             .key_identity_repo
             .find_user_by_principal_id(principal_id)
             .await?
-            .is_some()
-        {
-            return Err(ServiceError::Conflict(
-                "another account on this server already uses this key identity".to_string(),
-            ));
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            (repos.host_repo.user_kind(user_id).await? == Some(UserKind::Remote))
+                .then_some(user_id),
+        ))
+    }
+
+    /// Turn a remote user into the local account a key-only signup creates: their stored log
+    /// must be a prefix of the presented one, which extends it; the presented device is reused
+    /// when it is stored already. Memberships stay.
+    #[allow(clippy::too_many_arguments)]
+    async fn adopt_remote(
+        repos: &KeyAuthRepos,
+        user_id: UserId,
+        username: &str,
+        display_name: &str,
+        state: &KeyState,
+        entries: Vec<NewKeyLogEntry>,
+        cert: &DeviceCert,
+        device: &SignedPayload,
+    ) -> ServiceResult<DeviceKey> {
+        if !repos.key_identity_repo.lock_user(user_id).await? {
+            return Err(ServiceError::NotFound);
         }
-        Ok(())
+        let stored = repos.key_identity_repo.list_key_log(user_id).await?;
+        let prefix = stored.len() <= entries.len()
+            && stored
+                .iter()
+                .zip(&entries)
+                .all(|(s, e)| s.payload == e.payload && s.signature == e.signature);
+        if !prefix {
+            return Err(Self::principal_taken());
+        }
+        let from = stored.len();
+        for entry in entries.into_iter().skip(from) {
+            repos
+                .key_identity_repo
+                .append_rotation(user_id, entry, &state.identity_key.to_string())
+                .await?;
+        }
+        repos
+            .host_repo
+            .make_local(user_id, username, display_name)
+            .await
+            .map_err(|e| match e.kind() {
+                RepoErrorKind::Conflict => {
+                    ServiceError::Conflict("this username is taken".to_string())
+                }
+                _ => e.into(),
+            })?;
+        match repos
+            .key_identity_repo
+            .get_device(user_id, cert.device_id)
+            .await?
+        {
+            Some(existing)
+                if existing.revoked_at.is_none()
+                    && existing.public_key == cert.device_key.to_string() =>
+            {
+                Ok(existing)
+            }
+            Some(_) => Err(ServiceError::Conflict(
+                "this device id or device key is already enrolled or was revoked".to_string(),
+            )),
+            None => insert_device(repos, new_device(user_id, cert, device)).await,
+        }
     }
 
     /// Verify a login proof and claim its challenge. Every refusal is `Unauthenticated` except
@@ -681,26 +786,57 @@ impl KeyAuthService for DefaultKeyAuthService {
         Self::consume_proof_challenge(&repos, &proof).await?;
         // Checked for a clear answer; two signups racing for one principal are settled by the
         // unique index, which turns the second insert into `Conflict` as well.
-        Self::ensure_principal_unused(&repos, &state.principal_id).await?;
-        let user = signup::create_user(
-            repos.user_repo.as_ref(),
-            NewUser {
-                username: username.to_string(),
-                password: None,
-                email: None,
-                display_name: Some(display_name),
-                key_identity: Some(NewUserKeyIdentity {
-                    principal_id: state.principal_id.clone(),
-                    identity_key: state.identity_key.to_string(),
-                }),
-            },
-        )
-        .await?;
-        repos
-            .key_identity_repo
-            .insert_key_log(user.id, entries)
-            .await?;
-        let device = insert_device(&repos, new_device(user.id, &cert, &cmd.device)).await?;
+        let (user_id, device) = match Self::remote_holder(&repos, &state.principal_id).await? {
+            Some(None) => return Err(Self::principal_taken()),
+            Some(Some(remote)) => {
+                let device = Self::adopt_remote(
+                    &repos,
+                    remote,
+                    username,
+                    &display_name,
+                    &state,
+                    entries,
+                    &cert,
+                    &cmd.device,
+                )
+                .await?;
+                info!(
+                    target = "audit",
+                    event = "key_identity_adopted",
+                    user_id = %remote,
+                    principal_id = %state.principal_id,
+                    "a remote user signed up here and is now local"
+                );
+                (remote, device)
+            }
+            None => {
+                let user = signup::create_user(
+                    repos.user_repo.as_ref(),
+                    NewUser {
+                        username: username.to_string(),
+                        password: None,
+                        email: None,
+                        display_name: Some(display_name),
+                        key_identity: Some(NewUserKeyIdentity {
+                            principal_id: state.principal_id.clone(),
+                            identity_key: state.identity_key.to_string(),
+                        }),
+                    },
+                )
+                .await?;
+                repos
+                    .key_identity_repo
+                    .insert_key_log(user.id, entries)
+                    .await?;
+                let device = insert_device(&repos, new_device(user.id, &cert, &cmd.device)).await?;
+                (user.id, device)
+            }
+        };
+        let user = repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
         let server_id = match &token {
             Some(token) => signup::claim_token(&repos.signup, token, user.id).await?,
             None => None,
@@ -768,6 +904,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             device_id = %device.device_id,
             "device key added"
         );
+        self.identity_changed(user_id);
         Ok(device_dto(device))
     }
 
@@ -798,6 +935,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         Self::commit(scope).await?;
         if newly_revoked {
             self.devices_changed(user_id).await;
+            self.identity_changed(user_id);
             info!(
                 target = "audit",
                 event = "device_key_revoked",
@@ -938,6 +1076,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             ));
         }
         Self::commit(scope).await?;
+        self.identity_changed(user_id);
         let stored = self
             .repos
             .key_identity_repo

@@ -35,6 +35,10 @@ pub trait PeerService: Send + Sync {
 
     async fn get(&self, server_id: &str) -> ServiceResult<Option<PeerDto>>;
 
+    /// A pinned peer's discovery document as JSON text, rebuilt from its pinned key log and
+    /// descriptor.
+    async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>>;
+
     /// Forget a peer's pin after an out-of-band check, so its next contact pins it afresh.
     /// Returns whether it was pinned.
     async fn reset(&self, server_id: &str) -> ServiceResult<bool>;

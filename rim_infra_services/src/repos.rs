@@ -16,6 +16,7 @@ use rim_core::escalation::repository::{
     ConversationEscalationPolicyRepository, EscalationPolicyRepository, EscalationRunRepository,
     EscalationStepRepository,
 };
+use rim_core::host::repository::HostRepository;
 use rim_core::incident::repository::{
     IncidentMessageTagRepository, IncidentPhaseRepository, IncidentRepository,
 };
@@ -39,6 +40,7 @@ use rim_core::oncall::repository::{
 };
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::pipeline::repository::PipelineRepository;
+use rim_core::relay::repository::RelayRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::skill_profile::repository::SkillProfileRepository;
@@ -98,6 +100,8 @@ pub struct AppRepos {
     pub device_link_repo: Arc<dyn DeviceLinkRepository>,
     pub workspace_plugin_repo: Arc<dyn WorkspacePluginRepository>,
     pub e2ee_repo: Arc<dyn E2eeRepository>,
+    pub relay_repo: Arc<dyn RelayRepository>,
+    pub host_repo: Arc<dyn HostRepository>,
 }
 
 #[derive(Clone)]
@@ -363,6 +367,30 @@ impl AppRepos {
             key_identity_repo: Arc::clone(&self.key_identity_repo),
             key_challenge_repo: Arc::clone(&self.key_challenge_repo),
             signup: self.for_auth().signup_repos(),
+            host_repo: Arc::clone(&self.host_repo),
+        }
+    }
+
+    pub fn for_relay(&self) -> crate::relay::RelayRepos {
+        crate::relay::RelayRepos {
+            relay_repo: Arc::clone(&self.relay_repo),
+            host_repo: Arc::clone(&self.host_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            e2ee_repo: Arc::clone(&self.e2ee_repo),
+            user_repo: Arc::clone(&self.user_repo),
+        }
+    }
+
+    pub fn for_host(&self) -> crate::host::HostRepos {
+        crate::host::HostRepos {
+            host_repo: Arc::clone(&self.host_repo),
+            relay_repo: Arc::clone(&self.relay_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            e2ee_repo: Arc::clone(&self.e2ee_repo),
+            user_repo: Arc::clone(&self.user_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
 
@@ -775,6 +803,12 @@ impl AppRepos {
                 ),
             ),
             e2ee_repo: Arc::new(sea_orm_impl::e2ee::SeaOrmE2eeRepository::new(
+                handle.clone(),
+            )),
+            relay_repo: Arc::new(sea_orm_impl::relay::SeaOrmRelayRepository::new(
+                handle.clone(),
+            )),
+            host_repo: Arc::new(sea_orm_impl::host::SeaOrmHostRepository::new(
                 handle.clone(),
             )),
         }

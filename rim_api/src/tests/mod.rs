@@ -156,6 +156,7 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -209,6 +210,7 @@ fn schema_with_server_mocks(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -259,6 +261,7 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -315,6 +318,7 @@ fn schema_with_incident_mocks(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -367,6 +371,7 @@ fn schema_with_oncall_mock(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -417,6 +422,7 @@ fn schema_with_escalation_policy_mock(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -893,6 +899,7 @@ fn schema_with_mocks(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -943,6 +950,7 @@ fn schema_with_capability_mock(capability: MockCapabilityService) -> crate::AppS
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -993,6 +1001,7 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -1047,6 +1056,7 @@ fn schema_with_audit_mock(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }
 
@@ -1144,5 +1154,6 @@ fn schema_with_ingest_token_mocks(
         test_typing_tracker(),
         test_observers(),
         test_registration_context(),
+        None,
     )
 }

@@ -41,6 +41,7 @@ pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod presence;
 pub(crate) mod profile;
+pub(crate) mod relay;
 pub(crate) mod skill_profile;
 pub(crate) mod workspace;
 pub(crate) mod workspace_feature;
@@ -118,4 +119,5 @@ pub(crate) struct MutationGroup7(
     device_link::DeviceLinkMutations,
     workspace_plugin::WorkspacePluginMutations,
     e2ee::E2eeMutations,
+    relay::RelayMutations,
 );

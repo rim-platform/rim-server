@@ -13,11 +13,20 @@ use rim_s2s::http_sig::{
     IncomingRequest, NONCE_RETENTION_SECS, OutgoingResponse, PendingRequest, RIM_ORIGIN,
     RIM_REQUEST_NONCE, RequestBinding, parse_request, request_nonce, sign_response,
 };
+use rim_services::ServiceError;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::relay::dto::{DeliverRequest, IdentityDocument, PeerClaimRequest};
 use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
 use serde_json::{Value, json};
 
 use crate::s2s::S2sState;
+
+/// `GET /outbox` parameters.
+#[derive(serde::Deserialize)]
+struct OutboxQuery {
+    after: Option<i64>,
+    limit: Option<i64>,
+}
 use crate::s2s::roles::{Endpoint, serves};
 
 /// Prefix of every server-to-server path.
@@ -37,37 +46,69 @@ struct Binding {
 }
 
 /// An answer before it is signed.
-struct Reply {
-    status: StatusCode,
-    body: Value,
-    retry_after: Option<u64>,
+pub(crate) struct Reply {
+    pub(crate) status: StatusCode,
+    pub(crate) body: Vec<u8>,
+    pub(crate) content_type: String,
+    pub(crate) retry_after: Option<u64>,
+    /// Further headers, outside the signature.
+    pub(crate) headers: Vec<(String, String)>,
 }
 
 impl Reply {
-    fn ok(body: Value) -> Self {
+    pub(crate) fn json(status: StatusCode, body: &Value) -> Self {
         Self {
-            status: StatusCode::OK,
-            body,
+            status,
+            body: serde_json::to_vec(body).unwrap_or_default(),
+            content_type: JSON.to_string(),
             retry_after: None,
+            headers: Vec::new(),
         }
     }
 
-    fn error(status: StatusCode, code: &str, message: &str) -> Self {
-        Self {
-            status,
-            body: json!({ "error": code, "message": message }),
-            retry_after: None,
+    pub(crate) fn ok(body: Value) -> Self {
+        Self::json(StatusCode::OK, &body)
+    }
+
+    pub(crate) fn error(status: StatusCode, code: &str, message: &str) -> Self {
+        Self::json(status, &json!({ "error": code, "message": message }))
+    }
+
+    /// A service refusal as the S2S error it maps to.
+    pub(crate) fn from_service_error(err: ServiceError) -> Self {
+        match err {
+            ServiceError::NotFound => Self::error(StatusCode::NOT_FOUND, "not_found", "not found"),
+            ServiceError::Validation(message) => {
+                Self::error(StatusCode::BAD_REQUEST, "bad_request", &message)
+            }
+            ServiceError::Forbidden(message) => {
+                Self::error(StatusCode::FORBIDDEN, "forbidden", &message)
+            }
+            ServiceError::PermissionDenied => {
+                Self::error(StatusCode::FORBIDDEN, "forbidden", "refused")
+            }
+            ServiceError::RateLimited {
+                retry_after_seconds,
+            } => {
+                let mut reply = Self::error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate_limited",
+                    "too many requests",
+                );
+                reply.retry_after = Some(retry_after_seconds.max(1));
+                reply
+            }
+            other => internal(other),
         }
     }
 }
 
 /// A request whose signature, key, digest, nonce and rate checks all passed.
-struct Verified {
-    peer: PeerKeysDto,
+pub(crate) struct Verified {
+    pub(crate) peer: PeerKeysDto,
     #[allow(dead_code)]
-    pending: PendingRequest,
-    #[allow(dead_code)]
-    body: Vec<u8>,
+    pub(crate) pending: PendingRequest,
+    pub(crate) body: Vec<u8>,
 }
 
 fn joined_header(req: &HttpRequest, name: &str) -> Option<String> {
@@ -111,7 +152,7 @@ async fn read_body(
 
 /// Sign `reply` with this server's current key, bound to the request.
 fn signed(state: &S2sState, binding: &Binding, reply: Reply) -> HttpResponse {
-    let body = serde_json::to_vec(&reply.body).unwrap_or_default();
+    let body = reply.body;
     let identity = state.identity.current();
     let key_id = identity.key_id();
     let headers = sign_response(
@@ -119,7 +160,7 @@ fn signed(state: &S2sState, binding: &Binding, reply: Reply) -> HttpResponse {
         &OutgoingResponse {
             status: reply.status.as_u16(),
             body: &body,
-            content_type: JSON,
+            content_type: &reply.content_type,
             request: RequestBinding {
                 method: &binding.method,
                 target_uri: &binding.target_uri,
@@ -131,7 +172,10 @@ fn signed(state: &S2sState, binding: &Binding, reply: Reply) -> HttpResponse {
         },
     );
     let mut response = HttpResponse::build(reply.status);
-    response.content_type(JSON);
+    response.content_type(reply.content_type.as_str());
+    for (name, value) in &reply.headers {
+        response.insert_header((name.as_str(), value.as_str()));
+    }
     if let Ok(nonce) = HeaderValue::from_str(&binding.nonce) {
         response.insert_header((HeaderName::from_static(RIM_REQUEST_NONCE), nonce));
     }
@@ -161,7 +205,7 @@ fn refuse_signature(peer: Option<&str>, reason: &str) -> Reply {
     )
 }
 
-fn internal(err: impl std::fmt::Display) -> Reply {
+pub(crate) fn internal(err: impl std::fmt::Display) -> Reply {
     tracing::error!(error = %err, "server-to-server request failed");
     Reply::error(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -308,8 +352,84 @@ async fn verify(
     })
 }
 
-async fn dispatch(state: &S2sState, endpoint: Endpoint, _verified: &Verified) -> Reply {
+async fn dispatch(
+    state: &S2sState,
+    req: &HttpRequest,
+    endpoint: Endpoint,
+    verified: &Verified,
+) -> Reply {
+    let peer = verified.peer.server_id.clone();
+    let parse = |body: &[u8]| -> Result<Value, Reply> {
+        serde_json::from_slice(body)
+            .map_err(|_| Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed JSON"))
+    };
     match endpoint {
+        Endpoint::Principal => {
+            let principal_id = req
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            match state.relay.local_identity(principal_id).await {
+                Ok(Some(document)) => Reply::ok(serde_json::to_value(document).unwrap_or_default()),
+                Ok(None) => Reply::error(StatusCode::NOT_FOUND, "not_found", "unknown principal"),
+                Err(e) => Reply::from_service_error(e),
+            }
+        }
+        Endpoint::Identity => {
+            let document = match parse(&verified.body).and_then(|v| {
+                serde_json::from_value::<IdentityDocument>(v).map_err(|_| {
+                    Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed identity")
+                })
+            }) {
+                Ok(document) => document,
+                Err(reply) => return reply,
+            };
+            match state.host.apply_identity(peer, document).await {
+                Ok(applied) => Reply::ok(json!({ "applied": applied })),
+                Err(e) => Reply::from_service_error(e),
+            }
+        }
+        Endpoint::KeyPackageClaim => {
+            let request = match parse(&verified.body).and_then(|v| {
+                serde_json::from_value::<PeerClaimRequest>(v).map_err(|_| {
+                    Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed claim")
+                })
+            }) {
+                Ok(request) => request,
+                Err(reply) => return reply,
+            };
+            match state.relay.claim_for_peer(peer, request).await {
+                Ok(answer) => Reply::ok(serde_json::to_value(answer).unwrap_or_default()),
+                Err(e) => Reply::from_service_error(e),
+            }
+        }
+        Endpoint::Deliver => {
+            let request = match parse(&verified.body).and_then(|v| {
+                serde_json::from_value::<DeliverRequest>(v).map_err(|_| {
+                    Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed delivery")
+                })
+            }) {
+                Ok(request) => request,
+                Err(reply) => return reply,
+            };
+            match state.relay.deliver(peer, request.items).await {
+                Ok(answer) => Reply::ok(serde_json::to_value(answer).unwrap_or_default()),
+                Err(e) => Reply::from_service_error(e),
+            }
+        }
+        Endpoint::Outbox => {
+            let query = web::Query::<OutboxQuery>::from_query(req.query_string()).ok();
+            let (after, limit) = query
+                .map(|q| (q.after.unwrap_or(0), q.limit.unwrap_or(256)))
+                .unwrap_or((0, 256));
+            match state.host.outbox_page(peer, after, limit).await {
+                Ok(page) => Reply::ok(serde_json::to_value(page).unwrap_or_default()),
+                Err(e) => Reply::from_service_error(e),
+            }
+        }
+        Endpoint::Forward => crate::s2s::forward::run(state, req, verified).await,
         Endpoint::Ping => {
             let identity = state.identity.current();
             let roles: Vec<&str> = state
@@ -367,7 +487,7 @@ pub(crate) async fn handle(
             "role_disabled",
             "this server does not run the role that endpoint belongs to",
         ),
-        Some(endpoint) => dispatch(&state, endpoint, &verified).await,
+        Some(endpoint) => dispatch(&state, &req, endpoint, &verified).await,
     };
     tracing::debug!(
         peer_server_id = %verified.peer.server_id,

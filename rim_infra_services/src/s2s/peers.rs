@@ -480,6 +480,28 @@ impl PeerService for DefaultPeerService {
         Ok(self.repo.find(server_id).await?.as_ref().map(to_dto))
     }
 
+    async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>> {
+        let Some(peer) = self.repo.find(server_id).await? else {
+            return Ok(None);
+        };
+        let statement = |payload: &str, signature: &str| serde_json::json!({ "payload": payload, "signature": signature });
+        let log: Vec<serde_json::Value> = self
+            .repo
+            .key_log(server_id)
+            .await?
+            .iter()
+            .map(|e| statement(&e.payload, &e.signature))
+            .collect();
+        Ok(Some(
+            serde_json::json!({
+                "rim": "server-discovery",
+                "keyLog": log,
+                "descriptor": statement(&peer.descriptor.payload, &peer.descriptor.signature),
+            })
+            .to_string(),
+        ))
+    }
+
     async fn reset(&self, server_id: &str) -> ServiceResult<bool> {
         let existed = self.repo.delete(server_id).await?;
         if existed {

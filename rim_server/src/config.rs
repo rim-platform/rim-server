@@ -133,6 +133,18 @@ pub struct RIMConfig {
     /// Allow server-to-server traffic over plain `http` (development and tests only).
     /// Controlled by `RIM_S2S_ALLOW_HTTP`.
     pub s2s_allow_http: Option<bool>,
+
+    /// Forwarded requests accepted per device per minute. Default 120. Controlled by
+    /// `RIM_S2S_DEVICE_RATE_PER_MIN`.
+    pub s2s_device_rate_per_min: Option<u32>,
+
+    /// Bytes queued per local user before the oldest items are dropped. Default 256 MiB.
+    /// Controlled by `RIM_RELAY_QUEUE_BYTES_PER_USER`.
+    pub relay_queue_bytes_per_user: Option<i64>,
+
+    /// Days queued items and DM requests are kept. Default 30. Controlled by
+    /// `RIM_RELAY_RETENTION_DAYS`.
+    pub relay_retention_days: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -278,6 +290,9 @@ impl Default for RIMConfig {
             s2s_max_body_bytes: None,
             s2s_allow_private_addresses: None,
             s2s_allow_http: None,
+            s2s_device_rate_per_min: None,
+            relay_queue_bytes_per_user: None,
+            relay_retention_days: None,
         }
     }
 }
@@ -559,6 +574,20 @@ impl RIMConfig {
     pub fn s2s_peer_rate_per_min(&self) -> u32 {
         self.s2s_peer_rate_per_min
             .unwrap_or(DEFAULT_S2S_PEER_RATE_PER_MIN)
+    }
+
+    pub fn s2s_device_rate_per_min(&self) -> u32 {
+        self.s2s_device_rate_per_min.unwrap_or(120).max(1)
+    }
+
+    pub fn relay_queue_bytes_per_user(&self) -> i64 {
+        self.relay_queue_bytes_per_user
+            .unwrap_or(256 * 1024 * 1024)
+            .max(1024 * 1024)
+    }
+
+    pub fn relay_retention_days(&self) -> u32 {
+        self.relay_retention_days.unwrap_or(30).clamp(1, 365)
     }
 
     pub fn s2s_max_body_bytes(&self) -> usize {

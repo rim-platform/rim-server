@@ -81,6 +81,9 @@ pub struct S2sRequest {
     pub body: Vec<u8>,
     /// `Content-Type` of a `POST`; `application/json` when `None`.
     pub content_type: Option<String>,
+    /// Further headers sent as they are, outside the signature (the device request headers of
+    /// a forwarded request).
+    pub headers: Vec<(String, String)>,
 }
 
 /// A peer's answer whose signature verified against its pin. Error statuses are answers too:
@@ -92,6 +95,8 @@ pub struct S2sResponse {
     pub body: Vec<u8>,
     /// The seq of the peer key that signed the response.
     pub key_seq: u32,
+    /// The `Rim-Host-Response` and `Rim-Host-Signature` headers, when the peer sent them.
+    pub headers: Vec<(String, String)>,
 }
 
 impl S2sResponse {

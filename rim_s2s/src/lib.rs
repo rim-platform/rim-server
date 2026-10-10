@@ -7,12 +7,15 @@
 //!   id is fixed by the inception.
 //! - [`ServerDescriptor`]: roles, endpoints and limits, signed by the head server key.
 //! - [`statement`]: signing and verifying server-signed statements by kind.
+//! - [`host`]: host events and host responses, the statements a host signs for relays and
+//!   clients.
 //! - [`http_sig`]: signature bases, signing and verifying requests and responses.
 //! - [`SharedIdentity`]: this server's key, log and descriptor, shared by everything that
 //!   signs.
 
 pub mod descriptor;
 mod error;
+pub mod host;
 pub mod http_sig;
 mod identity;
 mod key_log;

@@ -10,6 +10,10 @@
 /// `rim_infra_db/tests/support/mod.rs`).
 #[allow(dead_code)] // Not every test binary that includes `support` uses the GraphQL helpers.
 pub mod graphql;
+#[allow(dead_code)] // Only the encryption tests use the MLS client.
+pub mod mls;
+#[allow(dead_code)] // Only the server-to-server tests start servers.
+pub mod nodes;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 
@@ -298,6 +302,7 @@ fn schema_for(
             preview_rate_limiter: Arc::new(PreviewInviteRateLimiterToken),
             signup_rate_limiter: Arc::new(SignupRateLimiterToken),
         },
+        None,
     )
 }
 
@@ -417,6 +422,12 @@ pub fn build_test_provider_with(
             ),
         ),
         e2ee_repo: Arc::new(rim_infra_db::sea_orm_impl::e2ee::SeaOrmE2eeRepository::new(
+            db.clone(),
+        )),
+        relay_repo: Arc::new(rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository::new(
+            db.clone(),
+        )),
+        host_repo: Arc::new(rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository::new(
             db.clone(),
         )),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
@@ -545,6 +556,7 @@ pub fn build_test_provider_with(
             ])
             .expect("franking keys"),
         ),
+        rim_infra_services::FederationHooks::default(),
     ));
 
     (service_provider, observers)

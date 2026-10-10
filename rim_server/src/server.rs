@@ -41,6 +41,8 @@ pub struct RunningServer {
     pub server: actix_web::dev::Server,
     /// Server identity and server-to-server traffic.
     pub s2s: S2sRuntime,
+    /// The GraphQL schema the server runs, for tests that drive subscriptions directly.
+    pub schema: AppSchema,
     /// Keeps the background tasks running while the server is alive.
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
@@ -79,6 +81,7 @@ pub async fn serve(
 
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
+    let schema_handle = schema.clone();
     let request_authenticator = runtime.request_authenticator;
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
@@ -152,6 +155,11 @@ pub async fn serve(
             )
             .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)))
             .service(
+                web::resource("/api/remote/{host_server_id}/{tail:.*}")
+                    .route(web::get().to(crate::remote_handlers::handle_remote))
+                    .route(web::post().to(crate::remote_handlers::handle_remote)),
+            )
+            .service(
                 web::resource("/api/hooks/alerts/generic")
                     .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
                     .route(web::post().to(ingest_generic)),
@@ -199,6 +207,7 @@ pub async fn serve(
     .run();
     Ok(RunningServer {
         server,
+        schema: schema_handle,
         s2s: s2s_runtime,
         shutdown_tx,
     })

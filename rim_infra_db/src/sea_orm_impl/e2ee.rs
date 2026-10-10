@@ -773,6 +773,105 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         Ok(row.map(Into::into))
     }
 
+    async fn claim_key_package_for_peer(
+        &self,
+        device_key_id: DeviceKeyId,
+        cipher_suite: i32,
+        one_time: bool,
+    ) -> RepoResult<Option<ClaimedKeyPackage>> {
+        let device: Uuid = device_key_id.into();
+        if one_time {
+            let row: Option<ClaimedRow> = self
+                .one(
+                    &format!(
+                        "UPDATE mls_key_package SET claimed_at = now()
+                         WHERE id = (
+                             SELECT id FROM mls_key_package
+                             WHERE device_key_id = $1 AND cipher_suite = $2 AND claimed_at IS NULL
+                               AND NOT last_resort AND {}
+                             ORDER BY created_at, id
+                             LIMIT 1
+                             FOR UPDATE SKIP LOCKED)
+                         RETURNING {CLAIMED_COLUMNS}",
+                        usable("")
+                    ),
+                    vec![device.into(), cipher_suite.into()],
+                )
+                .await?;
+            if let Some(row) = row {
+                return Ok(Some(row.into()));
+            }
+        }
+        let row: Option<ClaimedRow> = self
+            .one(
+                &format!(
+                    "UPDATE mls_key_package
+                     SET claimed_at = now(), claim_count = claim_count + 1
+                     WHERE device_key_id = $1 AND cipher_suite = $2 AND last_resort AND {}
+                     RETURNING {CLAIMED_COLUMNS}",
+                    usable("")
+                ),
+                vec![device.into(), cipher_suite.into()],
+            )
+            .await?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn store_claimed_key_package(
+        &self,
+        package: NewMlsKeyPackage,
+        claimed_by: DeviceKeyId,
+        conversation_id: ConversationId,
+        incarnation: i32,
+    ) -> RepoResult<()> {
+        let user_id: Uuid = package.user_id.into();
+        let device_key_id: Uuid = package.device_key_id.into();
+        let claimer: Uuid = claimed_by.into();
+        let conversation: Uuid = conversation_id.into();
+        if package.last_resort {
+            self.execute(
+                "DELETE FROM mls_key_package \
+                 WHERE device_key_id = $1 AND cipher_suite = $2 AND last_resort \
+                   AND key_package_ref <> $3",
+                vec![
+                    device_key_id.into(),
+                    package.cipher_suite.into(),
+                    package.key_package_ref.clone().into(),
+                ],
+            )
+            .await?;
+        }
+        let id: Uuid = MlsKeyPackageId::new().into();
+        self.execute(
+            "INSERT INTO mls_key_package \
+             (id, user_id, device_key_id, cipher_suite, key_package_ref, key_package, \
+              last_resort, not_after, claimed_at, claimed_by_device_key_id, \
+              claimed_for_conversation_id, claimed_for_incarnation, claim_count) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, 1) \
+             ON CONFLICT (key_package_ref) DO UPDATE \
+                 SET claimed_at = now(), claimed_by_device_key_id = EXCLUDED.claimed_by_device_key_id, \
+                     claimed_for_conversation_id = EXCLUDED.claimed_for_conversation_id, \
+                     claimed_for_incarnation = EXCLUDED.claimed_for_incarnation, \
+                     claim_count = mls_key_package.claim_count + 1 \
+                 WHERE mls_key_package.device_key_id = EXCLUDED.device_key_id",
+            vec![
+                id.into(),
+                user_id.into(),
+                device_key_id.into(),
+                package.cipher_suite.into(),
+                package.key_package_ref.into(),
+                package.key_package.into(),
+                package.last_resort.into(),
+                utc(package.not_after),
+                claimer.into(),
+                conversation.into(),
+                incarnation.into(),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn find_key_packages_by_refs(&self, refs: &[Vec<u8>]) -> RepoResult<Vec<MlsKeyPackage>> {
         let mut found = Vec::with_capacity(refs.len());
         for key_package_ref in refs {

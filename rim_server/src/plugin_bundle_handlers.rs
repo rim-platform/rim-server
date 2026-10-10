@@ -139,7 +139,18 @@ pub async fn handle_plugin_bundle_download(
         Err(resp) => return resp,
     };
     let (server_id, sha256) = path.into_inner();
-    let Some(server_id) = parse_server_id(&server_id) else {
+    bundle_download_as(user_id, &server_id, sha256, service.get_ref().as_ref()).await
+}
+
+/// Serve a plugin bundle to `user_id` if they may read it: the session path above and
+/// forwarded requests from another relay share it.
+pub(crate) async fn bundle_download_as(
+    user_id: rim_core::user::model::UserId,
+    server_id: &str,
+    sha256: String,
+    service: &dyn PluginBundleService,
+) -> HttpResponse {
+    let Some(server_id) = parse_server_id(server_id) else {
         return map_service_error_to_response(ServiceError::NotFound);
     };
     match service

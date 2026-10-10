@@ -14,6 +14,8 @@ pub mod auth_context;
 pub mod auth_intent;
 pub mod broadcast;
 pub mod errors;
+// pub: rim_server injects the FederationContext and runs forwarded GraphQL with its checks.
+pub mod federation;
 pub mod graphql;
 pub mod ids;
 pub mod loaders;
@@ -140,8 +142,9 @@ pub fn build_schema(
     typing_tracker: Arc<dyn rim_services::typing::TypingService>,
     observers: Arc<rim_services::events::Observers>,
     registration: RegistrationContext,
+    federation: Option<federation::FederationContext>,
 ) -> AppSchema {
-    wire_common_schema_data(
+    let builder = wire_common_schema_data(
         Schema::build(Query::default(), Mutation::default(), Subscription),
         service_provider,
         broadcaster,
@@ -154,8 +157,11 @@ pub fn build_schema(
     .data(registration.preview_rate_limiter)
     .data(registration.signup_rate_limiter)
     .limit_depth(10)
-    .limit_complexity(200)
-    .finish()
+    .limit_complexity(200);
+    match federation {
+        Some(federation) => builder.data(federation).finish(),
+        None => builder.finish(),
+    }
 }
 
 /// Build the schema SDL string for codegen tooling.
