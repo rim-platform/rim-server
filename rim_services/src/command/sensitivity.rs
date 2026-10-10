@@ -272,18 +272,6 @@ pub fn redact_for_audit(args: &serde_json::Value) -> serde_json::Value {
     redact_walk(args, /*key_context:*/ None, /*forced:*/ false)
 }
 
-/// Same recursive redaction policy, but used at the boundary where a
-/// masked view is rendered in the UI. Today these two call sites use
-/// *identical* masking — this function exists as a separate name so that
-/// if the UI ever wants a different policy (e.g. keep last 4 chars of an
-/// API key for user recognition), the change lands here, not in
-/// `redact_for_audit`.
-///
-/// For now, delegates. Keep the alias; it makes greps intentional.
-pub fn mask_for_display(args: &serde_json::Value) -> serde_json::Value {
-    redact_for_audit(args)
-}
-
 /// Audit-side entry point for redacting `ExecuteCommandCmd::args` immediately
 /// before it is emitted on the `target: "audit"` tracing line in
 /// `command.rs::execute_command`.
@@ -620,21 +608,8 @@ mod tests {
     }
 
     #[test]
-    fn mask_for_display_delegates_to_redact() {
-        // Today these two entry points have identical policy. Pinning
-        // the behavior so a future divergence is an intentional edit
-        // rather than an accident.
-        let args = json!({
-            "token": "abc",
-            "other": "hello",
-        });
-        assert_eq!(mask_for_display(&args), redact_for_audit(&args));
-    }
-
-    #[test]
     fn sanitize_args_for_audit_delegates_to_redact() {
-        // Same alias-parity guard as `mask_for_display_delegates_to_redact`,
-        // but for the audit-side entry point. If Phase 5's structured
+        // Alias-parity guard for the audit-side entry point. If Phase 5's structured
         // metadata work diverges this from `redact_for_audit`, the test
         // updates intentionally.
         let args = json!({

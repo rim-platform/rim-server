@@ -34,21 +34,6 @@ impl DefaultStorageService {
         }
     }
 
-    /// Build a storage key for an attachment file.
-    /// Pattern: `{workspace_id}/attachments/{attachment_id}/{filename}`
-    pub fn attachment_key(workspace_id: &ServerId, attachment_id: &str, filename: &str) -> String {
-        format!(
-            "{}/attachments/{}/{}",
-            workspace_id, attachment_id, filename
-        )
-    }
-
-    /// Build a storage key for an avatar file.
-    /// Pattern: `{workspace_id}/avatars/{user_id}/{filename}`
-    pub fn avatar_key(workspace_id: &str, user_id: &str, filename: &str) -> String {
-        format!("{}/avatars/{}/{}", workspace_id, user_id, filename)
-    }
-
     pub fn backend(&self) -> &dyn StorageBackend {
         self.backend.as_ref()
     }

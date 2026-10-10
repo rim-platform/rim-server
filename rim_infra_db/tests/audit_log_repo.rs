@@ -138,50 +138,6 @@ async fn pagination_cursor_advances_pages() {
 }
 
 #[tokio::test]
-async fn delete_older_than_removes_stale_rows() {
-    let ctx = support::TestCtx::new().await;
-
-    let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
-    let server_id = uuid::Uuid::now_v7();
-    let actor_id = uuid::Uuid::now_v7();
-
-    // Old entry: 100 days ago.
-    let mut old = make_entry(server_id, actor_id, "/old");
-    old.created_at = chrono::Utc::now() - chrono::Duration::days(100);
-    repo.insert(old).await.expect("insert old");
-
-    // Recent entry: 1 day ago.
-    let mut recent = make_entry(server_id, actor_id, "/recent");
-    recent.created_at = chrono::Utc::now() - chrono::Duration::days(1);
-    repo.insert(recent).await.expect("insert recent");
-
-    // Delete rows older than 90 days.
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(90);
-    let deleted = repo
-        .delete_older_than(cutoff)
-        .await
-        .expect("delete_older_than");
-    assert_eq!(deleted, 1, "only the old row should be deleted");
-
-    // Verify only the recent entry remains.
-    let page = repo
-        .list(AuditLogListQuery {
-            actor_user_id: Some(actor_id),
-            server_id: Some(server_id),
-            command_id: None,
-            typed_verb: None,
-            since: None,
-            until: None,
-            cursor: None,
-            limit: 10,
-        })
-        .await
-        .expect("list after deletion");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].command_id, "/recent");
-}
-
-#[tokio::test]
 async fn typed_verb_filter_returns_matching_rows_only() {
     let ctx = support::TestCtx::new().await;
 

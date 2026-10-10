@@ -116,28 +116,3 @@ pub enum RegistrationMode {
     /// signup takes a token, as in invite-only mode.
     Pow { bits: u32 },
 }
-
-/// Zero-sized marker type carried through [`RegistrationContext`] as a GraphQL
-/// context data key for the `previewInviteToken` rate limiter.
-///
-/// The actual limiter is constructed inside `DefaultAuthService::new()` and is
-/// always present — "missing limiter" is a state the type system makes
-/// unrepresentable (spec §4.7 R2). This type exists for future-extensibility:
-/// a caller can swap in a custom limiter implementation by replacing this marker
-/// without changing the `RegistrationContext` shape.
-///
-/// [`RegistrationContext`]: rim_api::RegistrationContext
-#[derive(Debug, Clone, Default)]
-pub struct PreviewInviteRateLimiterToken;
-
-/// Zero-sized marker type carried through [`RegistrationContext`] as a GraphQL
-/// context data key for the open-mode signup rate limiter.
-///
-/// The actual limiter is constructed inside `DefaultAuthService::new()` and is
-/// always present (spec §6.3 R2). This type exists for future-extensibility:
-/// a caller can swap in a custom limiter implementation without changing the
-/// `RegistrationContext` shape.
-///
-/// [`RegistrationContext`]: rim_api::RegistrationContext
-#[derive(Debug, Clone, Default)]
-pub struct SignupRateLimiterToken;

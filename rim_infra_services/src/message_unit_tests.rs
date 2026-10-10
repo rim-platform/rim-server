@@ -160,7 +160,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("   ".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await
@@ -249,7 +248,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("hi".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await
@@ -999,7 +997,6 @@ mod tests {
             conversation_id,
             text: Some("hello".to_string()),
             parent_message_id: None,
-            attachments: vec![],
             forwarded_from_message_id: None,
         }
     }
@@ -1417,7 +1414,6 @@ mod tests {
                 conversation_id: conv_id,
                 text: Some("hi".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await

@@ -95,20 +95,6 @@ pub struct ConfirmationChallengeDto {
     pub expires_at: DateTime<Utc>,
 }
 
-/// High-level outcome of the confirmation gate, surfaced by
-/// `execute_command` so the caller knows whether to retry with a proof.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfirmationFlowDto {
-    /// Command was executed (either non-dangerous, or proof verified).
-    NotRequired,
-    /// Caller must re-submit with [`ConfirmationProof::InBandToken`] built
-    /// from these challenge parameters.
-    ConfirmationRequired(ConfirmationChallengeDto),
-    /// Caller submitted a proof but it was expired, single-use-consumed,
-    /// args-mismatched, or context-mismatched — re-issue and retry.
-    ConfirmationStale,
-}
-
 /// Failure modes for `verify_in_band`. Mapped to `ServiceError` at the
 /// service-orchestration layer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

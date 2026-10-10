@@ -15,7 +15,6 @@ pub struct ReplyToMessageCmd {
     pub root_message_id: MessageId,
     pub text: String,
     pub parent_message_id: Option<MessageId>,
-    pub attachments: Vec<MessageAttachmentRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,8 +26,6 @@ pub struct SendMessageCmd {
     pub text: Option<String>,
 
     pub parent_message_id: Option<MessageId>,
-
-    pub attachments: Vec<MessageAttachmentRef>,
 
     /// The message this one forwards, recorded as its origin; the caller must be able to read
     /// it.
@@ -56,11 +53,6 @@ pub struct EditEncryptedMessageCmd {
     pub conversation_id: ConversationId,
     pub message_id: MessageId,
     pub envelope: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct MessageAttachmentRef {
-    pub attachment_id: rim_core::message_attachment::model::MessageAttachmentId,
 }
 
 #[derive(Debug, Clone, Copy)]

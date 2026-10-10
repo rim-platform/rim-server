@@ -615,7 +615,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(
                 &self,
                 server_id: rim_core::server::model::ServerId,

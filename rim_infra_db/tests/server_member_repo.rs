@@ -33,9 +33,6 @@ async fn add_get_is_member_get_by_id_and_list_members() {
     let by_pair = repo.get_member(server.id, u1).await.unwrap().unwrap();
     assert_eq!(by_pair.id, m1.id);
 
-    let by_id = repo.get_by_id(m1.id).await.unwrap().unwrap();
-    assert_eq!(by_id.user_id, u1);
-
     let members = repo.get_members_for_server(server.id).await.unwrap();
     assert_eq!(members.len(), 2);
 }

@@ -47,11 +47,3 @@ pub struct NewWorkspaceState {
     pub created_by: UserId,
     pub expires_at: Option<DateTime<Utc>>,
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdateWorkspaceState {
-    pub value: serde_json::Value,
-    pub updated_by: UserId,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub expected_version: Option<i64>,
-}

@@ -598,7 +598,6 @@ mod tests {
                 conversation_id: f.conv.id,
                 text: Some("plain".to_string()),
                 parent_message_id: None,
-                attachments: vec![],
                 forwarded_from_message_id: None,
             })
             .await

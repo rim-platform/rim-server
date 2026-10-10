@@ -31,7 +31,6 @@ async fn create_get_update_text_and_soft_delete() {
             parent_message_id: None,
             sent_by: user.id,
             text: Some("hello".to_string()),
-            attachments: vec![],
             forwarded_from_message_id: None,
         })
         .await

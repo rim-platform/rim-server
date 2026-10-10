@@ -777,12 +777,7 @@ async fn groups_devices_and_readiness() {
     assert!(f.repo.mark_conversation_encrypted(f.conv.id).await.unwrap());
     assert!(!f.repo.mark_conversation_encrypted(f.conv.id).await.unwrap());
 
-    let found = f
-        .repo
-        .find_device("rimp1_alice", f.alice.device_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let found = f.repo.get_device(f.alice.device).await.unwrap().unwrap();
     assert_eq!(found.device_key_id, f.alice.device);
     assert!(found.last_key_package_upload_at.is_some());
     assert!(f.repo.lock_device(f.alice.device).await.unwrap());

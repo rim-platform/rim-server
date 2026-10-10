@@ -4,13 +4,12 @@ use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_core::workspace_state::model::{
-    NewWorkspaceState, UpdateWorkspaceState, WorkspaceState, WorkspaceStateId, WorkspaceStateScope,
+    NewWorkspaceState, WorkspaceState, WorkspaceStateId, WorkspaceStateScope,
 };
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
 use crate::DbHandle;
@@ -49,14 +48,6 @@ impl SeaOrmWorkspaceStateRepository {
 
 #[async_trait]
 impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
-    async fn get_by_id(&self, id: WorkspaceStateId) -> RepoResult<Option<WorkspaceState>> {
-        let model = workspace_state::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(model.map(Into::into))
-    }
-
     async fn get_by_key(
         &self,
         server_id: ServerId,
@@ -156,52 +147,6 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
         let model: workspace_state::Model =
             result.ok_or_else(|| RepoError::new(RepoErrorKind::Internal))?;
         Ok(model.into())
-    }
-
-    async fn update(
-        &self,
-        id: WorkspaceStateId,
-        update: UpdateWorkspaceState,
-    ) -> RepoResult<WorkspaceState> {
-        let model = workspace_state::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
-
-        if let Some(expected) = update.expected_version
-            && model.version != expected
-        {
-            return Err(RepoError::with_message(
-                RepoErrorKind::PreconditionFailed,
-                format!(
-                    "version mismatch: expected {expected}, actual {}",
-                    model.version
-                ),
-            ));
-        }
-
-        let next_version = model.version + 1;
-        let mut active: workspace_state::ActiveModel = model.into();
-        active.value = Set(update.value);
-        active.updated_by = Set(update.updated_by.into());
-        active.version = Set(next_version);
-        active.expires_at = Set(update.expires_at.map(|dt| dt.into()));
-        active.updated_at = Set(chrono::Utc::now().into());
-
-        let updated = active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(updated.into())
-    }
-
-    async fn delete(&self, id: WorkspaceStateId) -> RepoResult<()> {
-        let model = workspace_state::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
-        let active: workspace_state::ActiveModel = model.into();
-        active.delete(&self.db).await.map_err(map_db_err)?;
-        Ok(())
     }
 
     async fn delete_by_key(

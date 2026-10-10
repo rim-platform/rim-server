@@ -24,14 +24,6 @@ impl SeaOrmUserCommandRepository {
 
 #[async_trait]
 impl UserCommandRepository for SeaOrmUserCommandRepository {
-    async fn get_by_id(&self, id: UserCommandId) -> RepoResult<Option<UserCommand>> {
-        let model = user_command::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(model.map(Into::into))
-    }
-
     async fn get_by_key_for_user(
         &self,
         owner_user_id: UserId,

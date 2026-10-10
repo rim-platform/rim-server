@@ -41,13 +41,6 @@ pub trait E2eeRepository: Send + Sync {
 
     async fn get_device(&self, device_key_id: DeviceKeyId) -> RepoResult<Option<E2eeDevice>>;
 
-    /// The device `device_id` of the user holding `principal_id`.
-    async fn find_device(
-        &self,
-        principal_id: &str,
-        device_id: Uuid,
-    ) -> RepoResult<Option<E2eeDevice>>;
-
     /// Lock the device row until the transaction ends. Returns `false` when it does not exist.
     async fn lock_device(&self, device_key_id: DeviceKeyId) -> RepoResult<bool>;
 

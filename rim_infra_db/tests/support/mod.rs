@@ -289,7 +289,6 @@ impl TestCtx {
             forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
-            attachments: vec![],
         })
         .await
         .unwrap()
@@ -310,7 +309,6 @@ impl TestCtx {
             forwarded_from_message_id: None,
             sent_by: user_id,
             text: Some(text.to_string()),
-            attachments: vec![],
         })
         .await
         .unwrap()

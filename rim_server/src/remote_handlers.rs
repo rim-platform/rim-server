@@ -8,11 +8,11 @@ use actix_web::http::StatusCode;
 use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use futures_util::StreamExt;
 use rim_s2s::Role;
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest, S2sResponse};
 
+use crate::body::{BodyError, read_bounded};
 use crate::file_handlers::{map_service_error_to_response, require_csrf};
 use crate::graphql_support::extract_auth;
 use crate::s2s::S2sState;
@@ -34,26 +34,21 @@ fn header(req: &HttpRequest, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn read_body(mut payload: web::Payload) -> Result<Vec<u8>, HttpResponse> {
-    let mut body = Vec::new();
-    while let Some(chunk) = payload.next().await {
-        let chunk = chunk.map_err(|_| {
-            error(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "the body could not be read",
-            )
-        })?;
-        if body.len() + chunk.len() > MAX_FORWARD_BODY_BYTES {
-            return Err(error(
+async fn read_body(req: &HttpRequest, payload: web::Payload) -> Result<Vec<u8>, HttpResponse> {
+    read_bounded(req, payload, MAX_FORWARD_BODY_BYTES)
+        .await
+        .map_err(|e| match e {
+            BodyError::TooLarge => error(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "too_large",
                 "the body is too large",
-            ));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+            ),
+            BodyError::Read => error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "the body could not be read",
+            ),
+        })
 }
 
 /// Host response headers passed through to the client unchanged.
@@ -192,7 +187,7 @@ async fn forward(
         );
     }
     let body = match method {
-        S2sMethod::Post => match read_body(payload).await {
+        S2sMethod::Post => match read_body(&req, payload).await {
             Ok(body) => body,
             Err(response) => return response,
         },

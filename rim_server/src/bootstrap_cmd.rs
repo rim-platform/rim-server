@@ -21,7 +21,7 @@
 
 use sea_orm::Database;
 
-use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::NewBootstrapToken;
 use rim_core::auth::repository::BootstrapTokenRepository;
 use rim_infra_db::DbHandle;
@@ -68,8 +68,7 @@ async fn run_inner(args: impl Iterator<Item = String>) -> Result<(), String> {
     let handle: DbHandle = db.into();
     let repo = SeaOrmBootstrapTokenRepository::new(handle);
 
-    let raw_token =
-        generate_token_with_prefix("rim_boot_").map_err(|e| format!("entropy failure: {e}"))?;
+    let raw_token = generate_token("rim_boot_");
     let token_hash = hash_token(&raw_token);
     let expires_at = chrono::Utc::now()
         + chrono::Duration::seconds(
@@ -151,17 +150,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<BootstrapUserOpt
     Ok(BootstrapUserOpts { email, public_url })
 }
 
-/// Generate a bootstrap token using the same primitive as session tokens but with
-/// a `rim_boot_` prefix instead of `rim_sess_`.
-fn generate_token_with_prefix(prefix: &str) -> Result<String, String> {
-    let t = generate_session_token();
-    let token = t
-        .strip_prefix("rim_sess_")
-        .map(|s| format!("{prefix}{s}"))
-        .unwrap_or_else(|| format!("{prefix}{t}"));
-    Ok(token)
-}
-
 /// Return the first 16 hex chars of the SHA-256 hash — enough for visual correlation
 /// in audit logs without revealing the full hash (which is the DB credential).
 fn token_fingerprint(hash: &str) -> String {
@@ -224,15 +212,6 @@ mod tests {
         assert!(
             err.contains("unknown"),
             "should mention unknown argument: {err}"
-        );
-    }
-
-    #[test]
-    fn generate_token_has_expected_prefix() {
-        let t = generate_token_with_prefix("rim_boot_").unwrap();
-        assert!(
-            t.starts_with("rim_boot_"),
-            "token should start with rim_boot_: {t}"
         );
     }
 

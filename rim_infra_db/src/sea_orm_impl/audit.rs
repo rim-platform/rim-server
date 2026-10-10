@@ -5,8 +5,8 @@ use rim_core::audit::repository::{
 };
 use rim_core::repository::error::RepoResult;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DeleteResult, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement,
     prelude::{DateTimeWithTimeZone, Uuid},
 };
 
@@ -156,16 +156,6 @@ impl AuditLogRepository for SeaOrmAuditLogRepository {
             has_next_page: has_next,
             has_prev_page: query.cursor.is_some(),
         })
-    }
-
-    async fn delete_older_than(&self, cutoff: chrono::DateTime<chrono::Utc>) -> RepoResult<u64> {
-        let cutoff_tz: DateTimeWithTimeZone = cutoff.into();
-        let DeleteResult { rows_affected } = command_audit_log::Entity::delete_many()
-            .filter(command_audit_log::Column::CreatedAt.lt(cutoff_tz))
-            .exec(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(rows_affected)
     }
 
     async fn range_older_than(

@@ -319,7 +319,6 @@ fn schema_for(
     use std::sync::Arc;
 
     use rim_api::RegistrationContext;
-    use rim_services::auth::dto::{PreviewInviteRateLimiterToken, SignupRateLimiterToken};
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
         Arc::new(observers.clone()),
@@ -337,8 +336,6 @@ fn schema_for(
         observers_arc,
         RegistrationContext {
             registration_mode: Arc::new(registration_mode),
-            preview_rate_limiter: Arc::new(PreviewInviteRateLimiterToken),
-            signup_rate_limiter: Arc::new(SignupRateLimiterToken),
         },
         None,
     )

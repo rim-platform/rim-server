@@ -416,23 +416,6 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         Ok(row.map(Into::into))
     }
 
-    async fn find_device(
-        &self,
-        principal_id: &str,
-        device_id: Uuid,
-    ) -> RepoResult<Option<E2eeDevice>> {
-        let row: Option<DeviceRow> = self
-            .one(
-                &format!(
-                    r#"SELECT {DEVICE_COLUMNS} FROM device_key d JOIN "user" u ON u.id = d.user_id
-                       WHERE u.principal_id = $1 AND d.device_id = $2"#
-                ),
-                vec![principal_id.into(), device_id.into()],
-            )
-            .await?;
-        Ok(row.map(Into::into))
-    }
-
     async fn lock_device(&self, device_key_id: DeviceKeyId) -> RepoResult<bool> {
         let id: Uuid = device_key_id.into();
         let row = self

@@ -11,7 +11,6 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use getrandom::fill;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -22,15 +21,7 @@ const SEPARATOR: char = '.';
 
 /// Generate a new CSRF token that is HMAC-bound to the given session token.
 pub fn generate_csrf_token(session_token: &str) -> String {
-    let mut nonce = [0u8; 32];
-    if let Err(e) = fill(&mut nonce) {
-        tracing::error!(
-            target: "audit",
-            error = %e,
-            "fatal: OS entropy source failed; cannot generate CSRF token"
-        );
-        panic!("getrandom failed: {e}");
-    }
+    let nonce = crate::session_token::random_bytes::<32>("CSRF token");
     let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
 
     let sig = compute_hmac(session_token, &nonce);

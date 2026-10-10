@@ -746,16 +746,12 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         .await;
     assert_eq!(own.bytes, png);
 
-    // Only avatars are served; a legacy upload path is gone.
-    let (denied, _) = bob
-        .forward(&a, "GET", "/api/files/other/x", Vec::new(), None, None)
-        .await;
-    assert_eq!(denied.status, 403);
-    assert!(denied.host_signed);
-    let (gone, _) = bob
-        .forward(&a, "GET", "/api/files/uploads/x", Vec::new(), None, None)
-        .await;
-    assert_eq!(gone.status, 410);
+    // Only avatars are served.
+    for path in ["/api/files/other/x", "/api/files/uploads/x"] {
+        let (denied, _) = bob.forward(&a, "GET", path, Vec::new(), None, None).await;
+        assert_eq!(denied.status, 403, "{path}");
+        assert!(denied.host_signed);
+    }
 
     // A device request for another path than the one forwarded never reaches the handler.
     let (replaced, _) = bob

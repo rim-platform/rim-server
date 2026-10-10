@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub enum AuthIntent {
@@ -26,15 +26,4 @@ impl AuthIntentCtx {
     pub fn take(&self) -> Option<AuthIntent> {
         self.intent.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
-}
-
-/// Inserts a new per-request `AuthIntentCtx` into the GraphQL request data.
-///
-/// Returns the updated request and the same context as an `Arc` so the transport layer can read
-/// and consume the intent after execution.
-pub fn insert_auth_intent_ctx(
-    req: async_graphql::Request,
-) -> (async_graphql::Request, Arc<AuthIntentCtx>) {
-    let ctx = Arc::new(AuthIntentCtx::default());
-    (req.data(Arc::clone(&ctx)), ctx)
 }

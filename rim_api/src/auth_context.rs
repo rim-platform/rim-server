@@ -15,11 +15,6 @@ impl RemoteIp {
     pub fn new(ip: impl Into<String>) -> Self {
         Self(ip.into())
     }
-
-    /// Return the contained IP string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 /// Fail unless `actor` is a member of `server_id`.

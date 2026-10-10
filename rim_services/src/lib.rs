@@ -57,10 +57,6 @@ impl Actor {
             user_id,
         }
     }
-
-    pub fn from_principal(principal: Principal) -> Option<Self> {
-        principal.user_id.map(|user_id| Self { principal, user_id })
-    }
 }
 
 #[derive(Debug, Error)]

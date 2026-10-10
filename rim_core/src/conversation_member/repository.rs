@@ -1,5 +1,5 @@
 use crate::conversation::model::ConversationId;
-use crate::conversation_member::model::{ConversationMember, ConversationMemberId};
+use crate::conversation_member::model::ConversationMember;
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 use async_trait::async_trait;
@@ -10,8 +10,6 @@ use std::collections::HashMap;
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationMemberRepository: Send + Sync {
-    async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
-
     async fn add_member(
         &self,
         conversation_id: ConversationId,

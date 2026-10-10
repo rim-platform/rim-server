@@ -30,7 +30,6 @@ pub(super) async fn post_message(
             server_id,
             conversation_id,
             text: Some(text),
-            attachments: vec![],
             forwarded_from_message_id: None,
             parent_message_id: None,
         })
@@ -78,7 +77,6 @@ pub(super) async fn reply_to_selected_message(
             server_id,
             conversation_id,
             text: Some(text),
-            attachments: vec![],
             forwarded_from_message_id: None,
             parent_message_id: Some(parent_message_id),
         })

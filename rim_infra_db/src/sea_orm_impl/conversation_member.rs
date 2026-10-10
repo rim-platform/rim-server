@@ -27,15 +27,6 @@ impl SeaOrmConversationMemberRepository {
 
 #[async_trait]
 impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
-    async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>> {
-        let model = conversation_member::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(model.map(Into::into))
-    }
-
     async fn add_member(
         &self,
         conversation_id: ConversationId,

@@ -35,8 +35,6 @@ pub trait PeerService: Send + Sync {
     /// origin; `Unavailable` when it cannot be fetched; `Forbidden` when the pin forked.
     async fn pin(&self, origin: &str, expected_server_id: Option<&str>) -> ServiceResult<PeerDto>;
 
-    async fn get(&self, server_id: &str) -> ServiceResult<Option<PeerDto>>;
-
     /// A pinned peer's discovery document as JSON text, rebuilt from its pinned key log and
     /// descriptor.
     async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>>;

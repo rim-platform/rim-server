@@ -121,19 +121,6 @@ impl E2eeRepository for FakeE2ee {
             .cloned())
     }
 
-    async fn find_device(
-        &self,
-        principal_id: &str,
-        device_id: Uuid,
-    ) -> RepoResult<Option<E2eeDevice>> {
-        Ok(self
-            .state()
-            .devices
-            .iter()
-            .find(|d| d.principal_id.as_deref() == Some(principal_id) && d.device_id == device_id)
-            .cloned())
-    }
-
     async fn lock_device(&self, id: DeviceKeyId) -> RepoResult<bool> {
         Ok(self.state().devices.iter().any(|d| d.device_key_id == id))
     }

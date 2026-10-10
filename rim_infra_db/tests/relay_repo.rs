@@ -748,13 +748,6 @@ async fn the_direct_space_is_unique_and_unlisted_and_remote_users_are_members() 
             .unwrap()
             .is_empty()
     );
-    assert!(
-        servers
-            .find_by_name("Direct messages")
-            .await
-            .unwrap()
-            .is_none()
-    );
 
     let remote = repo
         .create_remote_user(NewRemoteUser {
