@@ -1,52 +1,18 @@
 # Local Plugin Host
 
-This document describes how the RIM desktop app hosts plugins today: who owns what, how a plugin
-is installed and started, and how panels are hosted. The process protocol itself is specified in
-[`docs/specs/plugin-protocol-v1.md`](specs/plugin-protocol-v1.md), which is the document to read
-when writing a plugin.
+This document describes how the RIM desktop app hosts `DesktopLocalProcess` plugins: where they
+live, how they are installed and started, and how their panels are hosted. `plugin_model.md`
+explains the plugin model as a whole. The process protocol is specified in
+[`specs/plugin-protocol-v1.md`](specs/plugin-protocol-v1.md), the document to read when writing a
+plugin; `WebSandboxed` plugins, which the desktop app hosts too, are specified in
+[`specs/web-plugins-v1.md`](specs/web-plugins-v1.md).
 
-Plugins are local client extensions, not backend-managed installs. The local plugin host lives in
-the desktop app (`rim-ui/src-tauri/src/plugin_host/`). It loads manifests, keeps enable/disable
-state, asks the user to approve capabilities, starts plugin processes, and brokers everything a
-plugin asks of the app.
-
-## Core Rule
-
-Plugins are local extensions that talk to a local host.
-
-The host:
-
-- loads and validates the manifest
-- asks the user to approve capabilities
-- launches the plugin process and speaks plugin protocol v1 with it
-- gates every command and every plugin-to-host call
-- hosts plugin panels in sandboxed iframes
-
-The backend remains a stable API surface for shared app state; it does not own plugin lifecycle.
-
-## Ownership
-
-### Local Plugin Host Owns
-
-- plugin folder discovery (`~/.rim/plugins/`)
-- local install/enable/disable/uninstall
-- manifest parsing/validation
-- local capability approval
-- local runtime lifecycle
-- local command registration
-- local keybind suggestion registration
-- local context action registration
-- local panel registration
-- local plugin settings
-
-### Backend Owns
-
-- auth/session validation
-- shared state
-- messaging data
-- backend commands
-- search/reference APIs
-- integrations/bots/webhooks later
+The host lives in the desktop app (`rim-ui/src-tauri/src/plugin_host/`). It finds plugins in
+`~/.rim/plugins/`, installs, enables, disables and uninstalls them, validates manifests, asks the
+user to approve capabilities, starts plugin processes and speaks protocol v1 with them, gates
+every command and every plugin-to-host call, and hosts panels in sandboxed iframes. The server
+takes no part in any of this; it only keeps workspace plugin registries
+(`specs/workspace-plugins-v1.md`).
 
 ## Manifest
 
@@ -61,7 +27,8 @@ The manifest uses snake_case keys and describes:
 - identity: `manifest_version` (always `1`), `plugin_id` (reverse-domain: at least three
   dot-separated segments of ASCII letters, digits and hyphens), `display_name`, `version`,
   `description`, `author`
-- runtime: `runtime_kind` (always `"DesktopLocalProcess"`) and `entrypoint`
+- runtime: `runtime_kind` (`"DesktopLocalProcess"` here; `"WebSandboxed"` is the web plugin
+  kind) and `entrypoint`
 - `capabilities` the plugin requests
 - `commands`, each with `id`, `title`, `description`, `arguments`, `dangerous`,
   `required_capabilities`, `ai_callable`, `output_schema` and `keybind_capable`
@@ -84,59 +51,30 @@ names other than the plugin's own `plugin.<plugin_id>.<verb>` keys and the built
 accepts, and `ai_callable` commands whose `output_schema` could leak a plugin install id. The
 protocol spec, section 12, lists which names each host version accepts.
 
-## Runtime
+## Process lifecycle
 
-The process protocol is **plugin protocol v1**, specified in
-[`docs/specs/plugin-protocol-v1.md`](specs/plugin-protocol-v1.md) and frozen in the JSON Schema
-`rim-ui/protocol/plugin-protocol-v1.schema.json`. In short: the host runs the entrypoint, frames
-JSON-RPC 2.0 messages over stdin and stdout with a 4-byte little-endian length prefix, handshakes
-with `rim.handshake`, runs commands with `rim.command.execute`, and stops the plugin with
-`rim.shutdown`. The spec also lists which methods the host implements and which it does not.
+A plugin process starts when the user enables the plugin, and at app start for every plugin that
+was enabled when the app last ran. The connection lifecycle, heartbeats and the shutdown sequence
+with its timeouts are protocol v1, sections 6, 13 and 15. Specific to this host:
 
-Process lifecycle as the host implements it:
+- A plugin that exits on its own stays stopped; commands for it fail with `PLUGIN_NOT_RUNNING`
+  until the user enables it again.
+- A plugin marked unresponsive after a missed heartbeat is not shown as such in the UI yet.
+- UI plugins and headless plugins (no `panels`) run the same way.
 
-- **Start.** A plugin process starts when the user enables the plugin, and at app start for every
-  plugin that was enabled when the app last ran. There is no lazy start on first use and no idle
-  stop in v1.
-- **Crash.** A plugin that exits on its own stays stopped; commands for it fail with
-  `PLUGIN_NOT_RUNNING` until the user enables it again. There is no automatic restart.
-- **Unresponsive.** A plugin that misses a heartbeat answer for 5 seconds is marked unresponsive
-  in the host. The UI does not show this state yet.
-- **Stop.** Disabling or uninstalling sends `rim.shutdown`, closes stdin, and escalates to
-  `SIGTERM` after 1 second and `SIGKILL` 2 seconds later. App quit does the same for every
-  plugin at once and kills whatever is still running after 4 seconds.
+## Capabilities and trust
 
-UI plugins and headless plugins (no `panels`) run the same way; the only difference is whether the
-manifest declares panels.
+The user approves a plugin's capabilities before it is enabled; the host checks them before
+running a command whose manifest lists `required_capabilities` and on every plugin-to-host call
+(protocol v1, section 12). A local-process plugin runs as the user and can do anything the user
+can: capabilities govern what the host does for it, not what the process can do on the machine.
+Dangerous commands run only after the user confirms each run, and the AI agent can never confirm
+one (protocol v1, section 10).
 
-## Capabilities
-
-Capabilities are local permissions the user grants a plugin over host-managed or backend-brokered
-operations. The user approves them locally before the plugin is enabled, and the host checks them
-in two places: before running a command whose manifest lists
-`required_capabilities`, and on every plugin-to-host call that needs one (with a per-capability
-rate limit). The protocol spec, section 12, lists the names and their current state.
-
-## Security Direction
-
-The first plugin host does not blindly trust arbitrary local processes.
-
-The direction is:
-
-- local plugin host
-- brokered access to sensitive features
-- capability checks at the host boundary
-- plugins call backend APIs through the host
-
-Manifest capabilities are not, by themselves, a complete OS sandbox. A local-process plugin runs as
-the user and can do anything the user can; the host/broker model governs what the **host** will do
-for it, and stronger sandboxing can be layered later. Dangerous commands run only after the user
-confirms each run, and the AI agent can never confirm one (protocol spec, section 10).
-
-### Install flow (git installs)
+## Install flow (git installs)
 
 Installing a plugin is the moment untrusted code first reaches the machine, so the host treats
-every input to it as hostile (rim-ui findings S-H2 and S-H3, fixed 2026-10-04):
+every input to it as hostile:
 
 1. **URL and branch validation before git runs.** Only `https://`, `ssh://` and scp-like
    `user@host:owner/repo` URLs are accepted. Remote-helper syntax (`ext::`, `fd::`, anything with
@@ -151,22 +89,10 @@ every input to it as hostile (rim-ui findings S-H2 and S-H3, fixed 2026-10-04):
    with `POST_INSTALL_CONSENT_REQUIRED` carrying the exact commands and directories, nothing is
    moved into the plugins directory or executed, and a declined update leaves the installed copy
    untouched. The client shows the commands verbatim and retries only on confirm.
-4. **Capability approval** follows, as before, before the plugin is enabled.
+4. **Capability approval** follows before the plugin is enabled.
 
 The implementation lives in `rim-ui/src-tauri/src/plugin_host/` (`git_source.rs`,
 `post_install.rs`, `git_install.rs`).
-
-## First Plugin Version Priority
-
-The first real plugin host prioritizes:
-
-- commands first
-- local manifest loading
-- local command registration
-- brokered backend API access
-- local capability approval
-
-Panels, context actions, and keybind suggestions follow on top of the same host/runtime model.
 
 ## Plugin UI Hosting
 
@@ -191,7 +117,7 @@ Panel → host messages, with what each does today:
 | Message | Status |
 |---|---|
 | `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
-| `rim.ui.notification.show` | Gated on `ui.notify` (grantable from rim-ui #16 onward); only logged. |
+| `rim.ui.notification.show` | Gated on `ui.notify`; only logged. |
 | `rim.ui.dialog.confirm` | Only logged. |
 | `rim.settings.get` / `rim.settings.set` | Only logged. |
 | `rim.plugin.ui_event` | Not wired: the host queues the event but never delivers it to the plugin process. |

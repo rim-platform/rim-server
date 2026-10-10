@@ -1,7 +1,6 @@
 # RIM — Product Vision
 
-_Last updated 2026-10-04 to match the general-purpose direction in `ROADMAP.md`. The
-roadmap owns sequencing; this document owns the product principles._
+_The roadmap (`ROADMAP.md`) owns sequencing; this document owns the product principles._
 
 ## What RIM Is
 
@@ -35,9 +34,10 @@ Pitch: *the self-hosted communication workspace you program.* A bring-your-own-m
 acts through the same command registry under a human confirmation gate, so it can operate
 whatever a workspace has plugged in. Other products' AI suggests; RIM's acts.
 
-Two long-term commitments shape the architecture from today: **end-to-end encryption** in a
-future version, and **convergence toward a decentralized chat platform**. `ROADMAP.md` carries
-the guardrails and the sequencing.
+Two commitments shape the architecture: **end-to-end encryption** for DMs and private groups,
+and **decentralization**, where a person is a key pair and servers are interchangeable relays and
+workspace hosts. Both are built; `ROADMAP.md` carries the guardrails that keep new features
+compatible with them.
 
 ## What RIM Is Not
 
@@ -66,16 +66,17 @@ These are the capabilities that no competing product offers together:
 
 4. **Client-side plugin system** — plugins extend the application itself (new panels,
    commands, context actions, behaviors), not just post messages into channels.
-   Plugins are first-class citizens with a marketplace, capability-based permissions,
-   and trust boundaries.
+   Plugins are first-class citizens with capability-based permissions, trust boundaries
+   and per-workspace registries of signed plugins.
 
 5. **An AI operator, not an AI summarizer** — a bring-your-own-model agent drives the
    workspace through the command registry, with capability checks and per-action human
    confirmation for anything mutating or dangerous. Because plugins register commands in the
    same registry, the agent can operate whatever a workspace has plugged in.
 
-6. **Self-hosted, auditable, converging on private** — one box, your data, your model, your
-   audit log today; end-to-end encryption and decentralization as committed horizons.
+6. **Self-hosted, auditable, private** — one box, your data, your model, your audit log;
+   end-to-end encrypted DMs and private groups; no central server, since any server can be a
+   person's relay or a workspace's host.
 
 The Tauri v2 desktop runtime (smaller binary, lower memory than Electron) is a real
 engineering advantage, but users rarely choose a tool for it — treat it as a quality
@@ -99,9 +100,7 @@ need an enterprise platform with thousands of pre-built integrations.
 
 ## Competitive Landscape
 
-See `docs/competitive-analysis.md` for the full analysis.
-
-Summary: No competing team-chat product combines a command palette, custom keybinds,
+No competing team-chat product combines a command palette, custom keybinds,
 macro commands, and client-side plugins.
 
 | Feature               | Slack | Discord | Mattermost | Zulip | Element | RIM   |
@@ -120,8 +119,7 @@ run on the client (see the architecture guardrails in `ROADMAP.md`).
 ## Product Positioning — One Sentence
 
 > RIM is the self-hosted communication workspace you program: commands, keybinds, macros,
-> pipelines, plugins and an AI operator on top of chat, built to become private and
-> decentralized.
+> pipelines, plugins and an AI operator on top of chat, private and decentralized.
 
 ## Inspirations
 

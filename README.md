@@ -125,7 +125,7 @@ rim_server audit purge [--dry-run] [--older-than-days <1-3650>]
 
 `invite create` prints a signup link; with `--email` it admits only a password signup with that
 address. `docs/server-identity.md` explains the key and peer commands, `docs/relay.md` and
-`docs/oncall/relay-public.md` the abuse tools, `docs/operations/audit-retention.md` the
+`docs/operations/relay-public.md` the abuse tools, `docs/operations/audit-retention.md` the
 purge.
 
 ## Configuration

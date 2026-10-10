@@ -842,7 +842,7 @@ a restart). `reportDmRequest` and the abuse address (`rim_server abuse-reports a
 `relay_abuse_report`, listed by `rim_server abuse-reports list [--open]` and closed by
 `abuse-reports resolve <id>`.
 
-**Runbook** (`docs/oncall/relay-public.md`, S5-6): who holds the server recovery key and where,
+**Runbook** (`docs/operations/relay-public.md`, S5-6): who holds the server recovery key and where,
 yearly `server-key rotate` and `recover` on compromise, database and key file backups with a restore
 drill, quotas and how to change them, monitoring (queue bytes, outbox depth per peer, deliver
 failures, `401`/`409`/`429` rates, PoW signups), incident response for spam waves, a hostile peer, a
