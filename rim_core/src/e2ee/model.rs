@@ -212,6 +212,30 @@ pub struct NewMlsReaddRequest {
     pub device_key_id: DeviceKeyId,
     pub payload: String,
     pub signature: String,
+    /// The request's nonce; a device's nonce is accepted once per incarnation.
+    pub nonce: Vec<u8>,
+}
+
+/// What one version of an encrypted message committed to: revision 0 when sent, one more per
+/// edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrankingRevision {
+    pub message_id: MessageId,
+    pub revision: i32,
+    pub franking_commitment: Vec<u8>,
+    pub sent_at_us: i64,
+    /// The sender's client device id.
+    pub sender_device_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A version to record; its revision is the next one of the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewFrankingRevision {
+    pub message_id: MessageId,
+    pub franking_commitment: Vec<u8>,
+    pub sent_at_us: i64,
+    pub sender_device_id: Uuid,
 }
 
 /// An encrypted message row as the sender's request creates it. The id is the client's.
@@ -227,17 +251,19 @@ pub struct NewEncryptedMessage {
     pub envelope: MessageEncryption,
 }
 
-/// The server's secret for franking receipts.
+/// A franking key as the `franking_key` table holds it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FrankingKey {
     pub id: i32,
-    pub secret: Vec<u8>,
+    pub secret: zeroize::Zeroizing<Vec<u8>>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl std::fmt::Debug for FrankingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FrankingKey")
             .field("id", &self.id)
+            .field("created_at", &self.created_at)
             .finish_non_exhaustive()
     }
 }
@@ -248,6 +274,7 @@ pub struct MlsRetention {
     pub commits: chrono::Duration,
     pub claimed_key_packages: chrono::Duration,
     pub readd_requests: chrono::Duration,
+    pub readd_nonces: chrono::Duration,
     /// Counted from the report's resolution.
     pub franked_content: chrono::Duration,
 }
@@ -259,5 +286,6 @@ pub struct MlsPurged {
     pub welcomes: u64,
     pub key_packages: u64,
     pub readd_requests: u64,
+    pub readd_nonces: u64,
     pub franked_contents: u64,
 }

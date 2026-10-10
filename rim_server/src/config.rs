@@ -106,6 +106,10 @@ pub struct RIMConfig {
     /// `RIM_SERVER_KEY_FILE`.
     pub server_key_file: Option<String>,
 
+    /// Path of the franking key file. Default `<RIM_DATA_DIR>/franking-key.json`. Controlled by
+    /// `RIM_FRANKING_KEY_FILE`.
+    pub franking_key_file: Option<String>,
+
     /// Comma-separated server ids allowed on host endpoints; empty allows any relay.
     /// Controlled by `RIM_HOST_ALLOWED_RELAYS`.
     pub host_allowed_relays: Option<String>,
@@ -234,6 +238,7 @@ impl fmt::Debug for RIMConfig {
             .field("key_login_audiences", &self.key_login_audiences())
             .field("role", &self.role)
             .field("server_key_file", &self.server_key_file)
+            .field("franking_key_file", &self.franking_key_file)
             .field("host_allowed_relays", &self.host_allowed_relays)
             .field("s2s_denied_peers", &self.s2s_denied_peers)
             .field("s2s_peer_rate_per_min", &self.s2s_peer_rate_per_min())
@@ -278,6 +283,7 @@ impl Default for RIMConfig {
             key_login_audiences: None,
             role: None,
             server_key_file: None,
+            franking_key_file: None,
             host_allowed_relays: None,
             s2s_denied_peers: None,
             s2s_peer_rate_per_min: None,
@@ -467,13 +473,13 @@ impl RIMConfig {
     /// replay it elsewhere.
     ///
     /// `RIM_KEY_LOGIN_AUDIENCES` when set; otherwise the host of `RIM_PUBLIC_BASE_URL`;
-    /// otherwise `localhost:PORT` and `127.0.0.1:PORT` for local development. Lowercased.
+    /// otherwise `localhost:PORT` and `127.0.0.1:PORT`, but only for a server bound to a
+    /// loopback address. Lowercased.
     ///
-    /// # Examples
-    /// ```ignore
-    /// let audiences = config.key_login_audiences();
-    /// ```
-    pub fn key_login_audiences(&self) -> Vec<String> {
+    /// # Errors
+    /// A message naming both variables when neither is set and `RIM_SERVER_HOST` accepts
+    /// connections from other machines.
+    pub fn key_login_audiences(&self) -> Result<Vec<String>, String> {
         let configured: Vec<String> = self
             .key_login_audiences
             .as_deref()
@@ -483,16 +489,38 @@ impl RIMConfig {
             .filter(|a| !a.is_empty())
             .collect();
         if !configured.is_empty() {
-            return configured;
+            return Ok(configured);
         }
         if let Some(authority) = self.public_base_url.as_deref().and_then(url_authority) {
-            return vec![authority];
+            return Ok(vec![authority]);
         }
-        vec![
+        if !is_loopback_host(&self.server_host) {
+            return Err(format!(
+                "RIM_SERVER_HOST={} accepts connections from other machines: set \
+                 RIM_KEY_LOGIN_AUDIENCES or RIM_PUBLIC_BASE_URL to the host[:port] clients reach \
+                 this server at (the localhost default is only for loopback binds)",
+                self.server_host
+            ));
+        }
+        Ok(vec![
             format!("localhost:{}", self.server_port),
             format!("127.0.0.1:{}", self.server_port),
-        ]
+        ])
     }
+}
+
+/// Whether a bind host accepts connections from this machine only: `localhost` or a loopback
+/// address.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 impl RIMConfig {
@@ -523,6 +551,16 @@ impl RIMConfig {
                 .filter(|p| !p.is_empty())
                 .map(std::path::PathBuf::from),
         )
+    }
+
+    /// The franking key file: `RIM_FRANKING_KEY_FILE`, or `<RIM_DATA_DIR>/franking-key.json`.
+    pub fn franking_key_file(&self) -> std::path::PathBuf {
+        self.franking_key_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("franking-key.json"))
     }
 
     pub fn s2s_allow_http(&self) -> bool {
@@ -759,7 +797,10 @@ mod tests {
         };
         assert_eq!(
             config.key_login_audiences(),
-            vec!["rim.example.com", "relay.rim.chat:8443"]
+            Ok(vec![
+                "rim.example.com".to_string(),
+                "relay.rim.chat:8443".to_string()
+            ])
         );
     }
 
@@ -769,20 +810,55 @@ mod tests {
             public_base_url: Some("https://user@RIM.example.com:8443/app?x=1".to_string()),
             ..Default::default()
         };
-        assert_eq!(config.key_login_audiences(), vec!["rim.example.com:8443"]);
+        assert_eq!(
+            config.key_login_audiences(),
+            Ok(vec!["rim.example.com:8443".to_string()])
+        );
     }
 
     #[test]
     fn key_login_audiences_defaults_to_localhost_on_the_server_port() {
-        let config = RIMConfig {
-            server_port: 9000,
-            key_login_audiences: Some(" ".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(
-            config.key_login_audiences(),
-            vec!["localhost:9000", "127.0.0.1:9000"]
-        );
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"] {
+            let config = RIMConfig {
+                server_host: host.to_string(),
+                server_port: 9000,
+                key_login_audiences: Some(" ".to_string()),
+                ..Default::default()
+            };
+            assert_eq!(
+                config.key_login_audiences(),
+                Ok(vec![
+                    "localhost:9000".to_string(),
+                    "127.0.0.1:9000".to_string()
+                ]),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn finding_15_a_public_bind_without_an_audience_refuses_to_start() {
+        for host in ["0.0.0.0", "::", "192.0.2.10", "rim.example.com"] {
+            let config = RIMConfig {
+                server_host: host.to_string(),
+                ..Default::default()
+            };
+            let err = config.key_login_audiences().unwrap_err();
+            assert!(
+                err.contains("RIM_KEY_LOGIN_AUDIENCES") && err.contains("RIM_PUBLIC_BASE_URL"),
+                "{host}: {err}"
+            );
+            let configured = RIMConfig {
+                key_login_audiences: Some("rim.example.com".to_string()),
+                ..config.clone()
+            };
+            assert!(configured.key_login_audiences().is_ok(), "{host}");
+            let public = RIMConfig {
+                public_base_url: Some("https://rim.example.com".to_string()),
+                ..config
+            };
+            assert!(public.key_login_audiences().is_ok(), "{host}");
+        }
     }
 
     #[test]
@@ -860,6 +936,26 @@ mod tests {
             }
             .public_origin(),
             "http://localhost:9000"
+        );
+    }
+
+    #[test]
+    fn franking_key_file_defaults_to_the_data_dir() {
+        let config = RIMConfig {
+            data_dir: "/var/lib/rim".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.franking_key_file(),
+            std::path::PathBuf::from("/var/lib/rim/franking-key.json")
+        );
+        let config = RIMConfig {
+            franking_key_file: Some(" /secrets/franking.json ".to_string()),
+            ..config
+        };
+        assert_eq!(
+            config.franking_key_file(),
+            std::path::PathBuf::from("/secrets/franking.json")
         );
     }
 

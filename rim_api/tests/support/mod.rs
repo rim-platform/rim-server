@@ -73,6 +73,13 @@ fn redact_url(url: &str) -> String {
 #[allow(dead_code)]
 pub const KEY_LOGIN_AUDIENCE: &str = "localhost:8080";
 
+/// The test provider's franking key 1, so tests can compute and forge receipts.
+#[allow(dead_code)]
+pub const FRANKING_KEY: [u8; 32] = [
+    0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+];
+
 /// Connect to the test database, or **panic loudly**. Only reachable under the
 /// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
 /// so a panic here means the feature was enabled without a usable test DB —
@@ -539,6 +546,16 @@ pub fn build_test_provider_with(
         None, // no public_base_url configured for registration tests
         Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
         vec![KEY_LOGIN_AUDIENCE.to_string()],
+        rim_infra_services::franking_keys::SharedFrankingKeys::fixed(
+            rim_infra_services::franking_keys::FrankingKeys::new(vec![
+                rim_infra_services::franking_keys::FrankingKey::new(
+                    1,
+                    FRANKING_KEY,
+                    chrono::Utc::now(),
+                ),
+            ])
+            .expect("franking keys"),
+        ),
         rim_infra_services::FederationHooks::default(),
     ));
 

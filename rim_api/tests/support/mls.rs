@@ -109,8 +109,13 @@ impl MlsDevice {
     /// A key package as uploaded: an `MLSMessage`, unpadded base64url. Its private keys stay in
     /// this device's provider.
     pub fn key_package(&self, last_resort: bool) -> String {
+        self.key_package_for(last_resort, 90 * 86_400)
+    }
+
+    /// A key package that expires `seconds` from now.
+    pub fn key_package_for(&self, last_resort: bool, seconds: u64) -> String {
         let mut builder = KeyPackage::builder()
-            .key_package_lifetime(Lifetime::new(90 * 86_400))
+            .key_package_lifetime(Lifetime::new(seconds))
             .leaf_node_capabilities(capabilities());
         if last_resort {
             builder = builder.mark_as_last_resort();

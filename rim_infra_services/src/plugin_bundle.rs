@@ -105,8 +105,10 @@ pub(crate) fn check_bundle(bytes: &[u8]) -> Result<(), String> {
     if bytes.first() != Some(&b'{') {
         return Err("a bundle is a JSON object".to_string());
     }
-    let bundle: RawBundle =
-        serde_json::from_slice(bytes).map_err(|e| format!("not a bundle: {e}"))?;
+    let bundle: RawBundle = serde_json::from_slice(bytes).map_err(|e| {
+        tracing::info!(detail = %e, "refused a malformed plugin bundle");
+        "not a bundle: the JSON does not have the bundle's fields and types".to_string()
+    })?;
     if bundle.format != "rim-plugin-bundle" {
         return Err("format must be rim-plugin-bundle".to_string());
     }

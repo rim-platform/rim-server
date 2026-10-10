@@ -126,7 +126,7 @@ fn to_statement(p: &SignedPayload) -> SignedStatement {
 }
 
 fn invalid(err: IdentityError) -> ServiceError {
-    ServiceError::Validation(err.to_string())
+    crate::util::statement_refused(err)
 }
 
 fn log_entry_dto(e: KeyLogEntry) -> KeyLogEntryDto {
@@ -557,17 +557,8 @@ impl DefaultKeyAuthService {
         let login = unverified
             .verify(&device_key)
             .map_err(|_| fail("bad_signature"))?;
-        if device.revoked_at.is_some() {
-            info!(
-                target = "audit",
-                event = "key_login_failure",
-                reason = "device_revoked",
-                user_id = %user_id,
-                device_id = %device.device_id,
-                "key login refused: device revoked"
-            );
-            return Err(ServiceError::PermissionDenied);
-        }
+        // Revocation is answered only for a proof that would otherwise pass, so an old proof,
+        // or one made for another server, never tells whether the device was revoked.
         if !self.audience_accepted(&login.audience) {
             return Err(fail("audience_mismatch"));
         }
@@ -578,6 +569,17 @@ impl DefaultKeyAuthService {
             .await?
         {
             return Err(fail("challenge_invalid"));
+        }
+        if device.revoked_at.is_some() {
+            info!(
+                target = "audit",
+                event = "key_login_failure",
+                reason = "device_revoked",
+                user_id = %user_id,
+                device_id = %device.device_id,
+                "key login refused: device revoked"
+            );
+            return Err(ServiceError::PermissionDenied);
         }
         Ok((user_id, device))
     }
