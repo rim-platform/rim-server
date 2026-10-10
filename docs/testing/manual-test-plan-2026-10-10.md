@@ -150,7 +150,8 @@ Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at 
 - **Windows/macOS**: the secret vault's key goes into Credential Manager / Keychain; nothing has
   run there yet (`rim-ui/docs/secret-vault.md`).
 - **Linux prompt count**: one Secret Service unlock per app start is the expectation.
-- **`plugin_host` tests** are flaky on `master` (timing-based process tests), unrelated to any
-  feature; a deflake task is queued behind Stage 5.
+- **Plugin installs under load**: a bundle install that restarts a plugin while another process
+  is being spawned used to fail with "Text file busy"; the host now retries (rim-ui #53). If an
+  install still leaves a plugin stopped, the log line names it.
 - Anything that fails in 3.x with "could not be verified" is the client refusing a message
   whose cross-checks failed; that is a bug worth the full log, not a user error.
