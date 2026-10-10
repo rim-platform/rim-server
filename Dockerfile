@@ -17,11 +17,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------- Stage 3: Builder (compile dependencies, then source) -------------
 FROM chef AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Cook dependencies first (cached unless Cargo.toml/Cargo.lock change)
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
@@ -34,7 +29,7 @@ RUN cargo build --release -p rim_server -p migration
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 curl \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security
