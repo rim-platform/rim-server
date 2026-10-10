@@ -75,5 +75,8 @@ S-3 and D-7. A database is reassigned only after its previous agent has reported
 | S-2 | rim-ui #60 | 2026-10-10 |
 | S-3 | rim-server #96 (+ #97: 72 audit events now reach the audit log) | 2026-10-10 |
 | S-4 | rim-server #95 | 2026-10-10 |
+| D-3, D-4 | rim-server #100 | 2026-10-10 |
+| D-7 | rim-server #104, rim-ui #63 (instance flags only; the workspace toggle went with the incident drop of `cleanup-2026-10-10.md`) | 2026-10-10 |
 
-D-7 now runs after the incident drop of `cleanup-2026-10-10.md`, with instance flags only.
+Outside the rows: rim-server #102 keeps the audit log file writer alive, so audit events reach
+`audit.log` again (2026-10-10). D-5 is open.

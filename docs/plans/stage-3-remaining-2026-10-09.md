@@ -88,5 +88,5 @@ Sizes: S under a day, M a day or two, L several days of agent work.
 - rim-ui: `npm run build`, `npm test`, `npm run lint`, `npm run format:check`, and in
   `src-tauri/` `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test`.
-- Every PR is reviewed (Hawkeye) and its BLOCK findings fixed before it ships.
+- Every PR is reviewed and its BLOCK findings fixed before it ships.
 - Migrations are additive: expand now, contract a release later.

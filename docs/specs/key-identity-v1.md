@@ -1,21 +1,20 @@
-# Key identity v1 (Stage 3, Track 7.2, first server PR)
+# Key identity v1
 
-_Spec written 2026-10-09 with the first Stage 3 server PR. Implements the "keys" part of
-`ROADMAP.md` Track 7.2 and the decisions in `docs/decisions/decentralization-2026-10-08.md`:
+_Status: implemented, normative. Follows `docs/decisions/decentralization-2026-10-08.md`:
 a user is a key pair, the user id is stable with a signed key log, the web app is a linked
 device, and servers are interchangeable relays. This document is the contract between the
 server (`rim_identity`, `KeyAuthService`) and every client that signs statements._
 
-_Updated 2026-10-09 by the algorithm agility PR (`docs/decisions/post-quantum-hybrid-2026-10-09.md`):
-statement format version 2 tags every key and signature with its algorithm, payload caps fit
+_Algorithm agility (`docs/decisions/post-quantum-hybrid-2026-10-09.md`): statement format
+version 2 tags every key and signature with its algorithm, payload caps fit
 hybrid post-quantum keys, and the server indexes device keys by a hash. Version 1 statements
 stay valid. See "Algorithms and statement versions"._
 
-_Updated 2026-10-09 by the key-only signup PR: `signupWithKey` creates an account from a key
+_Key-only signup: `signupWithKey` creates an account from a key
 identity alone, with no password and no email, so `user.password_hash` and `user.email` are
 nullable. See "Key-only signup"._
 
-## What this PR ships
+## Scope
 
 - **`rim_identity`**, a dependency-light crate that verifies every signed statement below. It
   has no database, HTTP or GraphQL code, so the Tauri client and later the relay can reuse it.
@@ -28,8 +27,9 @@ nullable. See "Key-only signup"._
 - **Password sign-in and password reset are refused** for an account once it has enrolled a
   key.
 
-Not in this PR (later Stage 3 PRs): key-only signup without a password or email, QR device
-linking, the 12-word recovery phrase, the client UI, plugin manifest signing, and remote users.
+Defined elsewhere: device linking (`device-linking-v1.md`), plugin manifest signing
+(`workspace-plugins-v1.md`) and remote users (`server-to-server-v1.md`). The recovery phrase and
+the key UI are client features of rim-ui.
 
 ## Keys and encodings
 
@@ -347,10 +347,10 @@ never interleave.
 
 | Where | What |
 |---|---|
-| `user.kind` | `local` (default) or `remote`; `remote` is reserved for Stage 5 |
+| `user.kind` | `local` (default) or `remote`; `remote` is a person whose relay is another server (`server-to-server-v1.md`) |
 | `user.principal_id`, `user.identity_key` | Null until enrollment, set together; `principal_id` unique; `identity_key` is the current identity key in tagged form |
 | `user.password_hash`, `user.email` | Null for a key-only account. `CHECK (password_hash IS NOT NULL OR principal_id IS NOT NULL)`: a key-only account always has a principal. Migration `key_only_signup`'s `down` refuses to run while a row has either null |
-| `user.home_relay` | Reserved for Stage 5 |
+| `user.home_relay` | The relay of a `remote` user (`server-to-server-v1.md`); null for local users |
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
 | `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
 | `profile_card` | One row per user, the newest card as signed |
@@ -433,8 +433,7 @@ This PR adds `User.principalId`. The mapping happens **once, in the client**:
 3. Other people's ids map the same way when their `User.principalId` is first seen non-null. An
    account that never enrolls keeps its `rimp0_` id.
 
-The desktop client does this since the second Stage 3 PR (rim-ui); the server only exposes
-`principalId`.
+The desktop client does this; the server only exposes `principalId`.
 
 ## Desktop client (rim-ui)
 
@@ -573,8 +572,8 @@ before the attempt are put back; with no answer the keys stay for the next try.
 
 - QR device linking (a new device gets its certificate from the old one through the server as a
   courier) is specified in `device-linking-v1.md`.
-- Usernames stay unique across the table; uniqueness among local users only, and rows of kind
-  `remote`, come with Stage 5.
+- Usernames stay unique across the whole table; rows of kind `remote` get an `r_` username
+  (`server-to-server-v1.md`).
 
 ## Appendix A: known-answer vectors (version 1)
 

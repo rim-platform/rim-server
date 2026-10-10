@@ -1,10 +1,10 @@
-# Web plugins v1 (Stage 3, S3-9)
+# Web plugins v1
 
-_Spec written 2026-10-09 for Track 2.3. Extends `docs/specs/plugin-protocol-v1.md` (read it first:
+_Status: implemented, normative. Extends `docs/specs/plugin-protocol-v1.md` (read it first:
 the messages, the handshake, capabilities and the dangerous-command gate are defined there and do
 not change). This document is the contract between the RIM host, on the desktop and on the web,
 and plugins of a second kind, `WebSandboxed`, which run in a sandboxed iframe instead of a local
-process. `docs/specs/workspace-plugins-v1.md` (S3-10) defines signed manifests and the workspace
+process. `docs/specs/workspace-plugins-v1.md` defines signed manifests and the workspace
 registry that web bundles come from._
 
 ## Summary
@@ -30,7 +30,7 @@ registry that web bundles come from._
 8. New host methods `rim.storage.get` and `rim.storage.set` (not frozen) give 1 MiB per plugin and
    account, because an opaque origin has no `localStorage` or IndexedDB.
 9. The desktop installs web plugins like any plugin or from the workspace registry; the web app
-   only from a registry entry (signed, S3-10) or a pasted link carrying the bundle's SHA-256. A
+   only from a registry entry (signed, `workspace-plugins-v1.md`) or a pasted link carrying the bundle's SHA-256. A
    bundle is one JSON file, hashed again at every start.
 10. The SDK gets a transport abstraction and a browser build; `rim-plugin-bundle` writes a
     `.rimbundle` and prints its hash. Showcase: a pull-request panel for public GitHub
@@ -48,8 +48,8 @@ Same `rim-plugin.json`, same `manifest_version` 1. What differs for this kind:
 | `capabilities` | See [Capabilities](#capabilities). |
 | `panels` | As today (`id`, `title`, `description`, `slot`). A panel's files live under `panels/<id>/`, so its `id` is one bundle path segment; `index.html` is required. The entrypoint is not under `panels/`. |
 
-`network_origins` and `network.fetch` are refused for `DesktopLocalProcess`. A host from before
-S3-9 refuses a web plugin at install with `failed to parse manifest: unknown variant
+`network_origins` and `network.fetch` are refused for `DesktopLocalProcess`. A host without web plugin
+support refuses a web plugin at install with `failed to parse manifest: unknown variant
 WebSandboxed`, because `RuntimeKind` is a closed enum; it never tries to execute the module.
 
 The showcase's manifest, as installed (its source names `main.ts`, which the bundler
@@ -319,7 +319,7 @@ fixed when the frame loads, so the host restarts the frame when grants change. R
 capability stops the plugin, as on the desktop.
 
 **Consent text.** Above the capability list, in the app's words and apart from the author's
-description, the prompt says what kind of plugin this is. S3-9 adds both lines to
+description, the prompt says what kind of plugin this is. Both lines are in
 `PluginCapabilityPrompt`:
 
 - `WebSandboxed`: "Runs sandboxed in this app. It cannot read your files, run programs, or use
@@ -338,7 +338,7 @@ without `https://` or a default port).
 |---|---|---|---|
 | Local folder (the bundler's output directory) | Yes, as today | No | No: fingerprint on first use |
 | Git URL | Yes; no post-install steps for this kind (`web plugins are installed built`) | No | No: fingerprint on first use |
-| Workspace registry entry (S3-10) | Yes | Yes | Yes |
+| Workspace registry entry | Yes | Yes | Yes |
 | Pasted link | Yes | Yes | No |
 
 **Pasted links.** `https://host/path/name.rimbundle#sha256=<64 lowercase hex>`. A link without
@@ -377,7 +377,7 @@ store `bundles`, keyed by hash) and install records per account (store `installs
 cached bytes again at every start; a mismatch or an evicted bundle is fetched again from its entry
 or link and must hash the same, or the plugin does not start ("bundle damaged or unavailable"). The
 desktop keeps the unpacked directory and checks its fingerprint at enable, as today. Registry
-installs update when the entry's statement changes (S3-10); link installs only by a new link.
+installs update when the entry's statement changes; link installs only by a new link.
 
 ## Host implementation (rim-ui)
 
@@ -479,7 +479,7 @@ the module loaded is not lost.
 
 | Threat | Stopped? | How, or why not |
 |---|---|---|
-| Reading the host page, the RIM session cookie, the CSRF token, device keys | Yes | Opaque origin, no `allow-same-origin`. Device keys are non-extractable `CryptoKey`s in the host origin's IndexedDB (S3-7). |
+| Reading the host page, the RIM session cookie, the CSRF token, device keys | Yes | Opaque origin, no `allow-same-origin`. Device keys are non-extractable `CryptoKey`s in the host origin's IndexedDB. |
 | Calling GraphQL as the user | Yes | A request from an opaque origin is cross-site, so the `SameSite=Lax` session cookie is not sent; the frame cannot read the CSRF token; the RIM origins are never in its policy. |
 | Reading files, running programs | Yes | The browser |
 | Reading another plugin's data | Yes | Each frame has its own opaque origin; the host scopes panel state and storage by the plugin id it takes from the iframe, never from a message. |

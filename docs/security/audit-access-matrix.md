@@ -1,34 +1,25 @@
 # Audit Log Access Matrix
 
-**Phase:** 6 (P6-FU4)
-**Date:** 2026-04-27
-**Author:** Pepper Potts (documentation)
-**Security owner:** Natasha Romanoff (Black Widow, CSO)
-**Related tickets:** #23 P6-H2, #29 P6-FU4, #30 P6-FU5, #31 P6-FU6
-
-This document is the canonical reference for which actor can read which audit
-records under which conditions. Future contributors touching
-`rim_infra_services/src/audit/mod.rs` MUST read this before modifying the
-`list_entries` gate. The three bypasses closed by P6 are documented explicitly
-in section 6 so they are not re-introduced.
+This document is the reference for which actor can read which rows of the command audit log
+(`command_audit_log`, GraphQL `listAuditLog`) under which conditions. Anyone changing
+`list_entries` in `rim_infra_services/src/audit/mod.rs` or `check` in
+`rim_infra_services/src/capability.rs` reads this first. Section 6 lists the bypasses that were
+closed, so they are not reintroduced.
 
 ---
 
 ## 1. Actors
 
-RIM does not have first-class "Owner / Admin / Member / Guest" role objects
-surfaced to the audit-read gate. The gate is capability-based: whether an actor
-may read audit records depends on which capabilities they hold, not on a role
-label. Role labels (if any) are assigned by the workspace and determine which
-capabilities are granted; the service layer sees only capabilities.
+The audit-read gate is capability-based: it asks whether the caller holds `audit.read` or
+`audit.read.self`, not which workspace role they have. A capability check is a registry lookup
+plus, for a workspace-scoped capability, workspace membership. There is no per-role grant, so
+every member of a workspace (guests included) passes `audit.read` in that workspace.
 
-The relevant actors for audit reads:
-
-| Actor type | Typical capability grants | Notes |
+| Actor type | Capability that passes | Notes |
 |---|---|---|
-| Workspace member (any role with `audit.read`) | `audit.read`, `audit.read.self` | Full workspace dump for the scoped workspace |
-| Any authenticated user | `audit.read.self` | Own audit history only, no workspace scope required |
-| System / server-internal | `write_entry` path — no capability check | Write path is server-internal only; see `rim_services/src/audit/service.rs:13` |
+| Member of workspace W | `audit.read` in W, `audit.read.self` | Full dump of W's rows |
+| Any authenticated user | `audit.read.self` | Own rows only, no workspace needed |
+| Server-internal code | none: `write_entry` has no capability check | Only server code writes rows (see section 3) |
 
 Only the builtin capabilities are in the registry; nothing registers plugin capabilities on the
 server.
@@ -37,238 +28,153 @@ server.
 
 ## 2. Resource scopes
 
-The `list_entries` gate branches on two optional filter fields supplied by the
-caller: `actor_user_id` and `server_id`. Their combination determines which
-resource scope is being requested:
+`list_entries` branches on two optional filter fields supplied by the caller: `actor_user_id`
+and `server_id`. Their combination decides the scope:
 
-| Scope label | `actor_user_id` | `server_id` | Description |
+| Scope | `actor_user_id` | `server_id` | Result |
 |---|---|---|---|
-| Self-read | `Some(caller)` | `None` or `Some(W)` | Caller reads their own history |
-| Workspace read | `None` | `Some(W)` | Caller reads all activity in workspace W |
-| Cross-user read | `Some(other)` | `Some(W)` | Caller reads workspace W activity (P6-FU6: user filter stripped) |
-| Forbidden — cross-user unscoped | `Some(other)` | `None` | Unconditionally denied |
-| Forbidden — unscoped | `None` | `None` | Unconditionally denied |
+| Self-read | `Some(caller)` | `None` or `Some(W)` | The caller's own rows |
+| Workspace read | `None` | `Some(W)` | Every row of W |
+| Cross-user read | `Some(other)` | `Some(W)` | Every row of W: the user filter is stripped |
+| Cross-user unscoped | `Some(other)` | `None` | Always `PermissionDenied` |
+| Unscoped | `None` | `None` | Always `PermissionDenied` |
 
-The "Cross-user read" case deserves extra attention: the caller is authorized to
-read workspace W, but the targeted `actor_user_id` filter is STRIPPED from the
-DB query (P6-FU6, ticket #31). The response is a full workspace dump, not a
-targeted user timeline. This prevents an adversary with `audit.read` from
-enumerating whether a specific user ever acted in a workspace. See section 6 for
-details.
+In a cross-user read the caller may read W, but the `actor_user_id` filter is removed from the
+database query. The response is the full workspace dump, not one user's timeline, so a caller
+cannot learn whether a given user ever acted in W from an empty or non-empty answer. Section 4.2
+has the details.
 
 ---
 
 ## 3. Required capabilities
 
-Two capabilities gate audit reads. Both are seeded at startup by
-`builtin_capabilities()` in `rim_infra_services/src/capability.rs:44-89`.
+Two capabilities gate audit reads. Both are seeded at startup from `builtin_capabilities()` in
+`rim_infra_services/src/capability.rs`.
 
 | Capability | `is_self_scoped` | Required for |
 |---|---|---|
-| `audit.read` | `false` (workspace-scoped) | Workspace read; cross-user read |
-| `audit.read.self` | `true` (self-scoped) | Self-read (no workspace membership required) |
+| `audit.read` | `false` (workspace-scoped) | Workspace read, cross-user read |
+| `audit.read.self` | `true` (self-scoped) | Self-read, no workspace membership needed |
 
-`is_self_scoped` is stored in the `capability_registry` DB table, not hardcoded
-in the check path. The service reads the DB row and enforces scope accordingly
-(P6-FU5, ticket #30). A workspace-scoped capability called without a
-`workspace_id` returns `PermissionDenied` before the membership check runs —
-passing `None` can no longer silently bypass membership.
+`is_self_scoped` is read from the `capability_registry` row, not hardcoded in the check. A
+workspace-scoped capability checked without a `workspace_id` is `PermissionDenied` before the
+membership leg runs, so passing `None` cannot skip membership.
 
-**Capability check path:**
+**`DefaultCapabilityService::check`:**
 
 ```
-rim_infra_services/src/capability.rs:147  DefaultCapabilityService::check()
-  step 1: reject empty/whitespace key (Validation)
-  step 2: registry lookup — unknown or retired key → PermissionDenied (strict default-deny, C1)
-  step 2b: workspace-scoped cap + workspace_id=None → PermissionDenied (P6-FU5, #30)
-  step 3: membership_holds(actor, workspace_id) → PermissionDenied if not member
+step 1: empty or whitespace key → Validation
+step 2: registry lookup; unknown or retired key → PermissionDenied (strict default-deny)
+step 2b: workspace-scoped capability with workspace_id = None → PermissionDenied
+step 3: membership_holds(actor, workspace_id) → PermissionDenied if not a member
 ```
 
-**Write path** (`write_entry`) has no capability check. It is called only from
-server-internal code paths (command executor, macro executor). It must never be
-exposed to external callers directly.
+**Write path.** `write_entry` has no capability check. Only server-internal code calls it: the
+command executor, the macro executor, the moderation audit helper and the remote-workspace host.
+It is never exposed to clients.
 
 ---
 
-## 4. Filters that MUST be applied at the service layer
+## 4. Filters enforced at the service layer
 
-The GraphQL resolver (`rim_api/src/query.rs:1203`) passes client-supplied filter
-values through to the service. The service is the only trust boundary; nothing
-the client sends is trusted to gate access.
+The resolver (`list_audit_log` in `rim_api/src/query/audit.rs`) passes the client's filter
+values through unchanged. The service is the only trust boundary.
 
-### 4.1 Workspace membership (server_id REQUIRED for non-self reads)
+### 4.1 Workspace scope is required for non-self reads
 
-Closed by ticket #23 P6-H2.
+`list_entries` matches on `(actor_user_id, server_id)` together:
 
-Before this fix, a caller could supply `actor_user_id=<victim>` with
-`server_id=None` and read the victim's history without any workspace check. The
-service now evaluates `(actor_user_id, server_id)` together:
+- `actor_user_id = Some(other)` with `server_id = None` is `PermissionDenied` before any
+  capability check or database call.
+- Every non-self path needs a `server_id`; the `audit.read` check passes
+  `workspace_id = Some(W)` to `CapabilityService::check`, which runs the membership leg.
 
-- `actor_user_id=Some(other)` with `server_id=None` is unconditionally
-  `PermissionDenied` — no capability check fires.
-- All non-self paths require a `server_id`; the capability check for `audit.read`
-  passes `workspace_id=Some(W)` to `CapabilityService::check`, which runs the
-  membership leg.
+### 4.2 The cross-user filter is stripped
 
-See `rim_infra_services/src/audit/mod.rs:91-144` for the full match arm
-implementation.
+When the caller sends `actor_user_id = Some(other)` with `server_id = Some(W)`, the service:
 
-### 4.2 Cross-user filter stripped at service layer (P6-FU6, ticket #31)
+1. checks `audit.read` in W;
+2. logs a `cross_user_filter_stripped` warning on the `audit` target;
+3. sets `actor_user_id = None` in the repository query.
 
-When the caller supplies `actor_user_id=Some(other)` with `server_id=Some(W)`,
-the service:
+The database returns every row of W, so the response cannot reveal whether a specific user ever
+acted there.
 
-1. Checks `audit.read` in W (membership confirmed).
-2. Emits a `cross_user_filter_stripped` warn-level audit event.
-3. **Sets `actor_user_id=None` in the repo query** before calling the DB.
+### 4.3 No membership bypass through a missing workspace
 
-The DB therefore returns the full workspace dump for W, not a row-set filtered
-to the targeted user. The response the caller sees contains activity from all
-workspace members, making it impossible to determine whether a specific user
-ever acted in W.
-
-See `rim_infra_services/src/audit/mod.rs:112-126` and the stripping assignment
-at line 147.
-
-### 4.3 `capability_service.check` with `membership_holds(None)` silent bypass (P6-FU5, ticket #30)
-
-Closed by ticket #30 P6-FU5.
-
-Before this fix, `membership_holds(actor, None)` returned `Ok(true)`,
-short-circuiting the membership check for any capability called without a
-workspace ID. This allowed a workspace-scoped cap to pass the membership leg
-when called without a workspace context.
-
-The fix moves the workspace-scope gate to step 2b in `CapabilityService::check`
-(before `membership_holds` is called). If `is_self_scoped=false` and
-`workspace_id=None`, the call returns `PermissionDenied` immediately.
-`membership_holds(actor, None)` is now only reached for self-scoped caps, where
-it short-circuits to `Ok(true)` as designed.
-
-See `rim_infra_services/src/capability.rs:197-207`.
+`membership_holds(actor, None)` returns `Ok(true)`. Step 2b of `check` makes sure only
+self-scoped capabilities reach it with `None`: a workspace-scoped capability without a workspace
+is refused first.
 
 ---
 
-## 5. Outcome surface
+## 5. Outcome values
 
-All audit entries carry one of seven typed outcome values. The type is defined
-in `rim_services/src/audit/dto.rs:18-28`. Writers must use the typed enum — not
-string literals. Conversion to/from the DB `text` column happens at the repo
-boundary via `AuditOutcome::as_str()` and `AuditOutcome::try_from(&str)`.
+Every audit row carries one of seven outcomes, the `AuditOutcome` enum in
+`rim_services/src/audit/dto.rs`. Writers use the enum, never string literals; the conversion to
+the `text` column happens at the repository boundary (`AuditOutcome::as_str`,
+`TryFrom<&str>`).
 
-| Rust variant | DB string | GraphQL enum value | Meaning |
+| Rust variant | DB string | GraphQL value | Meaning |
 |---|---|---|---|
 | `Success` | `success` | `SUCCESS` | Command completed without error |
-| `Error` | `error` | `ERROR` | Command terminated with an unhandled error |
-| `ConfirmationRequired` | `confirmation_required` | `CONFIRMATION_REQUIRED` | Execution halted; user confirmation was requested |
-| `PermissionDenied` | `permission_denied` | `PERMISSION_DENIED` | Capability or membership check denied the command |
+| `Error` | `error` | `ERROR` | Command ended with an error |
+| `ConfirmationRequired` | `confirmation_required` | `CONFIRMATION_REQUIRED` | Execution stopped; a confirmation was requested |
+| `PermissionDenied` | `permission_denied` | `PERMISSION_DENIED` | Capability or membership check refused the command |
 | `RateLimited` | `rate_limited` | `RATE_LIMITED` | Per-actor rate limit exceeded |
 | `StepError` | `step_error` | `STEP_ERROR` | One step inside a macro returned an error |
-| `MacroPartialFailure` | `macro_partial_failure` | `MACRO_PARTIAL_FAILURE` | Macro completed partial steps before one failed |
+| `MacroPartialFailure` | `macro_partial_failure` | `MACRO_PARTIAL_FAILURE` | A macro ran some steps before one failed |
 
-GraphQL type: `AuditOutcomeGql` in `rim_api/src/types.rs:2550-2558`.
-The DB column uses a CHECK constraint added in migration
-`m20260427_…_audit_outcome_widen_check`.
+The GraphQL type is `AuditOutcomeGql` in `rim_api/src/types/audit.rs`. The database column has a
+CHECK constraint from migration `m20260427_000001_audit_outcome_widen_check`.
 
-`StepError` and `MacroPartialFailure` are set on child rows emitted for macro
-steps. `parent_audit_id` links a child row back to the top-level macro entry.
-`parent_audit_id=None` means the row is a top-level (non-macro-step) entry.
+`StepError` and `MacroPartialFailure` appear on the child rows written for macro steps.
+`parent_audit_id` links a child row to the top-level macro row; `None` marks a top-level row.
 
 ---
 
 ## 6. Closed bypasses (do not reopen)
 
-### #23 P6-H2 — `server_id=None` bypass
+### Cross-user read without a workspace
 
-**Vector:** Caller supplies `actor_user_id=<victim>` and omits `server_id`.
-The original code forwarded the query to the repo without requiring workspace
-context, allowing cross-user reads with no membership check.
+**Vector:** the caller sends `actor_user_id = <victim>` and omits `server_id`. The query reached
+the repository with no workspace context, so anyone could read another user's history.
 
-**Fix:** Service-layer match on `(Some(other), None)` arm returns
-`PermissionDenied` before any capability check or DB call.
+**Fix:** the `(Some(other), None)` arm of `list_entries` returns `PermissionDenied` before any
+capability check or database call.
 
-**Location:** `rim_infra_services/src/audit/mod.rs:129-131`
+### Cross-user enumeration
 
-**Regression test:** `p6_h2_cross_user_no_server_forbidden` in
-`rim_infra_services/src/audit/mod.rs` (unit, mockall, no DB required).
+**Vector:** a caller with `audit.read` in W sends `actor_user_id = <victim>, server_id = W`. The
+filter reached the database, so the answer told the caller whether the victim ever acted in W
+and returned their whole timeline there.
 
----
+**Fix:** the `(Some(other), Some(W))` arm sets `strip_actor_filter`, and the repository query is
+built with `actor_user_id = None`, returning the full workspace dump.
 
-### #31 P6-FU6 — Cross-user enumeration primitive
+### Membership skipped for a capability without a workspace
 
-**Vector:** Caller with `audit.read` in workspace W supplies
-`actor_user_id=<victim>, server_id=W`. The original code forwarded the
-`actor_user_id` filter to the DB, returning only the victim's rows. This let an
-authorized admin determine whether a specific user ever acted in W (presence
-enumeration) and, if so, read their complete activity timeline.
+**Vector:** a workspace-scoped capability (for example `audit.read`) checked with
+`workspace_id = None` reached `membership_holds(actor, None)`, which answered `Ok(true)` for any
+actor.
 
-**Fix:** When the `(Some(other), Some(W))` branch fires, `strip_actor_filter`
-is set to `true`. The repo query is constructed with `actor_user_id=None`,
-returning the full workspace dump regardless of the requested target user.
-
-**Location:** `rim_infra_services/src/audit/mod.rs:88-126` (flag set),
-`rim_infra_services/src/audit/mod.rs:146-159` (flag applied).
-
-**Regression tests:**
-- `p6_fu6_cross_user_workspace_strips_actor_filter` — repo receives `actor_user_id=None`
-- `p6_fu6_cross_user_workspace_returns_full_workspace_dump` — response includes rows from all users
-- `p6_fu6_cross_user_workspace_no_victim_rows_returns_workspace_dump_not_empty` — empty victim timeline does not produce empty response
-
-All three are unit tests in `rim_infra_services/src/audit/mod.rs`.
+**Fix:** step 2b of `check` refuses `workspace_id.is_none() && !reg.is_self_scoped` before
+`membership_holds` runs. Self-scoped capabilities such as `audit.read.self` are exempt by design.
 
 ---
 
-### #30 P6-FU5 — `capability_check::membership_holds(None)` silent bypass
-
-**Vector:** A workspace-scoped capability (e.g. `audit.read`) called with
-`workspace_id=None` reached `membership_holds(actor, None)`, which returned
-`Ok(true)` for any actor. The membership leg was silently skipped, granting the
-capability without any workspace context.
-
-**Fix:** Step 2b in `CapabilityService::check` tests `workspace_id.is_none() &&
-!reg.is_self_scoped` and returns `PermissionDenied` before `membership_holds` is
-called. Self-scoped capabilities (`is_self_scoped=true`, e.g. `audit.read.self`)
-are exempt from this requirement by design.
-
-**Location:** `rim_infra_services/src/capability.rs:197-207`
-
-**Regression tests:**
-- `check_workspace_scoped_cap_without_workspace_denies`
-- `check_self_scoped_cap_without_workspace_succeeds`
-- `check_many_workspace_scoped_cap_without_workspace_returns_false`
-
-All three are unit tests in `rim_infra_services/src/capability.rs`.
-
----
-
-## 7. Test fixture locations
-
-### Unit tests (no DB required)
+## 7. Where the tests are
 
 | File | Coverage |
 |---|---|
-| `rim_infra_services/src/audit/mod.rs` | Full access-control matrix (#23, #31); P6-H2 and P6-FU6 regression cases |
-| `rim_infra_services/src/capability.rs` | Capability gate (#30); strict default-deny (C1); P6-FU5 regression cases |
+| `rim_infra_services/src/audit/mod.rs` | Unit tests of the whole matrix in section 2, including the regressions for the first two bypasses of section 6 |
+| `rim_infra_services/src/capability.rs` | Unit tests of the capability gate: strict default-deny, and `check` / `check_many` with a workspace-scoped capability and no workspace (the third bypass) |
+| `rim_api/src/tests/audit.rs` | `listAuditLog` refuses an unauthenticated caller; an authenticated query returns a page and maps `AuditOutcome::Success` to `SUCCESS` |
+| `rim_infra_db/tests/audit_log_repo.rs` | Repository insert and list under `--features db-tests`; all seven outcomes written and read back |
 
-### GraphQL layer tests
-
-| File | Coverage |
-|---|---|
-| `rim_api/src/tests.rs:2664` (`list_audit_log_query_requires_auth`) | Unauthenticated `listAuditLog` must return errors |
-| `rim_api/src/tests.rs:2679` (`list_audit_log_query_returns_page`) | Authenticated query returns correct shape; `AuditOutcome::Success` maps to `"SUCCESS"` in GraphQL |
-
-### DB-backed integration tests (require `DATABASE_URL`, run with `--features db-tests`)
-
-| File | Coverage |
-|---|---|
-| `rim_infra_db/tests/audit_log_repo.rs` | Repo-level insert and list; all 7 `AuditOutcome` variants written and read back |
-
-**Drift-guard anchor for ticket #33:** any future test that asserts "the matrix
-in this document is enforced end-to-end" should be placed in
-`rim_infra_services/src/audit/mod.rs` (service-layer gate) and
-`rim_api/src/tests.rs` (GraphQL surface). The DB repo tests in
-`rim_infra_db/tests/audit_log_repo.rs` cover the persistence contract, not the
-access-control matrix.
+A test asserting that this matrix holds end to end belongs in `rim_infra_services/src/audit/mod.rs`
+(the service gate) and `rim_api/src/tests/audit.rs` (the GraphQL surface). The repository tests
+cover persistence, not access control.
 
 ---
 
