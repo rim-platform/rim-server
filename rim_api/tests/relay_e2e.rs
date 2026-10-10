@@ -137,6 +137,7 @@ struct Item {
 struct Forwarded {
     status: u16,
     body: Value,
+    bytes: Vec<u8>,
     host_signed: bool,
 }
 
@@ -211,6 +212,22 @@ impl Person {
         sent_body: Option<Vec<u8>>,
         seq: Option<u64>,
     ) -> (Forwarded, u64) {
+        self.forward_typed(host, method, path, body, sent_body, seq, "application/json")
+            .await
+    }
+
+    /// [`Person::forward`] with a `POST` body of `content_type`.
+    #[allow(clippy::too_many_arguments)]
+    async fn forward_typed(
+        &mut self,
+        host: &Node,
+        method: &str,
+        path: &str,
+        body: Vec<u8>,
+        sent_body: Option<Vec<u8>>,
+        seq: Option<u64>,
+        content_type: &str,
+    ) -> (Forwarded, u64) {
         let seq = seq.unwrap_or_else(|| self.next_seq());
         let payload = device_request_payload(
             &self.principal(),
@@ -233,7 +250,7 @@ impl Person {
             "POST" => self
                 .http
                 .post(url)
-                .header("content-type", "application/json")
+                .header("content-type", content_type)
                 .body(sent_body.unwrap_or(body)),
             _ => self.http.get(url),
         };
@@ -280,6 +297,7 @@ impl Person {
             Forwarded {
                 status,
                 body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+                bytes: bytes.to_vec(),
                 host_signed,
             },
             seq,
@@ -1126,6 +1144,129 @@ async fn forwarded_requests_refuse_replays_tampering_and_relays_a_card_does_not_
     let (stranger, _) = bob.forward(&a, "POST", "/api", body, None, None).await;
     assert_eq!(stranger.status, 403);
     assert_eq!(stranger.body["error"], "not_delegated");
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// A multipart body with one file field.
+fn multipart_file(boundary: &str, filename: &str, content_type: &str, data: &[u8]) -> Vec<u8> {
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+         Content-Type: {content_type}\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avatars_upload_and_download_through_the_forward_path() {
+    const BOUNDARY: &str = "rim-test-boundary";
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let mut carol = sign_up(&b, "carol", 3).await;
+    alice.start_dm(&bob, &b, true).await;
+    bob.pending_request(&alice).await;
+    let multipart = format!("multipart/form-data; boundary={BOUNDARY}");
+
+    // Bob stores his avatar at Alice's server through his relay.
+    let png = b"\x89PNG\r\n\x1a\nbob";
+    let (uploaded, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.png", "image/png", png),
+            None,
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(uploaded.status, 200, "{}", uploaded.body);
+    assert!(uploaded.host_signed);
+    let bob_on_a = user_id(&a, &bob.principal()).await;
+    assert_eq!(
+        uploaded.body["path"],
+        json!(format!("avatars/{bob_on_a}/avatar.png"))
+    );
+
+    // Alice's avatar, stored on her own server, reaches Bob through the same path.
+    let alice_png = b"\x89PNG\r\n\x1a\nalice";
+    let stored: Value = alice
+        .http
+        .post(format!("{}/api/files/avatar", a.origin))
+        .header(
+            "cookie",
+            format!("rim_session={}; rim_csrf={}", alice.session, alice.csrf),
+        )
+        .header("x-csrf-token", &alice.csrf)
+        .header("content-type", &multipart)
+        .body(multipart_file(BOUNDARY, "me.png", "image/png", alice_png))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    let alice_path = format!("/api/files/{}", stored["path"].as_str().expect("path"));
+    let (downloaded, _) = bob
+        .forward(&a, "GET", &alice_path, Vec::new(), None, None)
+        .await;
+    assert_eq!(downloaded.status, 200);
+    assert!(downloaded.host_signed);
+    assert_eq!(downloaded.bytes, alice_png);
+    let (own, _) = bob
+        .forward(
+            &a,
+            "GET",
+            &format!("/api/files/avatars/{bob_on_a}/avatar.png"),
+            Vec::new(),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(own.bytes, png);
+
+    // Only avatars are served; a legacy upload path is gone.
+    let (denied, _) = bob
+        .forward(&a, "GET", "/api/files/other/x", Vec::new(), None, None)
+        .await;
+    assert_eq!(denied.status, 403);
+    assert!(denied.host_signed);
+    let (gone, _) = bob
+        .forward(&a, "GET", "/api/files/uploads/x", Vec::new(), None, None)
+        .await;
+    assert_eq!(gone.status, 410);
+
+    // A device request for another path than the one forwarded never reaches the handler.
+    let (replaced, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.png", "image/png", png),
+            Some(multipart_file(
+                BOUNDARY,
+                "me.png",
+                "image/png",
+                b"\x89PNGother",
+            )),
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(replaced.status, 403);
+    assert_eq!(replaced.body["error"], "forbidden");
+
+    // Carol is no one at Alice's server: the host refuses to run her requests.
+    let (stranger, _) = carol
+        .forward(&a, "GET", &alice_path, Vec::new(), None, None)
+        .await;
+    assert_eq!(stranger.status, 403);
+    assert_eq!(stranger.body["error"], "forbidden");
 
     a.stop().await;
     b.stop().await;

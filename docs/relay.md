@@ -118,7 +118,8 @@ the method, path and body hash, the `seq` window), and that the relay may carry 
 traffic: the relay holds an active delegation of that device for a workspace the user is still a
 member of, or the user is a member of its direct space and their newest card lists the relay's
 origin (`403 not_delegated` otherwise). It then runs GraphQL (`POST /api`), attachment downloads and
-uploads, or plugin bundle downloads as that user and device, with no session, and signs every
+uploads, avatar uploads (`POST /api/files/avatar`), stored-file downloads (`GET /api/files/<path>`)
+or plugin bundle downloads as that user and device, with no session, and signs every
 answer, refusals included, with `Rim-Host-Response` and `Rim-Host-Signature`. Per-IP limits key
 on `relay:<serverId>:<principalId>`.
 

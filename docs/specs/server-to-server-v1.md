@@ -340,7 +340,7 @@ payload text) and `Rim-Device-Signature` (the tagged signature over
 | Field | Rule |
 |---|---|
 | `host` | The host's server id |
-| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
+| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `POST /api/files/avatar`, `GET /api/files/<path>`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
 | `seq` | Below 2⁵³, greater than every `seq` this device used with this host; clients use `max(previous + 1, Unix time in µs)` and persist it |
 | `bodySha256` | base64url(SHA-256(exact body bytes)); the empty body's hash for `GET` |
 
@@ -367,8 +367,8 @@ The host's `/s2s/v1/forward/…` checks the S2S signature, then the device reque
 device of a user here; `host` is its own id; method, path, body hash; `seq`), then that the relay
 may carry this user's traffic: it holds an active delegation of this device for a workspace here,
 or the user is a member of this host's direct space and the relay's origin is in their newest card
-(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, upload, download) as that user
-and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
+(`403 not_delegated` otherwise). It runs the normal handler (GraphQL, attachment upload and download,
+avatar upload, stored-file download, plugin bundle download) as that user and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
 `relay:<serverId>:<principalId>` for forwarded requests.
 
 Every forwarded response carries `Rim-Host-Response` (base64url payload) and `Rim-Host-Signature`:
