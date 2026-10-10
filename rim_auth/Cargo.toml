@@ -1,7 +1,11 @@
 [package]
 name = "rim_auth"
+description = "Password hashing, digests and encoding primitives for RIM"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 argon2 = "0.5.3"

@@ -3,10 +3,12 @@ target/
 .github/
 .env
 .env.*
-*.md
-!migration/
-scripts/
 .claude/
-.idea/
-*.log
+.idea
 deploy/
+data/
+coverage/
+assets/
+audit.log
+*.log
+*.md

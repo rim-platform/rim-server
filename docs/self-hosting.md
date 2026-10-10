@@ -59,10 +59,13 @@ that origin; the browser console notes that it ignores the extra `/api` source t
 `https://<your domain>/api` gives the same result without that note and ties the image to the
 domain.
 
-Browsers send an `Origin` header with the client's requests even on one origin, and the server
-answers `400 Origin is not allowed` to any origin but `RIM_CORS_ALLOWED_ORIGIN`. The compose
-file sets it to `https://<RIM_DOMAIN>`; a client served from elsewhere needs it set to that
-origin.
+Browsers send an `Origin` header with the client's requests even on one origin. The server
+accepts its own origin without configuration: that of `RIM_PUBLIC_BASE_URL` when set, else the
+scheme and `Host` the request arrived with (`X-Forwarded-Proto` and `X-Forwarded-Host` count
+only with `RIM_TRUST_FORWARDED_HEADERS=true`). Any other origin gets `400 Origin is not
+allowed`, except one extra origin named by `RIM_CORS_ALLOWED_ORIGIN`, such as a client served
+from another domain or the desktop development app at `http://localhost:1420`. The compose file
+leaves it as a commented example.
 
 ## First start
 

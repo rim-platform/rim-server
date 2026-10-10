@@ -1,6 +1,7 @@
 //! `GET /healthz` and `GET /readyz`: liveness and readiness for orchestrators and load
 //! balancers. Unauthenticated, outside CORS and CSRF; the answers carry no paths or errors,
-//! the reasons a check failed go to the log.
+//! the reasons a check failed go to the log. A readiness result is reused for one second, so
+//! callers cannot drive the database checks at request rate.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -12,11 +13,16 @@ use async_trait::async_trait;
 use migration::MigratorTrait;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use serde_json::{Map, Value, json};
+use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 use crate::config::VERSION;
 
 /// How long one readiness check may take before it counts as failed.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long a readiness result is reused before the checks run again.
+const READINESS_TTL: Duration = Duration::from_secs(1);
 
 /// The pieces readiness depends on.
 #[async_trait]
@@ -40,6 +46,34 @@ pub(crate) struct SystemProbe {
     pub(crate) franking_key_file: PathBuf,
 }
 
+/// The names of the migrations recorded as applied. Only reads `seaql_migrations`: a missing
+/// table is an error, never created.
+pub(crate) async fn applied_migrations(db: &DatabaseConnection) -> anyhow::Result<HashSet<String>> {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT version FROM seaql_migrations",
+        ))
+        .await?;
+    rows.iter()
+        .map(|row| Ok(row.try_get::<String>("", "version")?))
+        .collect()
+}
+
+/// The names of the migrations this build registers.
+pub(crate) fn registered_migrations() -> Vec<String> {
+    migration::Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect()
+}
+
+/// How many migrations this build registers that the database has not applied.
+pub(crate) async fn count_pending_migrations(db: &DatabaseConnection) -> anyhow::Result<usize> {
+    let applied = applied_migrations(db).await?;
+    Ok(pending_migrations(&registered_migrations(), &applied))
+}
+
 async fn readable_file(path: &PathBuf) -> anyhow::Result<()> {
     let metadata = tokio::fs::metadata(path).await?;
     anyhow::ensure!(metadata.is_file(), "not a regular file");
@@ -55,23 +89,11 @@ impl ReadinessProbe for SystemProbe {
     }
 
     async fn applied_migrations(&self) -> anyhow::Result<HashSet<String>> {
-        let rows = self
-            .db
-            .query_all_raw(Statement::from_string(
-                DbBackend::Postgres,
-                "SELECT version FROM seaql_migrations",
-            ))
-            .await?;
-        rows.iter()
-            .map(|row| Ok(row.try_get::<String>("", "version")?))
-            .collect()
+        applied_migrations(&self.db).await
     }
 
     fn registered_migrations(&self) -> Vec<String> {
-        migration::Migrator::migrations()
-            .iter()
-            .map(|m| m.name().to_string())
-            .collect()
+        registered_migrations()
     }
 
     async fn server_key_file(&self) -> anyhow::Result<()> {
@@ -198,9 +220,44 @@ pub(crate) async fn healthz() -> HttpResponse {
         .json(json!({ "status": "ok", "version": VERSION }))
 }
 
+/// The readiness probe with its last result, shared by every worker.
+pub(crate) struct ReadinessCache {
+    probe: Arc<dyn ReadinessProbe>,
+    ttl: Duration,
+    last: Mutex<Option<(Instant, Readiness)>>,
+}
+
+impl ReadinessCache {
+    pub(crate) fn new(probe: Arc<dyn ReadinessProbe>) -> Self {
+        Self::with_ttl(probe, READINESS_TTL)
+    }
+
+    fn with_ttl(probe: Arc<dyn ReadinessProbe>, ttl: Duration) -> Self {
+        Self {
+            probe,
+            ttl,
+            last: Mutex::new(None),
+        }
+    }
+
+    /// The last result while it is younger than the time to live, else a fresh one. Concurrent
+    /// callers wait for the one check in flight instead of starting their own.
+    pub(crate) async fn readiness(&self) -> Readiness {
+        let mut last = self.last.lock().await;
+        if let Some((at, readiness)) = last.as_ref()
+            && at.elapsed() < self.ttl
+        {
+            return readiness.clone();
+        }
+        let readiness = check(self.probe.as_ref()).await;
+        *last = Some((Instant::now(), readiness.clone()));
+        readiness
+    }
+}
+
 /// `GET /readyz`: 200 when every readiness check passes, else 503 naming the failing ones.
-pub(crate) async fn readyz(probe: web::Data<Arc<dyn ReadinessProbe>>) -> HttpResponse {
-    let readiness = check(probe.get_ref().as_ref()).await;
+pub(crate) async fn readyz(cache: web::Data<ReadinessCache>) -> HttpResponse {
+    let readiness = cache.readiness().await;
     let mut response = if readiness.is_ready() {
         HttpResponse::Ok()
     } else {
@@ -217,6 +274,7 @@ mod tests {
 
     /// A probe whose every piece answers as configured.
     struct FakeProbe {
+        database_calls: std::sync::atomic::AtomicUsize,
         database: bool,
         applied: Option<Vec<&'static str>>,
         registered: Vec<&'static str>,
@@ -227,6 +285,7 @@ mod tests {
     impl Default for FakeProbe {
         fn default() -> Self {
             Self {
+                database_calls: std::sync::atomic::AtomicUsize::new(0),
                 database: true,
                 applied: Some(vec!["m1", "m2"]),
                 registered: vec!["m1", "m2"],
@@ -247,6 +306,8 @@ mod tests {
     #[async_trait]
     impl ReadinessProbe for FakeProbe {
         async fn database(&self) -> anyhow::Result<()> {
+            self.database_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             answer(self.database)
         }
 
@@ -368,17 +429,47 @@ mod tests {
 
     #[actix_web::test]
     async fn readyz_answers_503_when_a_check_fails() {
-        let ready: Arc<dyn ReadinessProbe> = Arc::new(FakeProbe::default());
+        let ready = ReadinessCache::new(Arc::new(FakeProbe::default()));
         let response = readyz(web::Data::new(ready)).await;
         assert_eq!(response.status(), actix_web::http::StatusCode::OK);
-        let unready: Arc<dyn ReadinessProbe> = Arc::new(FakeProbe {
+        let unready = ReadinessCache::new(Arc::new(FakeProbe {
             franking_key: false,
             ..Default::default()
-        });
+        }));
         let response = readyz(web::Data::new(unready)).await;
         assert_eq!(
             response.status(),
             actix_web::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[actix_web::test]
+    async fn readiness_within_the_time_to_live_runs_the_checks_once() {
+        let probe = Arc::new(FakeProbe::default());
+        let cache = web::Data::new(ReadinessCache::new(probe.clone()));
+        let first = readyz(cache.clone()).await;
+        let second = readyz(cache).await;
+        assert_eq!(first.status(), actix_web::http::StatusCode::OK);
+        assert_eq!(second.status(), actix_web::http::StatusCode::OK);
+        assert_eq!(
+            probe
+                .database_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_readiness_result_runs_the_checks_again() {
+        let probe = Arc::new(FakeProbe::default());
+        let cache = ReadinessCache::with_ttl(probe.clone(), Duration::ZERO);
+        cache.readiness().await;
+        cache.readiness().await;
+        assert_eq!(
+            probe
+                .database_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
         );
     }
 }
