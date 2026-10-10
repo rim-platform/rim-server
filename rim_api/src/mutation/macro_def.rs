@@ -111,7 +111,7 @@ impl MacroMutations {
             None => {
                 if input.confirmed_dangerous == Some(true) {
                     tracing::warn!(
-                        target = "audit",
+                        target: "audit",
                         event = "deprecated_confirmed_dangerous_bool",
                         macro_id = %input.macro_id.as_str(),
                         "client sent legacy confirmed_dangerous=true on executeMacro; ignoring (H1 closure).",

@@ -257,7 +257,7 @@ impl DefaultAuthService {
             verify_dummy_password(password).map_err(ServiceError::internal)?;
             // H4 audit: log failed login (user not found).
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "login_failure",
                 username = %username,
                 reason = "user_not_found",
@@ -271,7 +271,7 @@ impl DefaultAuthService {
         let Some(password_hash) = user.password_hash.as_deref() else {
             verify_dummy_password(password).map_err(ServiceError::internal)?;
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "login_failure",
                 user_id = %user.id,
                 username = %username,
@@ -284,7 +284,7 @@ impl DefaultAuthService {
         if !ok {
             // H4 audit: wrong password.
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "login_failure",
                 user_id = %user.id,
                 username = %username,
@@ -299,7 +299,7 @@ impl DefaultAuthService {
         // same as for a wrong password.
         if user.principal_id.is_some() {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "login_failure",
                 user_id = %user.id,
                 username = %username,
@@ -313,7 +313,7 @@ impl DefaultAuthService {
 
         // H4 audit: successful login.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "login_success",
             user_id = %user.id,
             session_id = %sess.id,
@@ -485,7 +485,7 @@ impl AuthService for DefaultAuthService {
         } = decision
         {
             tracing::warn!(
-                target = "audit",
+                target: "audit",
                 event = "login_rate_limited",
                 username = %username,
                 remote_ip = %remote_ip,
@@ -557,7 +557,7 @@ impl AuthService for DefaultAuthService {
             .await?;
 
         info!(
-            target = "audit",
+            target: "audit",
             event = "other_sessions_signed_out",
             user_id = %actor.user_id,
             kept_session_id = %session_id,
@@ -860,7 +860,7 @@ impl AuthService for DefaultAuthService {
 
         // H4 audit: workspace invite revocation.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "invite_revoked",
             invite_id = %cmd.invite_id,
             actor_user_id = %cmd.actor.user_id,
@@ -1066,7 +1066,7 @@ impl AuthService for DefaultAuthService {
 
         // H4 audit: log successful open-mode signup.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "signup_open_success",
             user_id = %user.id,
             remote_ip = %remote_ip,
@@ -1112,7 +1112,7 @@ impl AuthService for DefaultAuthService {
         .await?;
 
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "instance_invite_issued",
             instance_invite_id = %invite.id,
             issued_by_user_id = %cmd.actor.user_id,
@@ -1151,7 +1151,7 @@ impl AuthService for DefaultAuthService {
 
         // H4 audit: instance invite revocation.
         tracing::info!(
-            target = "audit",
+            target: "audit",
             event = "instance_invite_revoked",
             invite_id = %cmd.invite_id,
             actor_user_id = %cmd.actor.user_id,
@@ -1187,7 +1187,7 @@ impl AuthService for DefaultAuthService {
         } = decision
         {
             tracing::warn!(
-                target = "audit",
+                target: "audit",
                 event = "preview_invite_token_rate_limited",
                 remote_ip = %query.remote_ip,
                 "preview_invite_token rate limit exceeded"

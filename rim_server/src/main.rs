@@ -18,7 +18,7 @@ fn initialize() -> Option<LoggingHandle> {
 #[actix_web::main]
 async fn main() {
     // Bind the logging handle for the entire lifetime of `main` — must
-    // outlive every `tracing::info!(target = "audit", …)` emit and
+    // outlive every `tracing::info!(target: "audit", …)` emit and
     // remain alive until after any error is printed so the final log
     // lines are flushed before the process exits.
     let _logging_handle = initialize();
@@ -42,14 +42,14 @@ async fn main() {
     let config = match config::load_config() {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(target = "audit", error = %e, "fatal: failed to load configuration");
+            tracing::error!(target: "audit", error = %e, "fatal: failed to load configuration");
             eprintln!("fatal: failed to load configuration: {e}");
             std::process::exit(1);
         }
     };
 
     if let Err(e) = start_server(&config).await {
-        tracing::error!(target = "audit", error = %e, "fatal: server exited with error");
+        tracing::error!(target: "audit", error = %e, "fatal: server exited with error");
         eprintln!("fatal: server exited with error: {e}");
         std::process::exit(1);
     }

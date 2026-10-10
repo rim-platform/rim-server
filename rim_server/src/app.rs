@@ -473,7 +473,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     {
         Ok(armed) => {
             tracing::info!(
-                target = "audit",
+                target: "audit",
                 event = "escalation_boot_recovery",
                 armed_count = armed,
                 "re-armed active escalation runs on boot (§6)"
@@ -785,14 +785,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     if registration_mode == crate::config::RegistrationMode::Open {
         tracing::warn!(
-            target = "audit",
+            target: "audit",
             "RIM_OPEN_REGISTRATION=true: open registration mode is active; \
              instance accepts signups without invitation"
         );
     }
     if let crate::config::RegistrationMode::Pow { bits } = registration_mode {
         tracing::warn!(
-            target = "audit",
+            target: "audit",
             pow_bits = bits,
             open_registration_ignored = config.open_registration.unwrap_or(false),
             "RIM_REGISTRATION_POW_BITS is set: key-only signups need a proof-of-work or a token"
@@ -981,7 +981,7 @@ async fn seed_builtin_capabilities(
         .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
     }
     tracing::info!(
-        target = "audit",
+        target: "audit",
         event = "capability_registry_seeded",
         count = specs.len(),
         "seeded builtin capabilities into registry (Phase 1 §3.3)"

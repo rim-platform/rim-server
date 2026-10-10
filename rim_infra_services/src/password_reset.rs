@@ -129,7 +129,7 @@ impl PasswordResetService for DefaultPasswordResetService {
             .check_and_record(&remote_ip, "password_reset", now)
         {
             warn!(
-                target = "audit",
+                target: "audit",
                 event = "password_reset_rate_limited",
                 remote_ip = %remote_ip,
                 retry_after_seconds = %retry_after_seconds,
@@ -151,7 +151,7 @@ impl PasswordResetService for DefaultPasswordResetService {
             now,
         ) {
             info!(
-                target = "audit",
+                target: "audit",
                 event = "password_reset_suppressed",
                 username = %username,
                 "password reset request over the per-username limit; no email sent"
@@ -303,7 +303,7 @@ impl PasswordResetService for DefaultPasswordResetService {
         }
 
         info!(
-            target = "audit",
+            target: "audit",
             event = "password_reset_completed",
             user_id = %record.user_id,
             revoked_sessions,
