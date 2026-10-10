@@ -317,6 +317,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let mut key_login_audiences = config
         .key_login_audiences()
         .map_err(std::io::Error::other)?;
+    let audit_retention_days = config
+        .audit_retention_days()
+        .map_err(std::io::Error::other)?;
     let db = config
         .connect_database()
         .await
@@ -733,6 +736,24 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                 }
             }
         });
+    }
+
+    // Background task: export and delete command audit rows older than
+    // `RIM_AUDIT_RETENTION_DAYS`, a minute after boot and then daily.
+    if let Some(days) = audit_retention_days {
+        let repo: Arc<dyn rim_core::audit::repository::AuditLogRepository> = Arc::new(
+            rim_infra_db::sea_orm_impl::audit::SeaOrmAuditLogRepository::new(
+                raw_db_for_tasks.clone().into(),
+            ),
+        );
+        let export_dir =
+            rim_infra_services::audit_retention::export_dir(std::path::Path::new(&config.data_dir));
+        tokio::spawn(rim_infra_services::audit_retention::run_daily(
+            repo,
+            days,
+            export_dir,
+            shutdown_tx.subscribe(),
+        ));
     }
 
     let message_attachment_service = service_provider.message_attachment_service();

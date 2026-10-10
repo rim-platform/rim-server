@@ -276,13 +276,14 @@ access-control matrix.
 
 ## 8. Retention
 
-Audit rows are subject to automatic purge. The retention task runs hourly.
+Audit rows are purged only when the operator sets a retention. A purge runs a minute after boot
+and then daily; it exports the rows to the data directory before deleting them.
 
 | Setting | Value |
 |---|---|
-| Default retention | 90 days |
-| Maximum (operator-configurable) | 365 days |
-| Env var override | `RIM_AUDIT_RETENTION_DAYS` |
+| Default retention | none: rows are kept forever |
+| Range (operator-configurable) | 1 to 3650 days |
+| Env var | `RIM_AUDIT_RETENTION_DAYS` |
 
-Source: `rim_infra_services/src/audit/retention.rs:19-25`.
-Values agreed at Kuba's Gate-1 review (2026-04-23, `ai-reframe-review-2026-04-22.md` §7.4 L3).
+Source: `rim_infra_services/src/audit_retention.rs`. Operator view, the export format and the
+`audit purge` command: `docs/operations/audit-retention.md`.

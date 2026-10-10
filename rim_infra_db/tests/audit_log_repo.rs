@@ -389,3 +389,94 @@ async fn audit_parent_child_linkage() {
     assert_eq!(child_row.parent_audit_id, Some(parent_id));
     assert_eq!(child_row.outcome, AuditOutcome::StepError.as_str());
 }
+
+#[tokio::test]
+async fn retention_reads_counts_and_deletes_old_rows_in_batches() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
+    let server_id = uuid::Uuid::now_v7();
+    let actor_id = uuid::Uuid::now_v7();
+    // Microsecond timestamps, as Postgres stores them, so keys compare exactly.
+    let now = chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+        .expect("now");
+    let cutoff = now - chrono::Duration::days(90);
+
+    // Five old rows, two of them sharing a timestamp, and one inside the retention.
+    let mut old = Vec::new();
+    for days in [200, 150, 120, 120, 91] {
+        let mut e = make_entry(server_id, actor_id, &format!("/old-{days}"));
+        e.created_at = now - chrono::Duration::days(days);
+        old.push(e);
+    }
+    let mut recent = make_entry(server_id, actor_id, "/recent");
+    recent.created_at = now - chrono::Duration::days(1);
+    for e in old.iter().chain(std::iter::once(&recent)) {
+        repo.insert(e.clone()).await.expect("insert");
+    }
+    old.sort_by_key(|e| (e.created_at, e.id));
+
+    let range = repo.range_older_than(cutoff).await.expect("range");
+    assert_eq!(range.count, 5);
+    assert_eq!(range.oldest, Some(old[0].created_at));
+    assert_eq!(range.newest, Some(old[4].created_at));
+    let empty = repo
+        .range_older_than(now - chrono::Duration::days(365))
+        .await
+        .expect("range");
+    assert_eq!((empty.count, empty.oldest, empty.newest), (0, None, None));
+
+    // Keyset pages walk the old rows oldest first without skipping the timestamp tie.
+    let page1 = repo.list_older_than(cutoff, None, 2).await.expect("page 1");
+    let last = page1.last().expect("rows");
+    let page2 = repo
+        .list_older_than(cutoff, Some((last.created_at, last.id)), 2)
+        .await
+        .expect("page 2");
+    let last = page2.last().expect("rows");
+    let page3 = repo
+        .list_older_than(cutoff, Some((last.created_at, last.id)), 2)
+        .await
+        .expect("page 3");
+    let walked: Vec<_> = page1
+        .iter()
+        .chain(&page2)
+        .chain(&page3)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(walked, old.iter().map(|e| e.id).collect::<Vec<_>>());
+
+    // Deletes stop at the bound: the newest old row stays until the bound covers it.
+    let bound = (old[3].created_at, old[3].id);
+    assert_eq!(
+        repo.delete_older_than_batch(cutoff, bound, 3)
+            .await
+            .expect("batch 1"),
+        3
+    );
+    assert_eq!(
+        repo.delete_older_than_batch(cutoff, bound, 3)
+            .await
+            .expect("batch 2"),
+        1
+    );
+    assert_eq!(
+        repo.delete_older_than_batch(cutoff, bound, 3)
+            .await
+            .expect("batch 3"),
+        0
+    );
+    let left = repo.list_older_than(cutoff, None, 10).await.expect("left");
+    assert_eq!(
+        left.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![old[4].id]
+    );
+    let all = repo
+        .list_older_than(now + chrono::Duration::days(1), None, 10)
+        .await
+        .expect("all");
+    assert_eq!(
+        all.len(),
+        2,
+        "the old row past the bound and the recent row"
+    );
+}

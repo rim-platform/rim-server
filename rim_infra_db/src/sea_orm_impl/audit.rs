@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use entity::command_audit_log;
 use rim_core::audit::repository::{
-    AuditLogEntryRecord, AuditLogListQuery, AuditLogPageRecord, AuditLogRepository,
+    AuditLogEntryRecord, AuditLogListQuery, AuditLogPageRecord, AuditLogRange, AuditLogRepository,
 };
 use rim_core::repository::error::RepoResult;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DeleteResult, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DeleteResult, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
     prelude::{DateTimeWithTimeZone, Uuid},
 };
 
@@ -20,6 +20,44 @@ pub struct SeaOrmAuditLogRepository {
 impl SeaOrmAuditLogRepository {
     pub fn new(db: DbHandle) -> Self {
         Self { db }
+    }
+}
+
+/// Count and bounds of the rows older than a cutoff.
+#[derive(FromQueryResult)]
+struct RangeRow {
+    n: i64,
+    oldest: Option<DateTimeWithTimeZone>,
+    newest: Option<DateTimeWithTimeZone>,
+}
+
+const RANGE_OLDER_THAN_SQL: &str = "SELECT count(*)::int8 AS n, min(created_at) AS oldest, \
+     max(created_at) AS newest FROM command_audit_log WHERE created_at < $1";
+
+/// Deletes one batch of the oldest rows below the cutoff, bounded by the last exported key.
+const DELETE_OLDER_THAN_BATCH_SQL: &str = "DELETE FROM command_audit_log WHERE id IN (\
+     SELECT id FROM command_audit_log \
+     WHERE created_at < $1 AND (created_at, id) <= ($2, $3) \
+     ORDER BY created_at, id LIMIT $4)";
+
+fn to_record(r: command_audit_log::Model) -> AuditLogEntryRecord {
+    AuditLogEntryRecord {
+        id: r.id,
+        actor_user_id: r.actor_user_id,
+        server_id: r.server_id,
+        command_id: r.command_id,
+        initiator: r.initiator,
+        args_redacted: r.args_redacted,
+        sensitivity: r.sensitivity,
+        dangerous: r.dangerous,
+        confirmation_kind: r.confirmation_kind,
+        typed_verb: r.typed_verb,
+        outcome: r.outcome,
+        error_kind: r.error_kind,
+        capability_check_outcome: r.capability_check_outcome,
+        confirmation_outcome: r.confirmation_outcome,
+        parent_audit_id: r.parent_audit_id,
+        created_at: r.created_at.into(),
     }
 }
 
@@ -110,27 +148,7 @@ impl AuditLogRepository for SeaOrmAuditLogRepository {
             None
         };
 
-        let items = rows
-            .into_iter()
-            .map(|r| AuditLogEntryRecord {
-                id: r.id,
-                actor_user_id: r.actor_user_id,
-                server_id: r.server_id,
-                command_id: r.command_id,
-                initiator: r.initiator,
-                args_redacted: r.args_redacted,
-                sensitivity: r.sensitivity,
-                dangerous: r.dangerous,
-                confirmation_kind: r.confirmation_kind,
-                typed_verb: r.typed_verb,
-                outcome: r.outcome,
-                error_kind: r.error_kind,
-                capability_check_outcome: r.capability_check_outcome,
-                confirmation_outcome: r.confirmation_outcome,
-                parent_audit_id: r.parent_audit_id,
-                created_at: r.created_at.into(),
-            })
-            .collect();
+        let items = rows.into_iter().map(to_record).collect();
 
         Ok(AuditLogPageRecord {
             items,
@@ -148,5 +166,88 @@ impl AuditLogRepository for SeaOrmAuditLogRepository {
             .await
             .map_err(map_db_err)?;
         Ok(rows_affected)
+    }
+
+    async fn range_older_than(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<AuditLogRange> {
+        let cutoff_tz: DateTimeWithTimeZone = cutoff.into();
+        let row = RangeRow::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            RANGE_OLDER_THAN_SQL,
+            [cutoff_tz.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.map_or(
+            AuditLogRange {
+                count: 0,
+                oldest: None,
+                newest: None,
+            },
+            |r| AuditLogRange {
+                count: u64::try_from(r.n).unwrap_or(0),
+                oldest: r.oldest.map(Into::into),
+                newest: r.newest.map(Into::into),
+            },
+        ))
+    }
+
+    async fn list_older_than(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        after: Option<(chrono::DateTime<chrono::Utc>, Uuid)>,
+        limit: u32,
+    ) -> RepoResult<Vec<AuditLogEntryRecord>> {
+        let cutoff_tz: DateTimeWithTimeZone = cutoff.into();
+        let mut select = command_audit_log::Entity::find()
+            .filter(command_audit_log::Column::CreatedAt.lt(cutoff_tz));
+        if let Some((after_at, after_id)) = after {
+            let after_tz: DateTimeWithTimeZone = after_at.into();
+            select = select.filter(
+                sea_orm::Condition::any()
+                    .add(command_audit_log::Column::CreatedAt.gt(after_tz))
+                    .add(
+                        sea_orm::Condition::all()
+                            .add(command_audit_log::Column::CreatedAt.eq(after_tz))
+                            .add(command_audit_log::Column::Id.gt(after_id)),
+                    ),
+            );
+        }
+        let rows = select
+            .order_by_asc(command_audit_log::Column::CreatedAt)
+            .order_by_asc(command_audit_log::Column::Id)
+            .limit(u64::from(limit.max(1)))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(rows.into_iter().map(to_record).collect())
+    }
+
+    async fn delete_older_than_batch(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        up_to: (chrono::DateTime<chrono::Utc>, Uuid),
+        limit: u32,
+    ) -> RepoResult<u64> {
+        let cutoff_tz: DateTimeWithTimeZone = cutoff.into();
+        let up_to_tz: DateTimeWithTimeZone = up_to.0.into();
+        let result = self
+            .db
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                DELETE_OLDER_THAN_BATCH_SQL,
+                [
+                    cutoff_tz.into(),
+                    up_to_tz.into(),
+                    up_to.1.into(),
+                    i64::from(limit.max(1)).into(),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected())
     }
 }
