@@ -57,7 +57,7 @@ The switches are read at boot; change the variable and restart. At boot the serv
 disabled and unavailable features:
 
 ```json
-{"level":"INFO","fields":{"disabled":"[\"attachments\", \"custom_emoji\"]","unavailable":"[\"email: SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM\"]","message":"instance features (RIM_FEATURES_DISABLED)"}}
+{"level":"INFO","fields":{"message":"instance features (RIM_FEATURES_DISABLED)","disabled":"[\"attachments\", \"custom_emoji\"]","unavailable":"[\"email: SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM\"]"},"target":"rim_server::app"}
 ```
 
 Switching a feature off deletes nothing. Stored attachments, emoji, plugin entries, bundles and

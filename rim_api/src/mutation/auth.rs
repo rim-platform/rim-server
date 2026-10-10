@@ -80,7 +80,7 @@ pub(crate) struct PasswordResetMutations;
 #[Object]
 impl PasswordResetMutations {
     /// `FEATURE_DISABLED` while the operator has disabled email. Without SMTP the reset mail is
-    /// logged instead of sent, as before.
+    /// logged instead of sent.
     async fn request_password_reset(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
         if crate::features::feature_state(ctx, ServerFeature::Email)?.is_disabled() {
             return Err(map_service_error(
