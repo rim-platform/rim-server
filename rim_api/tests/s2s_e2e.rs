@@ -506,13 +506,13 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     b.db.execute_unprepared("DELETE FROM server_key_log_entry WHERE seq > 0")
         .await
         .expect("drop seq 1");
-    for (seq, entry) in [(1, &e1), (2, &e2)] {
+    for (seq, entry) in [(1_i32, &e1), (2, &e2)] {
         b.db.execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "INSERT INTO server_key_log_entry (seq, entry_type, payload, signature) \
              VALUES ($1, 'rotate', $2, $3)",
             [
-                (seq as i32).into(),
+                seq.into(),
                 entry.payload.clone().into(),
                 entry.signature.clone().into(),
             ],
