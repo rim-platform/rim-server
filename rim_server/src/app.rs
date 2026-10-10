@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use rim_api::broadcast::InMemoryBroadcaster;
 use rim_api::{AppSchema, build_schema};
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_infra_services::file_storage::LocalFileStorage;
 use rim_services::events::{Broadcaster, Observers};
+use rim_services::feature::service::FeatureGate;
 use rim_services::presence::PresenceService;
 use rim_services::storage::service::StorageService;
 use rim_services::typing::TypingService;
@@ -55,6 +57,8 @@ pub struct AppRuntime {
     pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
     pub plugin_bundle_service:
         Arc<dyn rim_services::workspace_plugin::service::PluginBundleService>,
+    /// The instance's feature switches, for the upload routes and the discovery document.
+    pub feature_gate: Arc<dyn FeatureGate>,
     pub s2s: S2sRuntime,
     /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
@@ -314,6 +318,10 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
+    let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
+    log_features(&instance_features);
+    let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
+    let email_disabled = feature_gate.state(ServerFeature::Email).is_disabled();
     let db = config
         .connect_database()
         .await
@@ -389,8 +397,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     // Track B3 — real SMTP only when RIM_SMTP_HOST + RIM_SMTP_FROM are both configured;
     // otherwise every send falls back to LogEmailSender (log-only, no delivery). See
-    // docs/email.md.
+    // docs/email.md. With email disabled every message is dropped.
     let email_sender: Arc<dyn rim_infra_services::email::EmailSender> = match config.smtp_config() {
+        _ if email_disabled => Arc::new(rim_infra_services::email::DisabledEmailSender),
         Some(smtp) => Arc::new(
             rim_infra_services::email::SmtpEmailSender::new(smtp)
                 .map_err(|e| std::io::Error::other(format!("failed to build SMTP sender: {e}")))?,
@@ -444,6 +453,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             host_service: Some(Arc::clone(&s2s.host) as Arc<dyn HostService>),
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
         },
+        Arc::clone(&feature_gate),
     ));
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 
@@ -543,7 +553,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             retention_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
-                    _ = digest_tick.tick() => {
+                    _ = digest_tick.tick(), if !email_disabled => {
                         match jobs.run_digest(chrono::Utc::now()).await {
                             Ok(report) if report.candidates > 0 => tracing::info!(
                                 candidates = report.candidates,
@@ -766,10 +776,26 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_attachment_service,
         moderation_service,
         plugin_bundle_service,
+        feature_gate,
         s2s,
         db: raw_db_for_tasks,
         shutdown_tx,
     })
+}
+
+/// Log the features that are not enabled, so an operator sees what the instance runs.
+fn log_features(gate: &rim_infra_services::feature_gate::InstanceFeatureGate) {
+    let disabled: Vec<&str> = gate.disabled().iter().map(ServerFeature::as_str).collect();
+    let unavailable: Vec<String> = gate
+        .unavailable()
+        .iter()
+        .map(|(feature, reason)| format!("{feature}: {reason}"))
+        .collect();
+    tracing::info!(
+        disabled = ?disabled,
+        unavailable = ?unavailable,
+        "instance features (RIM_FEATURES_DISABLED)"
+    );
 }
 
 /// The relay and host parts of the per-minute cleanup: acked and expired items, orphaned

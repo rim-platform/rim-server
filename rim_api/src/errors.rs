@@ -102,6 +102,14 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("code", Value::from("MLS_COMMIT_REQUIRED"));
                 e.set("reason", Value::from(reason.as_str()));
             }),
+        // The client reads `serverInfo.features` for the state and its reason.
+        ServiceError::FeatureDisabled(feature) => Error::new(format!(
+            "the {feature} feature is not available on this server"
+        ))
+        .extend_with(|_, e| {
+            e.set("code", Value::from("FEATURE_DISABLED"));
+            e.set("feature", Value::from(feature.as_str()));
+        }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
@@ -111,6 +119,20 @@ pub fn map_service_error(err: ServiceError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feature_disabled_maps_to_feature_disabled_code_with_the_feature() {
+        let err = map_service_error(ServiceError::FeatureDisabled(
+            rim_core::server_feature::model::ServerFeature::CustomEmoji,
+        ));
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("FEATURE_DISABLED")));
+        assert_eq!(ext.get("feature"), Some(&Value::from("custom_emoji")));
+        assert_eq!(
+            err.message,
+            "the custom_emoji feature is not available on this server"
+        );
+    }
 
     #[test]
     fn timed_out_maps_to_timed_out_code_with_until() {

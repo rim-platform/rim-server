@@ -1,4 +1,5 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::auth::command::{LoginCmd, LogoutCmd, LogoutOtherSessionsCmd};
 use rim_services::auth::service::AuthService;
@@ -78,7 +79,14 @@ pub(crate) struct PasswordResetMutations;
 
 #[Object]
 impl PasswordResetMutations {
+    /// `FEATURE_DISABLED` while the operator has disabled email. Without SMTP the reset mail is
+    /// logged instead of sent.
     async fn request_password_reset(&self, ctx: &Context<'_>, username: String) -> Result<bool> {
+        if crate::features::feature_state(ctx, ServerFeature::Email)?.is_disabled() {
+            return Err(map_service_error(
+                rim_services::ServiceError::FeatureDisabled(ServerFeature::Email),
+            ));
+        }
         let svc = ctx
             .data::<std::sync::Arc<dyn rim_services::password_reset::service::PasswordResetService>>(
             )?;
