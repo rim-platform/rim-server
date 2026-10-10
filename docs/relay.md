@@ -20,7 +20,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Bytes queued per local user; over it the oldest items are dropped |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | How long queued items and DM requests are kept |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests a host accepts per device per minute |
-| `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it delegations are refused as `limited` |
+| `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to join, subscribe, forward, report presence and bring revocations here |
 
 ### The direct space
@@ -251,7 +251,8 @@ person, retrying at 10 s, 30 s, 1 min, 2 min, 5 min and then every 15 minutes fo
 acknowledges. Check each `ack` (a `revocation-ack` statement) under the host's pinned key and its
 `revocationSha256` against the revocation. A host that has not acknowledged within 2 minutes gets
 the revocation from the app directly: `applyRemoteRevocation(revocation)` on the host's own `/api`
-needs no session and no CSRF header and returns the acknowledgement.
+needs no session and no CSRF header and returns the acknowledgement; an address may try it 20
+times in 15 minutes.
 
 ### Signing in to a host directly
 

@@ -124,6 +124,23 @@ async fn one_delegation_per_workspace_device_and_relay_and_the_longer_one_stays(
         .await
         .unwrap();
     assert!(matches!(first, DelegationStored::Stored { .. }));
+    assert!(
+        repo.is_active(workspace, laptop.id, RELAY, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .is_active(workspace, laptop.id, OTHER_RELAY, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .is_active(workspace, laptop.id, RELAY, now + Duration::hours(7))
+            .await
+            .unwrap()
+    );
     let longer = repo
         .store(delegation(workspace, user, &laptop, RELAY, 12), now)
         .await

@@ -715,7 +715,8 @@ recording it, and pushes
 `{"type":"RevocationAcked","deviceId","hostServerId","ack":{"payload","signature"}}` on
 `relayStream` to the person's devices online.
 `applyRemoteRevocation` is the same on the host's GraphQL, without a session and exempt from CSRF
-(it acts only on a fresh identity or device signature, like `loginWithKey`). The app verifies each
+(it acts only on a fresh identity or device signature, like `loginWithKey`), at most 20 attempts
+per IP per 15 minutes (`RATE_LIMITED` past them). The app verifies each
 acknowledgement against the pinned key and its revocation's hash, and names any host it could not
 reach: "<host> has not confirmed; the device keeps access to <workspace> until <time>", the
 delegation's expiry at most. The relay stops forwarding anything the revoked device signs as soon as
@@ -990,7 +991,7 @@ is the new code `UPSTREAM_UNAVAILABLE` (with `hostServerId`); a peer's S2S error
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
 | Deliver; outbox | 256 items and 8 MiB per request; 7 days |
 | Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay) |
-| Delegations | ≤ 24 h; 64 per request; 10,000 per relay per host |
+| Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender per day; 3 held items; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |

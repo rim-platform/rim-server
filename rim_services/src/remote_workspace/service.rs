@@ -69,6 +69,17 @@ pub trait WorkspaceHostService: Send + Sync {
         revocation: SignedJson,
     ) -> ServiceResult<SignedJson>;
 
+    /// [`Self::apply_revocation`] for a revocation an app brings straight to this server, with no
+    /// session: every attempt counts against the caller's IP.
+    ///
+    /// # Errors
+    /// `RateLimited` once the IP has made too many attempts, and those of `apply_revocation`.
+    async fn apply_revocation_directly(
+        &self,
+        remote_ip: String,
+        revocation: SignedJson,
+    ) -> ServiceResult<SignedJson>;
+
     /// End expired delegations and those of revoked devices or departed members.
     async fn cleanup(&self) -> ServiceResult<RemoteWorkspaceCleanup>;
 }
