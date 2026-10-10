@@ -997,7 +997,9 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
         .clone();
     assert_eq!(first.event["message"]["id"], json!(first_id.to_string()));
 
-    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox.
+    // Bob's relay misses a delivery; it pulls the gap from Alice's relay's outbox. Holding
+    // deliveries waits for the sender to finish, so no acknowledgement in flight resets it.
+    drained(&a).await;
     a.db.execute_unprepared(
         "UPDATE s2s_peer_delivery SET next_attempt_at = now() + interval '1 hour', failures = 9",
     )
