@@ -132,6 +132,13 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
     result
 }
 
+fn nothing(cutoff: DateTime<Utc>, days: u32) -> String {
+    format!(
+        "no audit rows older than {} ({days} days)",
+        cutoff.to_rfc3339()
+    )
+}
+
 fn time(at: Option<DateTime<Utc>>) -> String {
     at.map_or_else(|| "-".to_string(), |t| t.to_rfc3339())
 }
@@ -154,14 +161,18 @@ async fn execute_on(
             .range_older_than(cutoff)
             .await
             .map_err(|e| e.to_string())?;
-        let _ = writeln!(
-            out,
-            "would purge {} audit rows older than {} ({days} days), from {} to {}",
-            range.count,
-            cutoff.to_rfc3339(),
-            time(range.oldest),
-            time(range.newest),
-        );
+        if range.count == 0 {
+            let _ = writeln!(out, "{}", nothing(cutoff, days));
+        } else {
+            let _ = writeln!(
+                out,
+                "would purge {} audit rows older than {} ({days} days), from {} to {}",
+                range.count,
+                cutoff.to_rfc3339(),
+                time(range.oldest),
+                time(range.newest),
+            );
+        }
         return Ok(out);
     }
     let export_dir = audit_retention::export_dir(Path::new(&config.data_dir));
@@ -175,6 +186,10 @@ async fn execute_on(
     } = audit_retention::run(repo, cutoff, &export_dir, "cli")
         .await
         .map_err(|e| e.to_string())?;
+    let Some(path) = export_path else {
+        let _ = writeln!(out, "{}", nothing(cutoff, days));
+        return Ok(out);
+    };
     let _ = writeln!(
         out,
         "purged {deleted} audit rows older than {} ({days} days), from {} to {}",
@@ -182,9 +197,7 @@ async fn execute_on(
         time(oldest),
         time(newest),
     );
-    if let Some(path) = export_path {
-        let _ = writeln!(out, "exported {exported} rows to {}", path.display());
-    }
+    let _ = writeln!(out, "exported {exported} rows to {}", path.display());
     Ok(out)
 }
 
@@ -305,6 +318,62 @@ mod tests {
         )
         .await
         .expect("the flag is enough");
-        assert!(out.starts_with("would purge 0 audit rows"), "{out}");
+        assert!(out.starts_with("no audit rows older than"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_real_run_exports_into_the_data_directory_and_deletes() {
+        let now = Utc::now();
+        let row = rim_core::audit::repository::AuditLogEntryRecord {
+            id: uuid::Uuid::now_v7(),
+            actor_user_id: uuid::Uuid::now_v7(),
+            server_id: uuid::Uuid::now_v7(),
+            command_id: "/ping".to_string(),
+            initiator: "palette".to_string(),
+            args_redacted: serde_json::json!({}),
+            sensitivity: "low".to_string(),
+            dangerous: false,
+            confirmation_kind: "none".to_string(),
+            typed_verb: None,
+            outcome: "success".to_string(),
+            error_kind: None,
+            capability_check_outcome: None,
+            confirmation_outcome: None,
+            parent_audit_id: None,
+            created_at: now - chrono::Duration::days(40),
+        };
+        let mut repo = MockAuditLogRepository::new();
+        let page = row.clone();
+        repo.expect_list_older_than()
+            .returning(move |_, after, _| Ok(after.map_or_else(|| vec![page.clone()], |_| vec![])));
+        repo.expect_delete_older_than_batch()
+            .withf(move |_, up_to, _| *up_to == (row.created_at, row.id))
+            .times(1)
+            .returning(|_, _, _| Ok(1));
+        let data_dir = std::env::temp_dir().join(format!("rim-audit-cmd-{}", uuid::Uuid::now_v7()));
+        let config = RIMConfig {
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        let out = execute_on(
+            Command::Purge {
+                dry_run: false,
+                older_than_days: Some(30),
+            },
+            &config,
+            &repo,
+            now,
+        )
+        .await;
+        let exports: Vec<_> = std::fs::read_dir(data_dir.join("audit-exports"))
+            .map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        let out = out.expect("purged");
+        assert!(out.starts_with("purged 1 audit rows"), "{out}");
+        assert_eq!(exports.len(), 1, "{exports:?}");
+        assert!(out.contains(&exports[0].display().to_string()), "{out}");
     }
 }
