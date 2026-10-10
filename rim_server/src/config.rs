@@ -4,6 +4,14 @@ use config::{Config, ConfigError, Environment};
 use dotenvy::dotenv;
 use serde::Deserialize;
 
+/// The release version of this build: the workspace version every crate carries.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// What `rim-server --version` prints.
+pub fn version_line() -> String {
+    format!("rim-server {VERSION}")
+}
+
 #[derive(Clone, Deserialize)]
 pub struct RIMConfig {
     pub server_host: String,
@@ -791,6 +799,30 @@ pub fn load_config() -> Result<RIMConfig, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `version` under `[workspace.package]` in the root manifest.
+    fn workspace_version() -> String {
+        let manifest = include_str!("../../Cargo.toml");
+        let section = manifest
+            .split("[workspace.package]")
+            .nth(1)
+            .expect("[workspace.package] in the root manifest");
+        section
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("version = "))
+            .expect("a workspace version")
+            .trim_matches('"')
+            .to_string()
+    }
+
+    #[test]
+    fn version_is_the_workspace_version() {
+        assert_eq!(VERSION, workspace_version());
+        assert_eq!(
+            version_line(),
+            format!("rim-server {}", workspace_version())
+        );
+    }
 
     #[test]
     fn alert_rate_limit_per_min_defaults_to_120_when_unset() {
