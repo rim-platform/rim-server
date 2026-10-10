@@ -53,12 +53,11 @@ impl AuditLogService for DefaultAuditLogService {
         self.repo.insert(record).await.map_err(ServiceError::from)
     }
 
-    /// Gate logic for `list_entries` (P6-H2 fix).
+    /// Gate logic for `list_entries`.
     ///
-    /// The matrix below closes the workspace-membership bypass: the optional
-    /// `server_id` parameter previously let any authenticated actor read
-    /// another user's audit rows by supplying their `actor_user_id` alongside
-    /// a `server_id` they were not a member of.
+    /// A cross-user read must be scoped to a workspace the caller is a member
+    /// of and holds `audit.read` in; supplying another user's `actor_user_id`
+    /// never widens access.
     ///
     /// Branching on `(actor_user_id, server_id)`:
     ///
@@ -67,7 +66,7 @@ impl AuditLogService for DefaultAuditLogService {
     /// | Some(caller)      | _          | Self-read; requires `audit.read.self` (no ws req) |
     /// | Some(other)       | Some(W)    | Cross-user read; requires `audit.read` in W AND   |
     /// |                   |            | caller must be a member of W (checked by cap svc).|
-    /// |                   |            | **P6-FU6**: actor_user_id filter is STRIPPED from  |
+    /// |                   |            | The actor_user_id filter is STRIPPED from         |
     /// |                   |            | the repo query — returns full workspace dump.     |
     /// |                   |            | Prevents targeted enumeration ("did Alice act     |
     /// |                   |            | in W?") while preserving the authorised read.     |
@@ -82,17 +81,16 @@ impl AuditLogService for DefaultAuditLogService {
         let caller_uuid: uuid::Uuid = caller.user_id.into();
         let workspace_id = query.server_id.map(ServerId::from);
 
-        // P6-FU6: track whether the cross-user+workspace branch fired so we can
+        // Track whether the cross-user+workspace branch fired so we can
         // strip the targeted actor_user_id from the repo query below.
         let mut strip_actor_filter = false;
 
-        // SAFETY: keep in sync with the doc table above (lines 65-78) and
-        // docs/security/audit-access-matrix.md §3. The arm order encodes
+        // SAFETY: keep in sync with the doc table above. The arm order encodes
         // precedence: the self-read guard fires first (uid == caller_uuid)
         // so a call with (actor_user_id=self, server_id=W) always hits the
         // self arm, never the cross-user arm. Reordering arms or changing
         // the guard condition changes the security boundary — update the
-        // doc table and the matrix doc in lockstep.
+        // doc table in lockstep.
         match (query.actor_user_id, workspace_id) {
             // Self-read: actor_user_id == caller's own id, any server_id OK.
             (Some(uid), _) if uid == caller_uuid => {
@@ -109,7 +107,7 @@ impl AuditLogService for DefaultAuditLogService {
             // The membership check is handled inside CapabilityService.check
             // (workspace_id is Some → membership_holds is evaluated).
             //
-            // P6-FU6 (Option A): strip the targeted actor_user_id from the repo
+            // Strip the targeted actor_user_id from the repo
             // query to prevent enumeration ("did Alice ever act in W?"). The caller
             // is authorised to see all workspace activity; narrowing server-side by
             // a specific victim's id is a separate enumeration primitive that offers
@@ -124,7 +122,7 @@ impl AuditLogService for DefaultAuditLogService {
                     caller_id = %caller.user_id,
                     requested_user_id = %other,
                     workspace_id = %uuid::Uuid::from(ws),
-                    "cross-user actor_user_id filter stripped from audit query (P6-FU6); \
+                    "cross-user actor_user_id filter stripped from audit query; \
                      returning full workspace dump instead of targeted user rows"
                 );
                 strip_actor_filter = true;
@@ -267,13 +265,13 @@ mod tests {
         repo
     }
 
-    // ── P6-H2 matrix tests ────────────────────────────────────────────────────
+    // ── Access matrix tests ───────────────────────────────────────────────────
 
     /// actor_user_id=B, server_id=None → Forbidden.
     /// Cross-user read without any workspace scope must be denied unconditionally,
     /// before any capability check fires.
     #[tokio::test]
-    async fn p6_h2_cross_user_no_server_forbidden() {
+    async fn cross_user_no_server_forbidden() {
         // No capability check should fire — we short-circuit to PermissionDenied.
         let repo = MockAuditLogRepository::new();
         let cap_svc = MockCapabilityService::new();
@@ -301,7 +299,7 @@ mod tests {
     /// actor_user_id=B, server_id=W2 where caller is not a member → Forbidden.
     /// The capability check fires for audit.read in W2, which denies non-members.
     #[tokio::test]
-    async fn p6_h2_cross_user_non_member_workspace_forbidden() {
+    async fn cross_user_non_member_workspace_forbidden() {
         let repo = MockAuditLogRepository::new();
         let mut cap_svc = MockCapabilityService::new();
         // Capability check fires for audit.read with workspace_id=W2, but
@@ -339,7 +337,7 @@ mod tests {
 
     /// actor_user_id=A (self), server_id=None → Ok with audit.read.self.
     #[tokio::test]
-    async fn p6_h2_self_read_no_server_ok() {
+    async fn self_read_no_server_ok() {
         let mut cap_svc = MockCapabilityService::new();
         cap_svc
             .expect_check()
@@ -372,7 +370,7 @@ mod tests {
 
     /// actor_user_id=None, server_id=W1 (member) → Ok with audit.read in W1.
     #[tokio::test]
-    async fn p6_h2_workspace_read_member_ok() {
+    async fn workspace_read_member_ok() {
         let mut cap_svc = MockCapabilityService::new();
         cap_svc
             .expect_check()
@@ -407,7 +405,7 @@ mod tests {
 
     /// actor_user_id=None, server_id=None → Forbidden (too broad).
     #[tokio::test]
-    async fn p6_h2_unscoped_read_forbidden() {
+    async fn unscoped_read_forbidden() {
         let repo = MockAuditLogRepository::new();
         let cap_svc = MockCapabilityService::new();
 
@@ -431,14 +429,14 @@ mod tests {
         );
     }
 
-    // ── P6-FU6 enumeration-primitive regression tests ─────────────────────────
+    // ── Enumeration regression tests ──────────────────────────────────────────
 
-    /// P6-FU6: cross-user+workspace read must strip the actor_user_id from the
+    /// A cross-user+workspace read strips the actor_user_id from the
     /// repo query. The `.withf` on the repo expectation proves the DB never
     /// receives the targeted filter — Mallory cannot enumerate Alice's activity
     /// even when she has `audit.read` in W1.
     #[tokio::test]
-    async fn p6_fu6_cross_user_workspace_strips_actor_filter() {
+    async fn cross_user_workspace_strips_actor_filter() {
         let mut repo = MockAuditLogRepository::new();
         // Repo must be called WITHOUT actor_user_id (None), proving the
         // targeted filter was stripped before the query reached the DB.
@@ -485,9 +483,9 @@ mod tests {
         );
     }
 
-    /// P6-FU6: self-read must still pass actor_user_id to the repo (no stripping).
+    /// A self-read still passes actor_user_id to the repo (no stripping).
     #[tokio::test]
-    async fn p6_fu6_self_read_preserves_actor_filter() {
+    async fn self_read_preserves_actor_filter() {
         let mut repo = MockAuditLogRepository::new();
         // Self-read: repo receives actor_user_id = Alice's id.
         repo.expect_list()
@@ -531,13 +529,13 @@ mod tests {
         );
     }
 
-    /// P6-FU6: cross-user+workspace read returns full workspace dump — rows from
+    /// A cross-user+workspace read returns the full workspace dump — rows from
     /// all users in the workspace, NOT only the requested target user.
     /// Mallory queries `target_user=Alice, server_id=W1`; the repo (simulating
     /// rows from Alice, Mallory, and User3) returns all three. Service must
     /// pass them through unchanged — no post-filter on actor_user_id.
     #[tokio::test]
-    async fn p6_fu6_cross_user_workspace_returns_full_workspace_dump() {
+    async fn cross_user_workspace_returns_full_workspace_dump() {
         let mut repo = MockAuditLogRepository::new();
         // Repo returns rows from three different users — simulates a real workspace.
         repo.expect_list()
@@ -589,11 +587,11 @@ mod tests {
         );
     }
 
-    /// P6-FU6: cross-user+workspace read where victim has NO rows in W must
+    /// A cross-user+workspace read where the victim has NO rows in W must
     /// return the full workspace dump (non-empty), NOT an empty result that
     /// would leak victim absence information.
     #[tokio::test]
-    async fn p6_fu6_cross_user_workspace_no_victim_rows_returns_workspace_dump_not_empty() {
+    async fn cross_user_workspace_no_victim_rows_returns_workspace_dump_not_empty() {
         let mut repo = MockAuditLogRepository::new();
         // Victim (alice) has NO rows in W; workspace has rows from other users.
         // The repo is queried without actor_user_id filter, so it returns
@@ -680,7 +678,7 @@ mod tests {
         );
     }
 
-    /// P6-FU8: Happy path — cross-user read by a workspace member must succeed.
+    /// Happy path — cross-user read by a workspace member must succeed.
     ///
     /// Mallory has `audit.read` in W1. She queries `actor_user_id=Alice,
     /// server_id=W1`. The cap check passes and the service returns Ok.
@@ -688,7 +686,7 @@ mod tests {
     /// accidentally flipping the `Some(other)` / `None` arms) breaks the build
     /// rather than silently allowing or silently denying.
     #[tokio::test]
-    async fn p6_h2_cross_user_member_workspace_ok() {
+    async fn cross_user_member_workspace_ok() {
         let mut repo = MockAuditLogRepository::new();
         repo.expect_list().returning(|_| {
             Ok(AuditLogPageRecord {
@@ -735,7 +733,7 @@ mod tests {
         );
     }
 
-    /// P6-FU8: Precedence — `(actor_user_id=self, server_id=Some(W))` must
+    /// Precedence — `(actor_user_id=self, server_id=Some(W))` must
     /// hit the self-read arm, NOT the cross-user arm.
     ///
     /// The self arm fires first because of the `uid == caller_uuid` guard.
@@ -744,7 +742,7 @@ mod tests {
     /// with `workspace_id=Some(W1)` instead of `audit.read.self` with
     /// `workspace_id=None`, failing the test immediately.
     #[tokio::test]
-    async fn p6_h2_self_arm_takes_precedence() {
+    async fn self_arm_takes_precedence() {
         let mut cap_svc = MockCapabilityService::new();
         // Wrong arm: audit.read with workspace_id=Some(W1) must NEVER fire.
         // If the self-arm guard is removed or reordered this expectation fires,

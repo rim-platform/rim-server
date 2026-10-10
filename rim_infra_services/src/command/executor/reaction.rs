@@ -14,8 +14,7 @@ pub(super) async fn toggle_reaction(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // P4-A5: name is `toggle_reaction` (Tony's call) — backend
-    // mutation is bidirectional. `action` in the payload tells the
+    // The backend mutation is bidirectional. `action` in the payload tells the
     // LLM whether the call added or removed the reaction, so a
     // subsequent turn doesn't blindly retry "add" when it meant to.
     // Detection: compare reaction groups pre/post for the actor's

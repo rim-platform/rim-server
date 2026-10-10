@@ -1449,7 +1449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_10_a_client_clock_minutes_ahead_still_uploads() {
+    async fn a_client_clock_minutes_ahead_still_uploads() {
         let f = Fixture::new();
         let a = &f.alice;
         let package = |secs| {
@@ -1673,7 +1673,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_9_readd_requests_must_be_fresh_and_used_once() {
+    async fn readd_requests_must_be_fresh_and_used_once() {
         let f = Fixture::new().with_limits(600, 100, 10);
         let conv: Uuid = f.conv.id.into();
         let bob = &f.bob;
@@ -1954,7 +1954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_a_stolen_franking_key_cannot_forge_a_report() {
+    async fn a_stolen_franking_key_cannot_forge_a_report() {
         let f = Fixture::new();
         f.repo.state().devices.push(stored_device(&f.bob));
         let sent = br#"{"v":1,"type":"message","body":"hi"}"#.to_vec();
@@ -2079,7 +2079,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_a_replaced_key_still_verifies() {
+    async fn a_replaced_key_still_verifies() {
         let mut f = Fixture::new();
         f.service = Fixture::build(&f.repo, &f.events, &f.conv, &f.messages, &f.reports)
             .with_franking_keys(SharedFrankingKeys::fixed(

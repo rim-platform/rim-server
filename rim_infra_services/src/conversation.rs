@@ -169,7 +169,7 @@ impl DefaultConversationService {
         }
     }
 
-    /// Gate for joining and inviting (Track 1.2): role first, so a guest learns nothing about
+    /// Gate for joining and inviting: role first, so a guest learns nothing about
     /// which conversation ids exist; then the timeout; then the usual read gate.
     async fn ensure_may_add_members(
         &self,
@@ -360,7 +360,7 @@ impl ConversationService for DefaultConversationService {
             self.join_direct_space(cmd.server_id, &joining).await?;
         }
 
-        // Member, not timed out; guests may only open DMs (Track 1.2), except in the direct
+        // Member, not timed out; guests may only open DMs, except in the direct
         // space, where everyone is a guest.
         let standing = ensure_workspace_writable(
             self.repos.server_member_repo.as_ref(),
@@ -669,7 +669,7 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        // Guests cannot invite and timed-out members cannot write (Track 1.2). Private
+        // Guests cannot invite and timed-out members cannot write. Private
         // channels and groups: the gate already requires membership (NotFound /
         // PermissionDenied otherwise).
         let conversation = self
@@ -828,7 +828,7 @@ impl ConversationService for DefaultConversationService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
     )]
     async fn join_channel(&self, cmd: JoinChannelCmd) -> ServiceResult<ConversationDto> {
-        // Guests cannot join (Track 1.2); a timed-out member cannot either. A private channel
+        // Guests cannot join; a timed-out member cannot either. A private channel
         // the actor is not in is NotFound here, so it cannot be joined.
         let conversation = self
             .ensure_may_add_members(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)

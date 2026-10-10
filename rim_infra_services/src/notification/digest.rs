@@ -1,4 +1,4 @@
-//! The notification email digest and retention jobs (Track 1.3). The composition root
+//! The notification email digest and retention jobs. The composition root
 //! (`rim_server/src/app.rs`) drives them on a timer, assuming a single scheduler node; the jobs themselves are plain async methods behind
 //! [`NotificationJobs`] so they are testable without a scheduler.
 //!

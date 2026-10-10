@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_27_parser_text_never_reaches_the_client() {
+    fn parser_text_never_reaches_the_client() {
         for bad in [
             APPLICATION.replacen('{', r#"{"extra":1,"#, 1),
             APPLICATION.replacen('{', r#"{"mentionAll":true,"#, 1),

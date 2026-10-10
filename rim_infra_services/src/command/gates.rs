@@ -74,7 +74,7 @@ impl DefaultCommandService {
 }
 
 impl DefaultCommandService {
-    /// Track 1.2 timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
+    /// Timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
     /// stricter) and the actor is timed out in the context's workspace. Without a workspace
     /// context there is nothing to check here; the services behind the command still apply
     /// their own write gates.

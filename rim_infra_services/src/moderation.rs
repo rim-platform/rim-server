@@ -1,4 +1,4 @@
-//! Roles and moderation (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`).
+//! Roles and moderation.
 //!
 //! [`DefaultModerationService`] implements role changes, kick, ban, timeout, slow mode and
 //! message reports. [`record_moderation_action`] is the one place a moderation action is

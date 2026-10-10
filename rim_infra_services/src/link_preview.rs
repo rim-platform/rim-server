@@ -560,7 +560,7 @@ mod tests {
         );
     }
 
-    /// S-H2 regression: a *hostname* that resolves to a private address must not be fetched.
+    /// A *hostname* that resolves to a private address must not be fetched.
     /// `fetch_og_data` is called directly so the string-level `is_url_safe` check (which would
     /// catch the literal `localhost`) is bypassed and only the client's resolver stands guard.
     #[tokio::test]

@@ -85,7 +85,7 @@ impl std::fmt::Debug for SmtpConfig {
 
 impl SmtpConfig {
     /// Build a config from individual `RIM_SMTP_*` values, applying the "host+from required"
-    /// rule from `docs/email.md`: returns `None` (fall back to [`super::LogEmailSender`]) unless
+    /// rule: returns `None` (fall back to [`super::LogEmailSender`]) unless
     /// both `host` and `from` are present. `username`/`password` may be absent (unauthenticated
     /// relay / localhost dev SMTP); `port` defaults to 587; `tls` defaults to
     /// [`SmtpTlsMode::Starttls`] on any unrecognized/absent value.
@@ -180,7 +180,7 @@ where
 /// Real SMTP sender, `lettre` + rustls (pure-rustls stack — no native-tls/OpenSSL feature is
 /// enabled, matching the rest of this workspace). Retries transient failures via
 /// [`send_with_retry`]; permanent failures (invalid recipient, auth failure) return immediately
-/// without retrying — see [`Self::is_retryable`] for the classification.
+/// without retrying — see [`Self::is_permanent`] for the classification.
 pub struct SmtpEmailSender {
     transport: AsyncSmtpTransport<Tokio1Executor>,
     from: Mailbox,
@@ -250,7 +250,7 @@ impl SmtpEmailSender {
         Ok(email)
     }
 
-    /// Whether a `lettre` SMTP error is worth retrying. Permanent errors (5xx SMTP replies —
+    /// Whether a `lettre` SMTP error is permanent. Permanent errors (5xx SMTP replies —
     /// invalid recipient, auth failure) are never retried. Everything else (4xx transient
     /// replies, connection/network/TLS errors) is retried, since those are the class of failure
     /// that can plausibly clear up on its own within a few seconds.

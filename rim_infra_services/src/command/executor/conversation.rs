@@ -379,7 +379,7 @@ mod tests {
         }
     }
 
-    // ── Track 1.1 membership/archive commands ──
+    // ── Membership/archive commands ──
 
     fn ctx_with_conversation(ws: ServerId, conversation_id: ConversationId) -> CommandContextDto {
         CommandContextDto {

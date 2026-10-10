@@ -60,7 +60,7 @@ impl ReadStateService for DefaultReadStateService {
         .await?;
 
         // Upsert with forward-only guard (handled at DB level), and mark the conversation's
-        // notifications up to `read_at` read (Track 1.3), in one transaction when a database
+        // notifications up to `read_at` read, in one transaction when a database
         // connection is available.
         let scope = match &self.db {
             Some(db) => Some(
@@ -124,7 +124,7 @@ impl ReadStateService for DefaultReadStateService {
             .read_state_repo
             .mark_all_read(cmd.actor.user_id, &conversation_ids, now)
             .await?;
-        // Everything is read now, so are the workspace's notifications (Track 1.3).
+        // Everything is read now, so are the workspace's notifications.
         self.repos
             .notification_repo
             .mark_read_before(cmd.actor.user_id, cmd.workspace_id, now, now)
@@ -156,7 +156,7 @@ impl ReadStateService for DefaultReadStateService {
 
         // Only conversations the user is a member of (joined public channels, private
         // channels, DMs, groups): unjoined public channels are readable but not followed, so
-        // they carry no unread badge (Track 1.1).
+        // they carry no unread badge.
         let conversation_ids = self
             .repos
             .conversation_repo
@@ -204,7 +204,7 @@ mod tests {
     use super::DefaultReadStateService;
     use crate::ReadStateRepos;
 
-    /// Track 1.1: unread counts and mark-all-read cover only the conversations the user is a
+    /// Unread counts and mark-all-read cover only the conversations the user is a
     /// member of — never every public channel they could read.
     fn service(
         joined: Vec<ConversationId>,
@@ -291,7 +291,7 @@ mod tests {
             .expect_mark_all_read()
             .withf(move |_, ids, _| ids == expected.as_slice())
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
-        // Track 1.3: marking everything read also marks the workspace's notifications read.
+        // Marking everything read also marks the workspace's notifications read.
         let workspace = ServerId::new();
         let actor = UserId::new();
         let mut notification_repo = MockNotificationRepository::new();

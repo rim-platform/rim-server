@@ -38,7 +38,7 @@ impl DefaultServerMemberService {
         }
     }
 
-    /// The users a guest may see in the member directory (Track 1.2): themselves and everyone
+    /// The users a guest may see in the member directory: themselves and everyone
     /// who shares a conversation with them. `None` for non-guests (everyone is visible).
     async fn visible_member_ids(
         &self,
@@ -124,7 +124,7 @@ impl ServerMemberService for DefaultServerMemberService {
         &self,
         query: ListServerMembersQuery,
     ) -> ServiceResult<Vec<ServerMemberDto>> {
-        // Guests see only members who share a conversation with them (Track 1.2).
+        // Guests see only members who share a conversation with them.
         let visible = self
             .visible_member_ids(query.server_id, query.actor.user_id)
             .await?;
