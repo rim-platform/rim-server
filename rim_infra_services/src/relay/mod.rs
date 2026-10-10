@@ -543,7 +543,12 @@ impl DefaultRelayService {
         }
 
         let request_id = match file(&facts) {
-            Filing::Refuse(reason) => return Ok(Filed::Done(Some(reason))),
+            Filing::Refuse(reason) => {
+                if reason == "limited" {
+                    crate::metrics::rate_limited("dm_requests");
+                }
+                return Ok(Filed::Done(Some(reason)));
+            }
             Filing::Drop => return Ok(Filed::Done(None)),
             // Local members read a conversation they accepted live, not from the queue.
             Filing::Deliver if read.local => return Ok(Filed::Done(None)),
@@ -1005,17 +1010,24 @@ impl RelayService for DefaultRelayService {
             .verify(&key)
             .map_err(|_| forbidden("the device signature does not verify"))?;
         let now = Utc::now();
-        for decision in [
-            self.forwards_per_device
-                .check_and_record(&device.id.to_string(), "forward", now),
-            self.forwards_per_user
-                .check_and_record(&user_id.to_string(), now),
+        for (limiter, decision) in [
+            (
+                "relay_forward_device",
+                self.forwards_per_device
+                    .check_and_record(&device.id.to_string(), "forward", now),
+            ),
+            (
+                "relay_forward_user",
+                self.forwards_per_user
+                    .check_and_record(&user_id.to_string(), now),
+            ),
         ] {
             if let RateLimitDecision::Limited {
                 retry_after_seconds,
             } = decision
             {
                 warn!(user_id = %user_id, device_key_id = %device.id, "a user's forwarded requests are over their quota");
+                crate::metrics::rate_limited(limiter);
                 return Err(ServiceError::RateLimited {
                     retry_after_seconds,
                 });
@@ -1281,6 +1293,7 @@ impl RelayService for DefaultRelayService {
                 .stranger_claims
                 .check_and_record(claimer, "stranger_claim", Utc::now())
         {
+            crate::metrics::rate_limited("stranger_claim");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });

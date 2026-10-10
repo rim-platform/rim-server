@@ -173,9 +173,12 @@ impl DefaultPluginBundleService {
             RateLimitDecision::Allowed => Ok(()),
             RateLimitDecision::Limited {
                 retry_after_seconds,
-            } => Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            }),
+            } => {
+                crate::metrics::rate_limited(UPLOAD_KEY);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 
