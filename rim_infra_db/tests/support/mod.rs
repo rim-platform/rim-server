@@ -108,7 +108,6 @@ TRUNCATE TABLE
   device_key,
   device_link,
   device_request_seen,
-  franking_key,
   host_delegation,
   host_event_stream,
   instance_invite,

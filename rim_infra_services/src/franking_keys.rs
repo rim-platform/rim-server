@@ -283,11 +283,8 @@ fn next_file(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Load the key file, creating it at first boot. A missing file takes the keys of the
-/// `franking_key` table when it has any, so receipts signed before the file existed keep
-/// verifying, plus a fresh key that signs from then on, since the database and its backups hold
-/// the old ones; otherwise a new key 1. Refuses to start when messages carry receipts under a
-/// key that neither the file nor the table holds (a lost key file).
+/// Load the key file, creating it with a new key 1 at first boot. Refuses to start when the
+/// file is missing but messages carry receipts under a franking key (a lost key file).
 pub async fn load_or_create(
     path: &Path,
     repo: &dyn E2eeRepository,
@@ -295,44 +292,18 @@ pub async fn load_or_create(
     if path.exists() {
         return read_key_file(path);
     }
-    let legacy = repo
-        .legacy_franking_keys()
-        .await
-        .map_err(|e| anyhow!("cannot read the franking_key table: {e}"))?;
     let used = repo
         .max_message_franking_key_id()
         .await
         .map_err(|e| anyhow!("cannot read the messages' franking key ids: {e}"))?;
-    let held = legacy.iter().map(|k| k.id).max();
-    if let Some(used) = used
-        && held.is_none_or(|held| used > held)
-    {
+    if let Some(used) = used {
         bail!(
             "{} is missing but messages carry receipts under franking key {used}; restore the \
              file",
             path.display()
         );
     }
-    let keys = if legacy.is_empty() {
-        FrankingKeys::new(vec![FrankingKey::generate(1, Utc::now())?])?
-    } else {
-        let mut keys = legacy
-            .iter()
-            .map(|k| {
-                let secret: [u8; KEY_LEN] = k
-                    .secret
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| anyhow!("franking key {} is not {KEY_LEN} bytes", k.id))?;
-                Ok(FrankingKey::new(k.id, secret, k.created_at))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let next_id = held
-            .and_then(|held| held.checked_add(1))
-            .ok_or_else(|| anyhow!("franking key ids are exhausted"))?;
-        keys.push(FrankingKey::generate(next_id, Utc::now())?);
-        FrankingKeys::new(keys)?
-    };
+    let keys = FrankingKeys::new(vec![FrankingKey::generate(1, Utc::now())?])?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
@@ -342,17 +313,7 @@ pub async fn load_or_create(
         Err(_) if path.exists() => return read_key_file(path),
         Err(e) => return Err(e),
     }
-    if legacy.is_empty() {
-        tracing::info!(path = %path.display(), "created the franking key file");
-    } else {
-        tracing::info!(
-            path = %path.display(),
-            moved = ?legacy.iter().map(|k| k.id).collect::<Vec<_>>(),
-            current = keys.current().id,
-            "moved the franking keys from the database into the key file and rotated: the moved \
-             keys only verify, the new key signs"
-        );
-    }
+    tracing::info!(path = %path.display(), "created the franking key file");
     Ok(keys)
 }
 
@@ -391,7 +352,6 @@ pub fn rotate(path: &Path, now: DateTime<Utc>) -> anyhow::Result<FrankingKeys> {
 mod tests {
     use super::*;
 
-    use rim_core::e2ee::model::FrankingKey as LegacyKey;
     use rim_core::e2ee::repository::MockE2eeRepository;
 
     fn at(days: i64) -> DateTime<Utc> {
@@ -402,19 +362,8 @@ mod tests {
         FrankingKey::new(id, [byte; KEY_LEN], at(created))
     }
 
-    fn repo(legacy: Vec<(i32, u8)>, used: Option<i32>) -> MockE2eeRepository {
+    fn repo(used: Option<i32>) -> MockE2eeRepository {
         let mut repo = MockE2eeRepository::new();
-        repo.expect_legacy_franking_keys().returning(move || {
-            let keys = legacy
-                .iter()
-                .map(|(id, byte)| LegacyKey {
-                    id: *id,
-                    secret: Zeroizing::new(vec![*byte; KEY_LEN]),
-                    created_at: at(0),
-                })
-                .collect();
-            Box::pin(async move { Ok(keys) })
-        });
         repo.expect_max_message_franking_key_id()
             .returning(move || Box::pin(async move { Ok(used) }));
         repo
@@ -447,7 +396,7 @@ mod tests {
     async fn finding_7_first_boot_creates_a_private_key_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keys").join("franking-key.json");
-        let keys = load_or_create(&path, &repo(vec![], None)).await.unwrap();
+        let keys = load_or_create(&path, &repo(None)).await.unwrap();
         assert_eq!(keys.current().id, 1);
         assert_eq!(mode(&path), 0o600);
         let text = fs::read_to_string(&path).unwrap();
@@ -463,33 +412,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_the_database_key_moves_into_the_file_and_stops_signing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("franking-key.json");
-        let keys = load_or_create(&path, &repo(vec![(1, 0x42)], Some(1)))
-            .await
-            .unwrap();
-        assert_eq!(keys.ids(), vec![1, 2]);
-        assert_eq!(keys.verifying(1).map(|k| k.secret()), Some(&[0x42; 32]));
-        assert_eq!(keys.current().id, 2, "a fresh key signs");
-        assert_ne!(keys.current().secret(), &[0x42; 32]);
-        let stored = read_key_file(&path).unwrap();
-        assert_eq!(stored.ids(), vec![1, 2]);
-        assert_eq!(stored.current().secret(), keys.current().secret());
-    }
-
-    #[tokio::test]
     async fn finding_7_a_lost_key_file_refuses_to_start() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
-        let err = load_or_create(&path, &repo(vec![], Some(2)))
-            .await
-            .unwrap_err();
+        let err = load_or_create(&path, &repo(Some(2))).await.unwrap_err();
         assert!(format!("{err:#}").contains("restore the file"), "{err:#}");
-        let err = load_or_create(&path, &repo(vec![(1, 1)], Some(3)))
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("franking key 3"), "{err:#}");
+        assert!(format!("{err:#}").contains("franking key 2"), "{err:#}");
         assert!(!path.exists());
     }
 

@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS,
-    MlsCommit, MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    ClaimedKeyPackage, E2eeDevice, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
+    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
     MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
     NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
@@ -63,7 +63,6 @@ pub(crate) struct State {
     /// Re-add nonces used, per conversation, incarnation and device.
     pub(crate) readd_nonces: HashSet<(ConversationId, i32, DeviceKeyId, Vec<u8>)>,
     pub(crate) encrypted: HashSet<ConversationId>,
-    pub(crate) franking: Vec<FrankingKey>,
     pub(crate) fail_commit_insert: bool,
     /// Recorded versions of encrypted messages.
     pub(crate) revisions: Vec<FrankingRevision>,
@@ -898,10 +897,6 @@ impl E2eeRepository for FakeE2ee {
             .filter(|r| r.message_id == message_id)
             .cloned()
             .collect())
-    }
-
-    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
-        Ok(self.state().franking.clone())
     }
 
     async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>> {
