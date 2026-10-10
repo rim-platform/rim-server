@@ -151,3 +151,120 @@ async fn update_my_profile_mutation_maps_validation_error() {
         Some(&Value::from("VALIDATION"))
     );
 }
+
+/// A federation context whose host says whether a user is remote.
+fn federation_with_remote(remote: bool) -> crate::federation::FederationContext {
+    let mut host = rim_services::host::service::MockHostService::new();
+    host.expect_is_remote_user()
+        .returning(move |_| Box::pin(async move { Ok(remote) }));
+    crate::federation::FederationContext {
+        relay: Arc::new(rim_services::relay::service::MockRelayService::new()),
+        host: Arc::new(host),
+        workspace_host: Arc::new(
+            rim_services::remote_workspace::service::MockWorkspaceHostService::new(),
+        ),
+        workspace_relay: Arc::new(
+            rim_services::remote_workspace::service::MockWorkspaceRelayService::new(),
+        ),
+        info: rim_services::relay::dto::RelayInfoDto {
+            server_id: "rims1_test".to_string(),
+            roles: vec!["relay".to_string(), "host".to_string()],
+            direct_space_id: ServerId::new(),
+        },
+        relay_role: true,
+        host_role: true,
+    }
+}
+
+#[tokio::test]
+async fn update_my_profile_refuses_a_remote_members_display_name() {
+    let actor = UserId::new();
+    let schema = schema_with_user_mock(MockUserService::new());
+
+    let req = authed_request(
+        r#"mutation { updateMyProfile(input: { displayName: "Bob" }) { id } }"#,
+        actor,
+    )
+    .data(federation_with_remote(true));
+
+    let res = schema.execute(req).await;
+    assert_eq!(res.errors.len(), 1);
+    let code = res.errors[0]
+        .extensions
+        .as_ref()
+        .and_then(|e| e.get("code"))
+        .cloned();
+    assert_eq!(code, Some(Value::from("FORBIDDEN")));
+}
+
+#[tokio::test]
+async fn update_my_profile_lets_a_remote_member_set_avatar_and_status() {
+    let actor = UserId::new();
+    let mut user = MockUserService::new();
+    user.expect_update_my_profile().returning(move |cmd| {
+        Box::pin(async move {
+            let mut dto = test_user_dto();
+            dto.id = cmd.actor.user_id;
+            dto.avatar_url = cmd.avatar_url;
+            dto.status_text = cmd.status_text;
+            Ok(dto)
+        })
+    });
+    let schema = schema_with_user_mock(user);
+
+    // No display name in the input: the host is not even asked whether the user is remote.
+    let mut fed = federation_with_remote(true);
+    let mut host = rim_services::host::service::MockHostService::new();
+    host.expect_is_remote_user().never();
+    fed.host = Arc::new(host);
+    let req = authed_request(
+        r#"mutation {
+                updateMyProfile(input: { avatarUrl: "/api/files/avatars/x/avatar.png", statusText: "away" }) {
+                    avatarUrl statusText
+                }
+            }"#,
+        actor,
+    )
+    .data(fed);
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(
+        json["updateMyProfile"]["avatarUrl"],
+        serde_json::json!("/api/files/avatars/x/avatar.png")
+    );
+    assert_eq!(
+        json["updateMyProfile"]["statusText"],
+        serde_json::json!("away")
+    );
+}
+
+#[tokio::test]
+async fn update_my_profile_lets_a_local_user_set_a_display_name() {
+    let actor = UserId::new();
+    let mut user = MockUserService::new();
+    user.expect_update_my_profile().returning(move |cmd| {
+        Box::pin(async move {
+            let mut dto = test_user_dto();
+            dto.id = cmd.actor.user_id;
+            dto.display_name = cmd.display_name;
+            Ok(dto)
+        })
+    });
+    let schema = schema_with_user_mock(user);
+
+    let req = authed_request(
+        r#"mutation { updateMyProfile(input: { displayName: "Ada" }) { displayName } }"#,
+        actor,
+    )
+    .data(federation_with_remote(false));
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(
+        json["updateMyProfile"]["displayName"],
+        serde_json::json!("Ada")
+    );
+}

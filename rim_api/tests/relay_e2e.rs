@@ -639,6 +639,76 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         json!(format!("avatars/{bob_on_a}/avatar.png"))
     );
 
+    // Bob makes it his avatar at Alice's server, with a status; Alice's server stores both.
+    let avatar_url = uploaded.body["url"].as_str().expect("url").to_string();
+    let set = bob
+        .remote(
+            &a,
+            r#"mutation($input: UpdateMyProfileInput!) {
+                updateMyProfile(input: $input) { id avatarUrl statusText }
+            }"#,
+            json!({ "input": { "avatarUrl": avatar_url, "statusText": "on the road" } }),
+        )
+        .await;
+    assert_eq!(set["updateMyProfile"]["id"], json!(bob_on_a.to_string()));
+    assert_eq!(set["updateMyProfile"]["avatarUrl"], json!(avatar_url));
+    let row =
+        a.db.query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT avatar_url, status_text, display_name FROM "user" WHERE id = $1"#,
+            [Uuid::from(bob_on_a).into()],
+        ))
+        .await
+        .expect("query")
+        .expect("bob's row");
+    assert_eq!(
+        row.try_get::<Option<String>>("", "avatar_url")
+            .expect("avatar"),
+        Some(avatar_url.clone())
+    );
+    assert_eq!(
+        row.try_get::<Option<String>>("", "status_text")
+            .expect("status"),
+        Some("on the road".to_string())
+    );
+    let card_name = row
+        .try_get::<Option<String>>("", "display_name")
+        .expect("name");
+
+    // His display name comes from his profile card: setting it at Alice's server is refused.
+    let body = serde_json::to_vec(&json!({
+        "query": r#"mutation { updateMyProfile(input: { displayName: "Robert", avatarUrl: "" }) { id } }"#,
+    }))
+    .expect("json");
+    let (refused, _) = bob.forward(&a, "POST", "/api", body, None, None).await;
+    assert_eq!(refused.status, 200);
+    assert!(refused.host_signed);
+    assert_eq!(
+        refused.body["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{}",
+        refused.body
+    );
+    let row =
+        a.db.query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT avatar_url, display_name FROM "user" WHERE id = $1"#,
+            [Uuid::from(bob_on_a).into()],
+        ))
+        .await
+        .expect("query")
+        .expect("bob's row");
+    assert_eq!(
+        row.try_get::<Option<String>>("", "avatar_url")
+            .expect("avatar"),
+        Some(avatar_url),
+        "a refused mutation changes nothing"
+    );
+    assert_eq!(
+        row.try_get::<Option<String>>("", "display_name")
+            .expect("name"),
+        card_name
+    );
+
     // Alice's avatar, stored on her own server, reaches Bob through the same path.
     let alice_png = b"\x89PNG\r\n\x1a\nalice";
     let stored: Value = alice
