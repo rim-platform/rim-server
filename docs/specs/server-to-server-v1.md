@@ -226,7 +226,7 @@ Bodies are `{"error":"<code>","message":"…"}`.
 | 401 | `bad_signature` | Profile, clock, key, digest or signature |
 | 403 | `unknown_peer`, `peer_not_allowed`, `peer_forked`, `not_delegated`, `forbidden` | Peer not pinnable; denied or off the allow-list; forked; no delegation or card names the relay; action refused |
 | 404 | `not_found` | Unknown principal, space or conversation |
-| 409 | `replay` | Nonce seen; device request `seq` refused (`highestSeq` in the body) |
+| 409 | `replay`, `conflict` | Nonce seen; device request `seq` refused (`highestSeq` in the body); the action conflicts with stored state |
 | 413, 429 | `too_large`, `rate_limited` | Caps; `Retry-After` |
 | 500 | `internal` | The responder failed (its database, say); retry |
 | 503 | `role_disabled` | The endpoint belongs to a role this server does not run |
@@ -621,7 +621,9 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
    `joinServerByInvite`, bans included), creates or updates the remote user, adds the membership
    with the invite's role, stores devices and card, accepts the delegation, and answers
    `{"workspaceId","userId","role","streamHeads":{"w":17,"u:rimp1_…":0}}`. R records the
-   subscription; the app loads the space through the forward path.
+   subscription; the app loads the space through the forward path. The join carries no
+   `mlsActive`, so H marks devices it did not know inactive for encryption; R pushes the full
+   identity (`POST /identity`) right after the join, as it does for any host holding the person.
 
 A current member (an earlier join, or an existing local account on H) sends `inviteToken: null`.
 
@@ -643,14 +645,24 @@ that relay's log with no `signer: recovery` rotation after it (an ordinary rotat
 delegations, a recovery kills them); the principal is a current, unbanned member of `workspaceId`;
 `scope` is `workspace`; `expiresAt − issuedAt ≤ 24 h` and `expiresAt` is ahead. It keeps it until
 `min(expiresAt, accepted_at + 24 h)` by its own clock, so a device clock cannot extend it. One row
-per (workspace, device, relay); a newer one replaces it.
+per (workspace, device, relay); a newer one replaces it unless the active row runs longer, so a
+relay replaying an older delegation cannot shorten or reset the one it holds.
 
 **Subscriptions.** `POST /s2s/v1/subscriptions {"delegations":[…]}` (at most 64) →
 `{"subscriptions":[{"workspaceId","status","expiresAt"}]}`, one entry per delegation in order,
-`status` `active` or `refused` with a `reason`. A relay's subscription for (user, workspace) lives
-while one of the user's devices has an active delegation there.
-`POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` ends it.
-Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent.
+`status` `active` or `refused` with a `reason` (`invalid_delegation`, `bad_signature`,
+`wrong_host`, `wrong_relay`, `relay_key`, `expired`, `unknown_device`, `revoked_device`,
+`not_member`, `banned`, `limited`); `workspaceId` is null for a delegation that cannot be read.
+A relay's subscription for (user, workspace) lives while one of the user's devices has an active
+delegation there.
+`POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` (at most 64)
+ends the presenting relay's delegations for them → `{"cancelled":<n>}`.
+Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent;
+the departed member gets that `MemberLeft` on their `u:` stream, being no member of `w` any more.
+`join`, `join/challenge`, `subscriptions` and `subscriptions/cancel` are workspace host endpoints: a
+server running only `relay` answers `503 role_disabled`. `presence` and `revocations` are served by
+every role (a relay is the home of DMs). A relay delivers items of a workspace a user holds an
+active subscription to straight to the queue; the request inbox is for everything else.
 
 **Renewal.** An online device signs fresh delegations when the current ones have less than 6 hours
 left and sends them with `renewDelegations`; the relay presents them. When every device has been
@@ -660,8 +672,11 @@ revocation, as the relay decision requires. Rejected: a delegation for the whole
 relay key would reach every workspace there), and long-lived delegations with explicit revocation
 only (a hidden revocation would never end).
 
-**Presence.** The relay reports `POST /s2s/v1/presence {"updates":[{"principalId","online"}]}` for
-subscribed workspaces when a person's first WebSocket opens or the last closes (30 s debounce).
+**Presence.** The relay reports `POST /s2s/v1/presence {"updates":[{"principalId","online"}]}`
+(at most 64) → `{"applied":<n>}` to the hosts of the person's subscriptions when their first
+`relayStream` opens, and once the last has been closed for 30 s with none reopened. The host
+applies it in every workspace where the relay holds an active delegation of the person; a remote
+member's presence does not time out between reports.
 
 Members, roles, bans, timeouts, private channels, archive state, the plugin registry and bundles,
 search, notifications, the change feed and MLS sequencing stay the host's, checked by the same
@@ -687,7 +702,13 @@ t = 24 h  every delegation the revoked device signed has expired regardless
 
 The host verifies the revocation against its copy of the log (identity key, or the device itself),
 marks the device revoked, ends its delegations and direct sessions, raises `MlsMembershipChanged`
-where it is a group device, and acknowledges; a repeat gets the same acknowledgement.
+where it is a group device, and acknowledges; a repeat gets the same acknowledgement (`appliedAt`
+is when the device was first revoked there). A device it does not know is fetched once from the
+presenting relay; one it still does not know is `404 not_found`, and the relay stops sending to
+that host (`GAVE_UP`). The relay verifies each acknowledgement under the host's pinned key before
+recording it, and pushes
+`{"type":"RevocationAcked","deviceId","hostServerId","ack":{"payload","signature"}}` on
+`relayStream` to the person's devices online.
 `applyRemoteRevocation` is the same on the host's GraphQL, without a session and exempt from CSRF
 (it acts only on a fresh identity or device signature, like `loginWithKey`). The app verifies each
 acknowledgement against the pinned key and its revocation's hash, and names any host it could not
@@ -707,8 +728,9 @@ another origin).
   calls `keyLoginChallenge` and `loginWithKey` on the host with `audience` = the host's server id.
   The host finds the remote user and device (refreshing its copy from the person's relays first,
   carrying on if they are down) and issues a device-bound session valid **24 hours** for a remote
-  user. The app then uses the host's `/api` and `/api/ws` as a local client would, under a banner
-  "Connected directly to <host>".
+  user (the host waits up to 10 seconds for the relays). The app then uses the host's `/api` and
+  `/api/ws` as a local client would, under a banner "Connected directly to <host>". The account
+  mutations a remote user may not run are refused on that session too (`FORBIDDEN`).
 - **Back.** It probes `relayInfo` every 60 seconds; after two successes it renews delegations,
   reads `relayStream` from its last item, deduplicates by `(host, stream, seq)` and closes the
   direct connections.
@@ -904,7 +926,8 @@ type RelayItemPage { items: [RelayItem!]!  hasMore: Boolean! }
 type DmRequest { id: ID!  fromPrincipalId: String!  card: SignedStatement!  hostServerId: String!
                  conversationId: ID!  heldItems: [RelayItem!]!  status: DmRequestStatus!
                  createdAt: DateTime!  expiresAt: DateTime! }
-type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: String!  expiresAt: DateTime }
+type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: String!  expiresAt: DateTime
+                          reason: String }                # status refused, from renewDelegations
 enum RevocationFanoutStatus { PENDING  ACKED  GAVE_UP }
 type RevocationFanout { hostServerId: String!  status: RevocationFanoutStatus!  ack: SignedStatement
                         attempts: Int! }
