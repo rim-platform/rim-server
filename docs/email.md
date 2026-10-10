@@ -1,6 +1,6 @@
 # Transactional Email
 
-RIM sends transactional email for password resets, invites, and incident notifications. This
+RIM sends transactional email for password resets, invites, and notification digests. This
 document covers the `RIM_SMTP_*` config matrix, TLS modes, the three wired flows, retry policy,
 and the "unconfigured → log-only" fallback behavior. Implementation: Track B3 (2026-07-10).
 
@@ -36,13 +36,12 @@ transport. Everything else is optional:
 
 ### `RIM_PUBLIC_BASE_URL` and link building
 
-Every email that includes a link (`reset-password`, `join`, incident notification) needs a base
+Every email that includes a link (`reset-password`, `join`, digest permalinks) needs a base
 URL to build it from. If `RIM_PUBLIC_BASE_URL` is unset:
 - Password reset / invite emails fall back to including the **bare token** instead of a link
   (a warning is logged). The user has to construct the URL themselves — acceptable for local
   dev, not for production.
-- Incident-declared notifications are **skipped entirely** (there's no channel link to send,
-  and a notification email without a link isn't actionable).
+- Notification digests are sent without links.
 
 Links are always a **path segment**, never a `?token=` query string:
 - Password reset: `{RIM_PUBLIC_BASE_URL}/reset-password/{raw_token}`
@@ -78,26 +77,12 @@ Both `createInvite` and `createInstanceInvite` accept an optional `recipientEmai
 If `recipientEmail` is omitted, no email is sent — the raw-token-only flow works exactly as
 before Track B3.
 
-### Incident-declared notification
-
-When an incident is declared — either manually (`startIncident`) or by alert ingestion
-(`ingestAlert`'s create path, Track B2) — every workspace **owner** is emailed a
-"`[SEVn] incident declared: <title>`" notification with a link to the incident's channel.
-This is a **minimal** notification, not a full escalation policy:
-- Only fires on **declare**, not on every status update.
-- Goes to **all** owners unconditionally — there's no per-user incident-email preference yet
-  (see "Future work" below).
-- Best-effort: a failure at any step (listing members, resolving emails, sending) is logged and
-  swallowed — it must never fail incident creation.
-- No-op-but-harmless when email is unconfigured: `LogEmailSender` "sends" to the log sink.
-
 ### Notification digest (Track 1.3)
 
 A user can ask for unread notifications by email: `digest` in their workspace notification
 settings is `OFF` (default), `HOURLY` or `DAILY` (`docs/messaging.md`, Notification rules). A
 periodic job (`rim_infra_services::notification::DefaultNotificationJobs`, driven from
-`rim_server/src/app.rs` next to the escalation timer, every `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS`
-seconds, default 900, minimum 60) sends one email per user per workspace when all of these hold:
+`rim_server/src/app.rs`, every `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS` seconds, default 900, minimum 60) sends one email per user per workspace when all of these hold:
 
 - the oldest unread, un-emailed notification is at least one interval old (hourly: 60 minutes,
   daily: 24 hours);
@@ -114,7 +99,7 @@ HTML part, linked to the message permalink
 "`N unread notification(s) in <workspace>`", so `LogEmailSender`, which logs recipient and subject,
 never logs message text. After a successful send the listed notifications get `emailed_at`; a
 failed send leaves them pending for the next run. Deleted messages are skipped. The job assumes it
-runs on one node, like the escalation timer.
+runs on one node.
 
 Notifications older than 90 days are deleted by an hourly retention task in the same loop.
 
@@ -141,9 +126,6 @@ Dual MIT/Apache-2.0 licensed, actively maintained (`lettre v0.11.22` as of this 
 
 Explicitly out of scope for Track B3 (tracked here so they aren't silently dropped):
 - ~~**Notification digest engine**~~ — shipped in Track 1.3 (see "Notification digest" above).
-- **Full incident escalation policies** (on-call chains, paging, push notifications) — Track C.
-- **Per-user incident-email notification preferences** — today, every owner gets every
-  incident-declared email unconditionally; no opt-out exists yet.
 - **Bounce handling, DKIM/SPF setup** — operator/infrastructure concerns, not application code.
 - **Richer HTML email theming** — current HTML bodies are a basic inline-styled paragraph, not a
   branded template.

@@ -9,8 +9,7 @@ capability-gated client plugins. A bring-your-own-model AI agent speaks the same
 registry, so it can *operate* the workspace with every mutating step behind a human
 confirmation. Plugins extend the application itself (panels, commands, context actions), so a
 developer can show their Kubernetes pods next to the conversation and a community can add its
-own automations. The incident and on-call layer is the first showcase of what the platform can
-host. End-to-end encryption and decentralization are committed long-term directions.
+own automations. End-to-end encryption and decentralization are committed long-term directions.
 
 See `ROADMAP.md` for the strategy and `docs/vision.md` for the product principles.
 
@@ -24,17 +23,14 @@ Tauri v2 desktop client lives in the separate `rim-ui` repository.
   search, invite-only registration with operator bootstrap, password reset, SMTP email.
 - **Programmable runtime** — command registry with typed args and sensitivity tiers, user
   commands, macros with piping, keybinds, workspace state (KV + TTL + events), pipelines, lenses.
-- **Incidents** — phases, severity, timeline notes, action items, AI postmortem draft.
-- **On-call** — schedules, rotation layers, overrides, escalation policies with timers.
-- **Alert ingestion** — webhook receivers for generic JSON, Prometheus Alertmanager, and Grafana.
-- **AI operator** — incident and on-call commands exposed to the agent, gated by capability
-  checks and single-use confirmation proofs, recorded in the incident timeline.
+- **AI operator** — chat, navigation and workspace-state commands exposed to the agent, gated by
+  capability checks and single-use confirmation proofs.
 
 ## Workspace layout
 
 | Crate | Role |
 |---|---|
-| `rim_server` | Actix Web bootstrap, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, alert webhooks, server-to-server) |
+| `rim_server` | Actix Web bootstrap, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, server-to-server) |
 | `rim_api` | async-graphql schema, resolvers, auth context |
 | `rim_core` | Domain models, repository traits, strongly-typed IDs |
 | `rim_services` | Service traits, `*Cmd`/`*Query`/`*Dto` types, `ServiceError` |
@@ -113,7 +109,7 @@ Contracts (current):
 - `docs/command_model.md`, `docs/keybind_model.md`, `docs/plugin_model.md`, `docs/context_model.md`
 - `docs/capability_security_model.md` — capabilities, sensitivity tiers, confirmations
 - `docs/pagination.md` — cursor pagination contract
-- `docs/search.md`, `docs/alerts.md`, `docs/email.md`, `docs/oncall.md` — feature references
+- `docs/search.md`, `docs/email.md` — feature references
 
 Dated records (point-in-time, may be stale): `docs/specs/`, `docs/design/`, `docs/research/`,
 `docs/decisions/`, `docs/security/`, and `docs/next-steps-*.md`.
