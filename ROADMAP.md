@@ -1,7 +1,8 @@
 # Roadmap
 
 _Rebuilt 2026-10-04 after Jakub reset the direction; updated 2026-10-08 with the master plan
-that merges the plugin platform and decentralization into five stages. Supersedes the
+that merges the plugin platform and decentralization into five stages; status updated
+2026-10-10 after the five stages shipped and the cleanup before going public. Supersedes the
 2026-07-08 roadmap (incident wedge). See `docs/vision.md` for product principles,
 `docs/decisions/decentralization-2026-10-08.md` for the key-identity decentralization
 decision, `docs/decisions/post-quantum-hybrid-2026-10-09.md` for hybrid post-quantum crypto,
@@ -38,7 +39,7 @@ minimum support needed so people can use the app daily.
    relays, and each workspace is hosted on one server that enforces its roles. No domain or
    home server per user and no central RIM server anyone depends on. End-to-end encryption
    (MLS) covers DMs and private groups; channels stay plaintext so server search, pipelines
-   and AI grounding keep working there. Stages 2 to 5 below deliver this.
+   and AI grounding keep working there. Stages 2 to 5 below delivered this.
 
 What this rules out: chasing Discord or Slack feature parity, building first-party verticals
 (the incident and on-call layer is gone from the core; it returns as a plugin), and building
@@ -54,36 +55,37 @@ as the way the app is used, not as a separate pillar.
 
 ## Where We Are Now
 
-_Verified against both repositories on 2026-10-08 (rim-server `a668c05`, rim-ui `b62e31d`)._
+_Verified against both repositories on 2026-10-10 (rim-server `4945eda`, rim-ui `92fc764`)._
 
-**Done since the 2026-10-04 rebuild:** Tracks 0.1 (desktop RCE fixes), 0.3 (repo hygiene:
-rim-ui `master` carries the code, `cargo audit` blocking, messaging e2e, resolvers split by
-domain, dead `plugin_host` module removed), 0.4 (optional incident module behind a
-workspace feature flag), 1.1 (private channels), 1.2 (roles and moderation) and 1.3
-(notification rules) are merged on both server and UI `master`. Track 4.1 (general commands
-AI-callable) is merged on rim-server (PR #24).
-
-Chat, commands, keybinds, macros and a plugin host all exist, but a plugin command cannot
-run yet and the client keeps no history between launches.
+**Shipped:** all five stages below, on both `master` branches. After them, the release
+preparation of `docs/plans/release-prep-2026-10-10.md` (version and health probes, metrics, the
+compose stack with backup and restore, the dormant updater, instance feature switches, message
+rendering, the Vim profile, audit retention) and the first groups of the cleanup before going
+public (`docs/plans/cleanup-2026-10-10.md`): the incident and on-call vertical was dropped from
+the core (the last commit with it is tagged `incidents-last`), dead code and GraphQL roots no
+client calls were removed, bootstrap tokens were folded into instance invites, and the schema,
+build and metadata were tidied. The documentation and comment pass (C-4) is in progress; the
+`.env` history purge (C-5) comes last.
 
 | Area | State |
 |---|---|
-| Chat core | Workspaces, channels (public and private), DMs, group DMs, threads, edit/delete/forward, attachments with quotas, reactions, pins, mentions, read state, inbox, mute, notification rules, presence, typing, link previews, custom emoji, Postgres full-text search, channel lenses, invite-only registration, password reset, SMTP, roles and moderation |
-| Programmable runtime | Command registry (~50 builtins, four surfaces, typed args, sensitivity tiers, rate limits), user commands, macros with piping, keybinds with layers, workspace state, pipelines v1, capability registry with default-deny, audit log, confirmation proofs |
-| Plugin host (rim-ui) | Separate-process plugins over stdio, capability broker, panels, git install, trust badges. The UI calls `plugin_execute_command`, which does not exist in `src-tauri/src`; `plugin_run_ai_command` always returns `PluginNotRunning` |
-| Plugin protocol | Docs and code disagree on method names; only `plugins/hello-world` exists; no SDK |
-| Agent | Works (Anthropic and OpenAI, keys in the OS keyring, confirmation modal). Incident, on-call, chat, navigation and workspace-state commands are AI-callable (Track 4.1, PR #24); every agent write goes through the confirmation gate |
-| Client history | None kept on disk; TanStack Query memory only |
-| Identity | Username and password per server; `Principal` is an in-memory struct with no table |
-| Message edits | No `updated_at` or version on `message`, so a client cache cannot see edits yet |
-| Shell | Side rail, workspace rail, tool panel, docked thread pane, status bar, spatial navigation, layout presets, zen mode, density modes, modal composer |
-| Security | Argon2id, HttpOnly session cookies with HMAC double-submit CSRF, login and reset rate limits, SSRF-safe link previews, storage quotas, CSP on desktop and web |
-| Showcase vertical | Dropped 2026-10-10 (tag incidents-last); returns as a plugin after Track 3 |
+| Chat core | Workspaces, public and private channels, DMs, groups, threads, edit/delete/forward, attachments with quotas, reactions, pins, mentions, read state, inbox, notification rules with digest, presence, typing, link previews, custom emoji, full-text search, channel lenses, roles and moderation, message rendering with code blocks and embeds |
+| Programmable runtime | Command registry (typed args, sensitivity tiers, capability checks, confirmations, rate limits), user commands, macros with piping, keybinds with layers and a Vim profile, workspace state, pipelines, audit log |
+| Plugins | Protocol v1 frozen with a spec; TypeScript SDK; Kubernetes pods and GitHub pull-request showcases; plugin commands in the palette, keybinds and the agent; web plugins in a sandboxed iframe; per-workspace registries of publisher-signed plugins |
+| Agent | Anthropic and OpenAI, keys in the OS keyring; 41 AI-callable builtins plus plugin commands; every agent write goes through the confirmation gate |
+| Client history | Encrypted local message cache, local search, an encrypted archive in a folder or a cloud drive |
+| Identity | Key identity: identity and device keys, challenge login, key-only signup, device linking, recovery phrase, identity-key backup; password accounts still work |
+| Encryption | MLS for DMs and private groups, hybrid post-quantum key agreement, franked reports of encrypted messages; channels stay plaintext |
+| Decentralization | Server keys and ids, relays with a request inbox, workspace hosts serving members from other servers through their relay, a public relay setup with proof-of-work signups and abuse tools |
+| Operations | `/healthz`, `/readyz`, Prometheus metrics, compose stack with backup, restore and a restore drill, audit retention, instance feature switches, background jobs documented |
+| Showcase vertical | Dropped from the core 2026-10-10; may return as a plugin once bots and webhooks (Track 3) exist |
 | rim-cli | Initial commit only |
-| Quality | Server CI (fmt, clippy, single-threaded tests, coverage gate, audit, Docker) and client CI (ESLint, Prettier, tsc, Vitest, build, Docker) green |
 
-**Still open from the 2026-10-04 plan:** Track 0.2 embedded terminal decision, audit-log
-retention job (waits on variant A or B), coverage gate at 75% against a 95% target.
+**Open:** the outside cryptographic review of Stages 3 and 4
+(`docs/security/crypto-review-brief-2026-10.md`), hybrid post-quantum signatures after it, the
+upgrade guide and changelog (D-5), the first-run path in the clients (F-1, F-2), the PWA, release
+workflows and an image registry (held on the decision about the organisation), and the cleanup's
+last two groups.
 
 ## Principles for sequencing
 
@@ -103,21 +105,20 @@ Effort: S < 1w, M = 1–3w, L = 1–2mo, XL > 2mo. Tracks keep their numbers so 
 below can refer to them; the order of work is set by **Stages**, not by track number. Items
 marked **Done** are merged on both repositories.
 
-### Track 0 — Foundations and safety (done except 0.2)
+### Track 0 — Foundations and safety (done)
 
 1. **Done.** **Close the three desktop RCE findings** (M): terminal creation behind an explicit
    confirmation and a shell allowlist; plugin install URL validation (scheme allowlist, no
    `ext::`, `--` separator, `GIT_ALLOW_PROTOCOL`); no `npm`/`pip` install without a consent
    step that names it as arbitrary code execution.
-2. **Open (decision 10).** **Terminal decision** (S): remove the embedded terminal from the
-   product (recommended) or keep it as a capability-gated desktop feature. The PTY code is
-   also finding S-H1's root.
-3. **Done** (audit retention still waits on its variant). **Repo hygiene** (S): merge `rim-ui`
+2. **Done.** **Terminal decision** (S): the embedded terminal is removed from the desktop app.
+3. **Done.** **Repo hygiene** (S): merge `rim-ui`
    `feature/initial-code` to `master`; `cargo audit` blocking; close stale issues; schedule
    the audit retention job once the variant is picked; delete the dead server-side
    `plugin_host` module; messaging e2e test that walks pagination both ways; split the GraphQL resolvers and types
    by domain (`rim_api/src/query/`, `mutation/`, `types/`) before more resolvers land.
-4. **Done.** **Make the showcase vertical optional** (S/M): a per-workspace feature flag that hides
+4. **Done, then superseded** by dropping the vertical from the core (2026-10-10).
+   **Make the showcase vertical optional** (S/M): a per-workspace feature flag that hides
    the incident and on-call commands, settings and AI surface. Communities that do not run
    services never see SEV levels. This also starts the mechanism Track 2.4 needs for
    workspace-scoped plugin visibility.
@@ -135,30 +136,30 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 3. **Done.** **Notification rules** (M): per-conversation level (all, mentions, nothing), keyword
    alerts, do-not-disturb window, delivered via desktop notifications now and web push once
    Track 1.5 lands.
-4. **Message rendering** (S/M): code blocks with language hints, image and video embeds,
+4. **Done.** **Message rendering** (S/M): code blocks with language hints, image and video embeds,
    quoting. Markdown remains the format and DOMPurify the backstop; no new content model.
 5. **Reach** (L, lower priority): the web build made installable as a PWA with web push and a
-   narrow layout per rim-ui `docs/ui-shell.md`. Native mobile out of scope. One-command
-   deployment (compose file, backup and restore runbook), which the master plan pulls forward
-   to Stage 2 (see Cross-cutting work).
+   narrow layout per rim-ui `docs/ui-shell.md`. Native mobile out of scope. The one-command
+   deployment part is done: `deploy/compose.yml` with backup and restore
+   (`docs/self-hosting.md`).
 
 ### Track 2 — The plugin platform (bet 2, the main investment, XL total)
 
-1. **Plugin SDK v1** (M): freeze the stdio protocol version, publish a TypeScript SDK and a
+1. **Done.** **Plugin SDK v1** (M): freeze the stdio protocol version, publish a TypeScript SDK and a
    language-agnostic protocol spec, a template repository, and docs that let a stranger build
    a panel plugin in an afternoon. Capability list, manifest schema and panel lifecycle
    documented from the existing implementation, not invented.
-2. **The Kubernetes pods panel** (S/M, built with 2.1): the canonical first-party example
+2. **Done.** **The Kubernetes pods panel** (S/M, built with 2.1): the canonical first-party example
    plugin. Reads the user's local kubeconfig, lists pods and their status in a tool panel,
    exposes `k8s.restart_pod` as a Dangerous command so the confirmation gate and the agent
    (Track 4) have something real to operate. Lives in rim-ui (`plugins/k8s-pods/`, with the
    SDK in `sdk/`) until protocol v1 is stable, then moves to its own repository.
-3. **Web-capable plugins** (L): a second plugin kind that runs sandboxed in the browser
+3. **Done.** **Web-capable plugins** (L): a second plugin kind that runs sandboxed in the browser
    (a sandboxed iframe, same capability prompts, same panel slots) for plugins that only need
    the RIM API and the network. Local-process plugins stay desktop-only for things that need
    the machine (kubectl, local files). This is what makes the platform exist on the web
    build and later on mobile.
-4. **Workspace-shared plugins** (M/L): server-side plugin registry per workspace (what is
+4. **Done** (registry and signed manifests; no marketplace index). **Workspace-shared plugins** (M/L): server-side plugin registry per workspace (what is
    recommended or required, who approved it, pinned version), signed manifests, install from
    the palette. The marketplace v0 is a curated git-backed index on top of this; economics
    deferred.
@@ -166,9 +167,10 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
    keybind picker (partly exists), plugin panels in the side rail and main surface, plugin
    context actions on messages and members, plugin access to workspace state and pipeline
    events, plugin-provided lenses.
-6. **Second and third showcases** (S each): a GitHub pull-request panel; a feasibility spike
-   on moving the incident and on-call vertical out of the core onto 2.1–2.5. If it cannot be
-   moved, the gap is a platform gap and goes on this track.
+6. **Second and third showcases** (S each): a GitHub pull-request panel (done, a web plugin);
+   the incident and on-call vertical as a plugin once bots and webhooks exist, since it was
+   dropped from the core. What it cannot do as a plugin is a platform gap and goes on this
+   track.
 
 ### Track 3 — Bots, webhooks, pipelines (the lighter on-ramps, L total)
 
@@ -183,13 +185,13 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
    with typed args and sensitivity tiers like builtins.
 5. **RIM CLI v1** (M): `rim send`, `rim search`, `rim watch`, `rim macro run`. Doubles as the GraphQL contract test.
 6. **MCP bridge** (M): MCP servers install as plugins; RIM exposes itself as an MCP server so
-   external agents drive the registry under `OutOfBand` confirmations.
+   external agents drive the registry under the same confirmation gate.
 
 ### Track 4 — The agent as operator (bet 3, M/L each)
 
 1. **Done (PR #24).** **Flip the general commands to AI-callable** (S): chat, navigation, state and member
    commands get `nl_description` and `intent_samples`; the agent stops being incident-only.
-2. **Agent over plugin commands** (M, with Track 2.2): the agent can call plugin commands
+2. **Done.** **Agent over plugin commands** (M, with Track 2.2): the agent can call plugin commands
    under the same gate; "restart the crashlooping pod" becomes the demo.
 3. **Skill macros and intent routing**: macros as natural-language-routable units with
    per-step enforcement and sensitivity rollup.
@@ -204,7 +206,8 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 ### Track 5 — Keyboard-first polish (bet 4, S/M each)
 
 1. Shareable profiles: export and import keybinds, macros and pipelines; a few curated
-   starting profiles (minimal, vim, mouse-friendly).
+   starting profiles (minimal, vim, mouse-friendly). Keybind profiles and the opt-in Vim layer
+   are done; macros and pipelines are not in the profile file yet.
 2. Composer and navigation: fuzzy jump-to-anything, command history, per-context keybind
    hints, the open items in rim-ui `docs/ui-shell.md`.
 3. Light theme, i18n layer (the two Czech labels are the reminder), accessibility pass.
@@ -215,7 +218,8 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
    session rotation come from device keys. TOTP and passkeys are not built for new accounts;
    existing password accounts migrate to a key.
 2. **Operator features** (M): OIDC login for teams that want it, data export per user and
-   per workspace, audit retention scheduled and configurable, admin audit views.
+   per workspace, admin audit views. Audit retention is done: configurable, kept forever by
+   default (`docs/operations/audit-retention.md`).
 3. **Privacy posture** (S): metadata minimization pass (what is logged, how long presence is
    kept, what link previews fetch), documented in `docs/security/`.
 
@@ -226,13 +230,13 @@ Rewritten 2026-10-08. The model is decided (see
 track is renumbered 7.0 to 7.4 to match the stages. Local history and keys come first because
 both encryption and relays depend on them.
 
-0. **Identity shape in the plugin SDK** (S, Stage 1, with 2.1): plugins see users as
+0. **Done.** **Identity shape in the plugin SDK** (S, Stage 1, with 2.1): plugins see users as
    `{ principalId, displayName }`, never a local UUID or `name@domain`; `principalId` is
    opaque and stable across key changes; mentions are `<@principalId>`; chat methods go
    through one client message service. Ids minted before Stage 3 are provisional (`rimp0_`),
    and the host sends `rim.principal.changed` plus an old-to-new mapping notification when
    Stage 3 replaces them (`docs/specs/plugin-protocol-v1.md`, `docs/specs/key-identity-v1.md`).
-1. **Local history and drive archive** (L, Stage 2): an encrypted local message store, local
+1. **Done.** **Local history and drive archive** (L, Stage 2): an encrypted local message store, local
    search marked "on this device", and an encrypted archive written to a folder, Google Drive
    or Dropbox. Each device writes its own archive segments, so two devices never overwrite one
    file; segments are encrypted under one random archive key that Stage 3 rewraps instead of
@@ -240,7 +244,7 @@ both encryption and relays depend on them.
    Tauri app, not SDK plugins. One server PR adds a message change feed (`change_seq` bumped
    on edit, delete, reaction and pin, plus `conversationChanges(since)`) so edits and deletes
    reach the cache.
-2. **Keys, devices and challenge login** (L, Stage 3, absorbs 6.1): inception and device keys
+2. **Done.** **Keys, devices and challenge login** (L, Stage 3, absorbs 6.1): inception and device keys
    with a signed rotation log, a signed profile card, QR device linking, a 12-word recovery
    phrase, and challenge login that issues today's session cookie. The identity key stays off
    day-to-day devices, which hold only device keys it signed. Keys are nullable columns on the
@@ -254,7 +258,7 @@ both encryption and relays depend on them.
    other sessions (`docs/specs/key-identity-v1.md`, `docs/specs/device-linking-v1.md`). Web
    plugins and workspace plugin registries with signed manifests (Tracks 2.3 and 2.4) shipped
    with it (`docs/specs/web-plugins-v1.md`, `docs/specs/workspace-plugins-v1.md`).
-3. **E2EE v1 with MLS** (XL, Stage 4): OpenMLS on the Tauri side for DMs and private groups;
+3. **Done** (`docs/specs/e2ee-mls-v1.md`; the outside review is open). **E2EE v1 with MLS** (XL, Stage 4): OpenMLS on the Tauri side for DMs and private groups;
    channels stay plaintext. Every server feature that reads text gets a client replacement in
    encrypted conversations; plugins read messages only through the client message service under
    their grant. The client sends mentioned principal ids beside the ciphertext so mentions still
@@ -263,7 +267,7 @@ both encryption and relays depend on them.
    device joins each group fresh and reads older history from the 7.1 archive. Message
    franking for reports is designed at the start of this stage. Key agreement uses a hybrid
    X25519 + ML-KEM-768 suite.
-4. **Relays and workspace hosts** (XL, Stage 5, three steps): rim-server gains relay and
+4. **Done.** **Relays and workspace hosts** (XL, Stage 5, three steps): rim-server gains relay and
    workspace-host roles and a signed server-to-server HTTP API (HTTP Message Signatures with
    replay protection and rotatable server keys); GraphQL stays the client contract.
    - **7.4a** Cross-server DMs and the request inbox.
@@ -319,13 +323,13 @@ Five stages replace the old phase table. They alternate pillars so each one ship
 user can feel, and stopping after any stage still leaves a better product. The plugin pillar
 reaches its showcase in Stage 1 before any decentralization work starts.
 
-| Stage | Tracks | Size | The user gets |
-|---|---|---|---|
-| 1. Plugins run | 2.1, 2.2, 4.1, 4.2 with 7.0; palette and keybind part of 2.5 | L | Install the k8s pods panel, see pods next to chat, restart one with a keybind or by asking the agent, behind a confirmation |
-| 2. Your history is yours | 7.1 | L | Instant start, offline reading, and full history on a fresh install from the drive alone |
-| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app |
-| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs |
-| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss |
+| Stage | Tracks | Size | The user gets | Status |
+|---|---|---|---|---|
+| 1. Plugins run | 2.1, 2.2, 4.1, 4.2 with 7.0; palette and keybind part of 2.5 | L | Install the k8s pods panel, see pods next to chat, restart one with a keybind or by asking the agent, behind a confirmation | Shipped |
+| 2. Your history is yours | 7.1 | L | Instant start, offline reading, and full history on a fresh install from the drive alone | Shipped |
+| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app | Shipped 2026-10-09 (`docs/plans/stage-3-remaining-2026-10-09.md`) |
+| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs | Shipped 2026-10-09 (`docs/plans/stage-4-2026-10-09.md`) |
+| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss | Shipped 2026-10-10 (`docs/plans/stage-5-2026-10-09.md`) |
 
 **Stage 1 in more detail.** Plugin commands execute from the palette, keybinds and the agent.
 Protocol v1 is frozen with the identity shape from 7.0. A TypeScript SDK, a template and a
@@ -363,9 +367,8 @@ Stage 5 puts the workspace plugin registry on the workspace host, next to roles 
 | 9 | rim-ui | Encrypted SQLite cache (`rusqlite` with `bundled-sqlcipher`) behind Tauri commands, read-through and reconcile | 2 | M |
 | 10 | rim-ui | FTS5 local search as a second palette source | 2 | S |
 
-PRs 7 and 8 have no dependencies and can go in parallel with anything above them. After PR 10
-come the archive spec, the archive writer with the local-folder provider and restore, then the
-Google Drive and Dropbox providers.
+All ten shipped, followed by the archive spec, the archive writer with the local-folder provider
+and restore, and the cloud drive providers.
 
 ## Cross-cutting work (every stage)
 
@@ -387,7 +390,9 @@ and run it, which a decentralized product depends on more than a hosted one.
 
 ## Track mapping (old numbers to stages)
 
-Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in.
+Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in. The status
+column is the 2026-10-08 plan's; "Where We Are Now" and the tracks above have the current
+state.
 
 | Track | Status after the master plan | Stage |
 |---|---|---|
@@ -456,7 +461,10 @@ Tracks 0 to 6 keep their numbers; only Track 7 is rewritten and 6.1 is folded in
 ## Open Decisions (for Jakub)
 
 From the 2026-10-08 master plan. Work proceeds on the recommended answer until told otherwise.
-Decision 1 (go on the first PRs) was answered "go" on 2026-10-08.
+Decision 1 (go on the first PRs) was answered "go" on 2026-10-08. Since then: 10 is settled (the
+terminal is removed), 11 is settled differently (retention is configurable and keeps rows
+forever unless the operator sets `RIM_AUDIT_RETENTION_DAYS`), 12 is closed (the vertical is
+dropped from the core), and rim-ui took Apache-2.0 for 13.
 
 | # | Question | Options | Recommended |
 |---|---|---|---|
@@ -483,8 +491,8 @@ settled: the master plan adopts sandboxed iframes for web plugins and DMs plus p
 for E2EE v1, Jakub confirmed the decentralization model (see the decision record), and the
 four-role ladder shipped in 1.2.
 
-Carried: `oncall.take_shift` authorization, `.env` history purge, formal ratification of the
-client-side plugin reframe.
+Carried: the `.env` history purge (cleanup C-5), formal ratification of the client-side plugin
+reframe.
 
 ## Ledger — what the previous roadmaps shipped
 
@@ -492,8 +500,12 @@ Phases 0–4 of the April 2026 roadmap (communication core, command system, keyb
 plugins, incident mode v1, AI agent reframe phases 1–5) and Tracks A, B, C1, C2 of the July
 2026 roadmap (foundations, search/alerts/email, on-call and escalation, agent-operator
 fusion) are merged on `rim-server` `master` (PR #11, 2026-10-04) and on `rim-ui` `master`
-(through `feature/initial-code`, merged in rim-ui PR #1). Point-in-time specs live in
-`docs/specs/`, `docs/design/`, `docs/plans/` (rim-ui) and `docs/research/`.
+(through `feature/initial-code`, merged in rim-ui PR #1). The incident and on-call parts were
+dropped from the core on 2026-10-10.
 
 Tracks 0.1, 0.3, 0.4 and 1.1 to 1.3 of the 2026-10-04 roadmap are merged on both `master`
 branches (rim-server through PR #21, `a668c05`; rim-ui through PR #9, `b62e31d`).
+
+Stages 1 to 5 of the 2026-10-08 master plan are merged on both `master` branches; the plans in
+`docs/plans/` list their PRs. The release preparation and the cleanup before going public follow
+in `docs/plans/release-prep-2026-10-10.md` and `docs/plans/cleanup-2026-10-10.md`.
