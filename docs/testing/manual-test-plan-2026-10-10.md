@@ -1,6 +1,6 @@
-# Manual test plan: Stages 3 and 4 (2026-10-10)
+# Manual test plan: Stages 3, 4 and 5 (2026-10-10)
 
-_For Jakub's hands-on run after the Stage 3 and Stage 4 PRs of 2026-10-09. Everything below
+_For Jakub's hands-on run after the Stage 3, 4 and 5 PRs of 2026-10-09 and 2026-10-10. Everything below
 was verified only by automated tests against mocked clients or a local Postgres; nothing has
 run on two real devices yet. Work through the scenarios in order: later ones build on earlier
 state. Note what you saw next to each step; "expected" is what the specs promise._
@@ -91,6 +91,51 @@ Both `ada` (A) and `bob` (B, a different OS user, signed in with his key) must h
 | 3.14 | On W as `ada` (linked browser) | The DM opens in the browser; W sends and receives; closing the tab for 60+ days would remove it (not testable now); the notice "Encrypted conversations in this browser are only as safe as this browser profile" shows |
 | 3.15 | Install a plugin asking for `chat.read` and `chat.read.encrypted` (edit the SDK template's manifest) | Its consent line reads "Read your encrypted DMs and groups: this plugin sees their decrypted text…"; Settings > Plugins > Activity counts encrypted reads per day; a manifest with `chat.read.encrypted` but no `chat.read` is refused at install; without the encrypted grant `rim.chat.list_messages` on the DM answers `CAPABILITY_DENIED` |
 | 3.16 | Open the agent in the encrypted DM (conversation menu) | Off by default; turning it on shows the model-provider warning; after that it answers from the local cache and asks before every post it makes there |
+
+## 6. Two servers: relays and hosts (Stage 5)
+
+Stage 5 only shows itself with **two rim-servers**. Run a second one from the same checkout on
+another port, database and data directory; both on loopback with server-to-server traffic over
+plain HTTP, which the `RIM_S2S_ALLOW_*` flags permit for local runs only:
+
+```sh
+# Server A (Ada's relay; also hosts her workspace)
+createdb -h localhost -U postgres rim_dev_a; createdb -h localhost -U postgres rim_dev_b
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_a sea migrate up
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_b sea migrate up
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_a RIM_SERVER_HOST=127.0.0.1 RIM_SERVER_PORT=8080 \
+RIM_PUBLIC_BASE_URL=http://127.0.0.1:8080 RIM_S2S_ALLOW_HTTP=true RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true \
+RIM_DATA_DIR=./data-a RIM_OPEN_REGISTRATION=true cargo run -p rim_server
+# Server B (Bob's relay), in a second terminal
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/rim_dev_b RIM_SERVER_HOST=127.0.0.1 RIM_SERVER_PORT=8090 \
+RIM_PUBLIC_BASE_URL=http://127.0.0.1:8090 RIM_S2S_ALLOW_HTTP=true RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true \
+RIM_DATA_DIR=./data-b RIM_OPEN_REGISTRATION=true cargo run -p rim_server
+```
+
+`RIM_PUBLIC_BASE_URL` is also the login audience, so `RIM_KEY_LOGIN_AUDIENCES` is not needed.
+`curl -s http://127.0.0.1:8080/.well-known/rim-server | head -c 300` shows A's server id (`rims1_…`).
+Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at `http://127.0.0.1:8090`
+(the endpoint is chosen at sign-in). Both accounts are key accounts (1.1).
+
+| # | Do | Expected |
+|---|---|---|
+| 6.1 | On A: Settings > Contacts > **My contact link**; show the QR. On B: Settings > Contacts > **Add contact**, paste the link (or scan) | B shows Ada's card name and a 4×4 fingerprint, the same one A's Settings > Security shows under "Fingerprint"; Ada is listed as a contact. Repeat the other way so each is the other's contact |
+| 6.2 | On B: **Direct messages** in the rail > new message > pick Ada | The DM opens encrypted (lock mark). Send both ways; edit; react; attach a file. `psql` on `rim_dev_b`: `select count(*) from relay_item;` grows as A's events are queued; `select kind from server;` lists the `direct` space |
+| 6.3 | On A, from a third account `carl` on B that is **not** Ada's contact: start a DM with Ada | Ada's bell shows a **message request** with Carl's name and fingerprint; "Read first" shows his message; **Ignore** hides it; **Block** also leaves the conversation. Accept a new one from a fourth account and it becomes a normal DM |
+| 6.4 | `psql` on `rim_dev_a`: `select username, kind from "user";` | Bob and Carl appear as `r_…` rows of kind `remote` |
+| 6.5 | On A as the Owner of a workspace hosted on A: create an invite; copy the **`rim-invite:1:` link** (Invite dialog). On B: **Add workspace > Join with a link**, paste | B joins Ada's workspace **through its own relay**: the workspace appears in B's rail; channel messages flow both ways; A's member list shows Bob with his card; Settings > Security on B lists the workspace under "Spaces through this relay" with an expiry under 24 h |
+| 6.6 | On B: Settings > Security > revoke a second device of Bob's (link one first, 1.7) | The fan-out panel shows A's host acknowledging; `psql` on `rim_dev_a`: `select status from host_delegation …` ends for that device |
+| 6.7 | Stop server B (Bob's relay) while B is in Ada's workspace; wait a minute | B offers **Connect directly to <A>** with the IP notice; after accepting, B keeps reading and sending under the "Connected directly" banner (A's log shows a direct key login for a remote user). Start B again: within two minutes the banner goes and nothing shows twice |
+| 6.8 | Kick Bob from the workspace on A | B's workspace vanishes after the `MemberLeft`; `host_delegation` rows for Bob are ended |
+| 6.9 | Tamper: on `rim_dev_b`, `update relay_envelope set signature = 'x' where id = (select max(id) from relay_envelope);` then trigger a sync on B | The item is refused ("could not be verified" in the log), nothing shows; no crash |
+| 6.10 | Public relay checks (S5-6, once merged): start B with `RIM_REGISTRATION_POW_BITS=16` and `RIM_ROLE=relay` | Key signup on B shows a short "proving this is a real device" wait, then succeeds; `rim_server principal block <id>` on B ends that account's sessions; `rim_server peer block <A's id>` makes A's deliveries answer 403 |
+
+## 7. Regressions for Stage 5
+
+- A single server with **no** `RIM_PUBLIC_BASE_URL` behaves as before: `/.well-known/rim-server`
+  has `"s2s": null`, `/s2s/v1/ping` answers 404, every Stage 3–4 flow works unchanged.
+- A desktop pointed at a single server still creates DMs in the direct space (rail entry "Direct
+  messages"); old DMs inside workspaces still open.
 
 ## 4. Regressions worth a glance
 
