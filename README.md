@@ -71,7 +71,8 @@ cargo run -p rim_server
 
 Configuration is read from the environment (or a local, untracked `.env`) — see
 `rim_server/src/config.rs`. The essentials are `DATABASE_URL`, `RIM_SERVER_HOST`,
-`RIM_SERVER_PORT`; the log level comes from `RUST_LOG` (default `info`). A server bound to
+`RIM_SERVER_PORT`; the log level comes from `RUST_LOG` (default `info`), and
+`RIM_DATABASE_MAX_CONNECTIONS` caps the Postgres pool (default 10). A server bound to
 anything but a loopback address (the default `0.0.0.0` included) needs `RIM_PUBLIC_BASE_URL` or
 `RIM_KEY_LOGIN_AUDIENCES` set, or it refuses to start (`docs/server-identity.md`). Email delivery needs `RIM_SMTP_*` (`docs/email.md`);
 without it, emails are logged (recipient and subject only) instead of sent. Behind a reverse
