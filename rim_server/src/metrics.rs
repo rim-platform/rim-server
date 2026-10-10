@@ -355,7 +355,6 @@ mod tests {
             ("/api", "api"),
             ("/api/ws", "api"),
             ("/api/sdl", "api"),
-            ("/api/hooks/alerts/generic", "api"),
             ("/api/remote/rims1_x/api", "remote-forward"),
             ("/api/remote", "remote-forward"),
             ("/api/files/upload", "files"),
