@@ -32,6 +32,7 @@ impl DefaultCommandService {
                 actor_id = %actor.user_id,
                 retry_after = retry_after_seconds,
             );
+            crate::metrics::rate_limited("command_discover");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });

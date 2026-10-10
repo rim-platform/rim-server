@@ -573,6 +573,7 @@ impl DefaultCommandService {
                     limit = limit,
                     retry_after = retry_after_seconds,
                 );
+                crate::metrics::rate_limited("command");
                 return Err(ServiceError::RateLimited {
                     retry_after_seconds,
                 });
