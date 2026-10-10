@@ -14,9 +14,9 @@ pub(super) async fn list_members(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // P4-A5: thin adapter over ServerMemberService::list_members.
+    // Thin adapter over ServerMemberService::list_members.
     // Projects to `{members: [{username, role, joined}]}` ONLY.
-    // Widow no-go: do NOT leak `email`, `user_id`, `avatar_url`,
+    // Do NOT leak `email`, `user_id`, `avatar_url`,
     // `display_name`, `bio`, `status_text`. A future regression
     // that passes the ServerMemberDto through serde directly
     // would re-widen PII — the explicit map below is the gate.

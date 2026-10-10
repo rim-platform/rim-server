@@ -146,7 +146,7 @@ pub struct AuthRepos {
     pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
-    /// Ban checks on the workspace join paths (Track 1.2).
+    /// Ban checks on the workspace join paths.
     pub moderation_repo: Arc<dyn ModerationRepository>,
 }
 
@@ -195,7 +195,7 @@ pub struct ReadStateRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
-    /// Reading a conversation also marks its notifications read (Track 1.3).
+    /// Reading a conversation also marks its notifications read.
     pub notification_repo: Arc<dyn NotificationRepository>,
 }
 

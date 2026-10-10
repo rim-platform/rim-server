@@ -1,12 +1,11 @@
-//! Transactional email delivery (Track B3). A generic `send(EmailMessage)` transport, kept
-//! trivially mockable via [`EmailSender`], with two implementations: [`log::LogEmailSender`]
-//! (dev/unconfigured fallback — logs, never delivers) and [`smtp::SmtpEmailSender`] (real SMTP
+//! Transactional email delivery. A generic `send(EmailMessage)` transport, kept
+//! trivially mockable via [`EmailSender`], with three implementations: [`log::LogEmailSender`]
+//! (dev/unconfigured fallback — logs, never delivers), [`log::DisabledEmailSender`] (email
+//! disabled by the operator — drops every message) and [`smtp::SmtpEmailSender`] (real SMTP
 //! via `lettre`, rustls-only, with bounded retry on transient failures — see `smtp.rs`).
 //!
 //! Per-flow content lives in [`templates`] as small pure functions returning [`EmailMessage`],
 //! so composing a message never touches I/O and is trivially unit-testable.
-//!
-//! See `docs/email.md` for the operator-facing config matrix and wiring overview.
 
 pub mod log;
 pub mod smtp;
@@ -51,7 +50,7 @@ impl std::fmt::Debug for EmailMessage {
 /// Generic email transport. Implementations retry transient failures internally (see
 /// [`smtp::SmtpEmailSender`]) — callers should treat `Err` as a final, non-retryable failure and
 /// decide for themselves whether to swallow it (every current caller does, since email delivery
-/// is best-effort everywhere it's wired — see `docs/email.md`).
+/// is best-effort everywhere it's wired).
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait EmailSender: Send + Sync {

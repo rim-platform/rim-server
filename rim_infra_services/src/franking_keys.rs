@@ -375,13 +375,13 @@ mod tests {
     }
 
     #[test]
-    fn finding_23_franking_keys_are_wiped_on_drop() {
+    fn franking_keys_are_wiped_on_drop() {
         fn wiped<T: ZeroizeOnDrop>() {}
         wiped::<FrankingKey>();
     }
 
     #[test]
-    fn finding_7_the_newest_key_signs_and_every_key_verifies() {
+    fn the_newest_key_signs_and_every_key_verifies() {
         let keys = FrankingKeys::new(vec![key(2, 2, 10), key(1, 1, 0)]).unwrap();
         assert_eq!(keys.current().id, 2);
         assert!(keys.verifying(2).is_some());
@@ -393,7 +393,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_first_boot_creates_a_private_key_file() {
+    async fn first_boot_creates_a_private_key_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keys").join("franking-key.json");
         let keys = load_or_create(&path, &repo(None)).await.unwrap();
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_a_lost_key_file_refuses_to_start() {
+    async fn a_lost_key_file_refuses_to_start() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
         let err = load_or_create(&path, &repo(Some(2))).await.unwrap_err();
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_7_a_readable_or_malformed_key_file_is_refused() {
+    fn a_readable_or_malformed_key_file_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
@@ -450,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_7_rotation_adds_a_key_and_keeps_every_older_one() {
+    fn rotation_adds_a_key_and_keeps_every_older_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
         assert!(rotate(&path, at(0)).is_err(), "no file yet");
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_7_a_running_server_picks_up_a_rotation() {
+    fn a_running_server_picks_up_a_rotation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("franking-key.json");
         let keys = FrankingKeys::new(vec![key(1, 1, 0)]).unwrap();

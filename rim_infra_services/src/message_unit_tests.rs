@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(dto.thread_id, None);
     }
 
-    /// Unlike the pre-FTS implementation, an empty/whitespace-only query is no longer an error —
+    /// An empty/whitespace-only query is not an error —
     /// `parse_search_query` accepts it (operator-only or fully-empty searches are valid; see
     /// `rim_services::message::search_query`). What the service still must reject, *before*
     /// touching any repo, is an invalid parsed operator — proving `search_messages` propagates
@@ -710,7 +710,7 @@ mod tests {
 
     /// The repository returns `limit + 1` search rows nearest the cursor, newest first, so the
     /// overflow row (farthest from the cursor) is the last one for `After` but the first one for
-    /// `Before`. The service must drop that row — not the one next to the cursor (finding A-H1).
+    /// `Before`. The service must drop that row — not the one next to the cursor.
     #[tokio::test]
     async fn search_messages_drops_the_overflow_row_farthest_from_the_cursor() {
         use rim_core::message::repository::MessageSearchHit;
@@ -880,7 +880,7 @@ mod tests {
         assert!(matches!(err, ServiceError::NotFound));
     }
 
-    // ── Track 1.2: slow mode and moderator deletes ──
+    // ── Slow mode and moderator deletes ──
 
     #[test]
     fn slow_mode_retry_after_rounds_up_and_expires() {
@@ -1323,7 +1323,7 @@ mod tests {
         }
     }
 
-    // ── Track 1.3: notifications after commit, best-effort ──
+    // ── Notifications after commit, best-effort ──
 
     /// A failing notification service never fails the send; it is called once, after the
     /// message is stored, with the conversation's member list.

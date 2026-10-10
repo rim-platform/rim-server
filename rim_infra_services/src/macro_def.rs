@@ -39,7 +39,7 @@ pub struct MacroRepos {
 pub struct MacroServices {
     pub command_service: Arc<dyn CommandService>,
     pub audit_log_service: Option<Arc<dyn AuditLogService>>,
-    /// Shared confirmation token store for verifying macro-level proofs (BLOCK 5).
+    /// Shared confirmation token store for verifying macro-level proofs.
     /// Same store instance as `DefaultCommandService` in production.
     /// `None` in tests that don't exercise the confirmation gate.
     pub confirmation_store: Option<Arc<dyn ConfirmationStore>>,
@@ -303,7 +303,7 @@ impl MacroService for DefaultMacroService {
 
         let steps = Self::parse_steps(&macro_def.steps_json)?;
 
-        // ── BLOCK 4: resolve each step's declared sensitivity via the command
+        // ── Resolve each step's declared sensitivity via the command
         // service, then compute effective sensitivity as max(macro_tier, step_tiers).
         // Prevents a Safe-declared macro from silently wrapping a Restricted step.
         let macro_sensitivity = CommandSensitivityDto::from(macro_def.sensitivity.as_str());
@@ -325,15 +325,14 @@ impl MacroService for DefaultMacroService {
         let effective_sensitivity =
             CommandSensitivityDto::effective(macro_sensitivity, &step_sensitivities);
 
-        // ── H1 fix: verify outer confirmation proof and issue per-step tokens.
+        // ── Verify the outer confirmation proof and issue per-step tokens.
         //
-        // Bug 1: returning ConfirmationRequired with confirmation_required: None
-        //        means the client has no token to re-submit — issue one.
-        // Bug 2: passing confirmation: None to each step lets dangerous steps
-        //        silently skip their inner gate — issue per-step tokens derived
-        //        from the verified outer proof.
-        // Bug 3: inner ConfirmationRequired from a step must be a hard failure,
-        //        not silently treated as Ok (handled in step loop below).
+        // - Without a proof, return ConfirmationRequired with a challenge token
+        //   the client can re-submit.
+        // - With a verified proof, each step gets its own token derived from it,
+        //   so a dangerous step's inner gate has a proof to consume.
+        // - A step that still returns ConfirmationRequired is a hard failure
+        //   (handled in the step loop below).
         let macro_cmd_id = format!("macro.{}", macro_def.id);
         // outer_proof_verified is true when the outer proof was verified against
         // the store (or when there is no store — test context).
@@ -407,11 +406,9 @@ impl MacroService for DefaultMacroService {
         let mut failed_at_step: Option<u32> = None;
 
         for (step_index, step) in steps.iter().enumerate() {
-            // Bug 2 fix: when the outer proof was verified, issue a per-step
+            // When the outer proof was verified, issue a per-step
             // in-band token bound to this exact (command_id, args, context) so
             // the inner confirmation gate has a valid proof to consume.
-            // Without this, a dangerous step's inner gate returns
-            // ConfirmationRequired and execution silently skips it.
             let (step_confirmation, step_had_token) = if outer_proof_verified {
                 match self.services.confirmation_store.as_deref().map(|store| {
                     let challenge = issue_in_band(
@@ -444,12 +441,12 @@ impl MacroService for DefaultMacroService {
                     confirmation: step_confirmation,
                     is_pipe: false,
                     // Propagate outer initiator — Agent-triggered macros keep Agent
-                    // on every nested call (Fury v2 §3.11).
+                    // on every nested call.
                     initiator: cmd.initiator,
                 })
                 .await;
 
-            // Bug 3 fix: inner ConfirmationRequired is a hard failure — the step
+            // Inner ConfirmationRequired is a hard failure — the step
             // did not execute. Treat it as MacroPartialFailure rather than Ok.
             let result = result.and_then(|r| {
                 if r.status == CommandResultStatusDto::ConfirmationRequired {
@@ -461,7 +458,7 @@ impl MacroService for DefaultMacroService {
                 }
             });
 
-            // ── BLOCK 2: emit per-step child audit row carrying parent_audit_id.
+            // ── Emit a per-step child audit row carrying parent_audit_id.
             if let Some(audit_svc) = &self.services.audit_log_service {
                 let child_entry = AuditLogEntryDto {
                     id: uuid::Uuid::now_v7(),
@@ -983,8 +980,8 @@ mod tests {
                 macro_id,
                 command_context: None,
                 confirmation: None,
-                // Explicit Palette (not Default::default()) so Phase 4
-                // reviewers can grep for the human-path test coverage.
+                // Explicit Palette (not Default::default()) marks the
+                // human-initiated path.
                 initiator: rim_services::command::initiator::CommandInitiator::Palette,
             })
             .await
@@ -1114,12 +1111,10 @@ mod tests {
         );
     }
 
-    // ── P6-H1 fix tests ──────────────────────────────────────────────────────
+    // ── Macro confirmation tests ─────────────────────────────────────────────
 
-    /// P6-H1 test 1: macro with Restricted sensitivity but no proof must return
-    /// ConfirmationRequired with a non-None challenge.
-    /// Pre-fix: confirmation_required was always None, so the client could not
-    /// re-submit.
+    /// A macro with Restricted sensitivity but no proof returns
+    /// ConfirmationRequired with a challenge the client can re-submit.
     #[tokio::test]
     async fn execute_macro_restricted_no_proof_returns_challenge() {
         use rim_services::command::confirmation::shared_in_memory_store;
@@ -1188,7 +1183,7 @@ mod tests {
         );
     }
 
-    /// P6-H1 test 2: macro with valid outer proof executes all steps and emits
+    /// A macro with a valid outer proof executes all steps and emits
     /// 3 audit rows (2 child + 1 parent).
     #[tokio::test]
     async fn execute_macro_valid_proof_executes_all_steps() {
@@ -1288,16 +1283,16 @@ mod tests {
         );
     }
 
-    // ── P6-FU3 regression tests — initiator propagation through macro dispatch ─
+    // ── Initiator propagation through macro dispatch ─────────────────────────
     //
-    // Hawkeye BLOCK finding: prove that the outer `CommandInitiator` is
+    // Prove that the outer `CommandInitiator` is
     // preserved on every inner `execute_command` call that the macro step loop
     // issues. The `.withf` predicate on the mock expectation makes mockall panic
     // if the wrong initiator reaches the inner service — covering the scenario
     // where a future refactor silently resets the initiator to Palette before
     // calling `execute_command`.
 
-    /// P6-FU3 test A: outer initiator=Agent must propagate to every inner
+    /// Outer initiator=Agent must propagate to every inner
     /// `execute_command` call. The `.withf` predicate proves the inner call
     /// carries `CommandInitiator::Agent`, not a defaulted Palette.
     #[tokio::test]
@@ -1372,7 +1367,7 @@ mod tests {
         );
     }
 
-    /// P6-FU3 test B: outer initiator=Palette must propagate to inner steps
+    /// Outer initiator=Palette must propagate to inner steps
     /// and must NOT trigger the agentic confirmation gate (no over-gating).
     #[tokio::test]
     async fn execute_macro_palette_initiator_propagates_to_inner_steps() {
@@ -1444,10 +1439,8 @@ mod tests {
         );
     }
 
-    /// P6-H1 test 3: inner step returning ConfirmationRequired must become
+    /// An inner step returning ConfirmationRequired makes the macro a
     /// MacroPartialFailure (Error), NOT Success.
-    /// Pre-fix: the Ok(r) arm matched any Ok, so ConfirmationRequired silently
-    /// claimed success.
     #[tokio::test]
     async fn execute_macro_inner_confirmation_required_is_partial_failure() {
         let owner = UserId::new();

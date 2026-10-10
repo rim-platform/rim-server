@@ -16,11 +16,9 @@ use super::{
     resolve_workspace_id,
 };
 
-/// Hard cap on the single-page result for `chat.list_channels`. Conservative
-/// for Phase 3 (the AI surface uses this; an unbounded list would balloon
-/// the agent's token budget on workspaces with thousands of channels).
-/// When pagination lands (Phase 5), this becomes the per-page default and
-/// a `cursor` arg gets exposed.
+/// Hard cap on the single-page result for `chat.list_channels`. The AI surface
+/// uses this command, and an unbounded list would balloon the agent's token
+/// budget on workspaces with thousands of channels.
 const CHAT_LIST_CHANNELS_LIMIT: u32 = 100;
 
 pub(super) async fn list_channels(
@@ -29,13 +27,10 @@ pub(super) async fn list_channels(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // P3-A2: first AI-callable backend builtin. The Phase 2 cap gate
-    // already verified `chat.read` before we got here — this arm is
-    // a thin adapter from typed args → ConversationService query →
-    // JSON payload. `dir = After` + a generous `limit` mirrors the
-    // existing palette/agent expectation that "list" returns a
-    // single page of channels (pagination is a Phase 5 concern; the
-    // tool surface today is "give me the channels").
+    // The capability gate already verified `chat.read` before we got
+    // here; this arm is a thin adapter from typed args → ConversationService
+    // query → JSON payload. `dir = After` + a generous `limit` returns a
+    // single page of channels; the command takes no cursor.
     let server_id = resolve_workspace_id::<rim_core::server::model::ServerId>(
         &args,
         context.as_ref(),
@@ -57,9 +52,9 @@ pub(super) async fn list_channels(
     // Project to a stable wire shape for the AI tool consumer:
     // {id, title, conversation_type, is_private, is_archived, is_member}.
     // The frontend agent renders this directly; do NOT leak member_ids
-    // (PII surface widening for a "list" tool is a Widow no-go) — the
+    // (a "list" tool must not widen the PII surface) — the
     // caller's own membership is derived from them here instead.
-    // Track 1.1: the flags let the agent and macros decide whether to
+    // The flags let the agent and macros decide whether to
     // join (public, not a member) or invite, and skip archived channels.
     let channels: Vec<serde_json::Value> = page
         .items
@@ -98,7 +93,7 @@ pub(super) async fn create_channel(
         "server_id",
     )?;
     let name = require_string_arg(&args, "name")?;
-    // P4-A4: optional `description` arg added for the AI surface.
+    // Optional `description` arg, stored as the channel topic.
     // The conversation create call has no description field, so we
     // create-then-update_topic. If `update_topic` fails after the
     // channel is already created we propagate the error — the
@@ -107,7 +102,7 @@ pub(super) async fn create_channel(
     // they did this manually.
     let description = optional_string_arg(&args, "description");
     let is_private = optional_bool_arg(&args, "is_private").unwrap_or(false);
-    // Track 1.1: optional initial members, added right after creation (the same two-step flow
+    // Optional initial members, added right after creation (the same two-step flow
     // the client uses for a private channel's first members).
     let member_ids = if args.contains_key("member_ids") {
         parse_uuid_array_arg::<rim_core::user::model::UserId>(&args, "member_ids")?
@@ -233,12 +228,11 @@ pub(super) async fn search_messages(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // P4-A5: server-side resolution of author usernames AND channel
+    // Server-side resolution of author usernames AND channel
     // titles via the batch `get_users_by_ids` / `get_conversations_by_ids`
     // APIs — one lookup each, so the author resolution is O(1) in
-    // DB roundtrips regardless of how many results come back. This
-    // kills the FE `memberResolver.ts` workaround: the agent consumes
-    // {author: username} directly.
+    // DB roundtrips regardless of how many results come back. The agent
+    // consumes {author: username} directly.
     let server_id = resolve_workspace_id::<rim_core::server::model::ServerId>(
         &args,
         context.as_ref(),
@@ -313,7 +307,7 @@ pub(super) async fn get_recent_messages(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // P4-A5: read the newest page of messages in a conversation.
+    // Read the newest page of messages in a conversation.
     // `PageDir::Before` + no cursor = "most recent" per the
     // pagination contract. Deleted messages are filtered server-side
     // so the agent never sees tombstoned content. Author usernames
@@ -461,7 +455,7 @@ mod tests {
 
     // ── list_channels ────────────────────────────────────────────────────────
 
-    /// Track 1.1: each channel carries `is_private`, `is_archived` and the caller's
+    /// Each channel carries `is_private`, `is_archived` and the caller's
     /// `is_member` (derived from member ids, which themselves never reach the payload).
     #[tokio::test]
     async fn list_channels_projects_privacy_archive_and_membership_flags() {
@@ -579,7 +573,7 @@ mod tests {
         }
     }
 
-    // ── create_channel: Track 1.1 private + initial members ─────────────────
+    // ── create_channel: private + initial members ────────────────────────────
 
     fn fake_channel(ws: ServerId) -> ConversationDto {
         ConversationDto {

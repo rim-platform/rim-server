@@ -1596,7 +1596,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6_m2_agent_mutating_no_proof_requires_confirmation() {
+    async fn agent_mutating_no_proof_requires_confirmation() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let svc = service_with_mutating_command(cap_svc_allow_all());
 
@@ -1625,7 +1625,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6_m2_palette_mutating_no_proof_executes() {
+    async fn palette_mutating_no_proof_executes() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let svc = service_with_mutating_command(cap_svc_allow_all());
 
@@ -1650,7 +1650,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6_fu3_agent_pipe_with_mutating_stage_requires_confirmation() {
+    async fn agent_pipe_with_mutating_stage_requires_confirmation() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let svc = service_with_mutating_command(cap_svc_allow_all());
 
@@ -1679,7 +1679,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6_fu3_palette_pipe_with_mutating_stage_executes() {
+    async fn palette_pipe_with_mutating_stage_executes() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let svc = service_with_mutating_command(cap_svc_allow_all());
 
@@ -1704,7 +1704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn p6_m2_agent_mutating_valid_proof_executes() {
+    async fn agent_mutating_valid_proof_executes() {
         use rim_services::command::dto::CommandDefinitionDto;
         use rim_services::command::dto::{CommandExecutionTargetDto, CommandSourceKindDto};
         use rim_services::command::initiator::CommandInitiator;
@@ -1839,14 +1839,10 @@ mod tests {
         );
     }
 
-    /// Regression test for the command/macro two-instance defect fixed by the
-    /// `OnceLock` late-binding design (Track A item 2, 2026-07-08): previously
-    /// the provider held **two** `DefaultCommandService` instances, and
-    /// `keybind`/`pipeline` held the macro-less phase-1 instance, so a late
-    /// macro wire was invisible to them. With a single shared instance behind
-    /// `Arc<OnceLock<_>>`, setting the macro service on one `Arc` clone must be
-    /// observed through every other clone. If a future refactor reintroduces a
-    /// second `DefaultCommandService` instance, this test fails.
+    /// The provider holds a single `DefaultCommandService` with the macro service
+    /// late-bound behind `Arc<OnceLock<_>>`: setting it on one `Arc` clone must be
+    /// observed through every other clone, including the ones keybind and pipeline
+    /// hold. Fails if a second `DefaultCommandService` instance is introduced.
     #[tokio::test]
     async fn macro_visible_through_shared_arc_clone() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
@@ -1912,7 +1908,7 @@ mod tests {
         );
     }
 
-    // ── Track 1.2: timeout gate (T1) ──
+    // ── Timeout gate ──
 
     fn workspace_context(workspace: rim_core::server::model::ServerId) -> CommandContextDto {
         CommandContextDto {

@@ -115,7 +115,7 @@ pub struct DefaultMessageService {
     /// Writes the `admin.delete_message` audit row for moderator deletes. `None` in unit tests;
     /// the composition root always wires it.
     audit_log_service: Option<std::sync::Arc<dyn rim_services::audit::service::AuditLogService>>,
-    /// Decides and records notifications after a message commits (Track 1.3), best-effort.
+    /// Decides and records notifications after a message commits, best-effort.
     /// `None` in unit tests that are not about notifications; the composition root wires it.
     notification_service:
         Option<std::sync::Arc<dyn rim_services::notification::service::NotificationService>>,
@@ -208,7 +208,7 @@ impl DefaultMessageService {
         self
     }
 
-    /// Best-effort notifications for a committed message (Track 1.3): a failure is logged and
+    /// Best-effort notifications for a committed message: a failure is logged and
     /// never fails the send.
     async fn notify_recipients(
         &self,
@@ -236,7 +236,7 @@ impl DefaultMessageService {
         }
     }
 
-    /// Best-effort: a deleted message's unread notifications go away (Track 1.3).
+    /// Best-effort: a deleted message's unread notifications go away.
     async fn forget_notifications(&self, message_id: rim_core::message::model::MessageId) {
         let Some(notification_service) = &self.notification_service else {
             return;
@@ -254,7 +254,7 @@ impl DefaultMessageService {
         self
     }
 
-    /// Slow mode (Track 1.2): a non-moderator whose previous message in the conversation is
+    /// Slow mode: a non-moderator whose previous message in the conversation is
     /// younger than `conversation.slow_mode_seconds` gets `RateLimited` with the seconds left.
     /// Owner/Moderator are exempt. Reads the author's last `sent_at`; no in-memory state.
     async fn ensure_slow_mode_allows(
@@ -340,7 +340,7 @@ impl DefaultMessageService {
             else {
                 continue;
             };
-            // A guest can read a public channel only as a conversation member (Track 1.2).
+            // A guest can read a public channel only as a conversation member.
             if (conversation.is_public_channel() && !member.member_role.is_guest())
                 || matches!(
                     self.repos
@@ -1264,7 +1264,7 @@ impl MessageService for DefaultMessageService {
             // Workspace-wide search: server membership gates access;
             // list_accessible_conversation_ids already scopes to joined conversations. A guest
             // reads only conversations they are a member of, so public channels they have not
-            // been added to are excluded (Track 1.2).
+            // been added to are excluded.
             let standing = crate::util::member_standing(
                 self.repos.server_member_repo.as_ref(),
                 query.server_id,
@@ -1727,7 +1727,7 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::NotFound);
         }
 
-        // The author, or an Owner/Moderator of the workspace (Track 1.2).
+        // The author, or an Owner/Moderator of the workspace.
         let moderator_delete = msg.sent_by != cmd.actor.user_id;
         if moderator_delete && !standing.role.is_moderator() {
             return Err(ServiceError::PermissionDenied);

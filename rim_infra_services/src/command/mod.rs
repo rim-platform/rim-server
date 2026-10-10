@@ -8,7 +8,7 @@ pub(crate) mod registry;
 mod surface;
 mod user_commands;
 
-// Re-export the F1 audit-emission entrypoint so `rim_server::app` can wire
+// Re-export the startup AI-callable inventory audit so `rim_server::app` can wire
 // it without exposing the rest of the registry internals.
 pub use registry::emit_ai_callable_inventory_audit;
 
@@ -54,15 +54,15 @@ pub struct CommandServices {
     pub user_service: std::sync::Arc<dyn rim_services::user::service::UserService>,
     pub workspace_state_service:
         std::sync::Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
-    /// Track 1.2: moderation builtins (`admin.kick`, `chat.set_slow_mode`, ...) dispatch to it,
+    /// Moderation builtins (`admin.kick`, `chat.set_slow_mode`, ...) dispatch to it,
     /// and the timeout gate asks it whether the actor is timed out before any Mutating command.
     pub moderation_service:
         std::sync::Arc<dyn rim_services::moderation::service::ModerationService>,
-    /// Track 1.3: `notifications.set_level`, `notifications.dnd` and
+    /// `notifications.set_level`, `notifications.dnd` and
     /// `notifications.mark_all_read` dispatch to it.
     pub notification_service:
         std::sync::Arc<dyn rim_services::notification::service::NotificationService>,
-    /// Dual-path audit write (Widow §7.5 N3). `None` in test/unit contexts
+    /// Database audit sink. `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target: "audit")`
     /// line. Both sinks are kept — the tracing line is for low-cardinality
@@ -74,13 +74,12 @@ pub struct CommandServices {
 pub struct DefaultCommandService {
     pub(super) repos: CommandRepos,
     pub(super) services: CommandServices,
-    /// Holds the issued confirmation tokens for dangerous commands (H1
-    /// closure, §3.5). Phase 1 ships an in-memory store; Phase 5+ may
-    /// swap this to Redis behind the same trait without touching call
-    /// sites. Single-node-only is a known Phase 1 limitation (Fury §5).
+    /// Holds the issued confirmation tokens for dangerous commands. The
+    /// store in use is in-memory, so tokens are valid only on the node
+    /// that issued them; another store can replace it behind the same trait.
     pub(super) confirmation_store: std::sync::Arc<dyn ConfirmationStore>,
     /// In-memory per-(actor, command_id) sliding-window rate limiter.
-    /// Single-node only in Phase 5; multi-node coordination deferred.
+    /// Single-node only: each process keeps its own windows.
     pub(super) rate_limiter: rate_limiter::RateLimiter,
     /// AI-surface macro discovery source, wired **after** construction to break
     /// the command↔macro circular init dependency (provider builds the command
@@ -251,7 +250,7 @@ impl CommandService for DefaultCommandService {
     }
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
-        // P4-A1 / P5-A1: snapshot audit fields BEFORE moving `cmd` into
+        // Snapshot the audit fields BEFORE moving `cmd` into
         // `execute_command_inner` (which consumes args/context).
         let actor_id = cmd.actor.user_id;
         let command_id_for_audit = cmd.command_id.clone();

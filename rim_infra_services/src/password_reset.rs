@@ -41,7 +41,7 @@ pub struct DefaultPasswordResetService {
     account_rate_limiter: RegistrationRateLimiter,
     email_sender: Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/reset-password/{token}` link. If
-    /// unset, the email falls back to the bare token (dev-only — see `docs/email.md`).
+    /// unset, the email falls back to the bare token (dev-only).
     public_base_url: Option<String>,
     /// Login's store of recent successful sources; a completed reset forgets the account's.
     known_login_sources: Option<KnownLoginSources>,
@@ -90,7 +90,7 @@ impl DefaultPasswordResetService {
 
     /// Build the reset link as a path segment: `{public_base_url}/reset-password/{token}` — a
     /// path segment, never a `?token=` query string (query strings would both fail to route and
-    /// leak the token via `Referer`; see `docs/email.md`). The token is percent-encoded
+    /// leak the token via `Referer`). The token is percent-encoded
     /// defensively even though `rim_rst_`-prefixed base64url tokens are already path-safe. Falls
     /// back to the bare token (with a warning) if `public_base_url` is unset.
     fn build_reset_link(&self, raw_token: &str) -> String {

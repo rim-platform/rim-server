@@ -7,12 +7,9 @@ use rim_services::command::verb::TypedVerb;
 
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
-        // P3-A2 first AI-callable builtin. `ai_callable: true` opts into the
-        // surface filtered by `CommandSurfaceDto::Ai` (Phase 2). `chat.read`
-        // is the only required cap and is seeded in `builtin_capabilities()`
-        // — strict default-deny stays satisfied. Closes design §4 Phase 3
-        // first migration: `chat.list_channels` was hardcoded TS in the
-        // frontend agent; backend ownership lands here.
+        // `ai_callable: true` puts it on the surface filtered by
+        // `CommandSurfaceDto::Ai`. `chat.read` is the only required cap and
+        // is seeded in `builtin_capabilities()`.
         CommandDefinitionDto {
             id: "chat.list_channels".to_string(),
             title: "List Channels".to_string(),

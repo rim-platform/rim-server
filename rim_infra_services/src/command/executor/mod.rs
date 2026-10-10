@@ -261,8 +261,8 @@ pub(super) fn resolve_conversation_id(
 }
 
 /// Parses a list of UUIDs from `key`. Accepts a JSON array of strings, or one string of
-/// comma-separated ids: the agent's tool schema types every command argument as a scalar
-/// (Track 4.1), so `"a,b"` is what it sends for a list argument.
+/// comma-separated ids: the agent's tool schema types every command argument as a scalar,
+/// so `"a,b"` is what it sends for a list argument.
 pub(super) fn parse_uuid_array_arg<T>(
     map: &serde_json::Map<String, Value>,
     key: &str,

@@ -1,4 +1,4 @@
-//! `DefaultNotificationService` unit tests (Track 1.3): the async wrapper around the pure
+//! `DefaultNotificationService` unit tests: the async wrapper around the pure
 //! decision (what it loads, stores and emits), settings validation and mark-read semantics.
 
 use std::sync::{Arc, Mutex};

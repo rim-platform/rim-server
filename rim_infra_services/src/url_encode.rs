@@ -1,9 +1,8 @@
-//! Minimal, dependency-free percent-encoding for a single URL path segment (Track B3).
+//! Minimal, dependency-free percent-encoding for a single URL path segment.
 //!
 //! Reset/invite tokens are already restricted to `[A-Za-z0-9_-]` (base64url-nopad), which are
-//! all RFC 3986 "unreserved" characters and never need encoding — but §5 of
-//! `docs/specs/track-b3-email.md` asks for defensive encoding anyway, and pulling in a full URL
-//! crate for that would be scope creep for one helper. This encodes exactly the RFC 3986
+//! all RFC 3986 "unreserved" characters and never need encoding; they are encoded defensively
+//! anyway, without pulling in a full URL crate for one helper. This encodes exactly the RFC 3986
 //! unreserved set (`ALPHA / DIGIT / "-" / "." / "_" / "~"`) as-is and percent-encodes everything
 //! else.
 
