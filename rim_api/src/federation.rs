@@ -119,8 +119,6 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "rotateIdentityKey",
     "publishProfileCard",
     "createServer",
-    "createIngestToken",
-    "revokeIngestToken",
     "createInstanceInvite",
     "revokeInstanceInvite",
     "startDeviceLink",

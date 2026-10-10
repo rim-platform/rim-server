@@ -24,8 +24,6 @@ use rim_services::channel_lens::service::MockChannelLensService;
 use rim_services::command::service::MockCommandService;
 use rim_services::conversation::service::MockConversationService;
 use rim_services::custom_emoji::service::MockCustomEmojiService;
-use rim_services::incident::service::MockIncidentService;
-use rim_services::ingest_token::service::MockIngestTokenService;
 use rim_services::key_auth::service::MockKeyAuthService;
 use rim_services::keybind::service::MockKeybindService;
 use rim_services::link_preview::service::MockLinkPreviewService;
@@ -43,9 +41,7 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::MockReadStateService;
 use rim_services::server::service::MockServerService;
 use rim_services::server_member::service::MockServerMemberService;
-use rim_services::skill_profile::service::MockSkillProfileService;
 use rim_services::user::service::MockUserService;
-use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
 use crate::auth_context::AuthActorCtx;
@@ -59,12 +55,8 @@ mod auth;
 mod command;
 mod command_execution;
 mod conversation;
-mod escalation;
-mod incident;
-mod ingest_token;
 mod keybind;
 mod message;
-mod oncall;
 mod platform;
 mod presence;
 mod profile;
@@ -136,20 +128,12 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -190,20 +174,12 @@ fn schema_with_server_mocks(
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -241,181 +217,12 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
-        }),
-        InMemoryBroadcaster::new(16),
-        test_presence_manager(),
-        test_typing_tracker(),
-        test_observers(),
-        test_registration_context(),
-        None,
-    )
-}
-
-/// Builds a schema with a custom `IncidentService` mock and (since `Incident.
-/// acknowledgedByUser`/`escalationRun` need it) a custom `UserService` mock for the shared
-/// `User` DataLoader.
-fn schema_with_incident_mocks(
-    incident: MockIncidentService,
-    user: MockUserService,
-) -> crate::AppSchema {
-    build_schema(
-        Arc::new(TestAppServiceProvider {
-            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            macro_def: Arc::new(MockMacroService::new()),
-            mention: Arc::new(MockMentionService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
-            key_auth: Arc::new(MockKeyAuthService::new()),
-            pin: Arc::new(MockPinService::new()),
-            reaction: Arc::new(MockMessageReactionService::new()),
-            read_state: Arc::new(MockReadStateService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(user),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-            link_preview: Arc::new(MockLinkPreviewService::new()),
-            custom_emoji: Arc::new(MockCustomEmojiService::new()),
-            channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(incident),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
-            workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
-            moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
-            notification: Arc::new(
-                rim_services::notification::service::MockNotificationService::new(),
-            ),
-            pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
-        }),
-        InMemoryBroadcaster::new(16),
-        test_presence_manager(),
-        test_typing_tracker(),
-        test_observers(),
-        test_registration_context(),
-        None,
-    )
-}
-
-fn schema_with_oncall_mock(
-    oncall: rim_services::oncall::service::MockOnCallService,
-) -> crate::AppSchema {
-    build_schema(
-        Arc::new(TestAppServiceProvider {
-            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            macro_def: Arc::new(MockMacroService::new()),
-            mention: Arc::new(MockMentionService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
-            key_auth: Arc::new(MockKeyAuthService::new()),
-            pin: Arc::new(MockPinService::new()),
-            reaction: Arc::new(MockMessageReactionService::new()),
-            read_state: Arc::new(MockReadStateService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-            link_preview: Arc::new(MockLinkPreviewService::new()),
-            custom_emoji: Arc::new(MockCustomEmojiService::new()),
-            channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
-            workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
-            moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
-            notification: Arc::new(
-                rim_services::notification::service::MockNotificationService::new(),
-            ),
-            pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(oncall),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
-        }),
-        InMemoryBroadcaster::new(16),
-        test_presence_manager(),
-        test_typing_tracker(),
-        test_observers(),
-        test_registration_context(),
-        None,
-    )
-}
-
-fn schema_with_escalation_policy_mock(
-    escalation_policy: rim_services::escalation::service::MockEscalationPolicyService,
-) -> crate::AppSchema {
-    build_schema(
-        Arc::new(TestAppServiceProvider {
-            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            macro_def: Arc::new(MockMacroService::new()),
-            mention: Arc::new(MockMentionService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
-            key_auth: Arc::new(MockKeyAuthService::new()),
-            pin: Arc::new(MockPinService::new()),
-            reaction: Arc::new(MockMessageReactionService::new()),
-            read_state: Arc::new(MockReadStateService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-            link_preview: Arc::new(MockLinkPreviewService::new()),
-            custom_emoji: Arc::new(MockCustomEmojiService::new()),
-            channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
-            workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
-            moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
-            notification: Arc::new(
-                rim_services::notification::service::MockNotificationService::new(),
-            ),
-            pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(escalation_policy),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -441,83 +248,6 @@ fn test_conversation_dto() -> rim_services::conversation::dto::ConversationDto {
         created_by: None,
         slow_mode_seconds: 0,
         encrypted_at: None,
-    }
-}
-
-fn test_incident_dto() -> rim_services::incident::dto::IncidentDto {
-    let now = chrono::Utc::now();
-    rim_services::incident::dto::IncidentDto {
-        id: rim_core::incident::model::IncidentId::new(),
-        server_id: ServerId::new(),
-        conversation_id: ConversationId::new(),
-        started_by: UserId::new(),
-        status: rim_core::incident::model::IncidentStatus::Active,
-        severity: Some(rim_core::incident::model::IncidentSeverity::Sev2),
-        title: "Test incident".to_string(),
-        original_topic: None,
-        started_at: now,
-        mitigated_at: None,
-        resolved_at: None,
-        postmortem_draft: None,
-        created_at: now,
-        updated_at: now,
-        alert_fingerprint: None,
-        source: "manual".to_string(),
-        escalation_policy_id: None,
-        acknowledged_at: None,
-        acknowledged_by: None,
-    }
-}
-
-fn test_escalation_policy_dto() -> rim_services::escalation::dto::EscalationPolicyDto {
-    let now = chrono::Utc::now();
-    rim_services::escalation::dto::EscalationPolicyDto {
-        id: rim_core::escalation::model::EscalationPolicyId::new(),
-        server_id: ServerId::new(),
-        name: "Primary".to_string(),
-        created_by: UserId::new(),
-        created_at: now,
-        updated_at: now,
-        steps: vec![test_escalation_step_dto()],
-    }
-}
-
-fn test_escalation_step_dto() -> rim_services::escalation::dto::EscalationStepDto {
-    rim_services::escalation::dto::EscalationStepDto {
-        id: rim_core::escalation::model::EscalationStepId::new(),
-        policy_id: rim_core::escalation::model::EscalationPolicyId::new(),
-        position: 0,
-        delay_seconds: 0,
-        target: rim_core::escalation::model::EscalationTarget::User(UserId::new()),
-        actions: vec![rim_core::escalation::model::EscalationAction::Email],
-    }
-}
-
-fn test_on_call_schedule_dto() -> rim_services::oncall::dto::OnCallScheduleDto {
-    let now = chrono::Utc::now();
-    rim_services::oncall::dto::OnCallScheduleDto {
-        id: rim_core::oncall::model::OnCallScheduleId::new(),
-        server_id: ServerId::new(),
-        name: "Primary".to_string(),
-        timezone: "UTC".to_string(),
-        created_by: UserId::new(),
-        created_at: now,
-        updated_at: now,
-    }
-}
-
-fn test_rotation_layer_dto() -> rim_services::oncall::dto::RotationLayerDto {
-    rim_services::oncall::dto::RotationLayerDto {
-        id: rim_core::oncall::model::RotationLayerId::new(),
-        schedule_id: rim_core::oncall::model::OnCallScheduleId::new(),
-        name: "Primary rotation".to_string(),
-        priority: 0,
-        kind: rim_core::oncall::model::RotationKind::Custom {
-            interval_seconds: 3600,
-        },
-        anchor_at: chrono::Utc::now(),
-        created_at: chrono::Utc::now(),
-        participants: vec![],
     }
 }
 
@@ -644,16 +374,10 @@ struct TestAppServiceProvider {
     link_preview: Arc<dyn rim_services::link_preview::LinkPreviewService>,
     custom_emoji: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
     channel_lens: Arc<dyn rim_services::channel_lens::service::ChannelLensService>,
-    incident: Arc<dyn rim_services::incident::service::IncidentService>,
-    ingest_token: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
-    skill_profile: Arc<dyn rim_services::skill_profile::service::SkillProfileService>,
     workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
-    workspace_feature: Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService>,
     moderation: Arc<dyn rim_services::moderation::service::ModerationService>,
     notification: Arc<dyn rim_services::notification::service::NotificationService>,
     pipeline: Arc<dyn rim_services::pipeline::service::PipelineService>,
-    oncall: Arc<dyn rim_services::oncall::service::OnCallService>,
-    escalation_policy: Arc<dyn rim_services::escalation::service::EscalationPolicyService>,
 }
 
 impl AppServiceProvider for TestAppServiceProvider {
@@ -770,39 +494,12 @@ impl AppServiceProvider for TestAppServiceProvider {
         Arc::clone(&self.channel_lens)
     }
 
-    fn incident_service(&self) -> Arc<dyn rim_services::incident::service::IncidentService> {
-        Arc::clone(&self.incident)
-    }
-
-    fn escalation_policy_service(
-        &self,
-    ) -> Arc<dyn rim_services::escalation::service::EscalationPolicyService> {
-        Arc::clone(&self.escalation_policy)
-    }
-
-    fn ingest_token_service(
-        &self,
-    ) -> Arc<dyn rim_services::ingest_token::service::IngestTokenService> {
-        Arc::clone(&self.ingest_token)
-    }
-
-    fn skill_profile_service(
-        &self,
-    ) -> Arc<dyn rim_services::skill_profile::service::SkillProfileService> {
-        Arc::clone(&self.skill_profile)
-    }
-
     fn workspace_state_service(
         &self,
     ) -> Arc<dyn rim_services::workspace_state::service::WorkspaceStateService> {
         Arc::clone(&self.workspace_state)
     }
 
-    fn workspace_feature_service(
-        &self,
-    ) -> Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService> {
-        Arc::clone(&self.workspace_feature)
-    }
     fn moderation_service(&self) -> Arc<dyn rim_services::moderation::service::ModerationService> {
         Arc::clone(&self.moderation)
     }
@@ -815,10 +512,6 @@ impl AppServiceProvider for TestAppServiceProvider {
 
     fn pipeline_service(&self) -> Arc<dyn rim_services::pipeline::service::PipelineService> {
         Arc::clone(&self.pipeline)
-    }
-
-    fn oncall_service(&self) -> Arc<dyn rim_services::oncall::service::OnCallService> {
-        Arc::clone(&self.oncall)
     }
 
     fn device_link_service(
@@ -879,20 +572,12 @@ fn schema_with_mocks(
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -930,20 +615,12 @@ fn schema_with_capability_mock(capability: MockCapabilityService) -> crate::AppS
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -981,20 +658,12 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -1036,20 +705,12 @@ fn schema_with_audit_mock(
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(MockIngestTokenService::new()),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
             notification: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
             ),
             pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
         }),
         InMemoryBroadcaster::new(16),
         test_presence_manager(),
@@ -1088,72 +749,9 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         link_preview: Arc::new(MockLinkPreviewService::new()),
         custom_emoji: Arc::new(MockCustomEmojiService::new()),
         channel_lens: Arc::new(MockChannelLensService::new()),
-        incident: Arc::new(MockIncidentService::new()),
-        ingest_token: Arc::new(MockIngestTokenService::new()),
-        skill_profile: Arc::new(MockSkillProfileService::new()),
         workspace_state: Arc::new(MockWorkspaceStateService::new()),
-        workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
         moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
         notification: Arc::new(rim_services::notification::service::MockNotificationService::new()),
         pipeline: Arc::new(MockPipelineService::new()),
-        oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-        escalation_policy: Arc::new(
-            rim_services::escalation::service::MockEscalationPolicyService::new(),
-        ),
     })
-}
-
-// ── Ingest token (Track B2) schema builder (tests in `ingest_token`) ──────
-
-fn schema_with_ingest_token_mocks(
-    ingest_token: rim_services::ingest_token::service::MockIngestTokenService,
-) -> crate::AppSchema {
-    build_schema(
-        Arc::new(TestAppServiceProvider {
-            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            macro_def: Arc::new(MockMacroService::new()),
-            mention: Arc::new(MockMentionService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
-            key_auth: Arc::new(MockKeyAuthService::new()),
-            pin: Arc::new(MockPinService::new()),
-            reaction: Arc::new(MockMessageReactionService::new()),
-            read_state: Arc::new(MockReadStateService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-            link_preview: Arc::new(MockLinkPreviewService::new()),
-            custom_emoji: Arc::new(MockCustomEmojiService::new()),
-            channel_lens: Arc::new(MockChannelLensService::new()),
-            incident: Arc::new(MockIncidentService::new()),
-            ingest_token: Arc::new(ingest_token),
-            skill_profile: Arc::new(MockSkillProfileService::new()),
-            workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            workspace_feature: Arc::new(MockWorkspaceFeatureService::new()),
-            moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
-            notification: Arc::new(
-                rim_services::notification::service::MockNotificationService::new(),
-            ),
-            pipeline: Arc::new(MockPipelineService::new()),
-            oncall: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            escalation_policy: Arc::new(
-                rim_services::escalation::service::MockEscalationPolicyService::new(),
-            ),
-        }),
-        InMemoryBroadcaster::new(16),
-        test_presence_manager(),
-        test_typing_tracker(),
-        test_observers(),
-        test_registration_context(),
-        None,
-    )
 }
