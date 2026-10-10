@@ -509,7 +509,6 @@ mod tests {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
-            feature: None,
         }
     }
 

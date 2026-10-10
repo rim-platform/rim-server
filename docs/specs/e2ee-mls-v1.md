@@ -38,14 +38,13 @@ client (S4-3, S4-4, S4-5) and the web client (S4-6)._
 |---|---|---|
 | `Direct` | Yes | Two members, no shared history for later joiners, nothing server-side depends on its text |
 | `Group` | Yes | Member-only by construction (`is_private` is always false for groups; the server has no other reader) |
-| `Channel`, private | No | Channels are where server search, pipelines, alerts, incidents, bots and the agent work, and where later joiners read full history; MLS gives a new member nothing from before it joined. Encrypted private channels need history sharing and are deferred |
+| `Channel`, private | No | Channels are where server search, pipelines, bots and the agent work, and where later joiners read full history; MLS gives a new member nothing from before it joined. Encrypted private channels need history sharing and are deferred |
 | `Channel`, public | No | Readable by every workspace member by design |
 
 - **Ready member.** A user whose `principal_id` is set and who has at least one *MLS-active* device:
   not revoked, with a key package uploaded in the last 60 days (`device_key.last_key_package_upload_at`,
   set by every upload; key package rows themselves expire after 90 days), shown as
-  `PrincipalDevice.mlsActive`. Bots, ingest tokens, the CLI and password-only accounts are never
-  ready.
+  `PrincipalDevice.mlsActive`. Bots, the CLI and password-only accounts are never ready.
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
   Commit of an existing plaintext DM or group is accepted ("Migration"). It is never cleared.
@@ -674,8 +673,7 @@ signature could convince a third party. Message deniability is deferred.
 | Threads | `thread_id` and thread rows are metadata; replies are encrypted messages with `threadRootMessageId`; `thread_reply` notifications work |
 | Forwarding | `forwardMessage` refuses an encrypted source or target (`VALIDATION`). The client forwards by sending new content: `sendEncryptedMessage(forwardedFromMessageId)` into an encrypted conversation, or, after a confirmation that the text will be posted unencrypted, `sendMessage(forwardedFromMessageId)` into a plaintext one. The server checks the caller can read the source and records the origin |
 | Read states, unread counts, typing, presence | Unchanged |
-| Incidents, on-call, alerts | Not available: declaring an incident in an encrypted conversation is refused; alerts only post to channels |
-| Bots, webhooks, ingest | Cannot be members, so cannot post |
+| Bots, webhooks | Cannot be members, so cannot post |
 | Export and admin tools | Encrypted rows are exported as metadata without content; audit rows hold ids only, as today |
 
 ## Plugins and the client message service

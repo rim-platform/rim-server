@@ -77,7 +77,7 @@ pub enum CommandSensitivityDto {
     /// but is not high-blast-radius. E.g. `mark_read`, `set_presence`.
     Sensitive,
     /// Mutates durable state other users will see. E.g. `send_message`,
-    /// `create_thread`, `start_incident`. Counted against agent's
+    /// `create_thread`. Counted against agent's
     /// mutating-call cap (3/turn per §3.7).
     Mutating,
     /// Elevated-risk surface that should not be invoked casually — admin

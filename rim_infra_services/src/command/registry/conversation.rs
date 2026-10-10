@@ -60,7 +60,6 @@ fn membership_command(
         sensitivity: CommandSensitivityDto::Mutating,
         typed_verb: TypedVerb::Write,
         rate_limit_per_minute: None,
-        feature: None,
     }
 }
 
@@ -135,7 +134,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         sensitivity: CommandSensitivityDto::Mutating,
         typed_verb: TypedVerb::Write,
         rate_limit_per_minute: None,
-        feature: None,
     }];
     commands.extend(membership_commands());
     commands

@@ -10,11 +10,7 @@ use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::device_link::service::DeviceLinkService;
-use rim_services::escalation::scheduler::EscalationScheduler;
-use rim_services::escalation::service::EscalationPolicyService;
 use rim_services::events::Observers;
-use rim_services::incident::service::IncidentService;
-use rim_services::ingest_token::service::IngestTokenService;
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::link_preview::service::LinkPreviewService;
@@ -27,7 +23,6 @@ use rim_services::message_thread::service::ThreadService;
 use rim_services::moderation::service::ModerationService;
 use rim_services::notification::service::NotificationService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
-use rim_services::oncall::service::OnCallService;
 use rim_services::password_reset::service::PasswordResetService;
 use rim_services::pin::service::PinService;
 use rim_services::pipeline::service::PipelineService;
@@ -35,10 +30,8 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
-use rim_services::skill_profile::service::SkillProfileService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
-use rim_services::workspace_feature::service::WorkspaceFeatureService;
 use rim_services::workspace_plugin::service::{PluginBundleService, WorkspacePluginService};
 use rim_services::workspace_state::service::WorkspaceStateService;
 use sea_orm::DatabaseConnection;
@@ -75,9 +68,6 @@ pub struct DefaultAppServiceProvider {
     command_service: Arc<dyn CommandService>,
     conversation_service: Arc<dyn ConversationService>,
     custom_emoji_service: Arc<dyn CustomEmojiService>,
-    escalation_policy_service: Arc<dyn EscalationPolicyService>,
-    incident_service: Arc<dyn IncidentService>,
-    ingest_token_service: Arc<dyn IngestTokenService>,
     key_auth_service: Arc<dyn KeyAuthService>,
     keybind_service: Arc<dyn KeybindService>,
     link_preview_service: Arc<dyn LinkPreviewService>,
@@ -89,16 +79,13 @@ pub struct DefaultAppServiceProvider {
     moderation_service: Arc<dyn ModerationService>,
     notification_service: Arc<dyn NotificationService>,
     notification_preference_service: Arc<dyn NotificationPreferenceService>,
-    oncall_service: Arc<dyn OnCallService>,
     password_reset_service: Arc<dyn PasswordResetService>,
     pin_service: Arc<dyn PinService>,
     read_state_service: Arc<dyn ReadStateService>,
     server_service: Arc<dyn ServerService>,
     server_member_service: Arc<dyn ServerMemberService>,
-    skill_profile_service: Arc<dyn SkillProfileService>,
     thread_service: Arc<dyn ThreadService>,
     user_service: Arc<dyn UserService>,
-    workspace_feature_service: Arc<dyn WorkspaceFeatureService>,
     workspace_state_service: Arc<dyn WorkspaceStateService>,
     pipeline_service: Arc<dyn PipelineService>,
     request_authenticator: Arc<dyn RequestAuthenticator>,
@@ -110,8 +97,7 @@ pub struct DefaultAppServiceProvider {
 
 impl DefaultAppServiceProvider {
     /// Composition-root constructor — wires every service impl from shared repos/config. Its
-    /// argument count grows with each cross-cutting concern (observers, storage, ingest-token
-    /// TTL, email); it has exactly one call site (`rim_server/src/app.rs`), so a builder isn't
+    /// argument count grows with each cross-cutting concern (observers, storage, email); it has exactly one call site (`rim_server/src/app.rs`), so a builder isn't
     /// worth the indirection.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -120,10 +106,8 @@ impl DefaultAppServiceProvider {
         session_ttl: Duration,
         observers: Observers,
         storage_service: Arc<dyn StorageService>,
-        ingest_token_ttl_seconds: Option<u64>,
         email_sender: Arc<dyn EmailSender>,
         public_base_url: Option<String>,
-        escalation_scheduler: Arc<dyn EscalationScheduler>,
         key_login_audiences: Vec<String>,
         franking_keys: crate::franking_keys::SharedFrankingKeys,
         federation: FederationHooks,
@@ -247,7 +231,6 @@ impl DefaultAppServiceProvider {
         let pin_observers = observers.clone();
         let server_observers = observers.clone();
         let read_state_observers = observers.clone();
-        let incident_observers = observers.clone();
         let workspace_plugin_observers = observers.clone();
         let ws_state_broadcaster: Arc<dyn rim_services::events::Broadcaster> =
             Arc::new(observers.clone());
@@ -303,41 +286,12 @@ impl DefaultAppServiceProvider {
                 repos.for_workspace_state(),
                 ws_state_broadcaster,
             ));
-        let workspace_feature_service: Arc<dyn WorkspaceFeatureService> = Arc::new(
-            crate::workspace_feature::DefaultWorkspaceFeatureService::new(
-                repos.for_workspace_feature(),
-            )
-            .with_audit_log_service(Arc::clone(&audit_log_service)),
-        );
         // Shared confirmation store — same instance used by command_service and
         // macro_service so that a proof issued by command_service can be verified
         // by macro_service (and vice versa, once macro-level challenge issuance lands).
         let confirmation_store: std::sync::Arc<
             dyn rim_services::command::confirmation::ConfirmationStore,
         > = rim_services::command::confirmation::shared_in_memory_store();
-
-        // C1b (iron-man's note, §10.1): incident/oncall/escalation have no back-dependency on
-        // command_service, so they're built here — before command_service — and injected
-        // directly into `CommandServices`. This mirrors the plain-order pattern everywhere else
-        // in this constructor; unlike the command↔macro pair, there is no init cycle here, so no
-        // `OnceLock` late-binding is needed.
-        let oncall_service: Arc<dyn OnCallService> =
-            Arc::new(crate::oncall::DefaultOnCallService::new(repos.for_oncall()));
-
-        let escalation_policy_service: Arc<dyn EscalationPolicyService> = Arc::new(
-            crate::escalation::DefaultEscalationPolicyService::new(repos.for_escalation_policy()),
-        );
-
-        let incident_service: Arc<dyn IncidentService> =
-            Arc::new(crate::incident::DefaultIncidentService::new(
-                repos.for_incident(),
-                Some(db.clone()),
-                incident_observers,
-                Arc::clone(&email_sender),
-                public_base_url.clone(),
-                Arc::clone(&message_service),
-                Arc::clone(&escalation_scheduler),
-            ));
 
         let command_services_args = || crate::command::CommandServices {
             auth_service: Arc::clone(&auth_service),
@@ -351,9 +305,6 @@ impl DefaultAppServiceProvider {
             user_service: Arc::clone(&user_service),
             workspace_state_service: Arc::clone(&workspace_state_service),
             audit_log_service: Some(Arc::clone(&audit_log_service)),
-            incident_service: Arc::clone(&incident_service),
-            oncall_service: Arc::clone(&oncall_service),
-            workspace_feature_service: Arc::clone(&workspace_feature_service),
             moderation_service: Arc::clone(&moderation_service),
             notification_service: Arc::clone(&notification_service),
         };
@@ -405,17 +356,6 @@ impl DefaultAppServiceProvider {
             crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),
         );
 
-        let skill_profile_service: Arc<dyn SkillProfileService> =
-            Arc::new(crate::skill_profile::DefaultSkillProfileService::new(
-                Arc::clone(&repos.skill_profile_repo),
-            ));
-
-        let ingest_token_service: Arc<dyn IngestTokenService> =
-            Arc::new(crate::ingest_token::DefaultIngestTokenService::new(
-                repos.for_ingest_token(),
-                ingest_token_ttl_seconds,
-            ));
-
         let pipeline_service: Arc<dyn PipelineService> =
             Arc::new(crate::pipeline::DefaultPipelineService::new(
                 repos.for_pipeline(),
@@ -449,9 +389,6 @@ impl DefaultAppServiceProvider {
             command_service,
             conversation_service,
             custom_emoji_service,
-            escalation_policy_service,
-            incident_service,
-            ingest_token_service,
             key_auth_service,
             keybind_service,
             link_preview_service,
@@ -463,16 +400,13 @@ impl DefaultAppServiceProvider {
             moderation_service,
             notification_service,
             notification_preference_service,
-            oncall_service,
             password_reset_service,
             pin_service,
             read_state_service,
             server_service,
             server_member_service,
-            skill_profile_service,
             thread_service,
             user_service,
-            workspace_feature_service,
             workspace_state_service,
             pipeline_service,
             request_authenticator,
@@ -509,15 +443,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn link_preview_service(&self) -> Arc<dyn LinkPreviewService> {
         Arc::clone(&self.link_preview_service)
     }
-    fn escalation_policy_service(&self) -> Arc<dyn EscalationPolicyService> {
-        Arc::clone(&self.escalation_policy_service)
-    }
-    fn incident_service(&self) -> Arc<dyn IncidentService> {
-        Arc::clone(&self.incident_service)
-    }
-    fn ingest_token_service(&self) -> Arc<dyn IngestTokenService> {
-        Arc::clone(&self.ingest_token_service)
-    }
     fn key_auth_service(&self) -> Arc<dyn KeyAuthService> {
         Arc::clone(&self.key_auth_service)
     }
@@ -543,9 +468,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn notification_preference_service(&self) -> Arc<dyn NotificationPreferenceService> {
         Arc::clone(&self.notification_preference_service)
     }
-    fn oncall_service(&self) -> Arc<dyn OnCallService> {
-        Arc::clone(&self.oncall_service)
-    }
     fn password_reset_service(&self) -> Arc<dyn PasswordResetService> {
         Arc::clone(&self.password_reset_service)
     }
@@ -561,17 +483,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     fn server_member_service(&self) -> Arc<dyn ServerMemberService> {
         Arc::clone(&self.server_member_service)
     }
-    fn skill_profile_service(&self) -> Arc<dyn SkillProfileService> {
-        Arc::clone(&self.skill_profile_service)
-    }
     fn thread_service(&self) -> Arc<dyn ThreadService> {
         Arc::clone(&self.thread_service)
     }
     fn user_service(&self) -> Arc<dyn UserService> {
         Arc::clone(&self.user_service)
-    }
-    fn workspace_feature_service(&self) -> Arc<dyn WorkspaceFeatureService> {
-        Arc::clone(&self.workspace_feature_service)
     }
     fn moderation_service(&self) -> Arc<dyn ModerationService> {
         Arc::clone(&self.moderation_service)

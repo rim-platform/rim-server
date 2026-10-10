@@ -19,9 +19,7 @@ pub struct User {
     /// Lowercased, trimmed email address; `None` for a key-only account. Anything that emails
     /// users skips an account without one.
     pub email: Option<String>,
-    /// IANA timezone name (e.g. `"America/Chicago"`), validated on write. Display/defaulting
-    /// only — see `docs/oncall.md`: rotation handoff math lives on the on-call **schedule's**
-    /// timezone, never the user's.
+    /// IANA timezone name (e.g. `"America/Chicago"`), validated on write.
     pub timezone: Option<String>,
     /// Key-based principal id (`rimp1_...`) once the account enrolled a key; `None` before.
     /// An account with a principal id signs in with a device key, not its password.
