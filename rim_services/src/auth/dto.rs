@@ -89,7 +89,7 @@ pub struct WorkspaceInvitePreviewDto {
 
 /// Read-only preview of a registration token.
 ///
-/// Does NOT consume the token. See spec §4.7.
+/// Does NOT consume the token.
 #[derive(Debug, Clone)]
 pub struct InviteTokenPreviewDto {
     pub token_type: InviteTokenType,

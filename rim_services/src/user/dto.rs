@@ -10,6 +10,6 @@ pub struct UserDto {
     pub avatar_url: Option<String>,
     pub status_text: Option<String>,
     pub bio: Option<String>,
-    /// Key-based principal id once the account enrolled a key (`docs/specs/key-identity-v1.md`).
+    /// Key-based principal id once the account enrolled a key.
     pub principal_id: Option<String>,
 }

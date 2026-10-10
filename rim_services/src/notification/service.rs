@@ -16,7 +16,7 @@ use crate::notification::dto::{
     NotificationSettingsDto,
 };
 
-/// Notification rules and the notification inbox (Track 1.3). Every actor-facing method
+/// Notification rules and the notification inbox. Every actor-facing method
 /// requires workspace membership (`NotFound`/`PermissionDenied` otherwise) and only ever touches
 /// the actor's own settings and notifications.
 #[async_trait]
