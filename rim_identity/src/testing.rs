@@ -281,6 +281,18 @@ pub fn device_login(
     )
 }
 
+/// A device signing a delegation for `delegation`'s relay, host and workspace.
+pub fn device_delegation(
+    device: &SigningKey,
+    delegation: &crate::delegation::Delegation,
+) -> SignedStatement {
+    crate::statement::sign_with_context(
+        Purpose::Delegation.context(),
+        device,
+        crate::delegation::delegation_payload(delegation),
+    )
+}
+
 /// A device retiring itself, at the version of the key log head `state`.
 pub fn device_self_revoke(
     device: &SigningKey,
