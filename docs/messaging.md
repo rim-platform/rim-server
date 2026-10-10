@@ -1,6 +1,6 @@
 # Messaging Contract
 
-This document describes the current v0 backend contract for conversations, messages, threads, and attachments.
+This document describes the backend contract for conversations, messages, threads, and attachments.
 
 ## Product Terms
 
@@ -283,20 +283,26 @@ no existing event changed.
 
 This lets clients render the timeline normally while also knowing whether a timeline message can open an existing thread.
 
-## Attachments In v0
+## Attachments
 
-- Message send APIs still reject inline attachment refs in v0.
-- `has_attachments` is still part of the message shape because attachment rows already exist in the data model and may be read for existing data.
-- Attachment reads require both:
-  - server membership, and
-  - membership in the conversation that owns the attachment's message.
-- Attachment create/finalize/delete endpoints now support a minimal lifecycle for existing messages:
-  - `createAttachment` requires `message_id`
-  - the actor must be the author of that message
-  - create returns a temporary upload ticket and stores the attachment as pending
-  - finalize marks the attachment as ready
-  - delete removes the attachment and refreshes the message `has_attachments` flag
-- Upload-ticket validation and pre-message attachment staging are not implemented yet.
+- Sending a message takes no attachments; the author adds them to a message they already sent.
+- `createAttachment(serverId, conversationId, messageId, filename, contentType, sizeBytes)`:
+  only the message's author, at most 25 MB. The declared size is reserved against the
+  workspace quota (`RIM_MAX_WORKSPACE_STORAGE_BYTES`), the attachment is stored as pending
+  upload, the message's `has_attachments` is set, and the answer is an upload ticket: the
+  attachment id, an upload token, the size limit and an expiry.
+- `POST /api/files/upload` (multipart: `upload_token`, `attachment_id` and one file) stores the
+  bytes and marks the attachment uploaded; a file larger than declared is refused.
+- `finalizeAttachment` marks an uploaded attachment ready. `deleteAttachment` removes it and
+  refreshes `has_attachments`.
+- An upload still pending 15 minutes after it started is marked failed by the stale-attachment
+  cleanup job (`docs/operations/background-jobs.md`).
+- Reading an attachment (`GET /api/attachments/{id}/download`) needs workspace membership and read
+  access to the conversation of its message.
+- In an encrypted conversation the client uploads the encrypted blob: `createAttachment` then
+  requires `blobSha256`, a fixed file name and type, and the upload is checked against the hash
+  (`docs/specs/e2ee-mls-v1.md`, "Attachments").
+- The `attachments` instance feature switches all of this off (`docs/operations/features.md`).
 
 ## Pagination
 

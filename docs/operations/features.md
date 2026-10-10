@@ -13,7 +13,7 @@ SMTP is not configured, which is how it already behaved.
 | `email` | Password reset mail, invite mail and notification digests | Some instances must not send mail at all. |
 | `custom_emoji` | The `customEmojis` query and the `createCustomEmoji` and `deleteCustomEmoji` mutations | Uploaded images are content the operator moderates and stores. |
 | `workspace_plugins` | The `workspacePlugins` query, the `addWorkspacePlugin`, `updateWorkspacePlugin` and `removeWorkspacePlugin` mutations, and `POST`/`GET /api/plugin-bundles/…` (and the forwarded download) | Hosting plugin bundles distributes code to members' clients. Plugins a user installs locally on their client are not affected. |
-| `ai_commands` | `commandDiscover`, `commands(surface: AI)`, `executeCommand` and `executeMacro` with an `AGENT` or `MCP` initiator, and the agent-facing fields of `Command` (`nlDescription` is null, `intentSamples` empty and `aiCallable` false while off) | An instance may not want an AI agent driving its workspaces. |
+| `ai_commands` | `commandDiscover`, `commands(surface: AI)`, `executeCommand` and `executeMacro` with the `AGENT` initiator, and the agent-facing fields of `Command` (`nlDescription` is null, `intentSamples` empty and `aiCallable` false while off) | An instance may not want an AI agent driving its workspaces. |
 
 These are platform core and have no switch: end-to-end encrypted conversations, key identity,
 the relay and host roles (`RIM_ROLE`), registration (its own modes: `RIM_OPEN_REGISTRATION`,
@@ -85,6 +85,6 @@ A client reads `serverInfo.features` after connecting and hides the surfaces of 
 unavailable features: the attach button, emoji management, the workspace plugin settings, the
 AI agent, "forgot password". The server enforces the switches either way.
 
-`ai_commands` refuses agent and MCP runs by the initiator the client declares. It switches the
+`ai_commands` refuses agent runs by the initiator the client declares. It switches the
 AI surface off for well-behaved clients; the capability checks, confirmation and audit that
 apply to every command are the security boundary, not this switch.
