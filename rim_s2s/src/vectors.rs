@@ -368,30 +368,28 @@ fn a8_proof_of_work() {
         rim_identity::principal_id_for_inception(inception),
         PRINCIPAL
     );
-    let hash_for = |counter: u64| {
-        let mut h = Sha256::new();
-        h.update(b"rim.pow.v1\0");
-        h.update(RELAY_ID.as_bytes());
-        h.update(b"\0");
-        h.update(inception.as_bytes());
-        h.update(counter.to_be_bytes());
-        <[u8; 32]>::from(h.finalize())
-    };
-    let counter = (0u64..)
-        .find(|c| {
-            let h = hash_for(*c);
-            h[0] == 0 && h[1] == 0
-        })
-        .expect("counter");
-    assert_eq!(counter, 37283);
-    assert_eq!(b64u(&counter.to_be_bytes()), "AAAAAAAAkaM");
-    let hex: String = hash_for(counter)
+    let nonce = crate::pow::solve_pow(RELAY_ID, inception, 16);
+    assert_eq!(u64::from_be_bytes(nonce), 37283);
+    assert_eq!(b64u(&nonce), "AAAAAAAAkaM");
+    let hex: String = crate::pow::pow_hash(RELAY_ID, inception, &nonce)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
         hex,
         "00002f63d137749fda27201ccf9d282a4ed846287d49c55fea89a47617e78ed6"
+    );
+    assert_eq!(
+        crate::pow::check_pow(RELAY_ID, inception, "AAAAAAAAkaM", 16),
+        Ok(())
+    );
+    assert_eq!(
+        crate::pow::check_pow(RELAY_ID, inception, "AAAAAAAAkaM", 19),
+        Err(crate::pow::PowError::TooWeak)
+    );
+    assert_eq!(
+        crate::pow::check_pow(RELAY_ID, inception, "AAAAAAAAkaI", 16),
+        Err(crate::pow::PowError::TooWeak)
     );
 }
 

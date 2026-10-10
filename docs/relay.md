@@ -19,9 +19,15 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_ROLE` | `both` | `relay` creates no new workspaces; `host` refuses `/api/remote/…`, contacts, DM requests and deliveries |
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Bytes queued per local user; over it the oldest items are dropped |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | How long queued items and DM requests are kept |
-| `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests a host accepts per device per minute |
+| `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device per minute: those a local user's device sends through `/api/remote/…`, and those a host accepts |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to join, subscribe, forward, report presence and bring revocations here |
+| `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
+| `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
+| `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and cipher suite |
+| `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices a local user keeps, revoked ones not counted |
+| `RIM_REGISTRATION_POW_BITS` | unset | Turns on proof-of-work signups, "The public relay" |
 
 ### The direct space
 
@@ -96,11 +102,11 @@ once.
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
-| `reportDmRequest` | Audited as `relay.dm_request_reported`; a pending request is ignored |
+| `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored |
 | Nothing | Expires after the retention period |
 
-Limits: 100 pending requests per recipient and 20 per sender principal per day on this relay;
-past them invites are refused as `limited`. A claim of a local user's key packages by a stranger
+Limits: 100 pending requests per recipient and `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
+principal per day on this relay; past them invites are refused as `limited`. A claim of a local user's key packages by a stranger
 (not a contact, never accepted, sharing no workspace here) gets last-resort packages only, at
 most 20 claims per stranger per day.
 
@@ -170,9 +176,55 @@ Every minute the server deletes acknowledged and expired items, envelopes no ite
 requests, outbox rows over 7 days and accepted `seq` values out of the window, ends expired
 delegations and those of revoked devices or departed members, and marks this relay's expired
 subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit events
-(target `audit`, ids only): `relay.principal_blocked`, `relay.dm_request_reported`, `relay.left`,
-`key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
+(target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
+`server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
+`relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
+`relay.registration_pow`, `relay.left`, `key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
 `host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
+
+### The public relay
+
+A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
+`deploy/compose.relay.yml`; `deploy/README.md` brings it up and `docs/oncall/relay-public.md` is
+its runbook.
+
+**Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
+registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
+token (bootstrap, instance invite or workspace invite) or `proofOfWork`: an 8-byte nonce,
+unpadded base64url, such that
+
+```
+SHA-256("rim.pow.v1\0" || this server's id || "\0" || inception payload || nonce)
+```
+
+starts with that many zero bits. The work is bound to this server and one principal, and
+checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP
+and are audited as `relay.registration_pow`. Password signups take a token, as in invite-only
+mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
+answers `POW`. To let someone in without the work, issue a single-use link with
+`rim_server bootstrap-user`.
+
+**Quotas** per local user are the `RIM_RELAY_*` settings above with
+`RIM_RELAY_QUEUE_BYTES_PER_USER`; the public relay keeps 64 MiB of queue per user. The
+per-minute and per-day counters are in memory, per node.
+
+**Blocking a principal.** `rim_server principal block <principalId> --reason <text>` stores the
+block in `relay_principal_block`, ends the sessions of the account holding the principal here
+and ignores its pending DM requests for every recipient. From then on, until `principal
+unblock`: its logins, signups and enrollments are refused (`FORBIDDEN`); deliveries to it are
+refused as `unknown_principal` and its invites as `blocked`; its key packages are not handed
+out, and it claims none; `GET /s2s/v1/principals/<id>` answers `404`; forwarded requests it
+signs are refused with `403`. `principal list` shows the blocks.
+
+**Blocking a peer.** `rim_server peer block <serverId>` sets the pinned peer's status to
+`blocked`, which the request check reads on every request: its requests get
+`403 peer_not_allowed` and nothing is sent to it. `peer unblock` makes it `active` again. A
+forked peer stays forked; a peer never pinned is refused with `RIM_S2S_DENIED_PEERS` instead.
+Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
+
+**Abuse reports.** `reportDmRequest` and the abuse address both end in `relay_abuse_report`:
+`rim_server abuse-reports list [--open]`, `abuse-reports add [--principal P] [--server S]
+--reason <text>` for a report that came by mail, and `abuse-reports resolve <id>`.
 
 ## For clients
 
@@ -194,6 +246,11 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
   `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
   card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`
   records the conversation a successor replaces, and `Conversation.predecessor` returns it.
+- On a relay in `pow` registration mode (`registrationMode` is `POW`; the difficulty is the
+  discovery document's `registration.powBits`), `signupWithKey` takes `proofOfWork`: count from
+  0, hash as in "The public relay" with the counter as the 8-byte big-endian nonce, and send the
+  first nonce that meets the difficulty, unpadded base64url. A registration token instead skips
+  the work.
 - `dmRequests(status)`, `acceptDmRequest`, `ignoreDmRequest`, `blockPrincipal`,
   `unblockPrincipal`, `reportDmRequest` work the request inbox. A request's `heldItems` are
   host-signed envelopes to read before deciding, the `DmInvite` first; verify it to bind the

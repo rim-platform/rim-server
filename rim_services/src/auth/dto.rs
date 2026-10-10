@@ -132,6 +132,10 @@ pub enum RegistrationMode {
     InviteOnly,
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,
+    /// `RIM_REGISTRATION_POW_BITS`: a key-only signup takes a registration token or a
+    /// proof-of-work of `bits` leading zero bits (rate-limited as open signups); a password
+    /// signup takes a token, as in invite-only mode.
+    Pow { bits: u32 },
 }
 
 /// Zero-sized marker type carried through [`RegistrationContext`] as a GraphQL

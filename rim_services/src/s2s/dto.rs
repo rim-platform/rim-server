@@ -41,6 +41,19 @@ pub enum PeerLookup {
     Blocked,
 }
 
+/// What blocking or unblocking a peer did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerBlockChange {
+    /// The status changed.
+    Changed,
+    /// The peer already had that status.
+    Unchanged,
+    /// The peer is not pinned; `RIM_S2S_DENIED_PEERS` refuses it before it is.
+    NotPinned,
+    /// The peer's key log forked; it stays refused until `peer reset`.
+    Forked,
+}
+
 /// A pinned peer, as an operator or a resolver sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerDto {

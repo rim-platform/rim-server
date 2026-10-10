@@ -55,6 +55,10 @@ pub struct FederationHooks {
     pub remote_key_packages: Option<Arc<dyn rim_services::host::service::RemoteKeyPackages>>,
     /// Told when a local user's card or devices change.
     pub relay_service: Option<Arc<dyn rim_services::relay::service::RelayService>>,
+    /// This server's id, which proof-of-work signups are bound to.
+    pub server_id: Option<String>,
+    /// What each local user may hold and send.
+    pub quotas: crate::quota::Quotas,
     /// Refreshes a remote user's identity before they sign in directly.
     pub host_service: Option<Arc<dyn rim_services::host::service::HostService>>,
     /// Sends a local device's revocation to every host holding its person.
@@ -152,6 +156,10 @@ impl DefaultAppServiceProvider {
         if let Some(relay) = &federation.relay_service {
             key_auth = key_auth.with_relay_service(Arc::clone(relay));
         }
+        if let Some(server_id) = &federation.server_id {
+            key_auth = key_auth.with_server_id(server_id.clone());
+        }
+        key_auth = key_auth.with_quotas(federation.quotas);
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -209,7 +217,8 @@ impl DefaultAppServiceProvider {
             observers.clone(),
         )
         .with_audit_log_service(Arc::clone(&audit_log_service))
-        .with_franking_keys(franking_keys);
+        .with_franking_keys(franking_keys)
+        .with_key_package_cap(federation.quotas.key_packages_per_device);
         if let Some(remote) = &federation.remote_key_packages {
             e2ee_concrete = e2ee_concrete.with_remote_key_packages(Arc::clone(remote));
         }

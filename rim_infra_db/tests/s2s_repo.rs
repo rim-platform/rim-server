@@ -112,6 +112,31 @@ async fn a_pin_advances_only_from_the_expected_head_while_active() {
     assert_eq!(advanced.first_seen_at, inserted.first_seen_at);
     assert_eq!(repo.key_log(PEER).await.unwrap(), pin(2).log);
 
+    // A status changes only from the one expected.
+    assert!(
+        !repo
+            .replace_status(PEER, PeerStatus::Blocked, PeerStatus::Active)
+            .await
+            .unwrap()
+    );
+    assert!(
+        repo.replace_status(PEER, PeerStatus::Active, PeerStatus::Blocked)
+            .await
+            .unwrap()
+    );
+    assert!(repo.advance(pin(3), 2).await.unwrap().is_none(), "blocked");
+    assert!(
+        repo.replace_status(PEER, PeerStatus::Blocked, PeerStatus::Active)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .replace_status("rims1_unknown", PeerStatus::Active, PeerStatus::Blocked)
+            .await
+            .unwrap()
+    );
+
     // A forked peer does not advance.
     assert!(repo.set_status(PEER, PeerStatus::Forked).await.unwrap());
     assert!(repo.advance(pin(3), 2).await.unwrap().is_none());

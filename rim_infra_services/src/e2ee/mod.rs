@@ -392,6 +392,8 @@ pub struct DefaultE2eeService {
     /// Verifies franking receipts. `None` in unit tests that are not about reports; the
     /// composition root always wires it.
     franking_keys: Option<SharedFrankingKeys>,
+    /// Most unclaimed one-time key packages per device and suite.
+    key_packages_per_device: i64,
 }
 
 /// Why an incarnation's first Commit is allowed over an existing group.
@@ -444,7 +446,14 @@ impl DefaultE2eeService {
             readd_rate_limiter: RegistrationRateLimiter::new(86_400, 3),
             franking_keys: None,
             remote_key_packages: None,
+            key_packages_per_device: MAX_AVAILABLE_KEY_PACKAGES,
         }
+    }
+
+    /// Cap unclaimed one-time key packages per device and suite at `cap`.
+    pub fn with_key_package_cap(mut self, cap: i64) -> Self {
+        self.key_packages_per_device = cap.max(1);
+        self
     }
 
     pub fn with_franking_keys(mut self, franking_keys: SharedFrankingKeys) -> Self {
@@ -1285,9 +1294,10 @@ impl E2eeService for DefaultE2eeService {
                 .e2ee_repo
                 .count_available_key_packages(device.device_key_id, suite)
                 .await?;
-            if available > MAX_AVAILABLE_KEY_PACKAGES {
+            if available > self.key_packages_per_device {
                 return Err(ServiceError::Validation(format!(
-                    "a device keeps at most {MAX_AVAILABLE_KEY_PACKAGES} unclaimed key packages"
+                    "a device keeps at most {} unclaimed key packages",
+                    self.key_packages_per_device
                 )));
             }
         }

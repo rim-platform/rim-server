@@ -60,6 +60,14 @@ pub trait PeerServerRepository: Send + Sync {
     /// Set the status. Returns whether the peer exists.
     async fn set_status(&self, server_id: &str, status: PeerStatus) -> RepoResult<bool>;
 
+    /// Set the status to `to` if it is `from`. Returns whether it changed.
+    async fn replace_status(
+        &self,
+        server_id: &str,
+        from: PeerStatus,
+        to: PeerStatus,
+    ) -> RepoResult<bool>;
+
     /// Forget a peer and its log, so its next contact pins it afresh. Returns whether it
     /// existed.
     async fn delete(&self, server_id: &str) -> RepoResult<bool>;

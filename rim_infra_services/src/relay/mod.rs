@@ -2,6 +2,7 @@
 //! events with per-device cursors, identities served to and fetched from other servers, and
 //! what hosts deliver.
 
+pub mod abuse;
 pub(crate) mod identity;
 pub(crate) mod inbox;
 
@@ -23,10 +24,10 @@ use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::relay::model::{
-    DmRequest, DmRequestId, DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem,
-    RelayItemRecord,
+    DmRequest, DmRequestId, DmRequestStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope,
+    NewRelayItem, RelayItemRecord,
 };
-use rim_core::relay::repository::{RelayRepository, SubscriptionRepository};
+use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
 use rim_identity::{SignedStatement, UnverifiedDeviceRequest, is_principal_id};
@@ -46,6 +47,7 @@ use rim_services::s2s::dto::{PeerKeysDto, PeerLookup, S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
+use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{local_document, verify_identity};
 use crate::relay::inbox::{Filing, InboxFacts, file};
@@ -84,15 +86,19 @@ pub struct RelayRepos {
     pub e2ee_repo: Arc<dyn E2eeRepository>,
     pub user_repo: Arc<dyn UserRepository>,
     pub subscription_repo: Arc<dyn SubscriptionRepository>,
+    /// Principals this server refuses, and abuse reports.
+    pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
 }
 
-/// Limits of the relay's queues.
+/// Limits of the relay's queues and its users' traffic.
 #[derive(Debug, Clone, Copy)]
 pub struct RelaySettings {
     /// Bytes queued per local user before the oldest items are dropped.
     pub queue_bytes_per_user: i64,
     /// How long items and requests are kept.
     pub retention: Duration,
+    /// Forwarded requests and DM requests per user.
+    pub quotas: Quotas,
 }
 
 pub struct DefaultRelayService {
@@ -104,6 +110,10 @@ pub struct DefaultRelayService {
     settings: RelaySettings,
     notices: broadcast::Sender<RelayNotice>,
     stranger_claims: RegistrationRateLimiter,
+    /// Requests each device sends through `/api/remote/…` per minute.
+    forwards_per_device: RegistrationRateLimiter,
+    /// Requests each user sends through `/api/remote/…` per day.
+    forwards_per_user: DailyCounter,
 }
 
 /// Validate a principal id given by a client.
@@ -219,6 +229,11 @@ impl DefaultRelayService {
             settings,
             notices,
             stranger_claims: RegistrationRateLimiter::new(24 * 60 * 60, STRANGER_CLAIMS_PER_DAY),
+            forwards_per_device: RegistrationRateLimiter::new(
+                60,
+                settings.quotas.forwards_per_device_per_min,
+            ),
+            forwards_per_user: DailyCounter::per_day(settings.quotas.forwards_per_user_per_day),
         }
     }
 
@@ -394,6 +409,14 @@ impl DefaultRelayService {
         else {
             return Ok(Some("unknown_principal"));
         };
+        // A principal blocked here gets nothing, as if unknown.
+        if repos
+            .relay_abuse_repo
+            .is_principal_blocked(principal_id)
+            .await?
+        {
+            return Ok(Some("unknown_principal"));
+        }
         let device_key_id = match device_id {
             Some(device_id) => {
                 match repos
@@ -501,10 +524,12 @@ impl DefaultRelayService {
             request,
             pending_for_user: 0,
             filed_by_sender_today: 0,
+            sender_daily_limit: i64::from(self.settings.quotas.dm_requests_per_day),
         };
         if let Some(invite) = &read.invite {
             let from = invite.from_principal_id.as_str();
-            facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?;
+            facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?
+                || repos.relay_abuse_repo.is_principal_blocked(from).await?;
             facts.trusted = repos.relay_repo.is_contact(user_id, from).await?
                 || repos.relay_repo.accepted_from(user_id, from).await?
                 || repos.host_repo.shares_workspace(user_id, from).await?;
@@ -758,6 +783,7 @@ impl RelayService for DefaultRelayService {
         info!(
             target = "audit",
             event = "relay.principal_blocked",
+            scope = "user",
             user_id = %actor.user_id,
             principal_id = %principal_id,
             ignored_requests = ignored,
@@ -865,10 +891,22 @@ impl RelayService for DefaultRelayService {
         if request.status == DmRequestStatus::Pending {
             self.ignore_dm_request(actor, id).await?;
         }
+        let report = self
+            .repos
+            .relay_abuse_repo
+            .insert_report(NewAbuseReport {
+                reporter_user_id: Some(actor.user_id),
+                subject_principal_id: Some(request.from_principal_id.clone()),
+                subject_server_id: Some(request.host_server_id.clone()),
+                request_id: Some(request.id),
+                reason: reason.to_string(),
+            })
+            .await?;
         info!(
             target = "audit",
             event = "relay.dm_request_reported",
             user_id = %actor.user_id,
+            report_id = %report.id,
             request_id = %request.id,
             principal_id = %request.from_principal_id,
             host_server_id = %request.host_server_id,
@@ -966,6 +1004,23 @@ impl RelayService for DefaultRelayService {
         let request = unverified
             .verify(&key)
             .map_err(|_| forbidden("the device signature does not verify"))?;
+        let now = Utc::now();
+        for decision in [
+            self.forwards_per_device
+                .check_and_record(&device.id.to_string(), "forward", now),
+            self.forwards_per_user
+                .check_and_record(&user_id.to_string(), now),
+        ] {
+            if let RateLimitDecision::Limited {
+                retry_after_seconds,
+            } = decision
+            {
+                warn!(user_id = %user_id, device_key_id = %device.id, "a user's forwarded requests are over their quota");
+                return Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                });
+            }
+        }
         Ok(request.host)
     }
 
@@ -973,6 +1028,14 @@ impl RelayService for DefaultRelayService {
         &self,
         principal_id: String,
     ) -> ServiceResult<Option<IdentityDocument>> {
+        if self
+            .repos
+            .relay_abuse_repo
+            .is_principal_blocked(&principal_id)
+            .await?
+        {
+            return Ok(None);
+        }
         match self.repos.host_repo.find_user(&principal_id).await? {
             Some((user_id, UserKind::Local)) => {
                 local_document(
@@ -1180,8 +1243,22 @@ impl RelayService for DefaultRelayService {
         else {
             return Err(ServiceError::NotFound);
         };
+        if self
+            .repos
+            .relay_abuse_repo
+            .is_principal_blocked(&request.principal_id)
+            .await?
+        {
+            return Err(ServiceError::NotFound);
+        }
         let claimer = request.claimer.principal_id.as_str();
-        if self.repos.relay_repo.is_blocked(user_id, claimer).await? {
+        if self.repos.relay_repo.is_blocked(user_id, claimer).await?
+            || self
+                .repos
+                .relay_abuse_repo
+                .is_principal_blocked(claimer)
+                .await?
+        {
             return Err(ServiceError::Forbidden(
                 "the claimer is blocked".to_string(),
             ));

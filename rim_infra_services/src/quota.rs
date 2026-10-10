@@ -1,0 +1,134 @@
+//! What each local user of a relay may hold and send, and the fixed-window counter the daily
+//! quotas use.
+
+use chrono::{DateTime, Duration, Utc};
+use dashmap::DashMap;
+use rim_services::command::rate_limit::RateLimitDecision;
+
+/// Most keys a [`DailyCounter`] holds before it forgets windows that ended.
+const MAX_KEYS: usize = 100_000;
+
+/// Per-user quotas. The queued-bytes cap lives with the relay's queue settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quotas {
+    /// Largest profile card payload, in bytes (at most 128 KiB, the statement cap).
+    pub card_max_bytes: usize,
+    /// Unclaimed one-time key packages per device and cipher suite.
+    pub key_packages_per_device: i64,
+    /// Devices that are not revoked, per user.
+    pub devices_per_user: usize,
+    /// Requests a device sends through `/api/remote/…` per minute.
+    pub forwards_per_device_per_min: u32,
+    /// Requests a user sends through `/api/remote/…` per day.
+    pub forwards_per_user_per_day: u32,
+    /// DM requests: those one sender principal files on this relay per day, and invites a
+    /// local user sends to people on other servers who are not their contacts per day.
+    pub dm_requests_per_day: u32,
+}
+
+/// Largest card the statement rules allow.
+pub const MAX_CARD_BYTES: usize = 128 * 1024;
+
+impl Default for Quotas {
+    fn default() -> Self {
+        Self {
+            card_max_bytes: MAX_CARD_BYTES,
+            key_packages_per_device: rim_services::e2ee::MAX_AVAILABLE_KEY_PACKAGES,
+            devices_per_user: 32,
+            forwards_per_device_per_min: 120,
+            forwards_per_user_per_day: 50_000,
+            dm_requests_per_day: 20,
+        }
+    }
+}
+
+/// Counts per key in windows of a fixed length starting at a key's first use. Unlike a sliding
+/// window it keeps one count per key, so a large daily limit costs no memory. In memory, per
+/// node.
+#[derive(Debug)]
+pub struct DailyCounter {
+    counts: DashMap<String, (DateTime<Utc>, u32)>,
+    window: Duration,
+    limit: u32,
+}
+
+impl DailyCounter {
+    /// A counter of `limit` per day.
+    pub fn per_day(limit: u32) -> Self {
+        Self::new(Duration::days(1), limit)
+    }
+
+    pub fn new(window: Duration, limit: u32) -> Self {
+        Self {
+            counts: DashMap::new(),
+            window,
+            limit,
+        }
+    }
+
+    /// Count one use of `key` at `now` unless the key used its limit in the current window.
+    pub fn check_and_record(&self, key: &str, now: DateTime<Utc>) -> RateLimitDecision {
+        if self.counts.len() >= MAX_KEYS {
+            let window = self.window;
+            self.counts.retain(|_, (start, _)| now - *start < window);
+        }
+        let mut entry = self.counts.entry(key.to_string()).or_insert((now, 0));
+        let (start, count) = entry.value_mut();
+        if now - *start >= self.window {
+            *start = now;
+            *count = 0;
+        }
+        if *count >= self.limit {
+            let retry = (*start + self.window - now).num_seconds().max(1);
+            return RateLimitDecision::Limited {
+                retry_after_seconds: u64::try_from(retry).unwrap_or(1),
+            };
+        }
+        *count += 1;
+        RateLimitDecision::Allowed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_defaults_are_the_public_relay_quotas() {
+        let q = Quotas::default();
+        assert_eq!(q.card_max_bytes, 131_072);
+        assert_eq!(q.key_packages_per_device, 100);
+        assert_eq!(q.devices_per_user, 32);
+        assert_eq!(q.forwards_per_device_per_min, 120);
+        assert_eq!(q.forwards_per_user_per_day, 50_000);
+        assert_eq!(q.dm_requests_per_day, 20);
+    }
+
+    #[test]
+    fn a_daily_counter_refuses_past_its_limit_until_the_window_ends() {
+        let counter = DailyCounter::per_day(2);
+        let t0 = Utc::now();
+        assert_eq!(
+            counter.check_and_record("a", t0),
+            RateLimitDecision::Allowed
+        );
+        assert_eq!(
+            counter.check_and_record("a", t0 + Duration::hours(1)),
+            RateLimitDecision::Allowed
+        );
+        match counter.check_and_record("a", t0 + Duration::hours(2)) {
+            RateLimitDecision::Limited {
+                retry_after_seconds,
+            } => assert_eq!(retry_after_seconds, 22 * 3600),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert_eq!(
+            counter.check_and_record("b", t0),
+            RateLimitDecision::Allowed
+        );
+        assert_eq!(
+            counter.check_and_record("a", t0 + Duration::days(1)),
+            RateLimitDecision::Allowed
+        );
+    }
+}

@@ -372,6 +372,23 @@ impl PeerServerRepository for SeaOrmPeerServerRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn replace_status(
+        &self,
+        server_id: &str,
+        from: PeerStatus,
+        to: PeerStatus,
+    ) -> RepoResult<bool> {
+        let result = self
+            .db
+            .execute_raw(stmt(
+                "UPDATE peer_server SET status = $3 WHERE server_id = $1 AND status = $2",
+                vec![server_id.into(), from.as_str().into(), to.as_str().into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn delete(&self, server_id: &str) -> RepoResult<bool> {
         let result = self
             .db

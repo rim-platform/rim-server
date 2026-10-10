@@ -149,6 +149,31 @@ pub struct RIMConfig {
     /// Days queued items and DM requests are kept. Default 30. Controlled by
     /// `RIM_RELAY_RETENTION_DAYS`.
     pub relay_retention_days: Option<u32>,
+
+    /// Leading zero bits a key-only signup's proof-of-work needs; set, it turns on `pow`
+    /// registration. 1 to 40. Controlled by `RIM_REGISTRATION_POW_BITS`.
+    pub registration_pow_bits: Option<u32>,
+
+    /// Largest profile card, in bytes. Default and most 131072. Controlled by
+    /// `RIM_RELAY_CARD_MAX_BYTES`.
+    pub relay_card_max_bytes: Option<usize>,
+
+    /// Unclaimed one-time key packages per device and cipher suite. Default 100. Controlled by
+    /// `RIM_RELAY_KEY_PACKAGES_PER_DEVICE`.
+    pub relay_key_packages_per_device: Option<i64>,
+
+    /// Devices that are not revoked, per user. Default 32. Controlled by
+    /// `RIM_RELAY_DEVICES_PER_USER`.
+    pub relay_devices_per_user: Option<u32>,
+
+    /// Requests a user sends through `/api/remote/…` per day. Default 50000. Controlled by
+    /// `RIM_RELAY_FORWARDS_PER_USER_PER_DAY`.
+    pub relay_forwards_per_user_per_day: Option<u32>,
+
+    /// DM requests one sender principal files here per day, and invites a local user sends to
+    /// people on other servers per day. Default 20. Controlled by
+    /// `RIM_RELAY_DM_REQUESTS_PER_DAY`.
+    pub relay_dm_requests_per_day: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -199,6 +224,9 @@ pub enum RegistrationMode {
     InviteOnly,
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,
+    /// `RIM_REGISTRATION_POW_BITS`: a key-only signup takes a token or a proof-of-work of
+    /// `bits` leading zero bits.
+    Pow { bits: u32 },
 }
 
 impl fmt::Debug for RIMConfig {
@@ -252,6 +280,8 @@ impl fmt::Debug for RIMConfig {
                 &self.s2s_allow_private_addresses(),
             )
             .field("s2s_allow_http", &self.s2s_allow_http())
+            .field("registration_pow_bits", &self.registration_pow_bits)
+            .field("quotas", &self.quotas())
             .field(
                 "s2s_subscriptions_per_peer",
                 &self.s2s_subscriptions_per_peer(),
@@ -302,6 +332,12 @@ impl Default for RIMConfig {
             s2s_subscriptions_per_peer: None,
             relay_queue_bytes_per_user: None,
             relay_retention_days: None,
+            registration_pow_bits: None,
+            relay_card_max_bytes: None,
+            relay_key_packages_per_device: None,
+            relay_devices_per_user: None,
+            relay_forwards_per_user_per_day: None,
+            relay_dm_requests_per_day: None,
         }
     }
 }
@@ -333,17 +369,61 @@ impl RIMConfig {
         Ok(ttl)
     }
 
-    /// Resolve the registration mode from the environment.
+    /// Resolve the registration mode from the environment: `pow` when
+    /// `RIM_REGISTRATION_POW_BITS` is set (it wins over `RIM_OPEN_REGISTRATION`), else open or
+    /// invite-only.
+    ///
+    /// # Errors
+    /// A message naming `RIM_REGISTRATION_POW_BITS` when it is outside 1 to 40.
     ///
     /// # Examples
     /// ```ignore
-    /// let mode = config.registration_mode();
+    /// let mode = config.registration_mode()?;
     /// ```
-    pub fn registration_mode(&self) -> RegistrationMode {
-        if self.open_registration.unwrap_or(false) {
+    pub fn registration_mode(&self) -> Result<RegistrationMode, String> {
+        if let Some(bits) = self.registration_pow_bits {
+            if !(1..=rim_s2s::pow::MAX_POW_BITS).contains(&bits) {
+                return Err(format!(
+                    "RIM_REGISTRATION_POW_BITS={bits} is outside 1 to {}",
+                    rim_s2s::pow::MAX_POW_BITS
+                ));
+            }
+            return Ok(RegistrationMode::Pow { bits });
+        }
+        Ok(if self.open_registration.unwrap_or(false) {
             RegistrationMode::Open
         } else {
             RegistrationMode::InviteOnly
+        })
+    }
+
+    /// What each local user may hold and send, from `RIM_RELAY_*` and
+    /// `RIM_S2S_DEVICE_RATE_PER_MIN`, each kept within what the protocol allows.
+    pub fn quotas(&self) -> rim_infra_services::quota::Quotas {
+        use rim_infra_services::quota::{MAX_CARD_BYTES, Quotas};
+        let defaults = Quotas::default();
+        Quotas {
+            card_max_bytes: self
+                .relay_card_max_bytes
+                .unwrap_or(defaults.card_max_bytes)
+                .clamp(1024, MAX_CARD_BYTES),
+            key_packages_per_device: self
+                .relay_key_packages_per_device
+                .unwrap_or(defaults.key_packages_per_device)
+                .clamp(1, 1000),
+            devices_per_user: self
+                .relay_devices_per_user
+                .map_or(defaults.devices_per_user, |n| n as usize)
+                .clamp(1, 64),
+            forwards_per_device_per_min: self.s2s_device_rate_per_min(),
+            forwards_per_user_per_day: self
+                .relay_forwards_per_user_per_day
+                .unwrap_or(defaults.forwards_per_user_per_day)
+                .max(1),
+            dm_requests_per_day: self
+                .relay_dm_requests_per_day
+                .unwrap_or(defaults.dm_requests_per_day)
+                .max(1),
         }
     }
 
@@ -1003,6 +1083,59 @@ mod tests {
             config.key_files().key_file,
             std::path::PathBuf::from("/secrets/key.json")
         );
+    }
+
+    #[test]
+    fn pow_bits_turn_on_pow_registration_over_open() {
+        assert_eq!(
+            RIMConfig::default().registration_mode(),
+            Ok(RegistrationMode::InviteOnly)
+        );
+        let config = RIMConfig {
+            open_registration: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(config.registration_mode(), Ok(RegistrationMode::Open));
+        let config = RIMConfig {
+            registration_pow_bits: Some(24),
+            ..config
+        };
+        assert_eq!(
+            config.registration_mode(),
+            Ok(RegistrationMode::Pow { bits: 24 })
+        );
+        for bits in [0, 41] {
+            let config = RIMConfig {
+                registration_pow_bits: Some(bits),
+                ..Default::default()
+            };
+            let err = config.registration_mode().unwrap_err();
+            assert!(err.contains("RIM_REGISTRATION_POW_BITS"), "{err}");
+        }
+    }
+
+    #[test]
+    fn quotas_have_defaults_and_stay_within_the_protocol() {
+        assert_eq!(
+            RIMConfig::default().quotas(),
+            rim_infra_services::quota::Quotas::default()
+        );
+        let config = RIMConfig {
+            relay_card_max_bytes: Some(1 << 30),
+            relay_key_packages_per_device: Some(0),
+            relay_devices_per_user: Some(500),
+            relay_forwards_per_user_per_day: Some(10),
+            relay_dm_requests_per_day: Some(5),
+            s2s_device_rate_per_min: Some(60),
+            ..Default::default()
+        };
+        let quotas = config.quotas();
+        assert_eq!(quotas.card_max_bytes, 131_072);
+        assert_eq!(quotas.key_packages_per_device, 1);
+        assert_eq!(quotas.devices_per_user, 64);
+        assert_eq!(quotas.forwards_per_device_per_min, 60);
+        assert_eq!(quotas.forwards_per_user_per_day, 10);
+        assert_eq!(quotas.dm_requests_per_day, 5);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{SeqDecision, UserKind};
 use rim_core::host::repository::{DelegationRepository, HostRepository};
 use rim_core::key_identity::repository::KeyIdentityRepository;
-use rim_core::relay::repository::RelayRepository;
+use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
@@ -45,6 +45,7 @@ use rim_services::s2s::dto::{S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
+use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{IdentityStore, Stored, store_remote, verify_identity};
 use crate::relay::{
@@ -77,6 +78,8 @@ pub struct HostRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub delegation_repo: Arc<dyn DelegationRepository>,
+    /// Principals this server refuses.
+    pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
 }
 
 pub struct DefaultHostService {
@@ -92,6 +95,9 @@ pub struct DefaultHostService {
     e2ee_service: OnceLock<Arc<dyn E2eeService>>,
     /// Delegations of workspace spaces; without one only the direct-space rule applies.
     delegations: Option<Arc<dyn DelegationCheck>>,
+    /// Invites each user sends to people on other servers who are not their contacts, per
+    /// day.
+    dm_invites: DailyCounter,
 }
 
 fn upstream(server_id: &str) -> ServiceError {
@@ -119,7 +125,14 @@ impl DefaultHostService {
             device_limiter: RegistrationRateLimiter::new(60, device_rate_per_min),
             e2ee_service: OnceLock::new(),
             delegations: None,
+            dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
         }
+    }
+
+    /// Apply the per-user quotas: invites to people on other servers per day.
+    pub fn with_quotas(mut self, quotas: Quotas) -> Self {
+        self.dm_invites = DailyCounter::per_day(quotas.dm_requests_per_day);
+        self
     }
 
     /// Let workspace delegations authorize forwarded requests too.
@@ -272,6 +285,31 @@ impl DefaultHostService {
             .any(|origin| origin == peer_origin))
     }
 
+    /// Count an invite `actor` sends to someone on another server against their daily quota,
+    /// unless that person is their contact.
+    async fn count_dm_invite(&self, actor: Actor, principal_id: &str) -> ServiceResult<()> {
+        if self
+            .repos
+            .relay_repo
+            .is_contact(actor.user_id, principal_id)
+            .await?
+        {
+            return Ok(());
+        }
+        if let RateLimitDecision::Limited {
+            retry_after_seconds,
+        } = self
+            .dm_invites
+            .check_and_record(&actor.user_id.to_string(), Utc::now())
+        {
+            warn!(user_id = %actor.user_id, "a user's invites to other servers are over their daily quota");
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        Ok(())
+    }
+
     async fn check_forward(
         &self,
         request: &ForwardRequest,
@@ -298,6 +336,15 @@ impl DefaultHostService {
         else {
             return Err(forbidden("unknown principal"));
         };
+        if self
+            .repos
+            .relay_abuse_repo
+            .is_principal_blocked(&unverified.principal_id)
+            .await
+            .map_err(|e| internal(e.into()))?
+        {
+            return Err(forbidden("this principal is blocked on this server"));
+        }
         let device = self
             .repos
             .key_identity_repo
@@ -452,10 +499,10 @@ impl HostService for DefaultHostService {
         Ok(())
     }
 
-    #[instrument(name = "host.ensure_remote_member", skip_all, fields(actor_id = %_actor.user_id))]
+    #[instrument(name = "host.ensure_remote_member", skip_all, fields(actor_id = %actor.user_id))]
     async fn ensure_remote_member(
         &self,
-        _actor: Actor,
+        actor: Actor,
         member: RemoteMemberRef,
     ) -> ServiceResult<ResolvedMember> {
         if !rim_identity::is_principal_id(&member.principal_id) {
@@ -467,6 +514,7 @@ impl HostService for DefaultHostService {
             Some((user_id, UserKind::Local)) => (user_id, false),
             existing => {
                 check_relay_urls(&member.relay_urls)?;
+                self.count_dm_invite(actor, &member.principal_id).await?;
                 let fetched = fetch_from_relays(
                     self.peers.as_ref(),
                     self.client.as_ref(),

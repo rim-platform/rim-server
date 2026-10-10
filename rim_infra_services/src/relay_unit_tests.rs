@@ -15,7 +15,9 @@ use rim_core::host::model::{SeqDecision, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
 use rim_core::key_identity::model::{DeviceKey, DeviceKeyId, StoredProfileCard};
 use rim_core::key_identity::repository::MockKeyIdentityRepository;
-use rim_core::relay::repository::{MockRelayRepository, MockSubscriptionRepository};
+use rim_core::relay::repository::{
+    MockRelayAbuseRepository, MockRelayRepository, MockSubscriptionRepository,
+};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use rim_core::server_member::repository::MockServerMemberRepository;
@@ -36,6 +38,7 @@ use rim_services::s2s::service::{MockPeerService, MockS2sClient};
 use uuid::Uuid;
 
 use crate::host::{DefaultHostService, HostRepos};
+use crate::quota::Quotas;
 use crate::relay::{DefaultRelayService, RelayRepos, RelaySettings};
 
 const PEER: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
@@ -80,6 +83,17 @@ fn identity(seed: u8) -> SharedIdentity {
     })
 }
 
+/// Operator blocks of exactly the principals in `blocked`.
+fn blocks(blocked: &[&str]) -> MockRelayAbuseRepository {
+    let blocked: Vec<String> = blocked.iter().map(|p| p.to_string()).collect();
+    let mut abuse = MockRelayAbuseRepository::new();
+    abuse.expect_is_principal_blocked().returning(move |p| {
+        let found = blocked.iter().any(|b| b == p);
+        Box::pin(async move { Ok(found) })
+    });
+    abuse
+}
+
 fn device(id: DeviceKeyId, user_id: UserId, revoked: bool) -> DeviceKey {
     DeviceKey {
         id,
@@ -102,6 +116,16 @@ fn device(id: DeviceKeyId, user_id: UserId, revoked: bool) -> DeviceKey {
 
 /// A relay holding Bob, whose one device has packages; `one_time` records each claim's flag.
 fn relay(contact: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> DefaultRelayService {
+    relay_with_blocks(contact, blocked, one_time, &[])
+}
+
+/// [`relay`] with operator blocks of `server_blocks`.
+fn relay_with_blocks(
+    contact: bool,
+    blocked: bool,
+    one_time: Arc<Mutex<Vec<bool>>>,
+    server_blocks: &[&str],
+) -> DefaultRelayService {
     let bob = UserId::new();
     let mut host = MockHostRepository::new();
     host.expect_find_user()
@@ -144,6 +168,7 @@ fn relay(contact: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> Defau
             e2ee_repo: Arc::new(e2ee),
             user_repo: Arc::new(MockUserRepository::new()),
             subscription_repo: Arc::new(MockSubscriptionRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(server_blocks)),
         },
         None,
         identity(30),
@@ -152,6 +177,7 @@ fn relay(contact: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> Defau
         RelaySettings {
             queue_bytes_per_user: 1 << 20,
             retention: Duration::days(30),
+            quotas: Quotas::default(),
         },
     )
 }
@@ -213,6 +239,20 @@ async fn a_blocked_claimer_and_another_host_are_refused() {
 }
 
 #[tokio::test]
+async fn principals_blocked_on_this_server_neither_claim_nor_are_claimed() {
+    let err = relay_with_blocks(true, false, Arc::default(), &[ALICE])
+        .claim_for_peer(PEER.to_string(), claim(PEER))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+    let err = relay_with_blocks(true, false, Arc::default(), &[BOB])
+        .claim_for_peer(PEER.to_string(), claim(PEER))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+}
+
+#[tokio::test]
 async fn a_stranger_claims_twenty_times_a_day() {
     let svc = relay(false, false, Arc::default());
     for _ in 0..20 {
@@ -244,6 +284,8 @@ struct Facts {
     seq: SeqDecision,
     direct_member: bool,
     card_names_relay: bool,
+    /// An operator blocked Bob on this server.
+    server_blocked: bool,
 }
 
 const FACTS: Facts = Facts {
@@ -252,6 +294,7 @@ const FACTS: Facts = Facts {
     seq: SeqDecision::Accepted,
     direct_member: true,
     card_names_relay: true,
+    server_blocked: false,
 };
 
 fn host(facts: Facts, delegated: Option<bool>) -> (DefaultHostService, String) {
@@ -309,6 +352,7 @@ fn host(facts: Facts, delegated: Option<bool>) -> (DefaultHostService, String) {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(members),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(if facts.server_blocked { &[BOB] } else { &[] })),
         },
         None,
         shared,
@@ -394,6 +438,22 @@ async fn unknown_users_and_revoked_devices_are_refused() {
     assert!(
         matches!(revoked, Err(ForwardRefusal::Forbidden(_))),
         "{revoked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_principal_blocked_on_this_server_cannot_forward() {
+    let blocked = check(
+        Facts {
+            server_blocked: true,
+            ..FACTS
+        },
+        None,
+    )
+    .await;
+    assert!(
+        matches!(&blocked, Err(ForwardRefusal::Forbidden(why)) if why.contains("blocked")),
+        "{blocked:?}"
     );
 }
 
