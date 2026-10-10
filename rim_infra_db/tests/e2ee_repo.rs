@@ -1186,7 +1186,16 @@ async fn the_revision_migration_records_existing_messages_as_revision_0() {
     let f = fixture().await;
     create_group(&f).await;
     let conn = support::db_conn().await;
-    Migrator::down(&conn, Some(1))
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    let index = names
+        .iter()
+        .position(|n| n == "m20261010_000142_add_message_franking_revision")
+        .expect("migration must be registered");
+    let steps = u32::try_from(names.len() - index).expect("step count fits u32");
+    Migrator::down(&conn, Some(steps))
         .await
         .expect("roll back add_message_franking_revision");
     let message = insert_message(&f.repo, &f, 1, b"before").await;
