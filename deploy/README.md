@@ -1,39 +1,50 @@
 # Deploying a public relay
 
-`compose.relay.yml` runs a public relay: rim-server with `RIM_ROLE=relay`, PostgreSQL 17 and
-Caddy terminating TLS. The relay holds its users' accounts, devices and cards, queues what other
+`compose.relay.yml` turns `compose.yml` into a public relay: rim-server with `RIM_ROLE=relay`,
+the public relay's quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS,
+and no web client. The relay holds its users' accounts, devices and cards, queues what other
 servers send them and forwards their requests; it hosts no workspaces. The operator's runbook is
 `docs/oncall/relay-public.md`; the protocol is `docs/specs/server-to-server-v1.md`.
 
-The compose file's default domain, `relay.rim.chat`, is a working name: that domain is not
-registered. Use your own.
+A server that hosts workspaces uses `compose.yml` alone: `docs/self-hosting.md` covers it, and
+its sections on updates and backups apply to the relay too.
+
+The relay's working name, `relay.rim.chat`, is not a registered domain. Use your own.
 
 ## Before the first start
 
 1. A host with Docker (Compose v2.20 or later), ports 80 and 443 open, and DNS `A`/`AAAA`
    records of your domain pointing at it. Caddy gets the certificate from Let's Encrypt on the
    first request.
-2. Create `deploy/.env` (Git ignores it):
+2. Create `deploy/.env` (Git ignores it; `deploy/.env.example` lists every setting):
 
    ```sh
    cat > deploy/.env <<EOF
    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')
    RIM_DOMAIN=relay.example.org
-   RIM_PUBLIC_BASE_URL=https://relay.example.org
    EOF
    chmod 600 deploy/.env
    ```
 
-   Every other setting has the public relay's value in the compose file; set it in `.env` to
-   change it (the quotas are listed in the runbook). Without `POSTGRES_PASSWORD` the database
-   container refuses to start.
-3. Check the configuration: `docker compose -f deploy/compose.relay.yml config`.
+   `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. Every other setting has the public relay's value
+   in the compose files; set it in `.env` to change it (the quotas are listed in the runbook).
+   Without `POSTGRES_PASSWORD` or `RIM_DOMAIN` every compose command stops and names it.
+3. Check the configuration. The commands on this page and in the runbook use this alias, from
+   the repository root:
+
+   ```sh
+   alias dc='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml'
+   dc config --services          # postgres, migrate, rim, caddy: no web client
+   ```
+
+   The relay builds only `rim-server:local` (or uses `RIM_SERVER_IMAGE`); it needs no rim-ui
+   checkout.
 
 ## Start
 
 ```sh
-docker compose -f deploy/compose.relay.yml up -d --build
-docker compose -f deploy/compose.relay.yml logs -f rim
+dc up -d --build
+dc logs -f rim
 ```
 
 The `migrate` service applies the migrations and exits; the server starts after it. On its
@@ -42,24 +53,24 @@ warning about it at every start until the file is gone. Move it offline now, as 
 "The server recovery key" says:
 
 ```sh
-docker compose -f deploy/compose.relay.yml exec rim cat /data/server-recovery-key.txt
+dc exec rim cat /data/server-recovery-key.txt
 # copy the line to the offline places the runbook names, then:
-docker compose -f deploy/compose.relay.yml exec rim rm /data/server-recovery-key.txt
+dc exec rim rm /data/server-recovery-key.txt
 ```
 
 Check it answers:
 
 ```sh
 curl -s https://relay.example.org/.well-known/rim-server | head -c 300; echo
-docker compose -f deploy/compose.relay.yml exec rim /app/rim-server server-key show
+dc exec rim /app/rim-server server-key show
 ```
 
 The descriptor in the discovery document says `"registration":{"mode":"pow","powBits":24}`.
 
 ## Health
 
-The server answers two probes on its own port, without a session. Caddy does not proxy them,
-so they are reachable from inside the compose network only:
+The server answers two probes on its own port, without a session. The relay's Caddy does not
+proxy them, so they are reachable from inside the compose network only:
 
 - `GET /healthz` answers 200 with `{"status":"ok","version":"…"}` while the process serves
   requests. The image's `HEALTHCHECK` uses it.
@@ -69,9 +80,9 @@ so they are reachable from inside the compose network only:
   service's compose healthcheck uses it.
 
 ```sh
-docker compose -f deploy/compose.relay.yml ps rim          # healthy once /readyz passes
-docker compose -f deploy/compose.relay.yml exec rim curl -s http://localhost:8080/readyz
-docker compose -f deploy/compose.relay.yml exec rim /app/rim-server --version
+dc ps rim          # healthy once /readyz passes
+dc exec rim curl -s http://localhost:8080/readyz
+dc exec rim /app/rim-server --version
 ```
 
 ## The operator's commands
@@ -79,7 +90,7 @@ docker compose -f deploy/compose.relay.yml exec rim /app/rim-server --version
 The CLI is `/app/rim-server` inside the `rim` container and reads the same environment:
 
 ```sh
-alias rim-relay='docker compose -f deploy/compose.relay.yml exec rim /app/rim-server'
+alias rim-relay='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml exec rim /app/rim-server'
 rim-relay server-key show
 rim-relay principal block rimp1_… --reason "spam wave 2026-11-02"
 rim-relay peer block rims1_…
@@ -102,11 +113,13 @@ logrotate setup for `/data/audit.log`.
 ## Updating
 
 ```sh
+COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh
 git pull
-docker compose -f deploy/compose.relay.yml up -d --build
+dc up -d --build
 ```
 
-The migrations run before the new server starts. Take a backup first (runbook, "Backups").
+The migrations run before the new server starts. The backup scripts and how often to run them
+are in the runbook, "Backups".
 
 ## Another proxy
 
