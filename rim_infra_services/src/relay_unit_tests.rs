@@ -12,10 +12,10 @@ use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::e2ee::model::{ClaimedKeyPackage, MlsKeyPackageId};
 use rim_core::e2ee::repository::MockE2eeRepository;
 use rim_core::host::model::{SeqDecision, UserKind};
-use rim_core::host::repository::MockHostRepository;
+use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
 use rim_core::key_identity::model::{DeviceKey, DeviceKeyId, StoredProfileCard};
 use rim_core::key_identity::repository::MockKeyIdentityRepository;
-use rim_core::relay::repository::MockRelayRepository;
+use rim_core::relay::repository::{MockRelayRepository, MockSubscriptionRepository};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use rim_core::server_member::repository::MockServerMemberRepository;
@@ -143,6 +143,7 @@ fn relay(contact: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> Defau
             key_identity_repo: Arc::new(keys),
             e2ee_repo: Arc::new(e2ee),
             user_repo: Arc::new(MockUserRepository::new()),
+            subscription_repo: Arc::new(MockSubscriptionRepository::new()),
         },
         None,
         identity(30),
@@ -307,6 +308,7 @@ fn host(facts: Facts, delegated: Option<bool>) -> (DefaultHostService, String) {
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(members),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
         },
         None,
         shared,

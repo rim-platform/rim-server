@@ -39,6 +39,12 @@ pub trait PeerService: Send + Sync {
     /// descriptor.
     async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>>;
 
+    /// A pinned peer's key log, inception first; empty when it is not pinned.
+    async fn pinned_key_log(
+        &self,
+        server_id: &str,
+    ) -> ServiceResult<Vec<crate::relay::dto::SignedJson>>;
+
     /// Forget a peer's pin after an out-of-band check, so its next contact pins it afresh.
     /// Returns whether it was pinned.
     async fn reset(&self, server_id: &str) -> ServiceResult<bool>;

@@ -8,12 +8,17 @@ use async_graphql::{Context, Error, ErrorExtensions, Value};
 use rim_services::host::service::HostService;
 use rim_services::relay::dto::RelayInfoDto;
 use rim_services::relay::service::RelayService;
+use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
 
 /// The relay and host services and this server's roles, injected into the schema.
 #[derive(Clone)]
 pub struct FederationContext {
     pub relay: Arc<dyn RelayService>,
     pub host: Arc<dyn HostService>,
+    /// Workspaces here with members whose relay is elsewhere.
+    pub workspace_host: Arc<dyn WorkspaceHostService>,
+    /// This relay's users' workspaces hosted elsewhere.
+    pub workspace_relay: Arc<dyn WorkspaceRelayService>,
     pub info: RelayInfoDto,
     /// This server runs the relay role.
     pub relay_role: bool,
@@ -107,6 +112,9 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "reportDmRequest",
     "ackRelayItems",
     "leaveRelay",
+    "remoteJoinChallenge",
+    "joinRemoteWorkspace",
+    "renewDelegations",
 ];
 
 fn refused_in(document: &ExecutableDocument, set: &SelectionSet, depth: usize) -> Option<String> {

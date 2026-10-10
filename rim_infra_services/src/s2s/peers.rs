@@ -13,6 +13,7 @@ use rim_s2s::{
     verify_descriptor,
 };
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::relay::dto::SignedJson;
 use rim_services::s2s::dto::{PeerDto, PeerKeysDto, PeerLookup};
 use rim_services::s2s::service::PeerService;
 use rim_services::{ServiceError, ServiceResult};
@@ -500,6 +501,19 @@ impl PeerService for DefaultPeerService {
             })
             .to_string(),
         ))
+    }
+
+    async fn pinned_key_log(&self, server_id: &str) -> ServiceResult<Vec<SignedJson>> {
+        Ok(self
+            .repo
+            .key_log(server_id)
+            .await?
+            .into_iter()
+            .map(|e| SignedJson {
+                payload: e.payload,
+                signature: e.signature,
+            })
+            .collect())
     }
 
     async fn reset(&self, server_id: &str) -> ServiceResult<bool> {

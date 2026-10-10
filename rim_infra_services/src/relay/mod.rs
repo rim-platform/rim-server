@@ -26,7 +26,7 @@ use rim_core::relay::model::{
     DmRequest, DmRequestId, DmRequestStatus, NewDmRequest, NewRelayEnvelope, NewRelayItem,
     RelayItemRecord,
 };
-use rim_core::relay::repository::RelayRepository;
+use rim_core::relay::repository::{RelayRepository, SubscriptionRepository};
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
 use rim_identity::{SignedStatement, UnverifiedDeviceRequest, is_principal_id};
@@ -83,6 +83,7 @@ pub struct RelayRepos {
     pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
     pub e2ee_repo: Arc<dyn E2eeRepository>,
     pub user_repo: Arc<dyn UserRepository>,
+    pub subscription_repo: Arc<dyn SubscriptionRepository>,
 }
 
 /// Limits of the relay's queues.
@@ -184,6 +185,14 @@ struct ReadEnvelope {
     conversation_id: Option<Uuid>,
     invite: Option<Invite>,
     local: bool,
+}
+
+/// The request inbox's decision for one recipient of an item.
+enum Filed {
+    /// Queue the item, held by the request when one is given.
+    Queue(Option<DmRequestId>),
+    /// Do not queue it; a refusal reason when the host is told.
+    Done(Option<&'static str>),
 }
 
 /// The parts of a `DmInvite` the request inbox keeps.
@@ -401,6 +410,71 @@ impl DefaultRelayService {
             None => None,
         };
         let now = Utc::now();
+        // A workspace the user subscribed to through a delegation is not a DM: its items are
+        // queued as they come.
+        let subscribed = !read.local
+            && repos
+                .subscription_repo
+                .is_subscribed(user_id, peer_server_id, read.workspace_id, now)
+                .await?;
+        let request_id = if subscribed {
+            None
+        } else {
+            match self
+                .inbox_filing(repos, peer_server_id, read, user_id, now, notices)
+                .await?
+            {
+                Filed::Queue(request_id) => request_id,
+                Filed::Done(refusal) => return Ok(refusal),
+            }
+        };
+
+        let envelope_id = match envelope_id {
+            Some(id) => *id,
+            None => {
+                let id = repos
+                    .relay_repo
+                    .insert_envelope(NewRelayEnvelope {
+                        host_server_id: peer_server_id.to_string(),
+                        workspace_id: read.workspace_id,
+                        stream: read.stream.clone(),
+                        seq: read.seq,
+                        payload: envelope.payload.clone(),
+                        signature: envelope.signature.clone(),
+                    })
+                    .await?;
+                *envelope_id = Some(id);
+                id
+            }
+        };
+        let size =
+            i32::try_from(envelope.payload.len() + envelope.signature.len()).unwrap_or(i32::MAX);
+        repos
+            .relay_repo
+            .insert_item(NewRelayItem {
+                user_id,
+                envelope_id,
+                device_key_id,
+                request_id,
+                size_bytes: size,
+                expires_at: now + self.settings.retention,
+            })
+            .await?;
+        notices.push(RelayNotice::Items { user_id });
+        Ok(None)
+    }
+
+    /// Where the request inbox files an item for one recipient: the queue, possibly held by a
+    /// request, or nowhere, with any refusal.
+    async fn inbox_filing(
+        &self,
+        repos: &RelayRepos,
+        peer_server_id: &str,
+        read: &ReadEnvelope,
+        user_id: UserId,
+        now: DateTime<Utc>,
+        notices: &mut Vec<RelayNotice>,
+    ) -> ServiceResult<Filed> {
         let request = match read.conversation_id {
             Some(conversation_id) => {
                 match repos
@@ -446,19 +520,19 @@ impl DefaultRelayService {
         }
 
         let request_id = match file(&facts) {
-            Filing::Refuse(reason) => return Ok(Some(reason)),
-            Filing::Drop => return Ok(None),
+            Filing::Refuse(reason) => return Ok(Filed::Done(Some(reason))),
+            Filing::Drop => return Ok(Filed::Done(None)),
             // Local members read a conversation they accepted live, not from the queue.
-            Filing::Deliver if read.local => return Ok(None),
+            Filing::Deliver if read.local => return Ok(Filed::Done(None)),
             Filing::Deliver => None,
             Filing::Hold(id) => Some(id),
             filing @ (Filing::FileAccepted | Filing::FileRequest) => {
                 let (Some(invite), Some(conversation_id)) = (&read.invite, read.conversation_id)
                 else {
-                    return Ok(Some("invalid_envelope"));
+                    return Ok(Filed::Done(Some("invalid_envelope")));
                 };
                 let Some(card) = &invite.card else {
-                    return Ok(Some("invalid_envelope"));
+                    return Ok(Filed::Done(Some("invalid_envelope")));
                 };
                 let pending = filing == Filing::FileRequest;
                 let request = repos
@@ -483,7 +557,7 @@ impl DefaultRelayService {
                     })
                     .await?;
                 if !pending && read.local {
-                    return Ok(None);
+                    return Ok(Filed::Done(None));
                 }
                 if pending {
                     notices.push(RelayNotice::DmRequestReceived {
@@ -496,40 +570,7 @@ impl DefaultRelayService {
                 }
             }
         };
-
-        let envelope_id = match envelope_id {
-            Some(id) => *id,
-            None => {
-                let id = repos
-                    .relay_repo
-                    .insert_envelope(NewRelayEnvelope {
-                        host_server_id: peer_server_id.to_string(),
-                        workspace_id: read.workspace_id,
-                        stream: read.stream.clone(),
-                        seq: read.seq,
-                        payload: envelope.payload.clone(),
-                        signature: envelope.signature.clone(),
-                    })
-                    .await?;
-                *envelope_id = Some(id);
-                id
-            }
-        };
-        let size =
-            i32::try_from(envelope.payload.len() + envelope.signature.len()).unwrap_or(i32::MAX);
-        repos
-            .relay_repo
-            .insert_item(NewRelayItem {
-                user_id,
-                envelope_id,
-                device_key_id,
-                request_id,
-                size_bytes: size,
-                expires_at: now + self.settings.retention,
-            })
-            .await?;
-        notices.push(RelayNotice::Items { user_id });
-        Ok(None)
+        Ok(Filed::Queue(request_id))
     }
 
     /// Drop a user's oldest items over the byte cap.
@@ -885,6 +926,10 @@ impl RelayService for DefaultRelayService {
 
     fn subscribe(&self) -> broadcast::Receiver<RelayNotice> {
         self.notices.subscribe()
+    }
+
+    fn publish(&self, notice: RelayNotice) {
+        self.notify(notice);
     }
 
     async fn check_outgoing_request(

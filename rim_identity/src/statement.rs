@@ -64,6 +64,7 @@ pub enum Purpose {
     MlsKey,
     MlsReadd,
     DeviceRequest,
+    Delegation,
 }
 
 impl Purpose {
@@ -79,6 +80,7 @@ impl Purpose {
             Self::MlsKey => b"rim.mls-key.v1\0",
             Self::MlsReadd => b"rim.mls-readd.v1\0",
             Self::DeviceRequest => b"rim.device-request.v1\0",
+            Self::Delegation => b"rim.delegation.v1\0",
         }
     }
 

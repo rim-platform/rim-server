@@ -263,6 +263,11 @@ async fn graphql_handler(
             },
             None => Default::default(),
         };
+        if let Some(user_id) = auth.user_id
+            && let Some(response) = refuse_remote_account_mutation(&req, &batch, user_id).await
+        {
+            return response;
+        }
         let actor_ctx = AuthActorCtx::new(auth.user_id, auth.session_id)
             .with_device_key_id(auth.device_key_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
@@ -314,6 +319,43 @@ async fn graphql_handler(
     }
     .instrument(span)
     .await
+}
+
+/// `FORBIDDEN` when someone whose relay is another server, signed in here directly, sends a
+/// mutation that changes their account rather than a space: those run at their relay.
+async fn refuse_remote_account_mutation(
+    req: &HttpRequest,
+    batch: &async_graphql::BatchRequest,
+    user_id: rim_core::user::model::UserId,
+) -> Option<GraphQLResponse> {
+    let field = batch
+        .iter()
+        .find_map(|request| rim_api::federation::refused_account_mutation(&request.query))?;
+    let state = req.app_data::<web::Data<crate::s2s::S2sState>>()?;
+    match state.host.is_remote_user(user_id).await {
+        Ok(false) => None,
+        Ok(true) => {
+            tracing::info!(field, user_id = %user_id, "refused an account mutation for a remote member signed in directly");
+            let mut response =
+                async_graphql::Response::from_errors(vec![async_graphql::ServerError::new(
+                    "not available to remote members",
+                    None,
+                )]);
+            for error in &mut response.errors {
+                error
+                    .extensions
+                    .get_or_insert_with(Default::default)
+                    .set("code", "FORBIDDEN");
+            }
+            Some(GraphQLResponse::from(response))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "could not tell whether a user is remote");
+            Some(internal_graphql_error_response(
+                "failed to validate session",
+            ))
+        }
+    }
 }
 
 async fn graphql_ws_handler(
