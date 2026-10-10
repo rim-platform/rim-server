@@ -476,9 +476,10 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
 - **Edit**: `editEncryptedMessage` carries a new application message in the current epoch whose
   content has the same `id`, a higher `rev`, and the complete new message (not a diff: a device
   that never decrypted the original can render the edit). The server replaces `mls_ciphertext`,
-  `mls_epoch`, `sender_device_key_id`, the franking columns and the mention rows; the change-feed
-  trigger bumps `version` and sets `edited_at`. Only the author (any of their devices) may edit; the
-  receiver checks that the sender's principal is the row author's.
+  `mls_epoch`, `sender_device_key_id`, the franking columns and the mention rows, and records the
+  edit as the next franking revision ("Franking"); the change-feed trigger bumps `version` and
+  sets `edited_at`. Only the author (any of their devices) may edit; the receiver checks that the
+  sender's principal is the row author's.
 - **Delete**: `deleteMessage` as today. The server sets `is_deleted`, nulls `mls_ciphertext`, and
   keeps the franking columns. No application message is sent: the server is the authority on
   deletion (it can drop a row anyway), and a moderator outside a group must be able to delete.
@@ -580,25 +581,31 @@ A report proves one message's content to the moderators without the server havin
    sender user id || sender device id || sent_at_us || c)` (ids as 16 raw UUID bytes, the device id
    being the client device id, `sent_at_us` the row's `sent_at` in microseconds as a big-endian
    i64), where `K` is the server's current franking key and `franking_key_id` its id ("Franking
-   keys" below). `r` and `sentAtUs` are delivered in `Message.encryption`.
+   keys" below). `r` and `sentAtUs` are delivered in `Message.encryption`. In the same
+   transaction it records the version in `message_franking_revision`: revision 0 when sent, one
+   more per edit, each with `c` from the authenticated data, `sent_at_us` and the client device
+   id of the sending session.
 3. **Receiver**: recomputes `c` and refuses the message as invalid on a mismatch, so every message a
    member can see is reportable. `fk` must be exactly 32 bytes (HMAC's key padding would otherwise
    let two keys collide). It keeps `fk`, `r` and `sentAtUs` with the plaintext.
 4. **Report** (`reportEncryptedMessage`): the reporter sends the content bytes, `fk`, the receipt,
    its key id, the sender ids and `sentAtUs`. The server recomputes `c` from the content and `fk`
    and checks, comparing secrets and MACs in constant time:
-   - `c` equals the message row's `franking_commitment`, `sentAtUs` its `sent_at`, the sender user
-     its author and the sender device the row's sender device (while the row still names one);
+   - the sender user is the row's author, and `c`, `sentAtUs` and the sender device equal those of
+     **any** recorded revision of the message (or the row's current `franking_commitment`,
+     `sent_at` and sender device, while the row still names one). Every revision is compared,
+     without stopping at the first match;
    - `r` recomputed with key `receiptKeyId` (any key in the key file, "Franking keys") equals the
      receipt.
 
-   The row check means a holder of `K` (a stolen key file or backup) cannot have the server
+   The revision check means a holder of `K` (a stolen key file or backup) cannot have the server
    verify content the sender never sent: the receipt alone proves only that `K` signed it. An
-   edit replaces the row's commitment, so only the current version of a message is reportable.
-   A message the sender deleted keeps its row with the franking columns (`is_deleted`,
+   edit adds a revision rather than replacing one, so every version a receiver saw stays
+   reportable: a sender who edits an abusive message does not escape a report of what was
+   shown. A message the sender deleted keeps its row and revisions (`is_deleted`,
    `mls_ciphertext` nulled), and no retention job deletes message rows, so it stays reportable;
-   the report references the row and goes with it only when its conversation or workspace is
-   deleted. A valid report stores the content in `message_report` (`franked_content`,
+   the report and the revisions reference the row and go with it only when its conversation or
+   workspace is deleted. A valid report stores the content in `message_report` (`franked_content`,
    `franking_verified_at`); an invalid one is refused (`VALIDATION`, `the report does not match
    the message`). The usual report rules hold (one per reporter and message).
 5. **Moderator view** (S4-5): the body as plain text with mentions resolved, the attachment names and
@@ -872,7 +879,19 @@ CREATE INDEX idx_mls_readd_nonce_created_at ON mls_readd_nonce (created_at);
 
 A fourth, `drop_message_franking_key_fk`, drops `message.franking_key_id`'s reference to
 `franking_key`: key ids come from the franking key file. Its `down` restores the reference as
-`NOT VALID`, since rows may name keys the table never held.
+`NOT VALID`, since rows may name keys the table never held. A fifth,
+`add_message_franking_revision`, adds every version's franking commitment and records each
+existing encrypted message whose sender device still exists as its revision 0:
+
+```sql
+CREATE TABLE message_franking_revision (
+    message_id uuid NOT NULL REFERENCES message (id) ON DELETE CASCADE,
+    revision integer NOT NULL CHECK (revision >= 0),
+    franking_commitment bytea NOT NULL, sent_at_us bigint NOT NULL,
+    sender_device_id uuid NOT NULL,              -- the client device id the receipt covers
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, revision));
+```
 
 Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
 once fulfilled or after 7 days, re-add nonces 1 day (longer than a request stays fresh),

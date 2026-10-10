@@ -51,6 +51,7 @@ mod macro_def_mapper;
 pub mod message;
 pub mod message_attachment;
 mod message_attachment_mapper;
+pub mod message_franking_revision;
 mod message_mapper;
 pub mod message_mention;
 mod message_mention_mapper;

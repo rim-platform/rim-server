@@ -124,6 +124,7 @@ TRUNCATE TABLE
   "macro",
   message,
   message_attachment,
+  message_franking_revision,
   message_change_seq,
   message_mention,
   message_pin,

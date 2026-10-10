@@ -1872,10 +1872,10 @@ async fn finding_9_a_replayed_readd_request_is_refused() {
 }
 
 /// A receipt made with the server's franking key over another content does not verify: the
-/// reported commitment must be the one the message row recorded. An edit replaces it, so only
-/// the current version of a message is reportable.
+/// reported commitment must be one the server recorded for the message. An edit adds a version,
+/// so the version the receiver saw before the edit stays reportable.
 #[tokio::test]
-async fn finding_7_a_report_must_match_the_stored_commitment() {
+async fn finding_7_a_report_must_match_a_stored_revision() {
     let mut f = fixture().await;
     let conv = f.encrypted_dm().await;
     let conversation_id: Uuid = conv.parse().expect("uuid");
@@ -1919,16 +1919,26 @@ async fn finding_7_a_report_must_match_the_stored_commitment() {
     let (code, extensions) = exec_err(&f.schema, f.bob.request(REPORT, input)).await;
     assert_eq!(code, "VALIDATION", "{extensions}");
 
-    // After an edit the original version no longer matches the row; the edit does.
+    // Alice edits it. The forged content still matches no version; the version bob saw
+    // before the edit does.
     let edited = content(id, 1, "hello, edited", &[]);
-    let edit_fk = [5u8; 32];
-    let envelope = f.alice.encrypt(id, &edited, edit_fk, &[]);
+    let envelope = f.alice.encrypt(id, &edited, [5u8; 32], &[]);
     let edit = f.alice.request(
         &format!("mutation Edit($input: EditEncryptedMessageInput!) {{ editEncryptedMessage(input: $input) {{ {MESSAGE_FIELDS} }} }}"),
         json!({ "input": { "serverId": server_id, "conversationId": conv, "messageId": id, "envelope": envelope } }),
     );
-    let edited_encryption =
-        exec_ok(&f.schema, edit).await["editEncryptedMessage"]["encryption"].clone();
+    exec_ok(&f.schema, edit).await;
+    let input = report(
+        &server_id,
+        &conv,
+        id,
+        &forged,
+        &fk,
+        &forged_encryption,
+        &f.alice,
+    );
+    let (code, extensions) = exec_err(&f.schema, f.bob.request(REPORT, input)).await;
+    assert_eq!(code, "VALIDATION", "{extensions}");
     let original = report(
         &server_id,
         &conv,
@@ -1938,19 +1948,22 @@ async fn finding_7_a_report_must_match_the_stored_commitment() {
         &encryption,
         &f.alice,
     );
-    let (code, extensions) = exec_err(&f.schema, f.bob.request(REPORT, original)).await;
-    assert_eq!(code, "VALIDATION", "{extensions}");
-    let current = report(
-        &server_id,
-        &conv,
-        id,
-        &edited,
-        &edit_fk,
-        &edited_encryption,
-        &f.alice,
-    );
-    let data = exec_ok(&f.schema, f.bob.request(REPORT, current)).await;
+    let data = exec_ok(&f.schema, f.bob.request(REPORT, original)).await;
     assert_eq!(data["reportEncryptedMessage"], json!(true));
+    let stored: Option<Vec<u8>> = f
+        .ctx
+        .conn
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT franked_content FROM message_report WHERE message_id = $1",
+            [id.into()],
+        ))
+        .await
+        .expect("query")
+        .expect("report row")
+        .try_get("", "franked_content")
+        .expect("column");
+    assert_eq!(stored.as_deref(), Some(sent_content.as_slice()));
 }
 
 /// A message its sender deleted stays reportable: the row keeps its franking columns, and the

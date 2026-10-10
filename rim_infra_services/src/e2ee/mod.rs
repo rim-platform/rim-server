@@ -1892,27 +1892,41 @@ impl E2eeService for DefaultE2eeService {
             sent_at_us,
         };
         let c = commitment(&franking_key, &content);
-        // The receipt alone proves only that someone holding the franking key signed it, so the
-        // report must also name what the message row recorded when it was sent or last edited.
+        // The receipt alone proves only that someone holding a franking key signed it, so the
+        // report must also name a version the server recorded: the commitment, send time and
+        // sender device of the message as sent or as any later edit. The row as it is now also
+        // counts, for a message whose versions were recorded without its sender device.
+        let revisions = self.repos.e2ee_repo.franking_revisions(message.id).await?;
         let stored = message
             .encryption
             .as_ref()
             .map(|e| e.franking_commitment.as_slice())
             .unwrap_or_default();
-        let sender_device = match message
+        let row_device = match message
             .encryption
             .as_ref()
             .and_then(|e| e.sender_device_key_id)
         {
-            Some(id) => self.repos.e2ee_repo.get_device(id).await?,
+            Some(id) => self
+                .repos
+                .e2ee_repo
+                .get_device(id)
+                .await?
+                .map(|d| d.device_id),
             None => None,
         };
-        let row_matches = bool::from(stored.ct_eq(&c[..]))
-            && sent_at_us == crate::e2ee::franking::sent_at_us(message.sent_at)
-            && sender_device.is_none_or(|d| d.device_id == cmd.sender_device_id);
+        // Every version is compared, without stopping at a match.
+        let mut recorded = bool::from(stored.ct_eq(&c[..]))
+            & (sent_at_us == crate::e2ee::franking::sent_at_us(message.sent_at))
+            & row_device.is_none_or(|d| d == cmd.sender_device_id);
+        for revision in &revisions {
+            recorded |= bool::from(revision.franking_commitment.ct_eq(&c[..]))
+                & (revision.sent_at_us == sent_at_us)
+                & (revision.sender_device_id == cmd.sender_device_id);
+        }
         if cmd.sender_user_id != message.sent_by
             || !verify_receipt(server_key.as_ref(), &fields, &c, &receipt)
-            || !row_matches
+            || !recorded
         {
             return Err(mismatch());
         }

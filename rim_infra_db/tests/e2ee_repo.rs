@@ -18,8 +18,8 @@ use migration::{Migrator, MigratorTrait};
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::model::{
-    MlsRetention, NewEncryptedMessage, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage,
-    NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup,
+    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::{DeviceKeyId, NewDeviceKey};
@@ -1126,6 +1126,79 @@ async fn finding_7_franking_key_ids_come_from_the_key_file_not_the_table() {
     let legacy = f.repo.legacy_franking_keys().await.unwrap();
     assert_eq!(legacy.iter().map(|k| k.id).collect::<Vec<_>>(), vec![1, 2]);
     assert_eq!(legacy[0].secret.as_slice(), &[0x11; 32]);
+}
+
+#[tokio::test]
+async fn franking_revisions_are_numbered_and_go_with_their_message() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let message = insert_message(&f.repo, &f, 1, b"hi").await;
+    for commitment in [1u8, 2] {
+        f.repo
+            .append_franking_revision(NewFrankingRevision {
+                message_id: message.id,
+                franking_commitment: vec![commitment; 32],
+                sent_at_us: 7,
+                sender_device_id: f.alice.device_id,
+            })
+            .await
+            .expect("revision");
+    }
+    let revisions = f.repo.franking_revisions(message.id).await.unwrap();
+    assert_eq!(
+        revisions
+            .iter()
+            .map(|r| (r.revision, r.franking_commitment[0], r.sent_at_us))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 7), (1, 2, 7)]
+    );
+    assert_eq!(revisions[0].sender_device_id, f.alice.device_id);
+
+    // A soft delete keeps them; deleting the row takes them with it.
+    SeaOrmMessageRepository::new(f.ctx.db.clone())
+        .soft_delete_message(message.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.repo.franking_revisions(message.id).await.unwrap().len(),
+        2
+    );
+    f.ctx
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM message WHERE id = $1",
+            [Uuid::from(message.id).into()],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        f.repo
+            .franking_revisions(message.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_revision_migration_records_existing_messages_as_revision_0() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let conn = support::db_conn().await;
+    Migrator::down(&conn, Some(1))
+        .await
+        .expect("roll back add_message_franking_revision");
+    let message = insert_message(&f.repo, &f, 1, b"before").await;
+    Migrator::up(&conn, None)
+        .await
+        .expect("re-apply add_message_franking_revision");
+    let revisions = f.repo.franking_revisions(message.id).await.unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].revision, 0);
+    assert_eq!(revisions[0].franking_commitment, vec![1; 32]);
+    assert_eq!(revisions[0].sent_at_us, message.sent_at.timestamp_micros());
+    assert_eq!(revisions[0].sender_device_id, f.alice.device_id);
 }
 
 /// A franked report as the e2ee service stores it.

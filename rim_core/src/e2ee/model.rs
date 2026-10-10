@@ -216,6 +216,28 @@ pub struct NewMlsReaddRequest {
     pub nonce: Vec<u8>,
 }
 
+/// What one version of an encrypted message committed to: revision 0 when sent, one more per
+/// edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrankingRevision {
+    pub message_id: MessageId,
+    pub revision: i32,
+    pub franking_commitment: Vec<u8>,
+    pub sent_at_us: i64,
+    /// The sender's client device id.
+    pub sender_device_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A version to record; its revision is the next one of the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewFrankingRevision {
+    pub message_id: MessageId,
+    pub franking_commitment: Vec<u8>,
+    pub sent_at_us: i64,
+    pub sender_device_id: Uuid,
+}
+
 /// An encrypted message row as the sender's request creates it. The id is the client's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewEncryptedMessage {

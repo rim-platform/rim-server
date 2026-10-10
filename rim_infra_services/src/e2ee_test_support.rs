@@ -13,11 +13,11 @@ use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationId;
 use rim_core::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
-    MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS,
+    MlsCommit, MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
-    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit, NewMlsGroup,
-    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
+    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -65,6 +65,8 @@ pub(crate) struct State {
     pub(crate) encrypted: HashSet<ConversationId>,
     pub(crate) franking: Vec<FrankingKey>,
     pub(crate) fail_commit_insert: bool,
+    /// Recorded versions of encrypted messages.
+    pub(crate) revisions: Vec<FrankingRevision>,
     /// Encrypted messages, by id.
     pub(crate) messages: HashMap<MessageId, Message>,
 }
@@ -800,6 +802,36 @@ impl E2eeRepository for FakeE2ee {
             .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
         message.encryption = Some(envelope);
         Ok(message.clone())
+    }
+
+    async fn append_franking_revision(&self, revision: NewFrankingRevision) -> RepoResult<()> {
+        let mut state = self.state();
+        let next = state
+            .revisions
+            .iter()
+            .filter(|r| r.message_id == revision.message_id)
+            .map(|r| r.revision + 1)
+            .max()
+            .unwrap_or(0);
+        state.revisions.push(FrankingRevision {
+            message_id: revision.message_id,
+            revision: next,
+            franking_commitment: revision.franking_commitment,
+            sent_at_us: revision.sent_at_us,
+            sender_device_id: revision.sender_device_id,
+            created_at: Utc::now(),
+        });
+        Ok(())
+    }
+
+    async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>> {
+        Ok(self
+            .state()
+            .revisions
+            .iter()
+            .filter(|r| r.message_id == message_id)
+            .cloned()
+            .collect())
     }
 
     async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>> {
