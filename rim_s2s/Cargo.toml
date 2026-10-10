@@ -15,5 +15,10 @@ sfv = "0.15.0"
 sha2 = "0.10.9"
 thiserror = "2.0.17"
 
+[features]
+# The client halves (solving a proof-of-work, checking a host response) for tests in other
+# crates.
+testing = []
+
 [dev-dependencies]
 rim_identity = { path = "../rim_identity", features = ["testing"] }

@@ -2,7 +2,7 @@
 //! checks a server runs on them. Normative description: `docs/specs/key-identity-v1.md`.
 //!
 //! No database, network or clock: the only I/O is the OS random generator, which
-//! [`device_link`] draws link secrets and nonces from. It verifies one statement at a time
+//! `device_link` draws link secrets and nonces from. It verifies one statement at a time
 //! against the state of a key log, and leaves storage, freshness and authorization to the
 //! caller (`rim_infra_services::key_auth`).
 //!
@@ -19,11 +19,13 @@
 //!   hosted on another server.
 //! - [`UnverifiedDelegation`]: a device's grant to its relay to carry one workspace's traffic
 //!   to and from its host, for at most 24 hours.
-//! - [`device_link`]: the sealed channel a new device gets its certificate through. Clients
-//!   and tests use it; the server only relays the sealed bytes.
+//! - `device_link` (with the `testing` feature): the client side of the sealed channel a new
+//!   device gets its certificate through. The server only relays the sealed bytes; tests use
+//!   it to play the two devices.
 
 mod delegation;
 mod device;
+#[cfg(any(test, feature = "testing"))]
 pub mod device_link;
 mod device_request;
 mod encoding;
@@ -40,9 +42,11 @@ mod vectors;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+#[cfg(any(test, feature = "testing"))]
+pub use delegation::delegation_payload;
 pub use delegation::{
     DELEGATION_NONCE_LEN, DELEGATION_SCOPE, Delegation, DelegationError, DelegationParties,
-    MAX_DELEGATION_LIFETIME, UnverifiedDelegation, delegation_payload,
+    MAX_DELEGATION_LIFETIME, UnverifiedDelegation,
 };
 pub use device::{
     DeviceCert, DeviceRevocation, MAX_DEVICE_NAME_CHARS, RevocationSigner, UnverifiedRevocation,
@@ -58,10 +62,11 @@ pub use encoding::{
 pub use error::{IdentityError, IdentityResult};
 pub use key_log::{KeyState, RotationSigner, entry_signer, rotation_principal_id};
 pub use login::{LoginProof, UnverifiedLogin};
+#[cfg(any(test, feature = "testing"))]
+pub use mls::mls_credential_identity;
 pub use mls::{
     MAX_MLS_CREDENTIAL_LEN, MLS_READD_NONCE_LEN, MlsKeyStatement, MlsReaddRequest,
-    UnverifiedMlsKey, UnverifiedMlsReadd, mls_credential_identity, read_mls_credential,
-    verify_mls_key, verify_mls_readd,
+    UnverifiedMlsKey, UnverifiedMlsReadd, read_mls_credential, verify_mls_key, verify_mls_readd,
 };
 pub use plugin_manifest::{
     KeyHistory, KeyHistoryEntry, MAX_BUNDLE_SIZE, MAX_GIT_URL_LEN, MAX_MANIFEST_LEN,
