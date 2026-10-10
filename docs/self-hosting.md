@@ -236,6 +236,8 @@ production's. Record each drill: **FILL** where.
 - **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
   to `/data/audit.log`; `docs/operations/audit-retention.md` covers its rotation and
   `RIM_AUDIT_RETENTION_DAYS` for the audit table.
+- **Background jobs.** `docs/operations/background-jobs.md` lists what the server runs on a
+  timer, how often, and the setting that changes it.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.
 
 ## Optional features

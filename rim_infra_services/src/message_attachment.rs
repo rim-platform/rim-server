@@ -41,7 +41,7 @@ impl DefaultMessageAttachmentService {
 
     /// Attachments in `PendingUpload` or `Uploaded` status older than this
     /// threshold are considered stale and reported as `Failed`.
-    const STALE_THRESHOLD_MINUTES: i64 = UPLOAD_TICKET_TTL_MINUTES;
+    pub(crate) const STALE_THRESHOLD_MINUTES: i64 = UPLOAD_TICKET_TTL_MINUTES;
 
     fn sanitize_filename(name: &str) -> Option<String> {
         rim_core::util::sanitize_filename(name)

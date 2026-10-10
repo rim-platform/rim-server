@@ -57,7 +57,8 @@ Each run is on record itself: an audit event `audit.retention.purged` (`target` 
 was old enough). A purge that stops logs `audit.retention.failed` with the `error` instead.
 
 More than one server process on the same database each runs the job; the second run of a day
-finds nothing left to purge.
+finds nothing left to purge. `docs/operations/background-jobs.md` lists the server's other
+scheduled jobs.
 
 ## The command
 
