@@ -14,9 +14,6 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
-pub(crate) mod escalation;
-pub(crate) mod incident;
-pub(crate) mod ingest_token;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
 pub(crate) mod keybind;
@@ -24,18 +21,15 @@ pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
 pub(crate) mod notification;
-pub(crate) mod oncall;
 pub(crate) mod pagination;
 pub(crate) mod pipeline;
 pub(crate) mod platform;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
-pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod user;
 pub(crate) mod workspace;
-pub(crate) mod workspace_feature;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
@@ -70,17 +64,6 @@ pub use e2ee::{
     ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
     SubmitMlsCommitInput,
 };
-pub use escalation::{
-    EscalationActionKindGql, EscalationPolicyGql, EscalationRunStatusGql, EscalationStepGql,
-    EscalationStepInputGql, EscalationTargetInputGql, EscalationTargetKindGql,
-    IncidentEscalationRunGql,
-};
-pub use incident::{
-    IncidentGql, IncidentListCursorInput, IncidentListCursorOutput, IncidentMessageTagGql,
-    IncidentPage, IncidentPhaseGql, IncidentPhaseNameGql, IncidentSeverityGql, IncidentStatusGql,
-    IncidentTimelineGql, MessageTagTypeGql,
-};
-pub use ingest_token::{CreateIngestTokenResultGql, IngestTokenGql};
 pub use invite::{
     CreateInstanceInvitePayloadGql, InstanceInviteGql, Invite, InviteTokenPreviewGql,
     InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql, WorkspaceInvitePreviewGql,
@@ -108,10 +91,6 @@ pub use notification::{
     NotificationCursorInput, NotificationCursorOutput, NotificationLevel, NotificationPage,
     NotificationReason, NotificationSettings, UpdateNotificationSettingsInput,
 };
-pub use oncall::{
-    OnCallNowGql, OnCallOverrideGql, OnCallScheduleGql, OnCallShiftGql, RotationKindGql,
-    RotationKindInputGql, RotationLayerGql,
-};
 pub use pagination::{
     ChannelCursorInput, ChannelCursorOutput, ChannelPage, ConversationPage, InboxCursorInput,
     InboxCursorOutput, MessageCursorInput, MessageCursorOutput, MessagePage, PageInfo,
@@ -133,11 +112,9 @@ pub use remote_workspace::{
     RevocationFanout, RevocationFanoutStatus,
 };
 pub use server_info::{API_VERSION, ServerInfo};
-pub use skill_profile::{FeatureUsage, SkillProfileGql, SkillTier};
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
 pub use workspace::{Server, ServerMember, ServerMemberRoleGql};
-pub use workspace_feature::{WorkspaceFeature, WorkspaceFeatureState};
 pub use workspace_plugin::{
     AddWorkspacePluginInput, PluginRuntimeKind, PluginSignatureStatus, PluginSource,
     PluginSourceKind, UpdateWorkspacePluginInput, WorkspacePlugin, WorkspacePluginStatus,

@@ -28,9 +28,6 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
-pub(crate) mod escalation;
-pub(crate) mod incident;
-pub(crate) mod ingest_token;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
 pub(crate) mod keybind;
@@ -38,7 +35,6 @@ pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
 pub(crate) mod notification;
-pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod platform;
 pub(crate) mod presence;
@@ -46,10 +42,8 @@ pub(crate) mod profile;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
-pub(crate) mod skill_profile;
 pub(crate) mod thread;
 pub(crate) mod workspace;
-pub(crate) mod workspace_feature;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
@@ -97,15 +91,11 @@ pub(crate) struct QueryGroup4(
     conversation::ConversationMuteQueries,
     custom_emoji::CustomEmojiQueries,
     macro_def::MacroQueries,
-    skill_profile::SkillProfileQueries,
     channel_lens::ChannelLensQueries,
 );
 
 #[derive(MergedObject, Default)]
 pub(crate) struct QueryGroup5(
-    incident::IncidentQueries,
-    ingest_token::IngestTokenQueries,
-    workspace_feature::WorkspaceFeatureQueries,
     workspace_state::WorkspaceStateQueries,
     pipeline::PipelineQueries,
 );
@@ -114,8 +104,6 @@ pub(crate) struct QueryGroup5(
 pub(crate) struct QueryGroup6(
     audit::AuditLogQueries,
     invite::RegistrationQueries,
-    oncall::OnCallQueries,
-    escalation::EscalationQueries,
     moderation::ModerationQueries,
 );
 
