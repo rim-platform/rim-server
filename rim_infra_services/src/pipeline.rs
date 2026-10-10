@@ -553,8 +553,8 @@ impl PipelineService for DefaultPipelineService {
                                 // initiate (e.g. webhook trigger). Tag as
                                 // `Plugin` because pipelines are config-
                                 // driven non-human automation — same
-                                // agentic-rate-limit class as agent and
-                                // MCP per `is_agentic()`. See Fury-handoff
+                                // agentic-rate-limit class as agent per
+                                // `is_agentic()`. See Fury-handoff
                                 // note in docs/security/ai-reframe-review
                                 // §8.4: if Fury adds a dedicated `Pipeline`
                                 // variant in Phase 2, update this site.

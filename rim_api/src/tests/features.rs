@@ -147,13 +147,11 @@ async fn ai_command_resolvers_answer_feature_disabled() {
         ServerFeature::AiCommands,
     )
     .await;
-    for initiator in ["AGENT", "MCP"] {
-        assert_feature_disabled(
-            &format!(r#"mutation {{ executeCommand(input: {{ commandId: "chat.post_message", initiator: {initiator} }}) {{ status }} }}"#),
-            ServerFeature::AiCommands,
-        )
-        .await;
-    }
+    assert_feature_disabled(
+        r#"mutation { executeCommand(input: { commandId: "chat.post_message", initiator: AGENT }) { status } }"#,
+        ServerFeature::AiCommands,
+    )
+    .await;
     assert_feature_disabled(
         &format!(r#"mutation {{ executeMacro(input: {{ macroId: "{}", initiator: AGENT }}) {{ status }} }}"#, uuid::Uuid::now_v7()),
         ServerFeature::AiCommands,
