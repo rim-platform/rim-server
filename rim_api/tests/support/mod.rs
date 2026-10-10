@@ -16,6 +16,8 @@ pub mod mls;
 pub mod nodes;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
+#[allow(dead_code)] // Only the relay tests sign people up on two servers.
+pub mod relay;
 
 use std::env;
 use std::path::PathBuf;
