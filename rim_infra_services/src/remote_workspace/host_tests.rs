@@ -28,6 +28,7 @@ use rim_s2s::{
     ServerKeyState, ServerRotationSigner, ServerSigner, SharedIdentity, sign_descriptor,
     sign_inception, sign_rotation, timestamp,
 };
+use rim_services::ServiceError;
 use rim_services::relay::dto::SignedJson;
 use rim_services::remote_workspace::service::WorkspaceHostService;
 use rim_services::s2s::service::{MockPeerService, MockS2sClient};
@@ -87,6 +88,8 @@ struct Facts {
     revoked: bool,
     known_device: bool,
     active_for_relay: i64,
+    /// The relay already holds an active delegation for the same workspace and device.
+    renewing: bool,
     /// The relay's pinned log is followed by a recovery rotation.
     relay_recovered: bool,
 }
@@ -99,6 +102,7 @@ impl Default for Facts {
             revoked: false,
             known_device: true,
             active_for_relay: 0,
+            renewing: false,
             relay_recovered: false,
         }
     }
@@ -214,6 +218,10 @@ fn setup(facts: Facts) -> Setup {
     delegations
         .expect_count_active_for_relay()
         .returning(move |_, _| Box::pin(async move { Ok(active) }));
+    let renewing = facts.renewing;
+    delegations
+        .expect_is_active()
+        .returning(move |_, _, _, _| Box::pin(async move { Ok(renewing) }));
     let record = Arc::clone(&stored);
     delegations.expect_store().returning(move |d, _| {
         record.lock().expect("lock").push(d.expires_at);
@@ -427,4 +435,47 @@ async fn a_relay_at_its_limit_is_refused_and_a_request_holds_64() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn a_renewal_at_the_limit_replaces_its_row_without_counting() {
+    let s = setup(Facts {
+        active_for_relay: 10_000,
+        renewing: true,
+        ..Facts::default()
+    });
+    assert_eq!(
+        s.present(s.delegation(|_| {})).await,
+        ("active".to_string(), None)
+    );
+    assert_eq!(s.stored.lock().expect("lock").len(), 1);
+}
+
+#[tokio::test]
+async fn revocations_brought_directly_are_limited_per_address() {
+    let s = setup(Facts::default());
+    let junk = SignedJson {
+        payload: "{}".to_string(),
+        signature: "ed25519:x".to_string(),
+    };
+    for _ in 0..20 {
+        assert!(matches!(
+            s.host
+                .apply_revocation_directly("198.51.100.7".to_string(), junk.clone())
+                .await,
+            Err(ServiceError::Validation(_))
+        ));
+    }
+    assert!(matches!(
+        s.host
+            .apply_revocation_directly("198.51.100.7".to_string(), junk.clone())
+            .await,
+        Err(ServiceError::RateLimited { .. })
+    ));
+    assert!(matches!(
+        s.host
+            .apply_revocation_directly("198.51.100.8".to_string(), junk)
+            .await,
+        Err(ServiceError::Validation(_))
+    ));
 }

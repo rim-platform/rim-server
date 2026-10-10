@@ -82,7 +82,7 @@ impl RemoteWorkspaceMutations {
 
     /// Apply a device revocation on this host directly, as an app does when a host did not
     /// acknowledge it through the relay. Needs no session: it acts only on the revocation's
-    /// signature. Returns the host's signed acknowledgement.
+    /// signature, and attempts are limited per IP. Returns the host's signed acknowledgement.
     async fn apply_remote_revocation(
         &self,
         ctx: &Context<'_>,
@@ -90,7 +90,7 @@ impl RemoteWorkspaceMutations {
     ) -> Result<SignedStatement> {
         let ack = federation(ctx)?
             .workspace_host
-            .apply_revocation(None, None, signed_json(revocation))
+            .apply_revocation_directly(crate::auth_context::remote_ip(ctx), signed_json(revocation))
             .await
             .map_err(map_service_error)?;
         Ok(SignedStatement {

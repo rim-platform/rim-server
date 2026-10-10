@@ -30,6 +30,7 @@ use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
 use rim_services::auth::command::JoinServerByInviteCmd;
 use rim_services::auth::service::AuthService;
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::command::verb::TypedVerb;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::service::{DelegationCheck, HostService};
@@ -44,6 +45,7 @@ use rim_services::s2s::service::PeerService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::host::DefaultHostService;
+use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::device_key;
 use crate::remote_workspace::{MAX_ACCEPTED_LIFETIME, MAX_DELEGATIONS_PER_REQUEST};
 
@@ -51,6 +53,11 @@ use crate::remote_workspace::{MAX_ACCEPTED_LIFETIME, MAX_DELEGATIONS_PER_REQUEST
 const JOIN_CHALLENGE_TTL: chrono::Duration = chrono::Duration::seconds(120);
 /// `initiator` of the audit rows a host writes for remote members.
 const AUDIT_INITIATOR: &str = "s2s";
+/// Revocations an IP may bring directly per window, and the window in seconds.
+const DIRECT_REVOCATIONS_PER_WINDOW: u32 = 20;
+const DIRECT_REVOCATION_WINDOW_SECS: u64 = 15 * 60;
+/// Limiter key of revocations brought directly.
+const DIRECT_REVOCATION_KEY: &str = "apply_remote_revocation";
 
 #[derive(Clone)]
 pub struct WorkspaceHostRepos {
@@ -81,6 +88,8 @@ pub struct DefaultWorkspaceHost {
     host: Arc<DefaultHostService>,
     /// Active delegations one relay may hold here.
     delegations_per_relay: i64,
+    /// Revocations brought directly, per IP.
+    direct_revocations: RegistrationRateLimiter,
     later: Later,
 }
 
@@ -144,6 +153,10 @@ impl DefaultWorkspaceHost {
             peers,
             host,
             delegations_per_relay,
+            direct_revocations: RegistrationRateLimiter::new(
+                DIRECT_REVOCATION_WINDOW_SECS,
+                DIRECT_REVOCATIONS_PER_WINDOW,
+            ),
             later: Later::default(),
         }
     }
@@ -330,15 +343,25 @@ impl DefaultWorkspaceHost {
         {
             return Err("banned");
         }
-        let active = self
+        // A renewal replacing an active delegation adds none, so only a new one counts against
+        // the relay's limit.
+        let renewal = self
             .repos
             .delegation_repo
-            .count_active_for_relay(peer_server_id, now)
+            .is_active(workspace_id, device.id, peer_server_id, now)
             .await
             .map_err(|e| internal(e.into()))?;
-        if active >= self.delegations_per_relay {
-            warn!(peer_server_id, active, "a relay is at its delegation limit");
-            return Err("limited");
+        if !renewal {
+            let active = self
+                .repos
+                .delegation_repo
+                .count_active_for_relay(peer_server_id, now)
+                .await
+                .map_err(|e| internal(e.into()))?;
+            if active >= self.delegations_per_relay {
+                warn!(peer_server_id, active, "a relay is at its delegation limit");
+                return Err("limited");
+            }
         }
         let stored = self
             .repos
@@ -892,6 +915,25 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             payload: ack.payload,
             signature: ack.signature,
         })
+    }
+
+    async fn apply_revocation_directly(
+        &self,
+        remote_ip: String,
+        revocation: SignedJson,
+    ) -> ServiceResult<SignedJson> {
+        if let RateLimitDecision::Limited {
+            retry_after_seconds,
+        } =
+            self.direct_revocations
+                .check_and_record(&remote_ip, DIRECT_REVOCATION_KEY, Utc::now())
+        {
+            warn!(remote_ip = %remote_ip, "too many revocations brought directly from one address");
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        self.apply_revocation(None, None, revocation).await
     }
 
     async fn cleanup(&self) -> ServiceResult<RemoteWorkspaceCleanup> {

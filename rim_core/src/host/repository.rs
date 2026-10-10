@@ -164,6 +164,15 @@ pub trait DelegationRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> RepoResult<DelegationStored>;
 
+    /// Whether the row for a workspace, device and relay holds an active delegation.
+    async fn is_active(
+        &self,
+        workspace_id: ServerId,
+        device_key_id: DeviceKeyId,
+        relay_server_id: &str,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
     /// Active delegations a relay holds here.
     async fn count_active_for_relay(
         &self,

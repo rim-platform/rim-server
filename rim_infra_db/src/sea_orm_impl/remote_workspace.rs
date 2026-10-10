@@ -198,6 +198,33 @@ impl DelegationRepository for SeaOrmDelegationRepository {
         })
     }
 
+    async fn is_active(
+        &self,
+        workspace_id: ServerId,
+        device_key_id: DeviceKeyId,
+        relay_server_id: &str,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        Ok(self
+            .sql()
+            .one::<FlagRow>(
+                &format!(
+                    "SELECT EXISTS (SELECT 1 FROM host_delegation d \
+                     WHERE d.workspace_id = $1 AND d.device_key_id = $2 \
+                       AND d.relay_server_id = $3 AND {}) AS flag",
+                    active(4)
+                ),
+                vec![
+                    uuid(workspace_id),
+                    uuid(device_key_id),
+                    relay_server_id.into(),
+                    time(now),
+                ],
+            )
+            .await?
+            .is_some_and(|r| r.flag))
+    }
+
     async fn count_active_for_relay(
         &self,
         relay_server_id: &str,
