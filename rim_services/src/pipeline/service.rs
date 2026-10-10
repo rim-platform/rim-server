@@ -14,12 +14,6 @@ use crate::pipeline::request::{
 pub trait PipelineService: Send + Sync {
     async fn create(&self, cmd: CreatePipelineCmd) -> ServiceResult<PipelineDto>;
 
-    async fn get(
-        &self,
-        actor: crate::Actor,
-        pipeline_id: rim_core::pipeline::model::PipelineId,
-    ) -> ServiceResult<PipelineDto>;
-
     async fn list(&self, cmd: ListPipelinesCmd) -> ServiceResult<Vec<PipelineDto>>;
 
     async fn update(&self, cmd: UpdatePipelineCmd) -> ServiceResult<PipelineDto>;

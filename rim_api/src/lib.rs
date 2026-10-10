@@ -91,7 +91,6 @@ fn wire_common_schema_data(
         .data(Arc::clone(&service_provider))
         .data(service_provider.audit_log_service())
         .data(service_provider.auth_service())
-        .data(service_provider.capability_service())
         .data(service_provider.command_service())
         .data(service_provider.conversation_service())
         .data(service_provider.key_auth_service())

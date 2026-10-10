@@ -20,8 +20,8 @@ use rim_services::command::service::CommandService;
 use rim_services::command::verb::TypedVerb;
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
-    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
-    ListUserMacrosQuery, SynthesizeMacroCommandsQuery, UpdateMacroCmd,
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
+    SynthesizeMacroCommandsQuery, UpdateMacroCmd,
 };
 use rim_services::macro_def::service::MacroService;
 use rim_services::{ServiceError, ServiceResult};
@@ -284,19 +284,6 @@ impl MacroService for DefaultMacroService {
             .repos
             .macro_repo
             .list_for_user(query.server_id, query.actor.user_id)
-            .await?;
-
-        macros.into_iter().map(Self::to_dto).collect()
-    }
-
-    async fn list_server_macros(
-        &self,
-        query: ListServerMacrosQuery,
-    ) -> ServiceResult<Vec<MacroDto>> {
-        let macros = self
-            .repos
-            .macro_repo
-            .list_for_server(query.server_id)
             .await?;
 
         macros.into_iter().map(Self::to_dto).collect()
@@ -692,7 +679,6 @@ mod tests {
                 server_id: ServerId,
                 user_id: UserId,
             ) -> RepoResult<Vec<MacroDef>>;
-            async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>>;
             async fn count_for_user(
                 &self,
                 server_id: ServerId,

@@ -34,13 +34,6 @@ pub struct DeleteAttachmentCmd {
     pub attachment_id: MessageAttachmentId,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct GetAttachmentQuery {
-    pub actor: Actor,
-    pub server_id: ServerId,
-    pub attachment_id: MessageAttachmentId,
-}
-
 /// Completes a pending upload: validates the upload token, checks that the
 /// attachment is in pending state and that `data` fits its declared size, then
 /// stores `data` and records the storage key.

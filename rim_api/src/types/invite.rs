@@ -1,33 +1,5 @@
 use async_graphql::SimpleObject;
 
-#[derive(SimpleObject, Clone, Debug)]
-pub struct Invite {
-    pub id: async_graphql::ID,
-    pub server_id: async_graphql::ID,
-    pub created_by_user_id: async_graphql::ID,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub max_uses: i32,
-    pub use_count: i32,
-    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Role granted on join: `MEMBER` or `GUEST` (Track 1.2).
-    pub role: super::ServerMemberRoleGql,
-}
-
-impl From<rim_services::auth::dto::InviteDto> for Invite {
-    fn from(value: rim_services::auth::dto::InviteDto) -> Self {
-        Self {
-            id: async_graphql::ID(value.id.to_string()),
-            server_id: async_graphql::ID(value.server_id.to_string()),
-            created_by_user_id: async_graphql::ID(value.created_by_user_id.to_string()),
-            expires_at: value.expires_at,
-            max_uses: value.max_uses,
-            use_count: value.use_count,
-            revoked_at: value.revoked_at,
-            role: value.role.into(),
-        }
-    }
-}
-
 // ── Registration types ─────────────────────────────────────────────────────
 
 /// GraphQL enum for the deployment-wide registration mode.
@@ -129,47 +101,6 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
             workspace: dto.workspace.map(Into::into),
         }
     }
-}
-
-/// Output type for an instance invite (admin view).
-///
-/// Mirrors the `InstanceInvite` SDL type in spec §9.2.
-/// Note: the raw invite token is **not** exposed here — it is only emitted
-/// once in `CreateInstanceInvitePayload.inviteToken`.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct InstanceInviteGql {
-    pub id: async_graphql::ID,
-    /// The user who issued it; null for an invite the operator issued from the command line.
-    pub created_by_user_id: Option<async_graphql::ID>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub max_uses: i32,
-    pub use_count: i32,
-    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl From<rim_services::auth::dto::InstanceInviteDto> for InstanceInviteGql {
-    fn from(dto: rim_services::auth::dto::InstanceInviteDto) -> Self {
-        Self {
-            id: dto.id.to_string().into(),
-            created_by_user_id: dto.created_by_user_id.map(|id| id.to_string().into()),
-            expires_at: dto.expires_at,
-            max_uses: dto.max_uses,
-            use_count: dto.use_count,
-            revoked_at: dto.revoked_at,
-            created_at: dto.created_at,
-        }
-    }
-}
-
-/// Payload returned after successfully creating an instance invite.
-///
-/// `invite_token` is the raw (unhashed) token — shown to the admin exactly once.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct CreateInstanceInvitePayloadGql {
-    /// The raw invite token. Shown to the admin once; never stored unhashed.
-    pub invite_token: String,
-    pub invite: InstanceInviteGql,
 }
 
 /// Payload returned from `signupWithInvite`.

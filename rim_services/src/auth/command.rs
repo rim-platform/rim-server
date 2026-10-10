@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 
-use rim_core::auth::model::InstanceInviteId;
 use rim_core::server::model::ServerId;
 
 use crate::Actor;
@@ -53,18 +52,6 @@ pub struct AcceptInviteCmd {
 pub struct JoinServerByInviteCmd {
     pub actor: Actor,
     pub invite_token: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ListInvitesQuery {
-    pub actor: Actor,
-    pub server_id: ServerId,
-}
-
-#[derive(Debug, Clone)]
-pub struct RevokeInviteCmd {
-    pub actor: Actor,
-    pub invite_id: rim_core::auth::model::InviteId,
 }
 
 /// The registration token a signup presents in invite-only mode, by kind. Each kind is
@@ -121,24 +108,6 @@ pub struct SignupOpenCmd {
     /// Optional display name (raw input). The service normalises and falls back
     /// to `username` when absent or blank after trim.
     pub display_name: Option<String>,
-}
-
-/// Command for an admin to create a new instance invite.
-#[derive(Debug, Clone)]
-pub struct CreateInstanceInviteCmd {
-    pub actor: Actor,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub max_uses: Option<i32>,
-    /// Optional recipient to email the invite link to. Same validation/best-effort-send
-    /// semantics as [`CreateInviteCmd::recipient_email`].
-    pub recipient_email: Option<String>,
-}
-
-/// Command for an admin to revoke an existing instance invite.
-#[derive(Debug, Clone)]
-pub struct RevokeInstanceInviteCmd {
-    pub actor: Actor,
-    pub invite_id: InstanceInviteId,
 }
 
 /// Query to preview a registration token (bootstrap, instance, or workspace).

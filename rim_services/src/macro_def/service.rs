@@ -6,8 +6,8 @@ use crate::ServiceResult;
 use crate::command::dto::{CommandDefinitionDto, CommandResultDto};
 use crate::macro_def::dto::MacroDto;
 use crate::macro_def::request::{
-    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListServerMacrosQuery,
-    ListUserMacrosQuery, SynthesizeMacroCommandsQuery, UpdateMacroCmd,
+    CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
+    SynthesizeMacroCommandsQuery, UpdateMacroCmd,
 };
 
 #[async_trait]
@@ -21,10 +21,6 @@ pub trait MacroService: Send + Sync {
         query: GetMacroByNameQuery,
     ) -> ServiceResult<Option<MacroDto>>;
     async fn list_user_macros(&self, query: ListUserMacrosQuery) -> ServiceResult<Vec<MacroDto>>;
-    async fn list_server_macros(
-        &self,
-        query: ListServerMacrosQuery,
-    ) -> ServiceResult<Vec<MacroDto>>;
     async fn execute_macro(&self, cmd: ExecuteMacroCmd) -> ServiceResult<CommandResultDto>;
     /// Return `CommandDefinitionDto` representations of all AI-callable macros
     /// owned by the actor in the given server. Used by the command discovery

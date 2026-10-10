@@ -63,7 +63,6 @@ pub struct FederationHooks {
 pub struct DefaultAppServiceProvider {
     audit_log_service: Arc<dyn AuditLogService>,
     auth_service: Arc<dyn AuthService>,
-    capability_service: Arc<dyn CapabilityService>,
     channel_lens_service: Arc<dyn ChannelLensService>,
     command_service: Arc<dyn CommandService>,
     conversation_service: Arc<dyn ConversationService>,
@@ -223,11 +222,9 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&storage_service),
             ),
         );
-        let mention_service: Arc<dyn MentionService> =
-            Arc::new(crate::mention::DefaultMentionService::new(
-                repos.for_mention(),
-                Arc::clone(&message_service),
-            ));
+        let mention_service: Arc<dyn MentionService> = Arc::new(
+            crate::mention::DefaultMentionService::new(repos.for_mention()),
+        );
         let pin_observers = observers.clone();
         let server_observers = observers.clone();
         let read_state_observers = observers.clone();
@@ -384,7 +381,6 @@ impl DefaultAppServiceProvider {
         Self {
             audit_log_service,
             auth_service,
-            capability_service,
             channel_lens_service,
             command_service,
             conversation_service,
@@ -424,9 +420,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn auth_service(&self) -> Arc<dyn AuthService> {
         Arc::clone(&self.auth_service)
-    }
-    fn capability_service(&self) -> Arc<dyn CapabilityService> {
-        Arc::clone(&self.capability_service)
     }
     fn channel_lens_service(&self) -> Arc<dyn ChannelLensService> {
         Arc::clone(&self.channel_lens_service)

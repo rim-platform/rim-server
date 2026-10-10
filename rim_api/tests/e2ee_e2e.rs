@@ -117,9 +117,11 @@ const CREATE_ATTACHMENT: &str = r#"
 mutation Attach($input: CreateAttachmentInput!) {
   createAttachment(input: $input) { attachmentId uploadToken }
 }"#;
-const ATTACHMENT: &str = r#"
-query Attachment($serverId: ID!, $attachmentId: ID!) {
-  attachment(serverId: $serverId, attachmentId: $attachmentId) { filename contentType sizeBytes blobSha256 }
+const MESSAGE_ATTACHMENTS: &str = r#"
+query Message($serverId: ID!, $conversationId: ID!, $messageId: ID!) {
+  message(serverId: $serverId, conversationId: $conversationId, messageId: $messageId) {
+    attachments { id filename contentType sizeBytes blobSha256 }
+  }
 }"#;
 const READD: &str = r#"
 mutation Readd($input: RequestMlsReaddInput!) { requestMlsReadd(input: $input) }"#;
@@ -1258,12 +1260,13 @@ async fn encrypted_attachments_are_checked_by_hash() {
     let shown = exec_ok(
         &f.schema,
         f.bob.request(
-            ATTACHMENT,
-            json!({ "serverId": server_id, "attachmentId": attachment_id }),
+            MESSAGE_ATTACHMENTS,
+            json!({ "serverId": server_id, "conversationId": conv, "messageId": id }),
         ),
     )
-    .await["attachment"]
+    .await["message"]["attachments"][0]
         .clone();
+    assert_eq!(shown["id"], json!(attachment_id.to_string()));
     assert_eq!(shown["blobSha256"], json!(blob_sha256));
     assert_eq!(shown["contentType"], json!("application/octet-stream"));
     let download = attachments

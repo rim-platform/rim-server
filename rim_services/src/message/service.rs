@@ -5,12 +5,11 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::message::command::{
     DeleteMessageCmd, EditEncryptedMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
-    GetMessageReferenceQuery, ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery,
-    ReplyToMessageCmd, SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
+    ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
+    SearchMessagesQuery, SendEncryptedMessageCmd, SendMessageCmd,
 };
 use crate::message::dto::{
-    ConversationMessageChangesDto, MessageDto, MessagePageCursor, MessageReferenceDto,
-    MessageSearchHitDto,
+    ConversationMessageChangesDto, MessageDto, MessagePageCursor, MessageSearchHitDto,
 };
 use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
@@ -23,11 +22,6 @@ pub trait MessageService: Send + Sync {
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto>;
 
     async fn get_message(&self, query: GetMessageQuery) -> ServiceResult<MessageDto>;
-
-    async fn get_message_reference(
-        &self,
-        query: GetMessageReferenceQuery,
-    ) -> ServiceResult<MessageReferenceDto>;
 
     async fn list_messages(
         &self,

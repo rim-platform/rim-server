@@ -73,7 +73,6 @@ mockall::mock! {
             server_id: ServerId,
             user_id: UserId,
         ) -> RepoResult<Vec<MacroDef>>;
-        async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<MacroDef>>;
         async fn count_for_user(
             &self,
             server_id: ServerId,

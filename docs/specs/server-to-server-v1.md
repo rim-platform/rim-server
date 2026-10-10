@@ -599,7 +599,7 @@ its creator is someone else, from another relay or not), the home files its own 
 Bob through the same rule instead of delivering it. The invite and the conversation's events are
 held as above, and until Bob accepts, the conversation is left out of his `inboxConversations`,
 its events out of his `workspaceEvents`, and its notifications, mentions and unread messages out
-of his `myNotifications`, `myUnreadNotificationCount`, `myMentions`, `unreadCounts` and email
+of his `myNotifications`, `myUnreadNotificationCount`, `unreadCounts` and email
 digest; ignoring keeps it out, and so does blocking its creator.
 Once accepted it is an ordinary conversation of the space he uses directly.
 

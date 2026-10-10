@@ -19,7 +19,6 @@ use rim_core::user::model::UserId;
 
 use rim_services::ServiceError;
 use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
-use rim_services::capability::service::MockCapabilityService;
 use rim_services::channel_lens::service::MockChannelLensService;
 use rim_services::command::service::MockCommandService;
 use rim_services::conversation::service::MockConversationService;
@@ -57,7 +56,6 @@ mod command_execution;
 mod conversation;
 mod keybind;
 mod message;
-mod platform;
 mod presence;
 mod profile;
 mod schema;
@@ -106,7 +104,6 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
@@ -152,7 +149,6 @@ fn schema_with_server_mocks(
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
@@ -195,7 +191,6 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(keybind),
@@ -351,7 +346,6 @@ fn test_attachment_dto() -> rim_services::message_attachment::dto::AttachmentDto
 struct TestAppServiceProvider {
     audit_log: Arc<dyn rim_services::audit::service::AuditLogService>,
     auth: Arc<dyn rim_services::auth::service::AuthService>,
-    capability: Arc<dyn rim_services::capability::service::CapabilityService>,
     command: Arc<dyn rim_services::command::service::CommandService>,
     conversation: Arc<dyn rim_services::conversation::service::ConversationService>,
     keybind: Arc<dyn rim_services::keybind::service::KeybindService>,
@@ -387,10 +381,6 @@ impl AppServiceProvider for TestAppServiceProvider {
 
     fn auth_service(&self) -> Arc<dyn rim_services::auth::service::AuthService> {
         Arc::clone(&self.auth)
-    }
-
-    fn capability_service(&self) -> Arc<dyn rim_services::capability::service::CapabilityService> {
-        Arc::clone(&self.capability)
     }
 
     fn command_service(&self) -> Arc<dyn rim_services::command::service::CommandService> {
@@ -550,7 +540,6 @@ fn schema_with_mocks(
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(auth),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(conv),
             keybind: Arc::new(MockKeybindService::new()),
@@ -588,55 +577,11 @@ fn schema_with_mocks(
     )
 }
 
-fn schema_with_capability_mock(capability: MockCapabilityService) -> crate::AppSchema {
-    build_schema(
-        Arc::new(TestAppServiceProvider {
-            audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
-            auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(capability),
-            command: Arc::new(MockCommandService::new()),
-            conversation: Arc::new(MockConversationService::new()),
-            keybind: Arc::new(MockKeybindService::new()),
-            macro_def: Arc::new(MockMacroService::new()),
-            mention: Arc::new(MockMentionService::new()),
-            message: Arc::new(MockMessageService::new()),
-            attachment: Arc::new(MockMessageAttachmentService::new()),
-            notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
-            key_auth: Arc::new(MockKeyAuthService::new()),
-            pin: Arc::new(MockPinService::new()),
-            reaction: Arc::new(MockMessageReactionService::new()),
-            read_state: Arc::new(MockReadStateService::new()),
-            server: Arc::new(MockServerService::new()),
-            server_member: Arc::new(MockServerMemberService::new()),
-            thread: Arc::new(MockThreadService::new()),
-            user: Arc::new(MockUserService::new()),
-            request_auth: Arc::new(MockRequestAuthenticator::new()),
-            link_preview: Arc::new(MockLinkPreviewService::new()),
-            custom_emoji: Arc::new(MockCustomEmojiService::new()),
-            channel_lens: Arc::new(MockChannelLensService::new()),
-            workspace_state: Arc::new(MockWorkspaceStateService::new()),
-            moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
-            notification: Arc::new(
-                rim_services::notification::service::MockNotificationService::new(),
-            ),
-            pipeline: Arc::new(MockPipelineService::new()),
-        }),
-        InMemoryBroadcaster::new(16),
-        test_presence_manager(),
-        test_typing_tracker(),
-        test_observers(),
-        test_registration_context(),
-        None,
-    )
-}
-
 fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(command),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
@@ -683,7 +628,6 @@ fn schema_with_audit_mock(
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(audit_log),
             auth: Arc::new(MockAuthService::new()),
-            capability: Arc::new(MockCapabilityService::new()),
             command: Arc::new(MockCommandService::new()),
             conversation: Arc::new(MockConversationService::new()),
             keybind: Arc::new(MockKeybindService::new()),
@@ -727,7 +671,6 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
     Arc::new(TestAppServiceProvider {
         audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
         auth: Arc::new(MockAuthService::new()),
-        capability: Arc::new(MockCapabilityService::new()),
         command: Arc::new(MockCommandService::new()),
         conversation: Arc::new(MockConversationService::new()),
         keybind: Arc::new(MockKeybindService::new()),

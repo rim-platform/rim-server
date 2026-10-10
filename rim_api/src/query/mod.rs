@@ -20,7 +20,6 @@
 
 use async_graphql::MergedObject;
 
-pub(crate) mod attachment;
 pub(crate) mod audit;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
@@ -36,7 +35,6 @@ pub(crate) mod message;
 pub(crate) mod moderation;
 pub(crate) mod notification;
 pub(crate) mod pipeline;
-pub(crate) mod platform;
 pub(crate) mod presence;
 pub(crate) mod profile;
 pub(crate) mod relay;
@@ -62,7 +60,6 @@ pub struct Query(
 #[derive(MergedObject, Default)]
 pub(crate) struct QueryGroup1(
     command::CommandQueries,
-    platform::PlatformQueries,
     keybind::KeybindQueries,
     conversation::ConversationQueries,
     message::MessageQueries,
@@ -71,7 +68,6 @@ pub(crate) struct QueryGroup1(
 #[derive(MergedObject, Default)]
 pub(crate) struct QueryGroup2(
     thread::ThreadQueries,
-    attachment::AttachmentQueries,
     profile::ProfileQueries,
     workspace::WorkspaceQueries,
     conversation::ReadStateQueries,
@@ -80,10 +76,8 @@ pub(crate) struct QueryGroup2(
 #[derive(MergedObject, Default)]
 pub(crate) struct QueryGroup3(
     workspace::WorkspaceMemberQueries,
-    message::MessageMentionQueries,
     message::MessagePinQueries,
     presence::PresenceQueries,
-    invite::InviteQueries,
 );
 
 #[derive(MergedObject, Default)]

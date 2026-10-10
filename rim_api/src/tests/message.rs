@@ -99,52 +99,6 @@ async fn message_query_exposes_attachments() {
 }
 
 #[tokio::test]
-async fn message_reference_query_returns_permalink_data() {
-    let actor = UserId::new();
-    let server_id = ServerId::new();
-    let conversation_id = ConversationId::new();
-    let message_id = MessageId::new();
-
-    let mut msg = MockMessageService::new();
-    msg.expect_get_message_reference().returning(move |_q| {
-        Box::pin(async move {
-            Ok(rim_services::message::dto::MessageReferenceDto {
-                server_id,
-                conversation_id,
-                message_id,
-                thread_id: None,
-                permalink_path: format!(
-                    "/workspaces/{}/conversations/{}/messages/{}",
-                    server_id, conversation_id, message_id
-                ),
-                anchor: format!("message-{message_id}"),
-            })
-        })
-    });
-
-    let schema = schema_with_mocks(
-        MockAuthService::new(),
-        MockConversationService::new(),
-        msg,
-        MockMessageAttachmentService::new(),
-        MockThreadService::new(),
-    );
-
-    let req = authed_request(
-        r#"query($sid: ID!, $cid: ID!, $mid: ID!) { messageReference(serverId: $sid, conversationId: $cid, messageId: $mid) { messageId permalinkPath anchor } }"#,
-        actor,
-    )
-    .variables(Variables::from_json(serde_json::json!({
-        "sid": server_id.to_string(),
-        "cid": conversation_id.to_string(),
-        "mid": message_id.to_string(),
-    })));
-
-    let res = schema.execute(req).await;
-    assert_no_errors(&res);
-}
-
-#[tokio::test]
 async fn search_messages_query_returns_matches() {
     let actor = UserId::new();
     let server_id = ServerId::new();

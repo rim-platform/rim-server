@@ -13,7 +13,6 @@ use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 
-use rim_services::capability::dto::CapabilityDto;
 use rim_services::capability::service::CapabilityService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -29,8 +28,6 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 /// mode than silently allowing.
 pub struct BuiltinCapabilitySpec {
     pub id: &'static str,
-    pub title: &'static str,
-    pub description: &'static str,
     /// When `true` the capability is self-scoped: it does not require a
     /// workspace context and `check()` accepts `workspace_id = None`.
     ///
@@ -45,44 +42,30 @@ pub fn builtin_capabilities() -> &'static [BuiltinCapabilitySpec] {
     &[
         BuiltinCapabilitySpec {
             id: "chat.read",
-            title: "Read Chat",
-            description: "Read conversations, messages, and threads.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "chat.write",
-            title: "Write Chat",
-            description: "Create messages, threads, and attachment changes.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "action.invoke",
-            title: "Invoke Actions",
-            description: "Invoke registered workspace actions.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "event.emit",
-            title: "Emit Events",
-            description: "Emit structured workspace events.",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "audit.read",
-            title: "Read Audit Log",
-            description: "Read the workspace audit log (requires workspace membership).",
             is_self_scoped: false,
         },
         BuiltinCapabilitySpec {
             id: "audit.read.self",
-            title: "Read Own Audit Log",
-            description: "Read the caller's own command audit history. Self-scoped: does not require workspace membership.",
             is_self_scoped: true,
         },
         BuiltinCapabilitySpec {
             id: "admin.manage_members",
-            title: "Manage Members",
-            description: "Invite, remove, and modify workspace member roles.",
             is_self_scoped: false,
         },
     ]
@@ -130,20 +113,6 @@ impl DefaultCapabilityService {
 
 #[async_trait]
 impl CapabilityService for DefaultCapabilityService {
-    async fn list_capabilities(&self, _actor: Actor) -> ServiceResult<Vec<CapabilityDto>> {
-        // Static catalogue, exactly as pre-Phase-1. The runtime gate is the
-        // surface the security review hardens; the catalogue stays
-        // human-curated.
-        Ok(builtin_capabilities()
-            .iter()
-            .map(|spec| CapabilityDto {
-                id: spec.id.to_string(),
-                title: spec.title.to_string(),
-                description: spec.description.to_string(),
-            })
-            .collect())
-    }
-
     async fn check(
         &self,
         actor: &Actor,

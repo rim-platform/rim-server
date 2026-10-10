@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use rim_core::auth::model::InstanceInviteId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
@@ -69,27 +68,6 @@ pub struct SignupResultDto {
     pub session: AuthSessionDto,
     pub session_token: String,
     pub csrf_token: String,
-}
-
-/// Metadata about an instance invite, returned to admin callers.
-#[derive(Debug, Clone)]
-pub struct InstanceInviteDto {
-    pub id: InstanceInviteId,
-    /// `None` for an invite the operator issued from the command line.
-    pub created_by_user_id: Option<UserId>,
-    pub expires_at: DateTime<Utc>,
-    pub max_uses: i32,
-    pub use_count: i32,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Result of `create_instance_invite`, containing the raw token for display.
-#[derive(Debug, Clone)]
-pub struct CreateInstanceInviteResultDto {
-    pub invite: InstanceInviteDto,
-    /// The raw (unhashed) invite token. Shown to the admin exactly once.
-    pub invite_token: String,
 }
 
 /// Token type discriminant for the preview query.

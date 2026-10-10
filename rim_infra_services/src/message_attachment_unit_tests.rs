@@ -28,7 +28,7 @@ mod tests {
     use rim_services::message_attachment::MAX_ATTACHMENT_BYTES;
     use rim_services::message_attachment::command::CompleteUploadCmd;
     use rim_services::message_attachment::command::{
-        CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd, GetAttachmentQuery,
+        CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
     };
     use rim_services::message_attachment::dto::AttachmentStatus;
     use rim_services::message_attachment::service::MessageAttachmentService;
@@ -697,222 +697,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_attachment_denies_non_member() {
-        let server_id = ServerId::new();
-        let actor_id = UserId::new();
-
-        let message_attachment_repo = MockMessageAttachmentRepository::new();
-        let conversation_repo = MockConversationRepository::new();
-        let conversation_member_repo = MockConversationMemberRepository::new();
-        let message_repo = MockMessageRepository::new();
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(false));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| Ok(None));
-
-        let svc = DefaultMessageAttachmentService::new(
-            AttachmentRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                server_member_repo: Arc::new(server_member_repo),
-            },
-            noop_storage(),
-        );
-
-        let err = svc
-            .get_attachment(GetAttachmentQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                attachment_id: MessageAttachmentId::new(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied));
-    }
-
-    #[tokio::test]
-    async fn get_attachment_returns_not_found_when_missing() {
-        let server_id = ServerId::new();
-        let actor_id = UserId::new();
-
-        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
-        message_attachment_repo
-            .expect_get_by_id()
-            .returning(|_id| Ok(None));
-
-        let conversation_repo = MockConversationRepository::new();
-        let conversation_member_repo = MockConversationMemberRepository::new();
-        let message_repo = MockMessageRepository::new();
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let svc = DefaultMessageAttachmentService::new(
-            AttachmentRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                server_member_repo: Arc::new(server_member_repo),
-            },
-            noop_storage(),
-        );
-
-        let err = svc
-            .get_attachment(GetAttachmentQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                attachment_id: MessageAttachmentId::new(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::NotFound));
-    }
-
-    #[tokio::test]
-    async fn get_attachment_maps_fields() {
-        let server_id = ServerId::new();
-        let actor_id = UserId::new();
-        let id = MessageAttachmentId::new();
-        let att = attachment(id);
-        let conversation_id = ConversationId::new();
-        let msg = message(att.message_id, conversation_id);
-
-        let mut conversation_repo = MockConversationRepository::new();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conversation(server_id, conversation_id))));
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(move |_conversation_id, user_id| Ok(user_id == actor_id));
-
-        let mut message_repo = MockMessageRepository::new();
-        message_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(msg.clone())));
-
-        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
-        message_attachment_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(att.clone())));
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let svc = DefaultMessageAttachmentService::new(
-            AttachmentRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                server_member_repo: Arc::new(server_member_repo),
-            },
-            noop_storage(),
-        );
-
-        let dto = svc
-            .get_attachment(GetAttachmentQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                attachment_id: id,
-            })
-            .await
-            .unwrap();
-        assert_eq!(dto.id, id);
-        assert_eq!(dto.filename, "f.txt");
-        assert_eq!(dto.size_bytes, 10);
-        assert_eq!(dto.status, AttachmentStatus::Ready);
-    }
-
-    #[tokio::test]
-    async fn get_attachment_denies_non_conversation_member() {
-        let server_id = ServerId::new();
-        let actor_id = UserId::new();
-        let id = MessageAttachmentId::new();
-        let att = attachment(id);
-        let conversation_id = ConversationId::new();
-        let msg = message(att.message_id, conversation_id);
-
-        let mut conversation_repo = MockConversationRepository::new();
-        conversation_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(conversation(server_id, conversation_id))));
-
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_conversation_id, _user_id| Ok(false));
-
-        let mut message_repo = MockMessageRepository::new();
-        message_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(msg.clone())));
-
-        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
-        message_attachment_repo
-            .expect_get_by_id()
-            .returning(move |_id| Ok(Some(att.clone())));
-
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
-            });
-
-        let svc = DefaultMessageAttachmentService::new(
-            AttachmentRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                server_member_repo: Arc::new(server_member_repo),
-            },
-            noop_storage(),
-        );
-
-        let err = svc
-            .get_attachment(GetAttachmentQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                attachment_id: id,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied));
-    }
-
-    #[tokio::test]
     async fn create_attachment_rejects_traversal_filename() {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
@@ -1050,13 +834,13 @@ mod tests {
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo
             .expect_get_by_id()
-            .times(4)
+            .times(3)
             .returning(move |_id| Ok(Some(conversation(server_id, conversation_id))));
 
         let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .times(4)
+            .times(3)
             .returning(move |_conversation_id, user_id| Ok(user_id == actor_id));
 
         let msg_for_create = msg.clone();
@@ -1065,7 +849,7 @@ mod tests {
         let mut message_repo = MockMessageRepository::new();
         message_repo
             .expect_get_by_id()
-            .times(4)
+            .times(3)
             .returning(move |_id| {
                 let value = if _id == message_id {
                     Some(msg_for_create.clone())
@@ -1120,20 +904,12 @@ mod tests {
         );
 
         let captured_id_for_get = Arc::clone(&captured_id);
-        let get_call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         message_attachment_repo
             .expect_get_by_id()
-            .times(3)
+            .times(2)
             .returning(move |_req_id| {
                 let att_id = captured_id_for_get.lock().unwrap().unwrap();
-                let call_num = get_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                // First call (from get_attachment): return pending status
-                // Second/third calls (from finalize/delete): return uploaded status
-                let (status, storage_url) = if call_num == 0 {
-                    ("pending_upload", format!("pending://upload-{att_id}"))
-                } else {
-                    ("uploaded", format!("uploads/{att_id}/f.txt"))
-                };
+                let (status, storage_url) = ("uploaded", format!("uploads/{att_id}/f.txt"));
                 Ok(Some(MessageAttachment {
                     id: att_id,
                     message_id,
@@ -1182,12 +958,8 @@ mod tests {
 
         let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
-            .expect_is_member()
-            .times(1)
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
             .expect_get_member_standing()
-            .times(4)
+            .times(3)
             .returning(|_sid, _uid| {
                 Ok(Some(rim_core::server_member::model::MemberStanding::new(
                     rim_core::server_member::model::ServerMemberRole::Member,
@@ -1229,16 +1001,6 @@ mod tests {
 
         let attachment_id = ticket.attachment_id;
         assert!(!ticket.upload_token.is_empty());
-
-        let pending = svc
-            .get_attachment(GetAttachmentQuery {
-                actor: Actor::new(actor_id),
-                server_id,
-                attachment_id,
-            })
-            .await
-            .unwrap();
-        assert_eq!(pending.status, AttachmentStatus::PendingUpload);
 
         let finalized = svc
             .finalize_attachment(FinalizeAttachmentCmd {

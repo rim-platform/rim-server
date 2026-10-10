@@ -4,7 +4,7 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::message_attachment::command::{
-    CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd, GetAttachmentQuery,
+    CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
 };
 use crate::message_attachment::dto::{AttachmentDto, UploadTicketDto};
 
@@ -15,8 +15,6 @@ pub trait MessageAttachmentService: Send + Sync {
 
     async fn finalize_attachment(&self, cmd: FinalizeAttachmentCmd)
     -> ServiceResult<AttachmentDto>;
-
-    async fn get_attachment(&self, query: GetAttachmentQuery) -> ServiceResult<AttachmentDto>;
 
     async fn delete_attachment(&self, cmd: DeleteAttachmentCmd) -> ServiceResult<()>;
 

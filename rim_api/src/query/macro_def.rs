@@ -51,21 +51,4 @@ impl MacroQueries {
 
         Ok(macro_def.map(Into::into))
     }
-
-    async fn server_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
-        let actor = require_actor(ctx)?;
-        let svc =
-            ctx.data::<std::sync::Arc<dyn rim_services::macro_def::service::MacroService>>()?;
-        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
-
-        let macros = svc
-            .list_server_macros(rim_services::macro_def::request::ListServerMacrosQuery {
-                actor: Actor::new(actor),
-                server_id,
-            })
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(macros.into_iter().map(Into::into).collect())
-    }
 }

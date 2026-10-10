@@ -207,8 +207,6 @@ pub struct ReadStateRepos {
 #[derive(Clone)]
 pub struct MentionRepos {
     pub message_mention_repo: Arc<dyn MessageMentionRepository>,
-    pub conversation_repo: Arc<dyn ConversationRepository>,
-    pub server_member_repo: Arc<dyn ServerMemberRepository>,
 }
 
 #[derive(Clone)]
@@ -494,8 +492,6 @@ impl AppRepos {
     pub fn for_mention(&self) -> MentionRepos {
         MentionRepos {
             message_mention_repo: Arc::clone(&self.message_mention_repo),
-            conversation_repo: Arc::clone(&self.conversation_repo),
-            server_member_repo: Arc::clone(&self.server_member_repo),
         }
     }
 

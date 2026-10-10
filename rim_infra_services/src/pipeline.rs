@@ -308,19 +308,6 @@ impl PipelineService for DefaultPipelineService {
         Ok(pipeline.into())
     }
 
-    async fn get(&self, actor: Actor, pipeline_id: PipelineId) -> ServiceResult<PipelineDto> {
-        let pipeline = self
-            .repos
-            .pipeline_repo
-            .get_by_id(pipeline_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        self.ensure_member(pipeline.server_id, actor.user_id)
-            .await?;
-        Ok(pipeline.into())
-    }
-
     async fn list(&self, cmd: ListPipelinesCmd) -> ServiceResult<Vec<PipelineDto>> {
         self.ensure_member(cmd.server_id, cmd.actor.user_id).await?;
 
