@@ -170,8 +170,12 @@ pub enum ServiceError {
     },
 
     /// Another server this request needed could not be reached or gave no verified answer.
-    #[error("server {host_server_id} is unavailable")]
-    UpstreamUnavailable { host_server_id: String },
+    /// `host_server_id` is its server id when known; otherwise `origin` is where it was sought.
+    #[error("{}", upstream_message(host_server_id.as_deref(), origin.as_deref()))]
+    UpstreamUnavailable {
+        host_server_id: Option<String>,
+        origin: Option<String>,
+    },
 
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
@@ -179,11 +183,37 @@ pub enum ServiceError {
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
+/// The message of [`ServiceError::UpstreamUnavailable`].
+pub fn upstream_message(host_server_id: Option<&str>, origin: Option<&str>) -> String {
+    match (host_server_id, origin) {
+        (Some(id), _) => format!("server {id} is unavailable"),
+        (None, Some(origin)) => format!("the server at {origin} is unavailable"),
+        (None, None) => "a server is unavailable".to_string(),
+    }
+}
+
 impl ServiceError {
     /// Shorthand for [`ServiceError::FeatureDisabled`] from a typed feature.
     pub fn feature_disabled(feature: rim_core::workspace_feature::model::WorkspaceFeature) -> Self {
         Self::FeatureDisabled {
             feature: feature.as_str().to_string(),
+        }
+    }
+
+    /// [`ServiceError::UpstreamUnavailable`] for a server whose id is known.
+    pub fn upstream(server_id: &str) -> Self {
+        Self::UpstreamUnavailable {
+            host_server_id: Some(server_id.to_string()),
+            origin: None,
+        }
+    }
+
+    /// [`ServiceError::UpstreamUnavailable`] for a server known only by its origin, as when it
+    /// could not be pinned.
+    pub fn upstream_origin(origin: &str) -> Self {
+        Self::UpstreamUnavailable {
+            host_server_id: None,
+            origin: Some(origin.to_string()),
         }
     }
 

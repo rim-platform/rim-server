@@ -172,9 +172,7 @@ fn item_dto(record: RelayItemRecord) -> RelayItemDto {
 }
 
 fn upstream(server_id: &str) -> ServiceError {
-    ServiceError::UpstreamUnavailable {
-        host_server_id: server_id.to_string(),
-    }
+    ServiceError::upstream(server_id)
 }
 
 /// What a delivered envelope says about where it belongs.
@@ -658,7 +656,7 @@ pub(crate) async fn fetch_from_relays(
             Ok(pinned) => pinned,
             Err(e) => {
                 warn!(origin = %origin, error = %e, "could not pin a relay");
-                last = upstream(&origin);
+                last = ServiceError::upstream_origin(&origin);
                 continue;
             }
         };
@@ -1385,6 +1383,9 @@ impl RelayService for DefaultRelayService {
 
 #[cfg(test)]
 mod tests {
+    use rim_services::s2s::dto::{PeerDto, S2sResponse};
+    use rim_services::s2s::service::{MockPeerService, MockS2sClient};
+
     use super::*;
 
     #[test]
@@ -1397,6 +1398,81 @@ mod tests {
         assert!(check_relay_urls(&["https://a b".to_string()]).is_err());
         assert!(check_relay_urls(&["x".repeat(257)]).is_err());
         assert!(check_relay_urls(&vec!["https://a.example".to_string(); 9]).is_err());
+    }
+
+    fn peer(server_id: &str, origin: &str) -> PeerDto {
+        PeerDto {
+            server_id: server_id.to_string(),
+            origin: origin.to_string(),
+            status: "active".to_string(),
+            head_seq: 0,
+            descriptor_version: 1,
+            descriptor_payload: "{}".to_string(),
+            fetched_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_cannot_be_pinned_is_named_by_its_origin() {
+        let mut peers = MockPeerService::new();
+        peers.expect_pin().returning(|_, _| {
+            Box::pin(async { Err(ServiceError::Validation("no document".to_string())) })
+        });
+        let mut client = MockS2sClient::new();
+        client.expect_send().never();
+        let err = fetch_from_relays(
+            &peers,
+            &client,
+            "rimp1_alice",
+            &["https://relay.example/x".to_string()],
+        )
+        .await
+        .expect_err("unpinned");
+        assert!(
+            matches!(
+                &err,
+                ServiceError::UpstreamUnavailable { host_server_id: None, origin: Some(o) }
+                    if o == "https://relay.example"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pinned_relay_that_fails_is_named_by_its_server_id() {
+        let mut peers = MockPeerService::new();
+        peers.expect_pin().returning(|origin, _| {
+            let pinned = peer("rims1_relay", origin);
+            Box::pin(async move { Ok(pinned) })
+        });
+        let mut client = MockS2sClient::new();
+        client.expect_send().returning(|_| {
+            Box::pin(async {
+                Ok(S2sResponse {
+                    status: 500,
+                    content_type: "application/json".to_string(),
+                    body: Vec::new(),
+                    key_seq: 0,
+                    headers: Vec::new(),
+                })
+            })
+        });
+        let err = fetch_from_relays(
+            &peers,
+            &client,
+            "rimp1_alice",
+            &["https://relay.example".to_string()],
+        )
+        .await
+        .expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                ServiceError::UpstreamUnavailable { host_server_id: Some(id), origin: None }
+                    if id == "rims1_relay"
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -63,9 +63,7 @@ pub(crate) fn peer_refusal(peer_server_id: &str, response: &S2sResponse) -> Serv
         429 => ServiceError::RateLimited {
             retry_after_seconds: 60,
         },
-        _ => ServiceError::UpstreamUnavailable {
-            host_server_id: peer_server_id.to_string(),
-        },
+        _ => ServiceError::upstream(peer_server_id),
     }
 }
 

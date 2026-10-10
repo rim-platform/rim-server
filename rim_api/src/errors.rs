@@ -61,12 +61,24 @@ pub fn map_service_error(err: ServiceError) -> Error {
             })
         }
         // A peer server this request needed could not be reached.
-        ServiceError::UpstreamUnavailable { host_server_id } => {
-            Error::new(format!("server {host_server_id} is unavailable")).extend_with(|_, e| {
-                e.set("code", Value::from("UPSTREAM_UNAVAILABLE"));
-                e.set("hostServerId", Value::from(host_server_id.as_str()));
-            })
-        }
+        // `hostServerId` is null when only the origin it was sought at is known.
+        ServiceError::UpstreamUnavailable {
+            host_server_id,
+            origin,
+        } => Error::new(rim_services::upstream_message(
+            host_server_id.as_deref(),
+            origin.as_deref(),
+        ))
+        .extend_with(|_, e| {
+            e.set("code", Value::from("UPSTREAM_UNAVAILABLE"));
+            e.set(
+                "hostServerId",
+                host_server_id.as_deref().map_or(Value::Null, Value::from),
+            );
+            if let Some(origin) = origin.as_deref() {
+                e.set("origin", Value::from(origin));
+            }
+        }),
         // Track 1.1: writes into an archived (read-only) conversation.
         ServiceError::ConversationArchived => {
             Error::new("conversation is archived").extend_with(|_, e| {
@@ -126,6 +138,29 @@ mod tests {
         let ext = err.extensions.expect("missing extensions");
         assert_eq!(ext.get("code"), Some(&Value::from("TIMED_OUT")));
         assert_eq!(ext.get("until"), Some(&Value::from(until.to_rfc3339())));
+    }
+
+    #[test]
+    fn upstream_unavailable_names_the_server_id_or_else_the_origin() {
+        let err = map_service_error(ServiceError::upstream("rims1_h"));
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("UPSTREAM_UNAVAILABLE")));
+        assert_eq!(ext.get("hostServerId"), Some(&Value::from("rims1_h")));
+        assert_eq!(ext.get("origin"), None);
+        assert_eq!(err.message, "server rims1_h is unavailable");
+
+        let err = map_service_error(ServiceError::upstream_origin("https://relay.example"));
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("UPSTREAM_UNAVAILABLE")));
+        assert_eq!(ext.get("hostServerId"), Some(&Value::Null));
+        assert_eq!(
+            ext.get("origin"),
+            Some(&Value::from("https://relay.example"))
+        );
+        assert_eq!(
+            err.message,
+            "the server at https://relay.example is unavailable"
+        );
     }
 
     #[test]
