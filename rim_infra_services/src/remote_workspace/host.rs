@@ -930,7 +930,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                 .check_and_record(&remote_ip, DIRECT_REVOCATION_KEY, Utc::now())
         {
             warn!(remote_ip = %remote_ip, "too many revocations brought directly from one address");
-            crate::metrics::rate_limited(DIRECT_REVOCATION_KEY);
+            crate::metrics::rate_limited("direct_revocation");
             return Err(ServiceError::RateLimited {
                 retry_after_seconds,
             });
