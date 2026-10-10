@@ -32,7 +32,7 @@ rim_infra_services = { path = "../rim_infra_services" }
 sha2 = "0.10.9"
 entity = { path = "../entity" }
 rim_server = { path = "../rim_server" }
-rim_s2s = { path = "../rim_s2s" }
+rim_s2s = { path = "../rim_s2s", features = ["testing"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 tempfile = "3"
 async-trait = "0.1.89"

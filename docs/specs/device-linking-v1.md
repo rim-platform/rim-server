@@ -444,8 +444,8 @@ Same as the new desktop device, except:
 Server (this PR):
 
 - `rim_identity::device_link`, the reference implementation of this document (code parse and
-  format, key derivation, seal, open, fingerprint, offer and answer types). The service never
-  calls it; tests and clients do. Its tests check appendix A byte for byte, that an offer does
+  format, key derivation, seal, open, fingerprint, offer and answer types), built only with
+  the crate's `testing` feature. The service never calls it; tests do. Its tests check appendix A byte for byte, that an offer does
   not open as an answer or under another link id, that a flipped AAD, nonce or tag byte fails,
   and the code parser's edge cases (whitespace, uppercase scheme, version 2, 335 characters,
   padded or 21-character link id, `?`, `#` or `@` in the endpoint, colons in the endpoint).
