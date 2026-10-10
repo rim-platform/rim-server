@@ -43,6 +43,8 @@ pub enum Relation {
     SelfRef,
     #[sea_orm(has_many = "super::message_attachment::Entity")]
     MessageAttachment,
+    #[sea_orm(has_many = "super::message_franking_revision::Entity")]
+    MessageFrankingRevision,
     #[sea_orm(
         belongs_to = "super::user::Entity",
         from = "Column::SentBy",
@@ -72,6 +74,12 @@ pub enum Relation {
 impl Related<super::message_attachment::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MessageAttachment.def()
+    }
+}
+
+impl Related<super::message_franking_revision::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::MessageFrankingRevision.def()
     }
 }
 

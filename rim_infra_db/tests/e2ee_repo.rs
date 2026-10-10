@@ -18,8 +18,8 @@ use migration::{Migrator, MigratorTrait};
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::model::{
-    MlsRetention, NewEncryptedMessage, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage,
-    NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup,
+    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::{DeviceKeyId, NewDeviceKey};
@@ -188,7 +188,6 @@ async fn insert_message(
     epoch: i64,
     ciphertext: &[u8],
 ) -> rim_core::message::model::Message {
-    let key = repo.current_franking_key(vec![9; 32]).await.expect("key");
     repo.insert_encrypted_message(NewEncryptedMessage {
         id: MessageId::new(),
         conversation_id: f.conv.id,
@@ -196,7 +195,7 @@ async fn insert_message(
         thread_id: None,
         forwarded_from_message_id: None,
         sent_at: Utc::now(),
-        envelope: envelope(epoch, f.alice.device, ciphertext, key.id),
+        envelope: envelope(epoch, f.alice.device, ciphertext, 1),
     })
     .await
     .expect("insert message")
@@ -648,9 +647,6 @@ async fn an_edit_bumps_the_version_and_a_delete_clears_the_ciphertext() {
     assert_eq!(err.kind(), RepoErrorKind::NotFound);
 
     // A repeated id is a conflict.
-    let key = f.repo.current_franking_key(vec![0; 32]).await.unwrap();
-    assert_eq!(key.id, 1);
-    assert_eq!(key.secret, vec![9; 32], "the first key stays");
     let dup = f
         .repo
         .insert_encrypted_message(NewEncryptedMessage {
@@ -660,7 +656,7 @@ async fn an_edit_bumps_the_version_and_a_delete_clears_the_ciphertext() {
             thread_id: None,
             forwarded_from_message_id: None,
             sent_at: Utc::now(),
-            envelope: envelope(2, f.alice.device, b"again", key.id),
+            envelope: envelope(2, f.alice.device, b"again", 1),
         })
         .await
         .unwrap_err();
@@ -937,6 +933,7 @@ async fn readd_requests_and_retention() {
             device_key_id: f.bob.device,
             payload: "{}".to_string(),
             signature: "sig".to_string(),
+            nonce: vec![1; 16],
         })
         .await
         .unwrap();
@@ -1004,6 +1001,7 @@ async fn readd_requests_and_retention() {
             commits: Duration::days(90),
             claimed_key_packages: Duration::days(7),
             readd_requests: Duration::days(7),
+            readd_nonces: Duration::days(1),
             franked_content: Duration::days(90),
         })
         .await
@@ -1026,6 +1024,181 @@ async fn readd_requests_and_retention() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn finding_9_a_readd_nonce_is_accepted_once_per_device_and_incarnation() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let request = |device: DeviceKeyId, nonce: u8| NewMlsReaddRequest {
+        conversation_id: f.conv.id,
+        incarnation: 1,
+        device_key_id: device,
+        payload: "{}".to_string(),
+        signature: "sig".to_string(),
+        nonce: vec![nonce; 16],
+    };
+    f.repo
+        .insert_readd_request(request(f.bob.device, 1))
+        .await
+        .expect("first");
+    // Fulfilled requests are deleted; their nonces are not.
+    f.repo
+        .fulfill_readd_requests(f.conv.id, 1, &[f.bob.device], 2)
+        .await
+        .unwrap();
+    let retention = MlsRetention {
+        commits: Duration::days(90),
+        claimed_key_packages: Duration::days(7),
+        readd_requests: Duration::days(7),
+        readd_nonces: Duration::days(1),
+        franked_content: Duration::days(90),
+    };
+    let purged = f.repo.purge(retention).await.unwrap();
+    assert_eq!((purged.readd_requests, purged.readd_nonces), (1, 0));
+    let err = f
+        .repo
+        .insert_readd_request(request(f.bob.device, 1))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), RepoErrorKind::Conflict);
+    let open = f
+        .repo
+        .open_readd_requests(f.conv.id, 1, Utc::now() - Duration::days(7))
+        .await
+        .unwrap();
+    assert!(open.is_empty(), "a refused request stores nothing");
+
+    // Another nonce, or the same nonce from another device, is a new request.
+    f.repo
+        .insert_readd_request(request(f.bob.device, 2))
+        .await
+        .expect("new nonce");
+    f.repo
+        .insert_readd_request(request(f.alice.device, 1))
+        .await
+        .expect("other device");
+
+    // Nonces go after their retention.
+    f.ctx
+        .db
+        .execute_unprepared(
+            "UPDATE mls_readd_nonce SET created_at = now() - interval '2 days' \
+             WHERE nonce = decode(repeat('01', 16), 'hex')",
+        )
+        .await
+        .unwrap();
+    let purged = f.repo.purge(retention).await.unwrap();
+    assert_eq!(purged.readd_nonces, 2);
+}
+
+#[tokio::test]
+async fn finding_7_franking_key_ids_come_from_the_key_file_not_the_table() {
+    let f = fixture().await;
+    create_group(&f).await;
+    assert!(f.repo.legacy_franking_keys().await.unwrap().is_empty());
+    assert_eq!(f.repo.max_message_franking_key_id().await.unwrap(), None);
+
+    // A message may name a key the table never held.
+    f.repo
+        .insert_encrypted_message(NewEncryptedMessage {
+            id: MessageId::new(),
+            conversation_id: f.conv.id,
+            sent_by: f.alice.user.id,
+            thread_id: None,
+            forwarded_from_message_id: None,
+            sent_at: Utc::now(),
+            envelope: envelope(1, f.alice.device, b"hi", 5),
+        })
+        .await
+        .expect("a key id outside the table");
+    assert_eq!(f.repo.max_message_franking_key_id().await.unwrap(), Some(5));
+
+    // An older server's table rows are read for the move into the key file.
+    f.ctx
+        .db
+        .execute_unprepared(
+            "INSERT INTO franking_key (id, secret) VALUES \
+             (2, decode(repeat('22', 32), 'hex')), (1, decode(repeat('11', 32), 'hex'))",
+        )
+        .await
+        .unwrap();
+    let legacy = f.repo.legacy_franking_keys().await.unwrap();
+    assert_eq!(legacy.iter().map(|k| k.id).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(legacy[0].secret.as_slice(), &[0x11; 32]);
+}
+
+#[tokio::test]
+async fn franking_revisions_are_numbered_and_go_with_their_message() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let message = insert_message(&f.repo, &f, 1, b"hi").await;
+    for commitment in [1u8, 2] {
+        f.repo
+            .append_franking_revision(NewFrankingRevision {
+                message_id: message.id,
+                franking_commitment: vec![commitment; 32],
+                sent_at_us: 7,
+                sender_device_id: f.alice.device_id,
+            })
+            .await
+            .expect("revision");
+    }
+    let revisions = f.repo.franking_revisions(message.id).await.unwrap();
+    assert_eq!(
+        revisions
+            .iter()
+            .map(|r| (r.revision, r.franking_commitment[0], r.sent_at_us))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 7), (1, 2, 7)]
+    );
+    assert_eq!(revisions[0].sender_device_id, f.alice.device_id);
+
+    // A soft delete keeps them; deleting the row takes them with it.
+    SeaOrmMessageRepository::new(f.ctx.db.clone())
+        .soft_delete_message(message.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.repo.franking_revisions(message.id).await.unwrap().len(),
+        2
+    );
+    f.ctx
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM message WHERE id = $1",
+            [Uuid::from(message.id).into()],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        f.repo
+            .franking_revisions(message.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_revision_migration_records_existing_messages_as_revision_0() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let conn = support::db_conn().await;
+    Migrator::down(&conn, Some(1))
+        .await
+        .expect("roll back add_message_franking_revision");
+    let message = insert_message(&f.repo, &f, 1, b"before").await;
+    Migrator::up(&conn, None)
+        .await
+        .expect("re-apply add_message_franking_revision");
+    let revisions = f.repo.franking_revisions(message.id).await.unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].revision, 0);
+    assert_eq!(revisions[0].franking_commitment, vec![1; 32]);
+    assert_eq!(revisions[0].sent_at_us, message.sent_at.timestamp_micros());
+    assert_eq!(revisions[0].sender_device_id, f.alice.device_id);
 }
 
 /// A franked report as the e2ee service stores it.
@@ -1085,6 +1258,7 @@ async fn verified_report_content_is_cleared_90_days_after_resolution() {
             commits: Duration::days(90),
             claimed_key_packages: Duration::days(7),
             readd_requests: Duration::days(7),
+            readd_nonces: Duration::days(1),
             franked_content: Duration::days(90),
         })
         .await
@@ -1127,6 +1301,66 @@ async fn verified_report_content_is_cleared_90_days_after_resolution() {
             .await
             .unwrap()
     );
+}
+
+/// A deleted encrypted message keeps its row and franking columns, so it stays reportable, and
+/// the hourly retention run never removes message rows: a verified report of it keeps its
+/// message and content until the content's own retention.
+#[tokio::test]
+async fn finding_26_a_report_of_a_deleted_message_survives_the_retention_run() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let messages = SeaOrmMessageRepository::new(f.ctx.db.clone());
+    let reports = SeaOrmModerationRepository::new(f.ctx.db.clone());
+    let message = insert_message(&f.repo, &f, 1, b"regret").await;
+    messages
+        .soft_delete_message(message.id)
+        .await
+        .expect("delete");
+    // Long past every retention the run applies.
+    f.ctx
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "UPDATE message SET sent_at = now() - interval '400 days' WHERE id = $1",
+            [Uuid::from(message.id).into()],
+        ))
+        .await
+        .unwrap();
+    let deleted = messages
+        .get_by_id(message.id)
+        .await
+        .unwrap()
+        .expect("the row stays");
+    assert!(deleted.is_deleted);
+    let envelope = deleted.encryption.expect("franking columns stay");
+    assert_eq!(envelope.ciphertext, None);
+    assert_eq!(envelope.franking_commitment, vec![1; 32]);
+
+    let report = reports
+        .create_report(franked_report(&f, message.id, &f.bob))
+        .await
+        .expect("report of a deleted message");
+    let purged = f
+        .repo
+        .purge(MlsRetention {
+            commits: Duration::days(90),
+            claimed_key_packages: Duration::days(7),
+            readd_requests: Duration::days(7),
+            readd_nonces: Duration::days(1),
+            franked_content: Duration::days(90),
+        })
+        .await
+        .unwrap();
+    assert_eq!(purged.franked_contents, 0);
+    assert!(messages.get_by_id(message.id).await.unwrap().is_some());
+    let kept = reports
+        .get_report(report.id)
+        .await
+        .unwrap()
+        .and_then(|r| r.franked)
+        .expect("still verified");
+    assert!(kept.content.is_some());
 }
 
 #[tokio::test]
@@ -1300,7 +1534,8 @@ async fn migration_down_is_refused_while_an_encrypted_message_exists() {
         ))
         .await
         .unwrap();
-    Migrator::down(&conn, Some(steps))
+    // The refused call already rolled back every later migration.
+    Migrator::down(&conn, Some(1))
         .await
         .expect("roll back add_e2ee_mls");
     // The previous change feed trigger is back: a text edit still stamps edited_at.

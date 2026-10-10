@@ -399,6 +399,18 @@ mod tests {
     }
 
     #[test]
+    fn finding_27_a_malformed_payload_keeps_the_parser_text_out_of_the_message() {
+        let unknown = READD_PAYLOAD.replacen('{', r#"{"extra":1,"#, 1);
+        let err = verify_mls_readd(&device(), &signed_readd(unknown)).unwrap_err();
+        assert_eq!(err.to_string(), "statement payload is not valid");
+        assert!(
+            err.detail().is_some_and(|d| d.contains("unknown field")),
+            "{err:?}"
+        );
+        assert_eq!(IdentityError::BadSignature.detail(), None);
+    }
+
+    #[test]
     fn credential_identity_is_strict() {
         let statement = signed_mls_key(mls_key_payload(
             PRINCIPAL_ID,

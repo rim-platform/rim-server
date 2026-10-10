@@ -6,10 +6,11 @@ use uuid::Uuid;
 
 use crate::conversation::model::ConversationId;
 use crate::e2ee::model::{
-    ClaimedKeyPackage, E2eeDevice, FrankingKey, MlsCommit, MlsDesiredDevice, MlsGroup,
-    MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
-    MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewMlsCommit,
-    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    ClaimedKeyPackage, E2eeDevice, FrankingKey, FrankingRevision, MlsCommit, MlsDesiredDevice,
+    MlsGroup, MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
+    MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage,
+    NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
+    NewMlsWelcome,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::message::model::{Message, MessageEncryption, MessageId};
@@ -262,6 +263,8 @@ pub trait E2eeRepository: Send + Sync {
 
     // ── Re-add requests ──────────────────────────────────────────────────
 
+    /// Record the request and its nonce together; `Conflict` when the device already used the
+    /// nonce in this incarnation.
     async fn insert_readd_request(
         &self,
         request: NewMlsReaddRequest,
@@ -300,10 +303,19 @@ pub trait E2eeRepository: Send + Sync {
 
     // ── Franking ─────────────────────────────────────────────────────────
 
-    /// The newest franking key, creating key 1 from `secret` when there is none.
-    async fn current_franking_key(&self, secret: Vec<u8>) -> RepoResult<FrankingKey>;
+    /// Record a version of an encrypted message, as the next revision. Called in the
+    /// transaction that stores the message or its edit.
+    async fn append_franking_revision(&self, revision: NewFrankingRevision) -> RepoResult<()>;
 
-    async fn get_franking_key(&self, id: i32) -> RepoResult<Option<FrankingKey>>;
+    /// Every recorded version of a message, oldest first.
+    async fn franking_revisions(&self, message_id: MessageId) -> RepoResult<Vec<FrankingRevision>>;
+
+    /// The franking keys an older server kept in the `franking_key` table, oldest first. Read
+    /// only to move them into the key file.
+    async fn legacy_franking_keys(&self) -> RepoResult<Vec<FrankingKey>>;
+
+    /// The highest `franking_key_id` any message carries.
+    async fn max_message_franking_key_id(&self) -> RepoResult<Option<i32>>;
 
     // ── Retention ────────────────────────────────────────────────────────
 

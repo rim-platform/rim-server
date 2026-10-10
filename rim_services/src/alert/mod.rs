@@ -129,6 +129,12 @@ fn default_status_firing() -> String {
     "firing".to_string()
 }
 
+/// `VALIDATION` with a fixed `message`; the parser's description goes to the log only.
+fn refused(message: &str, err: &serde_json::Error) -> ServiceError {
+    tracing::info!(detail = %err, "refused a malformed alert payload");
+    ServiceError::Validation(message.to_string())
+}
+
 /// Parse RIM's own generic JSON alert format: either a single alert object, or
 /// `{ "alerts": [...] }`. Each item may omit `fingerprint` (derived via
 /// [`derive_fingerprint`]) and `status` (defaults to `"firing"`).
@@ -137,15 +143,14 @@ fn default_status_firing() -> String {
 /// Returns [`ServiceError::Validation`] if `body` is not valid JSON or doesn't match the
 /// expected shape (missing `title`, wrong field types, etc.).
 pub fn parse_generic(body: &[u8]) -> ServiceResult<Vec<AlertEvent>> {
-    let value: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|e| ServiceError::Validation(format!("invalid JSON body: {e}")))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| refused("invalid JSON body", &e))?;
 
     let items: Vec<GenericAlertItem> = if let Some(alerts) = value.get("alerts") {
-        serde_json::from_value(alerts.clone())
-            .map_err(|e| ServiceError::Validation(format!("invalid `alerts` array: {e}")))?
+        serde_json::from_value(alerts.clone()).map_err(|e| refused("invalid `alerts` array", &e))?
     } else {
-        let single: GenericAlertItem = serde_json::from_value(value)
-            .map_err(|e| ServiceError::Validation(format!("invalid alert payload: {e}")))?;
+        let single: GenericAlertItem =
+            serde_json::from_value(value).map_err(|e| refused("invalid alert payload", &e))?;
         vec![single]
     };
 
@@ -198,9 +203,8 @@ struct AmShapedAlert {
 /// Grafana's unified alerting reuses. `source` tags the resulting events so the caller and the
 /// persisted incident can tell the two apart even though the wire shape is the same.
 fn parse_am_shaped(body: &[u8], source: AlertSource) -> ServiceResult<Vec<AlertEvent>> {
-    let payload: AmShapedPayload = serde_json::from_slice(body).map_err(|e| {
-        ServiceError::Validation(format!("invalid {} payload: {e}", source.as_str()))
-    })?;
+    let payload: AmShapedPayload = serde_json::from_slice(body)
+        .map_err(|e| refused(&format!("invalid {} payload", source.as_str()), &e))?;
 
     Ok(payload
         .alerts
@@ -264,6 +268,25 @@ pub fn parse_grafana(body: &[u8]) -> ServiceResult<Vec<AlertEvent>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finding_27_malformed_alerts_get_a_fixed_message() {
+        let cases: [(&[u8], &str); 3] = [
+            (b"{", "invalid JSON body"),
+            (br#"{"alerts":[{"status":1}]}"#, "invalid `alerts` array"),
+            (br#"{"labels":7}"#, "invalid alert payload"),
+        ];
+        for (body, message) in cases {
+            match parse_generic(body) {
+                Err(ServiceError::Validation(m)) => assert_eq!(m, message),
+                other => panic!("{other:?}"),
+            }
+        }
+        match parse_am_shaped(br#"{"alerts":7}"#, AlertSource::Grafana) {
+            Err(ServiceError::Validation(m)) => assert_eq!(m, "invalid grafana payload"),
+            other => panic!("{other:?}"),
+        }
+    }
 
     // ── map_severity ─────────────────────────────────────────────────────────
 

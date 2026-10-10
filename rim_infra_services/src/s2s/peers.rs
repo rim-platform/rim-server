@@ -120,8 +120,10 @@ pub fn verify_discovery(
     origin: &str,
     expected_server_id: Option<&str>,
 ) -> Result<VerifiedDiscovery, String> {
-    let doc: DiscoveryDocument =
-        serde_json::from_slice(bytes).map_err(|e| format!("not a discovery document: {e}"))?;
+    let doc: DiscoveryDocument = serde_json::from_slice(bytes).map_err(|e| {
+        tracing::info!(detail = %e, "refused a malformed discovery document");
+        "not a discovery document".to_string()
+    })?;
     if doc.rim != "server-discovery" {
         return Err("not a discovery document".to_string());
     }

@@ -168,7 +168,8 @@ commits pending changes first, without waiting (the server refuses its message o
   suite is in the server's accepted list (`[0x004F]`); OpenMLS validation passes (signature, protocol
   version); the credential is a basic credential whose `mls-key` statement verifies under **the
   uploading session's device key** and names that session's principal and device; the leaf
-  signature key equals `mlsKey`; `not_after` is in the future and at most 90 days away; the
+  signature key equals `mlsKey`; `not_after` is in the future and at most 90 days and 5 minutes
+  away (the 5 minutes absorb a client clock ahead of the server's); the
   `KeyPackageRef` (OpenMLS `hash_ref`, 32 bytes for this suite) is new. A new last-resort package
   replaces the device's previous one in the same transaction.
 - **Claiming**: `claimMlsKeyPackages` takes `(principalId, deviceId)` pairs for one conversation
@@ -281,7 +282,17 @@ past the server's Commit retention, signs a **re-add request** with its device k
 state, sends the request, and only then uploads fresh key packages: a re-add is served from a
 package uploaded after the request, never from one of the lost state. The server accepts a
 request only from a device that is still a group device of the incarnation it names, which must
-be the current one (an older one is `STALE_EPOCH`), with `lastEpoch` at most the group's epoch.
+be the current one (an older one is `STALE_EPOCH`), and only when it is fresh:
+
+- `issuedAt` is within 10 minutes of the server's clock, either way (`VALIDATION`);
+- `lastEpoch`, when not `null`, is at most the group's epoch and at least the epoch the device was
+  last added at (`mls_group_device.added_epoch`): state the device holds was reached by joining at
+  that epoch or later, so a request made before its latest add is refused (`VALIDATION`);
+- its `nonce` was not used before by that device in that incarnation. The server records every
+  accepted nonce in `mls_readd_nonce` in the same statement that stores the request, and answers
+  a reused one with `CONFLICT` (`this re-add request was already sent`). A device signs a new
+  request, with a new nonce, for every attempt.
+
 Protections against a server forcing re-adds:
 
 | Rule | Stops |
@@ -289,6 +300,7 @@ Protections against a server forcing re-adds:
 | The request is signed by the device key; committers verify it against the device's certificate before acting | A server fabricating requests |
 | A re-add uses a **one-time** key package claimed now, never a last-resort package | Forcing reuse of an old last-resort init key that may have leaked |
 | A committer honors at most one request per device and conversation per 24 hours, and the server accepts at most 3 per day | Churn and key package draining |
+| The server accepts a request only while it is fresh and only once (`issuedAt`, `lastEpoch`, `nonce` above) | Replaying a stored request later in the same incarnation, which would force a Remove and Add and, after 10 minutes without a Commit, open the recovery path to a new incarnation |
 | The re-added leaf is verified like any other | Substituting another key |
 
 While waiting, the conversation shows "This device can't read new messages until another device
@@ -464,9 +476,10 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
 - **Edit**: `editEncryptedMessage` carries a new application message in the current epoch whose
   content has the same `id`, a higher `rev`, and the complete new message (not a diff: a device
   that never decrypted the original can render the edit). The server replaces `mls_ciphertext`,
-  `mls_epoch`, `sender_device_key_id`, the franking columns and the mention rows; the change-feed
-  trigger bumps `version` and sets `edited_at`. Only the author (any of their devices) may edit; the
-  receiver checks that the sender's principal is the row author's.
+  `mls_epoch`, `sender_device_key_id`, the franking columns and the mention rows, and records the
+  edit as the next franking revision ("Franking"); the change-feed trigger bumps `version` and
+  sets `edited_at`. Only the author (any of their devices) may edit; the receiver checks that the
+  sender's principal is the row author's.
 - **Delete**: `deleteMessage` as today. The server sets `is_deleted`, nulls `mls_ciphertext`, and
   keeps the franking columns. No application message is sent: the server is the authority on
   deletion (it can drop a row anyway), and a moderator outside a group must be able to delete.
@@ -567,17 +580,34 @@ A report proves one message's content to the moderators without the server havin
    `r = HMAC-SHA256(K, "rim.e2ee.franking-receipt.v1\0" || message id || conversation id ||
    sender user id || sender device id || sent_at_us || c)` (ids as 16 raw UUID bytes, the device id
    being the client device id, `sent_at_us` the row's `sent_at` in microseconds as a big-endian
-   i64), where `K` is the server's franking key `franking_key_id` (32 random bytes in
-   `franking_key`, created on first use). `r` and `sentAtUs` are delivered in `Message.encryption`.
+   i64), where `K` is the server's current franking key and `franking_key_id` its id ("Franking
+   keys" below). `r` and `sentAtUs` are delivered in `Message.encryption`. In the same
+   transaction it records the version in `message_franking_revision`: revision 0 when sent, one
+   more per edit, each with `c` from the authenticated data, `sent_at_us` and the client device
+   id of the sending session.
 3. **Receiver**: recomputes `c` and refuses the message as invalid on a mismatch, so every message a
    member can see is reportable. `fk` must be exactly 32 bytes (HMAC's key padding would otherwise
    let two keys collide). It keeps `fk`, `r` and `sentAtUs` with the plaintext.
 4. **Report** (`reportEncryptedMessage`): the reporter sends the content bytes, `fk`, the receipt,
-   its key id, the sender ids and `sentAtUs`. The server recomputes `c` from the content and `fk`,
-   recomputes `r` with its key, and compares in constant time. It needs no message row, so a message
-   the sender deleted stays reportable. A valid report stores the content in `message_report`
-   (`franked_content`, `franking_verified_at`); an invalid one is refused (`VALIDATION`, `the report
-   does not match the message`). The usual report rules hold (one per reporter and message).
+   its key id, the sender ids and `sentAtUs`. The server recomputes `c` from the content and `fk`
+   and checks, comparing secrets and MACs in constant time:
+   - the sender user is the row's author, and `c`, `sentAtUs` and the sender device equal those of
+     **any** recorded revision of the message (or the row's current `franking_commitment`,
+     `sent_at` and sender device, while the row still names one). Every revision is compared,
+     without stopping at the first match;
+   - `r` recomputed with key `receiptKeyId` (any key in the key file, "Franking keys") equals the
+     receipt.
+
+   The revision check means a holder of `K` (a stolen key file or backup) cannot have the server
+   verify content the sender never sent: the receipt alone proves only that `K` signed it. An
+   edit adds a revision rather than replacing one, so every version a receiver saw stays
+   reportable: a sender who edits an abusive message does not escape a report of what was
+   shown. A message the sender deleted keeps its row and revisions (`is_deleted`,
+   `mls_ciphertext` nulled), and no retention job deletes message rows, so it stays reportable;
+   the report and the revisions reference the row and go with it only when its conversation or
+   workspace is deleted. A valid report stores the content in `message_report` (`franked_content`,
+   `franking_verified_at`); an invalid one is refused (`VALIDATION`, `the report does not match
+   the message`). The usual report rules hold (one per reporter and message).
 5. **Moderator view** (S4-5): the body as plain text with mentions resolved, the attachment names and
    sizes (a moderator's client downloads a reported attachment by its `blobSha256` through a
    report-scoped route and decrypts it with the secret from the verified content), sender,
@@ -597,6 +627,31 @@ A report proves one message's content to the moderators without the server havin
      `404`.
    - `deleteMessage` by an Owner/Moderator who cannot read the conversation succeeds when the
      message has a verified report.
+
+**Franking keys.** `K` lives in the franking key file, `RIM_FRANKING_KEY_FILE` (default
+`<RIM_DATA_DIR>/franking-key.json`, mode `0600`; the server refuses a file the group or others
+can read):
+
+```json
+{"v":1,"keys":[{"id":1,"key":"<base64url, 32 bytes>","createdAt":"2026-10-10T00:00:00Z"}]}
+```
+
+- The key with the highest id is current: it signs every new receipt and its id is the
+  message's `franking_key_id`. Keys are held in memory in zeroizing buffers.
+- At first boot without the file the server creates it with one random key, id 1. A server
+  that kept its key in the `franking_key` table moves those rows into the file instead, so
+  receipts it signed keep verifying, and at once adds a fresh key with the next id that signs
+  from then on: the moved keys, which the database and its backups also hold, only verify. It
+  refuses to start when messages carry a `franking_key_id` that neither the file nor the table
+  holds (a lost file: restore it). After that the table is unused and the server never reads
+  or writes it; `message.franking_key_id` no longer references it (migration
+  `drop_message_franking_key_fk`).
+- `rim_server franking-key rotate` adds a key with the next id, which becomes current. Every
+  key stays in the file and keeps verifying the receipts it signed for good: a receipt is never
+  signed again, so a message stays reportable for as long as it exists. What stops a forged
+  report is the check against the stored revisions, not a key's age. `rim_server franking-key
+  show` lists the keys. A running server reads the file again every minute, and at once (at
+  most every ten seconds) when a report names a key id above the ones it holds.
 
 **Limits.** A report proves one message, not its context: what it replied to, what came before, or
 whether the reporter provoked it (a reporter may report several messages, each proven alone). The
@@ -807,9 +862,40 @@ The change-feed function also sets `edited_at` when `mls_ciphertext` changes to 
 `OR NEW.mls_ciphertext IS DISTINCT FROM OLD.mls_ciphertext` in its `WHEN`. `down` restores
 the previous function and trigger, then drops the new columns, indexes and tables; it refuses to
 run while an encrypted message exists (rolling back would leave rows with neither text nor
-ciphertext). A second migration, `add_report_sender_device`, adds
-`message_report.franked_sender_device_id uuid NULL`. Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
-once fulfilled or after 7 days, `franked_content` 90 days after the report is resolved.
+ciphertext). The `franking_key` table above is no longer used ("Franking keys"). A second
+migration, `add_report_sender_device`, adds
+`message_report.franked_sender_device_id uuid NULL`. A third, `add_mls_readd_nonce`, adds the
+nonces of accepted re-add requests:
+
+```sql
+CREATE TABLE mls_readd_nonce (
+    conversation_id uuid NOT NULL, incarnation integer NOT NULL,
+    device_key_id uuid NOT NULL REFERENCES device_key (id) ON DELETE CASCADE,
+    nonce bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, incarnation, device_key_id, nonce),
+    FOREIGN KEY (conversation_id, incarnation) REFERENCES mls_group ON DELETE CASCADE);
+CREATE INDEX idx_mls_readd_nonce_created_at ON mls_readd_nonce (created_at);
+```
+
+A fourth, `drop_message_franking_key_fk`, drops `message.franking_key_id`'s reference to
+`franking_key`: key ids come from the franking key file. Its `down` restores the reference as
+`NOT VALID`, since rows may name keys the table never held. A fifth,
+`add_message_franking_revision`, adds every version's franking commitment and records each
+existing encrypted message whose sender device still exists as its revision 0:
+
+```sql
+CREATE TABLE message_franking_revision (
+    message_id uuid NOT NULL REFERENCES message (id) ON DELETE CASCADE,
+    revision integer NOT NULL CHECK (revision >= 0),
+    franking_commitment bytea NOT NULL, sent_at_us bigint NOT NULL,
+    sender_device_id uuid NOT NULL,              -- the client device id the receipt covers
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, revision));
+```
+
+Retention: Commits 90 days, Welcomes 30 days, claimed key packages 7 days, re-add requests
+once fulfilled or after 7 days, re-add nonces 1 day (longer than a request stays fresh),
+`franked_content` 90 days after the report is resolved.
 
 Code: an `e2ee` module in `rim_core` (repository traits), `rim_services` (`E2eeService`, DTOs, an
 `MlsWire` trait for decoding and key package validation), `rim_infra_services` (the service and the
@@ -911,8 +997,8 @@ type Mutation {
 | `STALE_EPOCH` (new) | A Commit or message for an epoch or incarnation that is not current | `incarnation`, `epoch` (current) |
 | `MLS_COMMIT_REQUIRED` (new) | A message while removals are pending, or into an encrypted conversation without a group | `reason`: `pendingRemovals` or `noGroup` |
 | `FORBIDDEN` | Session without a device; device not in the group; claim or commit by a non-member | — |
-| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text |
-| `CONFLICT` | Message id reused with other bytes; second report | — |
+| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text; JSON that does not parse into its shape gets a fixed reason, never the parser's message |
+| `CONFLICT` | Message id reused with other bytes; second report; a re-add request sent again | — |
 | `TIMED_OUT`, `NOT_FOUND`, `RATE_LIMITED` | As for the plaintext equivalents | as today |
 
 ### Events
