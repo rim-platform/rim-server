@@ -154,7 +154,7 @@ pub async fn ensure_workspace_writable(
 }
 
 /// `Err(PermissionDenied)` while `user_id` has an active ban in `server_id` (Track 1.2). Called
-/// by every workspace join path except bootstrap and workspace creation, where no ban can exist.
+/// by every workspace join path except workspace creation, where no ban can exist.
 pub async fn ensure_not_banned(
     moderation_repo: &dyn ModerationRepository,
     server_id: ServerId,
@@ -200,9 +200,9 @@ pub async fn ensure_server_member(
 ///
 /// Ban checks ([`ensure_not_banned`]) are the caller's job, before calling this.
 ///
-/// Every server-membership write (bootstrap, server creation, invite acceptance, join by invite,
-/// owner adding a member) goes through here, with the caller's repos — so inside the caller's
-/// transaction when it has one. Emits no events: callers announce the new member with
+/// Every server-membership write (server creation, invite acceptance, join by invite, signup by
+/// workspace invite, owner adding a member) goes through here, with the caller's repos — so
+/// inside the caller's transaction when it has one. Emits no events: callers announce the new member with
 /// `MemberJoined` after they commit, and clients refetch their channel list on joining a
 /// workspace.
 pub async fn add_workspace_member(

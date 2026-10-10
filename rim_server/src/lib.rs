@@ -7,7 +7,6 @@ pub mod abuse_cmd;
 pub mod app;
 pub mod audit_cmd;
 mod body;
-pub mod bootstrap_cmd;
 pub mod config;
 mod file_handlers;
 pub mod franking_key_cmd;

@@ -2,9 +2,6 @@
 
 pub mod prelude;
 
-pub mod bootstrap_token;
-mod bootstrap_token_mapper;
-
 pub mod command_audit_log;
 
 pub mod capability_registry;

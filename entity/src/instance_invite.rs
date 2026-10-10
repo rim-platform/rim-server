@@ -14,6 +14,7 @@ pub struct Model {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked_at: Option<DateTimeWithTimeZone>,
+    pub email: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

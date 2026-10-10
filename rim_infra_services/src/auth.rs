@@ -12,8 +12,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
     AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithBootstrapCmd,
-    SignupWithInstanceInviteCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InviteTokenPreviewDto,
@@ -766,78 +765,6 @@ impl AuthService for DefaultAuthService {
         })
     }
 
-    #[instrument(name = "auth.signup_with_bootstrap", skip_all, fields(username = %cmd.username))]
-    async fn signup_with_bootstrap(
-        &self,
-        cmd: SignupWithBootstrapCmd,
-    ) -> ServiceResult<SignupResultDto> {
-        let SignupWithBootstrapCmd {
-            bootstrap_token: raw_token,
-            username,
-            password,
-            email,
-            display_name,
-        } = cmd;
-        let (username, password) = (username.as_str(), password.as_str());
-
-        signup::validate_username(username)?;
-        Self::validate_password(password)?;
-        let email = Self::validate_email(&email)?;
-        let resolved_display_name =
-            signup::normalize_display_name(display_name.as_deref(), username)?;
-
-        let token = signup::CheckedToken::Bootstrap(
-            signup::check_bootstrap_token(self.repos.bootstrap_token_repo.as_ref(), &raw_token)
-                .await?,
-        );
-
-        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
-
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let txn_repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-
-        let user = Self::create_user_in_txn(
-            &txn_repos,
-            username,
-            password_hash,
-            &email,
-            Some(resolved_display_name),
-        )
-        .await?;
-
-        // Atomic try-mark: a token another request consumed since the pre-check is
-        // `InvalidToken`, and the transaction rolls back when `scope` is dropped.
-        signup::claim_token(&txn_repos.signup_repos(), &token, user.id).await?;
-
-        let (sess, raw_sess_token, csrf) =
-            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
-
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-
-        signup::announce_claimed(&token, user.id, username, &self.observers);
-
-        Ok(SignupResultDto {
-            user_id: user.id,
-            server_id: None,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_sess_token,
-            csrf_token: csrf,
-        })
-    }
-
     #[instrument(name = "auth.signup_with_instance_invite", skip_all, fields(username = %cmd.username))]
     async fn signup_with_instance_invite(
         &self,
@@ -859,8 +786,12 @@ impl AuthService for DefaultAuthService {
             signup::normalize_display_name(display_name.as_deref(), username)?;
 
         let token = signup::CheckedToken::InstanceInvite(
-            signup::check_instance_invite(self.repos.instance_invite_repo.as_ref(), &raw_token)
-                .await?,
+            signup::check_instance_invite(
+                self.repos.instance_invite_repo.as_ref(),
+                &raw_token,
+                Some(&email),
+            )
+            .await?,
         );
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
@@ -1008,27 +939,7 @@ impl AuthService for DefaultAuthService {
 
         let token_hash = hash_token(&query.token);
 
-        // 1. Check bootstrap_token first.
-        if let Some(bt) = self
-            .repos
-            .bootstrap_token_repo
-            .get_by_token_hash(&token_hash)
-            .await?
-        {
-            if bt.used_at.is_some() || bt.revoked_at.is_some() {
-                return Err(ServiceError::InvalidToken);
-            }
-            if bt.expires_at < Utc::now() {
-                return Err(ServiceError::ExpiredToken);
-            }
-            return Ok(InviteTokenPreviewDto {
-                token_type: InviteTokenType::Bootstrap,
-                expires_at: Some(bt.expires_at),
-                workspace: None,
-            });
-        }
-
-        // 2. Check instance_invite.
+        // 1. Check instance_invite.
         if let Some(ii) = self
             .repos
             .instance_invite_repo
@@ -1052,7 +963,7 @@ impl AuthService for DefaultAuthService {
             });
         }
 
-        // 3. Check workspace invite.
+        // 2. Check workspace invite.
         if let Some(inv) = self
             .repos
             .invite_repo

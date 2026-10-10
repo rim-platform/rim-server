@@ -55,27 +55,12 @@ pub struct JoinServerByInviteCmd {
 }
 
 /// The registration token a signup presents in invite-only mode, by kind. Each kind is
-/// checked and consumed the way its password signup does it: a bootstrap token or an instance
-/// invite creates an account with no workspace; a workspace invite also joins its server.
+/// checked and consumed the way its password signup does it: an instance invite creates an
+/// account with no workspace; a workspace invite also joins its server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignupToken {
-    Bootstrap(String),
     InstanceInvite(String),
     WorkspaceInvite(String),
-}
-
-/// Command for signing up with a bootstrap token.
-#[derive(Debug, Clone)]
-pub struct SignupWithBootstrapCmd {
-    pub bootstrap_token: String,
-    pub username: String,
-    pub password: String,
-    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
-    /// the service also validates before insert as defence in depth.
-    pub email: String,
-    /// Optional display name (raw input). The service normalises and falls back
-    /// to `username` when absent or blank after trim.
-    pub display_name: Option<String>,
 }
 
 /// Command for signing up with an instance invite token.
@@ -110,7 +95,7 @@ pub struct SignupOpenCmd {
     pub display_name: Option<String>,
 }
 
-/// Query to preview a registration token (bootstrap, instance, or workspace).
+/// Query to preview a registration token (instance or workspace invite).
 #[derive(Debug, Clone)]
 pub struct PreviewInviteTokenQuery {
     pub token: String,

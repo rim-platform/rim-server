@@ -10,12 +10,10 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use rim_auth::session_token::hash_token;
-    use rim_core::auth::model::{BootstrapToken, BootstrapTokenId, Invite, InviteId};
+    use rim_core::auth::model::{InstanceInvite, InstanceInviteId, Invite, InviteId};
     use rim_core::auth::model::{NewSession, Session, SessionId};
     use rim_core::auth::repository::SessionRepository;
-    use rim_core::auth::repository::{
-        MockBootstrapTokenRepository, MockInstanceInviteRepository, MockInviteRepository,
-    };
+    use rim_core::auth::repository::{MockInstanceInviteRepository, MockInviteRepository};
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::key_identity::model::{
@@ -510,7 +508,6 @@ mod tests {
     /// mistake fails loudly.
     fn no_signup_repos() -> SignupRepos {
         SignupRepos {
-            bootstrap_token_repo: Arc::new(MockBootstrapTokenRepository::new()),
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             invite_repo: Arc::new(MockInviteRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
@@ -2013,7 +2010,7 @@ mod tests {
                 &p,
                 "ada",
                 RegistrationMode::Open,
-                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+                Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
             ))
             .await
             .unwrap_err();
@@ -2185,35 +2182,36 @@ mod tests {
         assert_eq!(h.user_count(), 1);
     }
 
-    fn bootstrap_token(expires_in: Duration) -> BootstrapToken {
-        BootstrapToken {
-            id: BootstrapTokenId::new(),
-            email: "admin@example.com".to_string(),
-            token_hash: hash_token("rim_boot"),
+    fn instance_invite(expires_in: Duration, email: Option<&str>) -> InstanceInvite {
+        InstanceInvite {
+            id: InstanceInviteId::new(),
+            created_by_user_id: None,
+            token_hash: hash_token("rim_iinv"),
             created_at: Utc::now(),
             expires_at: Utc::now() + expires_in,
-            used_at: None,
-            consumed_by_user_id: None,
+            max_uses: 1,
+            use_count: 0,
             revoked_at: None,
+            email: email.map(str::to_string),
         }
     }
 
     #[tokio::test]
-    async fn signup_with_key_with_a_bootstrap_token_consumes_it_and_joins_nothing() {
-        let token = bootstrap_token(Duration::minutes(15));
-        let token_id = token.id;
-        let mut bootstrap = MockBootstrapTokenRepository::new();
-        bootstrap
+    async fn signup_with_key_with_an_instance_invite_consumes_it_and_joins_nothing() {
+        let invite = instance_invite(Duration::minutes(15), None);
+        let invite_id = invite.id;
+        let mut invites = MockInstanceInviteRepository::new();
+        invites
             .expect_get_by_token_hash()
-            .withf(|hash| hash == hash_token("rim_boot"))
-            .returning(move |_| Ok(Some(token.clone())));
-        bootstrap
-            .expect_try_mark_used()
-            .withf(move |id, _| *id == token_id)
+            .withf(|hash| hash == hash_token("rim_iinv"))
+            .returning(move |_| Ok(Some(invite.clone())));
+        invites
+            .expect_try_consume()
+            .withf(move |id| *id == invite_id)
             .times(1)
-            .returning(|_, _| Ok(true));
+            .returning(|_| Ok(true));
         let signup = SignupRepos {
-            bootstrap_token_repo: Arc::new(bootstrap),
+            instance_invite_repo: Arc::new(invites),
             ..no_signup_repos()
         };
         let events = Arc::new(Recording::default());
@@ -2226,7 +2224,7 @@ mod tests {
                 &p,
                 "admin",
                 RegistrationMode::InviteOnly,
-                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+                Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
             ))
             .await
             .unwrap();
@@ -2237,15 +2235,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signup_with_key_with_an_expired_bootstrap_token_creates_nothing() {
-        let token = bootstrap_token(Duration::minutes(-1));
-        let mut bootstrap = MockBootstrapTokenRepository::new();
-        bootstrap
+    async fn signup_with_key_with_an_expired_instance_invite_creates_nothing() {
+        let invite = instance_invite(Duration::minutes(-1), None);
+        let mut invites = MockInstanceInviteRepository::new();
+        invites
             .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(token.clone())));
-        bootstrap.expect_try_mark_used().never();
+            .returning(move |_| Ok(Some(invite.clone())));
+        invites.expect_try_consume().never();
         let signup = SignupRepos {
-            bootstrap_token_repo: Arc::new(bootstrap),
+            instance_invite_repo: Arc::new(invites),
             ..no_signup_repos()
         };
         let h = signup_harness(signup, Arc::new(Recording::default()));
@@ -2257,11 +2255,43 @@ mod tests {
                 &p,
                 "admin",
                 RegistrationMode::InviteOnly,
-                Some(SignupToken::Bootstrap("rim_boot".to_string())),
+                Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
             ))
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::ExpiredToken), "{err:?}");
+        assert_eq!(h.user_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_an_email_bound_instance_invite() {
+        let invite = instance_invite(Duration::minutes(15), Some("ops@example.com"));
+        let mut invites = MockInstanceInviteRepository::new();
+        invites
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(invite.clone())));
+        invites.expect_try_consume().never();
+        let signup = SignupRepos {
+            instance_invite_repo: Arc::new(invites),
+            ..no_signup_repos()
+        };
+        let h = signup_harness(signup, Arc::new(Recording::default()));
+        let p = h.present(1).await;
+
+        let err = h
+            .svc
+            .signup_with_key(signup_cmd(
+                &p,
+                "admin",
+                RegistrationMode::InviteOnly,
+                Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == crate::signup::EMAIL_BOUND_INVITE_REFUSAL),
+            "{err:?}"
+        );
         assert_eq!(h.user_count(), 0);
     }
 
@@ -2450,7 +2480,7 @@ mod tests {
         let both = h
             .svc
             .signup_with_key(SignupWithKeyCmd {
-                token: Some(SignupToken::Bootstrap("rim_boot".to_string())),
+                token: Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
                 ..pow_cmd(&p, "ada", 16, "AAAAAAAAkaM")
             })
             .await

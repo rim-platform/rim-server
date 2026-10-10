@@ -1370,6 +1370,7 @@ async fn pow_signups_are_accepted_refused_or_take_an_invite() {
         token_hash: rim_auth::session_token::hash_token("rim_inv_grace"),
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         max_uses: 1,
+        email: None,
     })
     .await
     .expect("instance invite");
