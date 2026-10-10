@@ -1,5 +1,5 @@
-//! Key identity statements (Stage 3, Track 7.2): the formats a person's devices sign and the
-//! checks a server runs on them. Normative description: `docs/specs/key-identity-v1.md`.
+//! Key identity statements: the formats a person's devices sign and the checks a server runs
+//! on them.
 //!
 //! No database, network or clock: the only I/O is the OS random generator, which
 //! `device_link` draws link secrets and nonces from. It verifies one statement at a time

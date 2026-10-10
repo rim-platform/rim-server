@@ -10,7 +10,7 @@ use crate::{AuthError, AuthResult};
 /// Any caller that bypasses this check would still fail here.
 const MIN_PASSWORD_LENGTH: usize = 8;
 
-/// Production-strength Argon2id parameters (H2 hardening).
+/// Production-strength Argon2id parameters.
 ///
 /// - Memory: 64 MiB (`m = 65536`)
 /// - Iterations: 3 (`t = 3`)
@@ -56,7 +56,7 @@ pub fn hash_password(password: &str) -> AuthResult<String> {
 ///
 /// The verification algorithm, version, and parameters are read from the PHC
 /// string itself, so hashes produced with different Argon2 parameters (e.g.
-/// pre-H2 defaults) remain verifiable without any migration.
+/// the weaker argon2 crate defaults) remain verifiable without any migration.
 ///
 /// Returns `true` if the password matches, `false` otherwise.
 ///
@@ -115,7 +115,7 @@ mod tests {
         );
     }
 
-    /// H2 hardening — verify that the PHC string embeds the production parameters
+    /// The PHC string embeds the production parameters
     /// (m=65536, t=3, p=4) and uses Argon2id.
     #[test]
     fn hash_password_uses_production_argon2id_parameters() {
@@ -133,7 +133,7 @@ mod tests {
         assert!(hash.contains("p=4"), "expected p=4, got: {hash}");
     }
 
-    /// H2 — old hashes (produced with old default params) remain verifiable.
+    /// Hashes produced with the argon2 crate's default params remain verifiable.
     ///
     /// This uses a pre-computed PHC string with m=19456 (old default ~19 MiB)
     /// to assert that `verify_password` transparently handles old hashes.
@@ -154,7 +154,7 @@ mod tests {
         // verify_password must accept a hash produced with the old (weaker) parameters.
         assert!(
             verify_password("oldpassword", &old_hash).unwrap(),
-            "verify must succeed for hash produced with pre-H2 parameters"
+            "verify must succeed for hash produced with the default parameters"
         );
         assert!(
             !verify_password("wrongpassword", &old_hash).unwrap(),

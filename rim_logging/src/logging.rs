@@ -12,12 +12,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-/// Tracing target reserved for audit-grade events (Phase 4 P4-A1, design
-/// §0.5). Every `execute_command` invocation emits exactly one line at this
-/// target; the audit layer routes those lines into a dedicated `audit.log`
-/// file in addition to the general stdout sink. Operators tail and ship
-/// this file separately from general logs (different retention rules per
-/// design §5).
+/// Tracing target reserved for audit-grade events. Every `execute_command` invocation emits
+/// exactly one line at this target; the audit layer routes those lines into a dedicated
+/// `audit.log` file in addition to the general stdout sink, so operators can ship and retain
+/// it separately from general logs.
 pub const AUDIT_TARGET: &str = "audit";
 
 /// Default file name for the audit log when `RIM_AUDIT_LOG_PATH` is unset.
@@ -38,9 +36,8 @@ const AUDIT_LOG_PATH_ENV: &str = "RIM_AUDIT_LOG_PATH";
 /// the audit target** — dropping it shuts the worker down and pending
 /// audit lines are lost. `main.rs` binds the return for the whole program.
 ///
-/// Wrapped (rather than returning `WorkerGuard` directly) so we can grow
-/// the structure without breaking callers — Phase 5 may add a second
-/// guard for a structured event sink, etc.
+/// Wrapped (rather than returning `WorkerGuard` directly) so further guards can be added
+/// without breaking callers.
 #[must_use = "drop of LoggingHandle stops the audit appender — bind it in main"]
 pub struct LoggingHandle {
     _audit_guard: WorkerGuard,

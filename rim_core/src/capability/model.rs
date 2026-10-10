@@ -18,8 +18,6 @@ pub struct RegisteredCapability {
     ///
     /// When `false` (the conservative default) the capability is
     /// workspace-scoped: `check()` rejects `workspace_id = None` with
-    /// `PermissionDenied` — the membership check would be meaningless without
-    /// a workspace and passing `None` was previously a silent security bypass
-    /// (P6-FU5, Black Widow H2).
+    /// `PermissionDenied`, because the membership check is meaningless without a workspace.
     pub is_self_scoped: bool,
 }
