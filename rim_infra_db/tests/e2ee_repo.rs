@@ -1300,7 +1300,13 @@ async fn migration_down_is_refused_while_an_encrypted_message_exists() {
         ))
         .await
         .unwrap();
-    Migrator::down(&conn, Some(steps))
+    // The refused run already rolled back every later migration; roll back what is left.
+    let applied = Migrator::get_applied_migrations(&conn)
+        .await
+        .expect("applied migrations")
+        .len();
+    let left = u32::try_from(applied - index).expect("step count fits u32");
+    Migrator::down(&conn, Some(left))
         .await
         .expect("roll back add_e2ee_mls");
     // The previous change feed trigger is back: a text edit still stamps edited_at.
