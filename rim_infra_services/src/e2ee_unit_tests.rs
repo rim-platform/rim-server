@@ -2002,8 +2002,8 @@ mod tests {
             report(&forged, fields, 2, &SERVER_KEY_2),
             report(&sent, other_device, 2, &SERVER_KEY_2),
             report(&sent, other_time, 2, &SERVER_KEY_2),
-            // Key 1 was replaced more than 30 days ago.
-            report(&sent, fields, 1, &SERVER_KEY_1),
+            // A key id the server never had.
+            report(&sent, fields, 3, &SERVER_KEY_2),
         ] {
             let err = f.service.report_encrypted_message(cmd).await.unwrap_err();
             assert_eq!(validation(err), mismatch);
@@ -2016,20 +2016,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_7_a_replaced_key_verifies_within_its_window() {
+    async fn finding_7_a_replaced_key_still_verifies() {
         let mut f = Fixture::new();
         f.service = Fixture::build(&f.repo, &f.events, &f.conv, &f.messages, &f.reports)
             .with_franking_keys(SharedFrankingKeys::fixed(
                 FrankingKeys::new(vec![
-                    FrankingKey::new(1, SERVER_KEY_1, Utc::now() - Duration::days(40)),
-                    FrankingKey::new(2, SERVER_KEY_2, Utc::now() - Duration::days(29)),
+                    FrankingKey::new(1, SERVER_KEY_1, Utc::now() - Duration::days(800)),
+                    FrankingKey::new(2, SERVER_KEY_2, Utc::now() - Duration::days(400)),
                 ])
                 .expect("keys"),
             ));
         f.repo.state().devices.push(stored_device(&f.bob));
         let content = br#"{"v":1,"type":"message","body":"hi"}"#.to_vec();
         let franking_key = [0x60u8; 32];
-        let sent_at = Utc::now() - Duration::days(35);
+        let sent_at = Utc::now() - Duration::days(500);
         let c = commitment(&franking_key, &content);
         let message = encrypted_message(&f, sent_at, &c, &[]);
         let message_id = message.id;
@@ -2057,7 +2057,7 @@ mod tests {
                 sent_at_us: fields.sent_at_us.to_string(),
             })
             .await
-            .expect("key 1 still verifies");
+            .expect("key 1 still verifies, a year after key 2 replaced it");
     }
 
     #[test]

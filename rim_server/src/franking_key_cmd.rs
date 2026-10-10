@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 
-use rim_infra_services::franking_keys::{self, FrankingKeys, RETIRED_KEY_WINDOW};
+use rim_infra_services::franking_keys::{self, FrankingKeys};
 
 const USAGE: &str = "usage: rim_server franking-key show | franking-key rotate";
 
@@ -34,18 +34,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
 }
 
 fn print_keys(keys: &FrankingKeys) {
-    let now = Utc::now();
     let current = keys.current().id;
-    let mut next_created = keys.keys().iter().skip(1).map(|k| k.created_at);
     for key in keys.keys() {
-        let replaced = next_created.next();
-        let state = match replaced {
-            None if key.id == current => "signs new receipts".to_string(),
-            Some(at) if keys.verifying(key.id, now).is_some() => format!(
-                "verifies until {}",
-                (at + RETIRED_KEY_WINDOW).format("%Y-%m-%dT%H:%M:%SZ")
-            ),
-            _ => "no longer verifies; the next rotation removes it".to_string(),
+        let state = if key.id == current {
+            "signs new receipts and verifies"
+        } else {
+            "verifies the receipts it signed"
         };
         println!(
             "key {:<4} created {}  {state}",

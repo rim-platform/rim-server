@@ -76,18 +76,19 @@ and with the same rules:
 The file is `{"v":1,"keys":[{"id":1,"key":"<base64url>","createdAt":"…"}]}`, mode `0600`; the
 server refuses to start when the group or others can read it. The first start creates it with
 one key. A server upgraded from a version that kept the key in the database moves it into the
-file at that start and logs a warning; run a rotation then, so the key the database and its
-backups hold stops signing. The server refuses to start when the file is missing but messages
-carry receipts under a key it no longer has: restore the file from a backup.
+file at that start and rotates at once: the moved key, which the database and its backups also
+hold, only verifies from then on, and a new key signs. The log line says so. The server refuses
+to start when the file is missing but messages carry receipts under a key it no longer has:
+restore the file from a backup.
 
 ```sh
-rim_server franking-key show      # the keys, which one signs, until when the others verify
-rim_server franking-key rotate    # a new signing key; the previous ones verify for 30 days
+rim_server franking-key show      # the keys and which one signs
+rim_server franking-key rotate    # a new signing key; every older key keeps verifying
 ```
 
-Rotate on a schedule or when the file may have leaked. A report of a message signed under a
-replaced key must arrive within 30 days of the rotation; the rotation after that removes the old
-key. A running server picks the new file up within a minute. With several nodes, every node needs
+Rotate on a schedule or when the file may have leaked. Rotation never removes a key: a receipt is
+never signed again, so the key that signed it must stay for as long as the message can be
+reported. A running server picks the new file up within a minute. With several nodes, every node needs
 the same file: copy it to each node after a rotation.
 
 Back the file up with the database. Whoever reads it can make receipts, but a report must also
