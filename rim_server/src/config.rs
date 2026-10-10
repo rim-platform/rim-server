@@ -41,7 +41,7 @@ pub struct RIMConfig {
     /// to determine the real client IP for rate-limiting. Only enable this
     /// when a trusted reverse proxy (Nginx, Caddy, Traefik, …) is the sole
     /// entry point; enabling it without a proxy lets attackers spoof their IP
-    /// and defeat the rate limiters (H1 hardening).
+    /// and defeat the rate limiters.
     ///
     /// Controlled by `RIM_TRUST_FORWARDED_HEADERS=true`.
     pub trust_forwarded_headers: Option<bool>,
@@ -49,17 +49,17 @@ pub struct RIMConfig {
     /// When `true`, all session and CSRF cookies are issued with `Secure=true`
     /// regardless of the incoming request scheme or `X-Forwarded-Proto` header.
     /// Use this for direct-HTTPS deployments where the reverse proxy does not
-    /// forward the `X-Forwarded-Proto` header (H3 hardening).
+    /// forward the `X-Forwarded-Proto` header.
     ///
     /// Controlled by `RIM_FORCE_SECURE_COOKIES=true`.
     pub force_secure_cookies: Option<bool>,
 
-    // ── Track B3: transactional email (RIM_SMTP_*) ──────────────────────────
+    // ── Transactional email (RIM_SMTP_*) ────────────────────────────────────
     //
     // SMTP is only enabled when both `smtp_host` and `smtp_from` are present (see
     // `SmtpConfig::from_parts` in `rim_infra_services::email`); otherwise every send falls
     // back to `LogEmailSender` (log-only, no delivery). `smtp_username`/`smtp_password` may be
-    // absent (unauthenticated relay / localhost dev SMTP). See `docs/email.md`.
+    // absent (unauthenticated relay / localhost dev SMTP).
     pub smtp_host: Option<String>,
     /// Defaults to 587 (STARTTLS) when unset.
     pub smtp_port: Option<u16>,
@@ -73,13 +73,13 @@ pub struct RIMConfig {
     /// links; without it, emails fall back to including the bare token/no link.
     pub public_base_url: Option<String>,
 
-    /// How often (seconds) the notification digest job looks for due digests (Track 1.3).
+    /// How often (seconds) the notification digest job looks for due digests.
     /// Default: 900 (15 minutes); values below 60 are raised to 60. Controlled by
     /// `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS`.
     pub notification_digest_interval_secs: Option<u64>,
 
-    /// Comma-separated `host[:port]` values a key login proof may name as its audience
-    /// (`docs/specs/key-identity-v1.md`). Controlled by `RIM_KEY_LOGIN_AUDIENCES`; see
+    /// Comma-separated `host[:port]` values a key login proof may name as its audience.
+    /// Controlled by `RIM_KEY_LOGIN_AUDIENCES`; see
     /// [`RIMConfig::key_login_audiences`] for the defaults.
     pub key_login_audiences: Option<String>,
 
@@ -402,7 +402,7 @@ impl RIMConfig {
     /// Returns `true` only when `RIM_TRUST_FORWARDED_HEADERS=true` is set.
     /// **Operator requirement:** only enable when a trusted reverse proxy is
     /// the sole entry point. Enabling without a proxy lets clients spoof their
-    /// IP and defeat per-IP rate limits (H1 hardening).
+    /// IP and defeat per-IP rate limits.
     ///
     /// # Examples
     /// ```ignore
@@ -419,7 +419,7 @@ impl RIMConfig {
     /// Returns `true` when `RIM_FORCE_SECURE_COOKIES=true` is set.
     /// Use this for direct-HTTPS deployments (Tauri WebView, Caddy/Traefik
     /// without `X-Forwarded-Proto`) where the scheme cannot be inferred from
-    /// headers (H3 hardening).
+    /// headers.
     ///
     /// # Examples
     /// ```ignore
@@ -433,7 +433,7 @@ impl RIMConfig {
 
     /// Resolve the SMTP configuration from `RIM_SMTP_*`. Returns `None` (fall back to
     /// `LogEmailSender`) unless both `smtp_host` and `smtp_from` are present — see
-    /// `rim_infra_services::email::SmtpConfig::from_parts` and `docs/email.md`.
+    /// `rim_infra_services::email::SmtpConfig::from_parts`.
     ///
     /// # Examples
     /// ```ignore
@@ -452,7 +452,7 @@ impl RIMConfig {
 
     /// e.g. `https://rim.example.com`. Required to build clickable password-reset/invite
     /// links in transactional emails; without it, those emails fall back to a bare token or no
-    /// link (see `docs/email.md`).
+    /// link.
     ///
     /// # Examples
     /// ```ignore
