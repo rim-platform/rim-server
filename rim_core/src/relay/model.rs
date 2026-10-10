@@ -79,6 +79,16 @@ pub struct DroppedSpace {
     pub workspace_id: Uuid,
 }
 
+/// Items and bytes in the relay queue, waiting for devices (`held` false) or held behind a
+/// pending DM request (`held` true).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RelayQueueStats {
+    pub queued_items: i64,
+    pub queued_bytes: i64,
+    pub held_items: i64,
+    pub held_bytes: i64,
+}
+
 /// A conversation started by someone outside the recipient's contacts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DmRequest {

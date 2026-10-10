@@ -262,12 +262,17 @@ impl DefaultPeerService {
             self.per_peer.check_and_record(server_id, now),
             RateLimitDecision::Limited { .. }
         ) {
+            crate::metrics::rate_limited("peer_discovery");
             return false;
         }
-        matches!(
+        let allowed = matches!(
             self.overall.check_and_record("all", now),
             RateLimitDecision::Allowed
-        )
+        );
+        if !allowed {
+            crate::metrics::rate_limited("peer_discovery");
+        }
+        allowed
     }
 
     async fn fetch_verified(
