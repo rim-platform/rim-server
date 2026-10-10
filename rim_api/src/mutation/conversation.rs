@@ -460,10 +460,38 @@ async fn remote_member_ids(
             ids.push(resolved.user_id);
         }
     }
-    if any_remote && !input.encrypted.unwrap_or(false) {
-        return Err(map_service_error(rim_services::ServiceError::Validation(
-            "a conversation with someone on another relay is encrypted".to_string(),
-        )));
-    }
+    ensure_encrypted_across_servers(any_remote, input.encrypted.unwrap_or(false))
+        .map_err(map_service_error)?;
     Ok(ids)
+}
+
+/// A conversation with anyone from another server is end-to-end encrypted, so relays carry
+/// only its ciphertext.
+fn ensure_encrypted_across_servers(
+    any_remote: bool,
+    encrypted: bool,
+) -> Result<(), rim_services::ServiceError> {
+    if any_remote && !encrypted {
+        return Err(rim_services::ServiceError::Validation(
+            "conversations with people on other servers are encrypted".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversations_with_people_on_other_servers_are_encrypted_only() {
+        assert!(matches!(
+            ensure_encrypted_across_servers(true, false),
+            Err(rim_services::ServiceError::Validation(message))
+                if message == "conversations with people on other servers are encrypted"
+        ));
+        assert!(ensure_encrypted_across_servers(true, true).is_ok());
+        assert!(ensure_encrypted_across_servers(false, false).is_ok());
+        assert!(ensure_encrypted_across_servers(false, true).is_ok());
+    }
 }
