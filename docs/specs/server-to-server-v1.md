@@ -525,8 +525,9 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    `remoteMembers` and no `memberIds` makes a DM, more make a group; the app names every member
    this way, those on R_A included. The app creates a conversation with anyone on another relay
    only encrypted: when a member or Alice's device is not ready it creates nothing and says who.
-   R_A refuses such a conversation unencrypted (`VALIDATION`), and an encrypted one when a member
-   has no MLS-active device. A person from another relay may create one too, through the forward
+   The server enforces this too: R_A refuses such a conversation unencrypted (`VALIDATION`,
+   "conversations with people on other servers are encrypted"), so relays only ever carry its
+   ciphertext, and refuses an encrypted one when a member has no MLS-active device. A person from another relay may create one too, through the forward
    path, naming R_A's members the same way.
 2. **Key packages.** Claims for Bob's devices go to R_B: `POST /s2s/v1/key-packages/claim`
    `{"principalId","devices":["<uuid>"],"conversation":{"host","conversationId","incarnation"},"claimer":{"principalId","deviceId"},"cipherSuite":79}`
