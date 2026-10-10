@@ -99,7 +99,6 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `mls_claim`, `mls_one_time_claim`, `mls_readd` | MLS key package claims and re-add requests. |
 | `command`, `command_discover` | Command runs per user and command, and command discovery. |
 | `workspace_plugin_change`, `plugin_bundle_upload` | Workspace plugin changes and bundle uploads per user. |
-| `alert_ingest` | Alert webhook requests per ingest token. |
 | `s2s_peer` | Server-to-server requests per peer (`RIM_S2S_PEER_RATE_PER_MIN`). |
 | `peer_discovery` | Discovery document fetches, one per peer and sixty in all per minute. |
 | `relay_forward_device`, `relay_forward_user` | Requests a local user forwards, per device per minute and per user per day. |

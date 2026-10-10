@@ -17,8 +17,8 @@ use crate::graphql_support::{extract_actor_and_session_id, validate_csrf_header}
 
 /// Map a ServiceError to an HTTP response for REST endpoints.
 ///
-/// Shared by every non-GraphQL (FL2) transport in `rim_server` — file handlers and the
-/// alert-ingest webhook handlers (`alert_handlers.rs`) — so REST error shapes stay consistent.
+/// Shared by the non-GraphQL (FL2) file transports in `rim_server` so REST error shapes stay
+/// consistent.
 pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpResponse {
     match err {
         rim_services::ServiceError::NotFound => {
@@ -56,9 +56,6 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
                 "error": "rate limit exceeded",
                 "retryAfterSeconds": retry_after_seconds,
             })),
-        // Track 0.4: a disabled workspace module looks like an unknown route on REST
-        // transports (bare 404, no body), matching the alert-webhook feature gate.
-        rim_services::ServiceError::FeatureDisabled { .. } => HttpResponse::NotFound().finish(),
         _ => {
             tracing::error!(error = %err, "service error in file handler");
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "internal error"}))

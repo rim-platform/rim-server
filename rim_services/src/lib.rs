@@ -1,4 +1,3 @@
-pub mod alert;
 pub mod audit;
 pub mod auth;
 pub mod capability;
@@ -8,11 +7,8 @@ pub mod conversation;
 pub mod custom_emoji;
 pub mod device_link;
 pub mod e2ee;
-pub mod escalation;
 pub mod events;
 pub mod host;
-pub mod incident;
-pub mod ingest_token;
 pub mod key_auth;
 pub mod keybind;
 pub mod link_preview;
@@ -25,7 +21,6 @@ pub mod message_thread;
 pub mod moderation;
 pub mod notification;
 pub mod notification_preference;
-pub mod oncall;
 pub mod password_reset;
 pub mod pin;
 pub mod pipeline;
@@ -37,11 +32,9 @@ pub mod remote_workspace;
 pub mod s2s;
 pub mod server;
 pub mod server_member;
-pub mod skill_profile;
 pub mod storage;
 pub mod typing;
 pub mod user;
-pub mod workspace_feature;
 pub mod workspace_plugin;
 pub mod workspace_state;
 
@@ -133,15 +126,8 @@ pub enum ServiceError {
     #[error("email already in use")]
     EmailTaken,
 
-    /// The workspace has the named optional module turned off (Track 0.4). `feature` is the
-    /// stable snake_case name (`rim_core::workspace_feature::model::WorkspaceFeature::as_str`).
-    /// Surfaced as the `FEATURE_DISABLED` GraphQL error code.
-    #[error("workspace feature `{feature}` is disabled")]
-    FeatureDisabled { feature: String },
-
     /// The conversation is archived and therefore read-only (Track 1.1). Returned by every
-    /// write path into a conversation (messages, reactions, pins, topic, attachments, typing,
-    /// incidents). Surfaced as the `CONVERSATION_ARCHIVED` GraphQL error code.
+    /// write path into a conversation (messages, reactions, pins, topic, attachments, typing). Surfaced as the `CONVERSATION_ARCHIVED` GraphQL error code.
     #[error("conversation is archived")]
     ConversationArchived,
 
@@ -193,13 +179,6 @@ pub fn upstream_message(host_server_id: Option<&str>, origin: Option<&str>) -> S
 }
 
 impl ServiceError {
-    /// Shorthand for [`ServiceError::FeatureDisabled`] from a typed feature.
-    pub fn feature_disabled(feature: rim_core::workspace_feature::model::WorkspaceFeature) -> Self {
-        Self::FeatureDisabled {
-            feature: feature.as_str().to_string(),
-        }
-    }
-
     /// [`ServiceError::UpstreamUnavailable`] for a server whose id is known.
     pub fn upstream(server_id: &str) -> Self {
         Self::UpstreamUnavailable {

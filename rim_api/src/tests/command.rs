@@ -27,7 +27,6 @@ async fn commands_query_returns_command_definitions() {
                 sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                 typed_verb: rim_services::command::verb::TypedVerb::Other,
                 rate_limit_per_minute: None,
-                feature: None,
             }])
         })
     });
@@ -75,7 +74,6 @@ async fn command_query_returns_single_command_definition() {
                 sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                 typed_verb: rim_services::command::verb::TypedVerb::Other,
                 rate_limit_per_minute: None,
-                feature: None,
             }))
         })
     });
@@ -173,7 +171,6 @@ async fn commands_query_returns_arguments_with_full_schema() {
                 sensitivity: rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                 typed_verb: rim_services::command::verb::TypedVerb::Other,
                 rate_limit_per_minute: None,
-                feature: None,
             }])
         })
     });
@@ -260,7 +257,6 @@ async fn command_discover_query_returns_ai_callable_commands() {
                             rim_services::command::sensitivity::CommandSensitivityDto::Safe,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
-                        feature: None,
                     },
                     rim_services::command::dto::CommandDefinitionDto {
                         id: "chat.post_message".to_string(),
@@ -285,7 +281,6 @@ async fn command_discover_query_returns_ai_callable_commands() {
                             rim_services::command::sensitivity::CommandSensitivityDto::Mutating,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
-                        feature: None,
                     },
                 ])
             })

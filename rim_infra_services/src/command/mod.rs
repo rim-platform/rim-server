@@ -31,11 +31,8 @@ use rim_services::command::request::{
 use rim_services::command::sensitivity::{CommandSensitivityDto, sanitize_args_for_audit};
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
-use rim_services::incident::service::IncidentService;
 use rim_services::macro_def::service::MacroService;
 use rim_services::message::service::MessageService;
-use rim_services::oncall::service::OnCallService;
-use rim_services::workspace_feature::service::WorkspaceFeatureService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
@@ -57,15 +54,6 @@ pub struct CommandServices {
     pub user_service: std::sync::Arc<dyn rim_services::user::service::UserService>,
     pub workspace_state_service:
         std::sync::Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
-    /// C1b: `incident.ack`/`incident.escalate` dispatch to the same `IncidentService` methods
-    /// as their GraphQL mutations (unified dispatch, no duplicated logic — §10.1).
-    pub incident_service: std::sync::Arc<dyn IncidentService>,
-    /// C1b: `oncall.who`/`oncall.take_shift` dispatch to the same `OnCallService` methods as
-    /// their GraphQL query/mutation (§10.1).
-    pub oncall_service: std::sync::Arc<dyn OnCallService>,
-    /// Track 0.4: hides feature-gated builtins from `list_commands` and rejects their
-    /// execution with `FeatureDisabled` when the workspace has the feature off.
-    pub workspace_feature_service: std::sync::Arc<dyn WorkspaceFeatureService>,
     /// Track 1.2: moderation builtins (`admin.kick`, `chat.set_slow_mode`, ...) dispatch to it,
     /// and the timeout gate asks it whether the actor is timed out before any Mutating command.
     pub moderation_service:
@@ -205,7 +193,6 @@ impl CommandService for DefaultCommandService {
     ) -> ServiceResult<Vec<CommandDefinitionDto>> {
         let context = query.context.as_ref();
         let mut commands = Self::builtin_commands();
-        self.retain_enabled_features(&mut commands, context).await?;
         let user_commands = self
             .repos
             .user_command_repo

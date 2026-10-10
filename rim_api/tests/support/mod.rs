@@ -488,23 +488,6 @@ pub fn build_test_provider_with(
         custom_emoji_repo: Arc::new(
             rim_infra_db::sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(db.clone()),
         ),
-        incident_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::incident::SeaOrmIncidentRepository::new(db.clone()),
-        ),
-        incident_phase_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::incident_phase::SeaOrmIncidentPhaseRepository::new(
-                db.clone(),
-            ),
-        ),
-        incident_message_tag_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::incident_message_tag::SeaOrmIncidentMessageTagRepository::new(db.clone()),
-        ),
-        ingest_token_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::ingest_token::SeaOrmIngestTokenRepository::new(db.clone()),
-        ),
-        skill_profile_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::skill_profile::SeaOrmSkillProfileRepository::new(db.clone()),
-        ),
         workspace_state_repo: Arc::new(
             rim_infra_db::sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(
                 db.clone(),
@@ -515,51 +498,6 @@ pub fn build_test_provider_with(
         ),
         capability_registry_repo: Arc::new(
             rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(db.clone()),
-        ),
-        on_call_schedule_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::on_call_schedule::SeaOrmOnCallScheduleRepository::new(
-                db.clone(),
-            ),
-        ),
-        rotation_layer_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::on_call_rotation_layer::SeaOrmRotationLayerRepository::new(
-                db.clone(),
-            ),
-        ),
-        rotation_participant_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::on_call_rotation_participant::SeaOrmRotationParticipantRepository::new(
-                db.clone(),
-            ),
-        ),
-        on_call_override_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::on_call_override::SeaOrmOnCallOverrideRepository::new(
-                db.clone(),
-            ),
-        ),
-        escalation_policy_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::escalation_policy::SeaOrmEscalationPolicyRepository::new(
-                db.clone(),
-            ),
-        ),
-        escalation_step_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::escalation_step::SeaOrmEscalationStepRepository::new(
-                db.clone(),
-            ),
-        ),
-        conversation_escalation_policy_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::conversation_escalation_policy::SeaOrmConversationEscalationPolicyRepository::new(
-                db.clone(),
-            ),
-        ),
-        escalation_run_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::escalation_run::SeaOrmEscalationRunRepository::new(
-                db.clone(),
-            ),
-        ),
-        workspace_feature_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::workspace_feature::SeaOrmWorkspaceFeatureRepository::new(
-                db.clone(),
-            ),
         ),
         moderation_repo: Arc::new(
             rim_infra_db::sea_orm_impl::moderation::SeaOrmModerationRepository::new(db.clone()),
@@ -592,10 +530,8 @@ pub fn build_test_provider_with(
         chrono::Duration::days(30),
         observers.clone(),
         Arc::clone(&storage_service),
-        None, // no ingest-token TTL configured for registration tests
         Arc::new(rim_infra_services::email::LogEmailSender),
         None, // no public_base_url configured for registration tests
-        Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new()),
         vec![KEY_LOGIN_AUDIENCE.to_string()],
         rim_infra_services::franking_keys::SharedFrankingKeys::fixed(
             rim_infra_services::franking_keys::FrankingKeys::new(vec![

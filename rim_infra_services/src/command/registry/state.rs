@@ -63,7 +63,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "state.set".to_string(),
@@ -138,7 +137,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "state.delete".to_string(),
@@ -195,7 +193,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Delete,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "state.list".to_string(),
@@ -261,7 +258,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: TypedVerb::Read,
             rate_limit_per_minute: None,
-            feature: None,
         },
         CommandDefinitionDto {
             id: "state.incr".to_string(),
@@ -327,7 +323,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Write,
             rate_limit_per_minute: None,
-            feature: None,
         },
     ]
 }

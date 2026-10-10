@@ -1,7 +1,5 @@
 use async_graphql::{ComplexObject, Context, Enum, Result, SimpleObject};
 
-use super::WorkspaceFeatureState;
-
 /// GraphQL exposure of `rim_core::server_member::model::ServerMemberRole`. Reused (not
 /// duplicated) across every place a member's role needs to cross the wire — `Server.viewerRole`,
 /// `ServerMember.memberRole`, `CreateInviteInput.role`, `setMemberRole`.
@@ -68,30 +66,6 @@ impl Server {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(member.member_role.into())
-    }
-
-    /// Per-workspace optional modules and whether each is on (Track 0.4). One entry per known
-    /// feature, defaults filled in. Resolved with one service call per server, like
-    /// `viewerRole`; `myServers` lists few servers per user, so no DataLoader.
-    async fn features(&self, ctx: &Context<'_>) -> Result<Vec<WorkspaceFeatureState>> {
-        let actor = crate::auth_context::require_actor(ctx)?;
-        let svc =
-            ctx.data::<std::sync::Arc<
-                dyn rim_services::workspace_feature::service::WorkspaceFeatureService,
-            >>()?;
-        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&self.id)?;
-
-        let states = svc
-            .list(
-                rim_services::workspace_feature::command::ListWorkspaceFeaturesQuery {
-                    actor: rim_services::Actor::new(actor),
-                    server_id,
-                },
-            )
-            .await
-            .map_err(crate::errors::map_service_error)?;
-
-        Ok(states.into_iter().map(Into::into).collect())
     }
 }
 

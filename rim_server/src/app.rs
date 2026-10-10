@@ -53,14 +53,8 @@ pub struct AppRuntime {
     pub message_attachment_service:
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
-    pub ingest_token_service: Arc<dyn rim_services::ingest_token::service::IngestTokenService>,
-    pub incident_service: Arc<dyn rim_services::incident::service::IncidentService>,
-    pub workspace_feature_service:
-        Arc<dyn rim_services::workspace_feature::service::WorkspaceFeatureService>,
     pub plugin_bundle_service:
         Arc<dyn rim_services::workspace_plugin::service::PluginBundleService>,
-    pub alert_rate_limiter: Arc<rim_infra_services::AlertRateLimiter>,
-    pub alert_max_body_bytes: usize,
     pub s2s: S2sRuntime,
     /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
@@ -293,7 +287,7 @@ async fn build_s2s(
             identity,
             peers,
             nonces,
-            rate_limiter: Arc::new(rim_infra_services::AlertRateLimiter::new(
+            rate_limiter: Arc::new(rim_infra_services::KeyedRateLimiter::new(
                 60,
                 config.s2s_peer_rate_per_min(),
             )),
@@ -410,13 +404,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         }
     };
 
-    // C1b — single-node in-memory escalation timer wheel (§6). Constructed here (not inside
-    // the provider) so this function can also drive the boot-recovery arm + the polling loop
-    // below, mirroring how `presence_manager`/`typing_tracker` are built here and handed to the
-    // schema as a concrete type alongside their `Arc<dyn ...>` use inside the provider.
-    let escalation_scheduler =
-        Arc::new(rim_infra_services::escalation::InMemoryEscalationScheduler::new());
-
     let franking_key_file = config.franking_key_file();
     let franking_keys = rim_infra_services::franking_keys::load_or_create(
         &franking_key_file,
@@ -444,11 +431,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         chrono::Duration::days(i64::from(config.session_ttl_days)),
         observers,
         Arc::clone(&storage_service),
-        config.ingest_token_ttl_seconds(),
         Arc::clone(&email_sender),
         config.public_base_url(),
-        Arc::clone(&escalation_scheduler)
-            as Arc<dyn rim_services::escalation::scheduler::EscalationScheduler>,
         key_login_audiences,
         franking_keys.clone(),
         FederationHooks {
@@ -462,27 +446,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         },
     ));
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
-
-    // Boot recovery (§6) — extracted into `rim_infra_services::escalation::recover_active_escalation_runs`
-    // so it's independently db-testable without spinning up the whole app runtime.
-    match rim_infra_services::escalation::recover_active_escalation_runs(
-        repos.escalation_run_repo.as_ref(),
-        escalation_scheduler.as_ref(),
-    )
-    .await
-    {
-        Ok(armed) => {
-            tracing::info!(
-                target: "audit",
-                event = "escalation_boot_recovery",
-                armed_count = armed,
-                "re-armed active escalation runs on boot (§6)"
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "boot recovery: failed to list active escalation runs");
-        }
-    }
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
         observers_for_presence,
@@ -554,44 +517,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
-    // Background task: escalation timer driver (§6). Sleeps until the earliest armed deadline
-    // (or a floor of `escalation_timer_resolution_secs` when nothing is armed), fires every due
-    // run through `IncidentService::fire_escalation_step`, and races that sleep against
-    // `notified()` so a newly-armed earlier deadline (or a cancellation) is picked up
-    // immediately rather than after the stale sleep elapses — mirrors the pipeline evaluator's
-    // `tokio::select!` shutdown pattern above.
-    {
-        let scheduler = Arc::clone(&escalation_scheduler);
-        let incident_service_for_driver = service_provider.incident_service();
-        let floor = std::time::Duration::from_secs(config.escalation_timer_resolution_secs());
-        let mut shutdown_rx3 = shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            loop {
-                let sleep_duration =
-                    escalation_sleep_duration(scheduler.next_deadline(), chrono::Utc::now(), floor);
-                tokio::select! {
-                    () = tokio::time::sleep(sleep_duration) => {
-                        let due = scheduler.take_due(chrono::Utc::now());
-                        for run_id in due {
-                            if let Err(e) = incident_service_for_driver.fire_escalation_step(run_id).await {
-                                tracing::error!(error = %e, run_id = %run_id, "escalation step fire failed");
-                            }
-                        }
-                    }
-                    () = scheduler.notified() => {
-                        // Loop again to recompute the deadline against the updated armed set.
-                    }
-                    _ = shutdown_rx3.changed() => {
-                        tracing::info!("escalation driver: shutdown signal received");
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    // Background tasks: notification digest and retention (Track 1.3), next to the escalation
-    // driver and under the same single-scheduler-node assumption. The jobs live in
+    // Background tasks: notification digest and retention (Track 1.3), assuming a single
+    // scheduler node. The jobs live in
     // `rim_infra_services::notification` behind `NotificationJobs`; this loop only times them.
     // The hourly retention tick also purges MLS rows the encryption retention rules let go.
     {
@@ -758,19 +685,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let message_attachment_service = service_provider.message_attachment_service();
     let moderation_service = service_provider.moderation_service();
-    let ingest_token_service = service_provider.ingest_token_service();
-    let incident_service = service_provider.incident_service();
-    let workspace_feature_service = service_provider.workspace_feature_service();
     let plugin_bundle_service = service_provider.plugin_bundle_service();
-
-    // Track B2 — alert-ingest rate limiting is keyed per ingest-token id, not IP (a token is
-    // the trusted principal here; see `AlertRateLimiter`'s doc comment). Window is fixed at
-    // 60s; the configured `alert_rate_limit_per_min` is the per-window request cap.
-    let alert_rate_limiter = Arc::new(rim_infra_services::AlertRateLimiter::new(
-        60,
-        config.alert_rate_limit_per_min(),
-    ));
-    let alert_max_body_bytes = config.alert_max_body_bytes();
 
     // ── Registration mode boot-time validation (§6.3) ──────────────────────
     let registration_mode = config.registration_mode().map_err(std::io::Error::other)?;
@@ -850,12 +765,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         storage_service,
         message_attachment_service,
         moderation_service,
-        ingest_token_service,
-        incident_service,
-        workspace_feature_service,
         plugin_bundle_service,
-        alert_rate_limiter,
-        alert_max_body_bytes,
         s2s,
         db: raw_db_for_tasks,
         shutdown_tx,
@@ -920,41 +830,6 @@ async fn run_relay_cleanup(
 /// How often expired notifications (older than 90 days) are purged: hourly.
 const NOTIFICATION_RETENTION_INTERVAL_SECS: u64 = 60 * 60;
 
-/// Computes how long the escalation timer driver should sleep before its
-/// next wakeup.
-///
-/// Three cases:
-/// - No run armed (`next_deadline` is `None`): sleep for the `floor` (the
-///   configured `escalation_timer_resolution_secs`), then loop and re-check.
-/// - A run is already past due (`deadline <= now`): sleep zero, fire
-///   immediately.
-/// - A run is armed in the future: sleep until that deadline, but capped at
-///   `floor`. This cap is a correctness requirement, not just tidiness — the
-///   driver races this sleep against `scheduler.notified()` (see the
-///   `tokio::select!` call site) so a *newly*-armed, earlier deadline is
-///   normally picked up instantly. But if the narrow window between reading
-///   `next_deadline()` and polling `notified()` misses a fresh `arm()` call
-///   (e.g. a brand-new incident declared while an older, far-future run is
-///   already armed), the driver would otherwise sleep until that older
-///   deadline — which could be minutes away — before re-checking. Capping at
-///   `floor` bounds that worst case to `floor` (~5s by default) instead.
-fn escalation_sleep_duration(
-    next_deadline: Option<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
-    floor: std::time::Duration,
-) -> std::time::Duration {
-    match next_deadline {
-        Some(deadline) => {
-            if deadline <= now {
-                std::time::Duration::ZERO
-            } else {
-                (deadline - now).to_std().unwrap_or(floor).min(floor)
-            }
-        }
-        None => floor,
-    }
-}
-
 /// Idempotent startup seeding for the capability registry.
 ///
 /// Runs synchronously before the HTTP listener binds — see the
@@ -987,60 +862,4 @@ async fn seed_builtin_capabilities(
         "seeded builtin capabilities into registry (Phase 1 §3.3)"
     );
     Ok(())
-}
-
-#[cfg(test)]
-mod escalation_sleep_duration_tests {
-    use super::escalation_sleep_duration;
-    use chrono::Duration as ChronoDuration;
-    use std::time::Duration;
-
-    const FLOOR: Duration = Duration::from_secs(5);
-
-    #[test]
-    fn no_run_armed_sleeps_the_floor() {
-        let now = chrono::Utc::now();
-        assert_eq!(escalation_sleep_duration(None, now, FLOOR), FLOOR);
-    }
-
-    #[test]
-    fn past_due_deadline_sleeps_zero() {
-        let now = chrono::Utc::now();
-        let deadline = now - ChronoDuration::seconds(1);
-        assert_eq!(
-            escalation_sleep_duration(Some(deadline), now, FLOOR),
-            Duration::ZERO
-        );
-    }
-
-    #[test]
-    fn equal_to_now_sleeps_zero() {
-        let now = chrono::Utc::now();
-        assert_eq!(
-            escalation_sleep_duration(Some(now), now, FLOOR),
-            Duration::ZERO
-        );
-    }
-
-    #[test]
-    fn near_deadline_sleeps_until_deadline() {
-        let now = chrono::Utc::now();
-        let deadline = now + ChronoDuration::seconds(2);
-        let sleep = escalation_sleep_duration(Some(deadline), now, FLOOR);
-        // Should be ~2s, well under the 5s floor, and NOT capped.
-        assert!(sleep >= Duration::from_millis(1900) && sleep <= Duration::from_secs(2));
-    }
-
-    /// This is the regression test for iron-man's C1b-review hardening: a
-    /// deadline far in the future (minutes away) must NOT produce a sleep
-    /// longer than `floor`. Without the `.min(floor)` cap, a missed
-    /// `notified()` window for a freshly-armed *earlier* run would leave the
-    /// driver asleep until this far-future deadline instead of re-checking
-    /// within `floor`.
-    #[test]
-    fn far_future_deadline_is_capped_at_floor() {
-        let now = chrono::Utc::now();
-        let deadline = now + ChronoDuration::minutes(10);
-        assert_eq!(escalation_sleep_duration(Some(deadline), now, FLOOR), FLOOR);
-    }
 }

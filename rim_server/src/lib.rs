@@ -4,7 +4,6 @@
 //! consumers of the public modules.
 
 pub mod abuse_cmd;
-mod alert_handlers;
 pub mod app;
 pub mod audit_cmd;
 pub mod bootstrap_cmd;

@@ -1,7 +1,6 @@
 use std::fmt;
 
 use rim_core::command::model::UserCommandId;
-use rim_core::workspace_feature::model::WorkspaceFeature;
 
 use crate::command::confirmation::ConfirmationChallengeDto;
 use crate::command::sensitivity::CommandSensitivityDto;
@@ -125,13 +124,6 @@ pub struct CommandDefinitionDto {
     /// unlimited. Enforced by the rate-limit gate in `execute_command` AFTER
     /// capability + confirmation gates. Single-node only in Phase 5.
     pub rate_limit_per_minute: Option<u32>,
-
-    /// Track 0.4: the optional workspace module this command belongs to. `None` for commands
-    /// that are always available (every non-incident builtin, user commands, macros, plugins).
-    /// When `Some`, `list_commands` hides the command and `execute_command` rejects it with
-    /// `ServiceError::FeatureDisabled` unless the feature is enabled for the context's
-    /// workspace; without a workspace context the command is hidden and rejected.
-    pub feature: Option<WorkspaceFeature>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,7 +277,6 @@ impl UserCommandDto {
             sensitivity,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
-            feature: None,
         }
     }
 }

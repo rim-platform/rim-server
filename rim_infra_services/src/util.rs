@@ -9,8 +9,6 @@ use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::{MemberStanding, ServerMember, ServerMemberRole};
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
-use rim_core::workspace_feature::model::WorkspaceFeature;
-use rim_core::workspace_feature::repository::WorkspaceFeatureRepository;
 use rim_services::{ServiceError, ServiceResult};
 
 /// Log the parser's description of a malformed statement; the client sees only the error's
@@ -92,7 +90,7 @@ pub async fn ensure_conversation_readable_with_standing(
 
 /// [`ensure_conversation_member_access`] plus [`ensure_not_archived`] and
 /// [`ensure_not_timed_out`]: the gate for every write into a conversation (messages, reactions,
-/// pins, topic, attachments, typing, incidents). Archived conversations stay readable through
+/// pins, topic, attachments, typing). Archived conversations stay readable through
 /// [`ensure_conversation_member_access`]; a timed-out member keeps reading.
 pub async fn ensure_conversation_writable(
     repos: ConversationAccessRepos<'_>,
@@ -255,10 +253,9 @@ pub async fn ensure_server_owner(
     Ok(())
 }
 
-/// Gates on `member_role ∈ {Owner, Moderator}` — the edit gate for server-scoped resources that
-/// don't have their own per-channel moderator concept (on-call schedules, escalation policies:
-/// see spec §10, iron-man's ruling). Per-channel moderator roles do NOT apply here since these
-/// resources are server-scoped, so the server role alone governs.
+/// Gates on `member_role ∈ {Owner, Moderator}` — the edit gate for server-scoped actions that
+/// have no per-channel moderator concept (such as archiving a channel), so the server role alone
+/// governs.
 pub async fn ensure_server_owner_or_moderator(
     server_member_repo: &dyn ServerMemberRepository,
     server_id: ServerId,
@@ -354,23 +351,6 @@ pub async fn ensure_conversation_access_as(
         );
     }
     Ok(())
-}
-
-/// Feature gate (Track 0.4): `Err(FeatureDisabled)` unless `feature` is enabled for
-/// `server_id`. A missing row resolves to the feature's default.
-pub async fn ensure_feature_enabled(
-    workspace_feature_repo: &dyn WorkspaceFeatureRepository,
-    server_id: ServerId,
-    feature: WorkspaceFeature,
-) -> ServiceResult<()> {
-    if workspace_feature_repo
-        .is_enabled(server_id, feature)
-        .await?
-    {
-        Ok(())
-    } else {
-        Err(ServiceError::feature_disabled(feature))
-    }
 }
 
 #[cfg(test)]
