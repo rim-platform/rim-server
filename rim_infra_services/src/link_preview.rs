@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use rim_core::link_preview::model::NewLinkPreview;
 use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::message::model::MessageId;
+use rim_core::server_feature::model::ServerFeature;
+use rim_services::feature::service::FeatureGate;
 use rim_services::link_preview::dto::LinkPreviewDto;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::{ServiceError, ServiceResult};
@@ -26,6 +28,9 @@ pub struct DefaultLinkPreviewService {
     /// `None` only if the hardened client failed to build; every fetch is then refused rather
     /// than falling back to an unguarded default client.
     http_client: Option<reqwest::Client>,
+    /// `None` keeps previews on; otherwise nothing is fetched or served while
+    /// [`ServerFeature::LinkPreviews`] is not enabled.
+    features: Option<Arc<dyn FeatureGate>>,
 }
 
 impl DefaultLinkPreviewService {
@@ -59,7 +64,20 @@ impl DefaultLinkPreviewService {
         Self {
             link_preview_repo,
             http_client,
+            features: None,
         }
+    }
+
+    /// Fetch and serve previews only while the instance has link previews enabled.
+    pub fn with_feature_gate(mut self, features: Arc<dyn FeatureGate>) -> Self {
+        self.features = Some(features);
+        self
+    }
+
+    fn enabled(&self) -> bool {
+        self.features
+            .as_ref()
+            .is_none_or(|gate| gate.state(ServerFeature::LinkPreviews).is_enabled())
     }
 }
 
@@ -229,6 +247,9 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         message_id: MessageId,
         urls: Vec<String>,
     ) -> ServiceResult<Vec<LinkPreviewDto>> {
+        if !self.enabled() {
+            return Ok(Vec::new());
+        }
         let safe_urls: Vec<&String> = urls.iter().filter(|u| is_url_safe(u)).collect();
         let urls_to_fetch = &safe_urls[..safe_urls.len().min(MAX_PREVIEWS_PER_MESSAGE)];
 
@@ -274,6 +295,9 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         &self,
         message_ids: &[MessageId],
     ) -> ServiceResult<HashMap<MessageId, Vec<LinkPreviewDto>>> {
+        if !self.enabled() {
+            return Ok(HashMap::new());
+        }
         let map = self.link_preview_repo.get_for_messages(message_ids).await?;
 
         Ok(map
@@ -557,5 +581,27 @@ mod tests {
             accepted.is_err(),
             "no connection may reach the loopback listener"
         );
+    }
+
+    /// A disabled feature fetches nothing and serves no stored preview: the unprimed repository
+    /// mock panics on any call.
+    #[tokio::test]
+    async fn a_disabled_feature_fetches_and_serves_nothing() {
+        use rim_core::link_preview::repository::MockLinkPreviewRepository;
+
+        let gate =
+            crate::feature_gate::InstanceFeatureGate::new(&[ServerFeature::LinkPreviews], &[]);
+        let svc = DefaultLinkPreviewService::new(Arc::new(MockLinkPreviewRepository::new()))
+            .with_feature_gate(Arc::new(gate));
+        let fetched = svc
+            .fetch_and_store(MessageId::new(), vec!["https://example.com/".to_string()])
+            .await
+            .expect("fetch");
+        assert!(fetched.is_empty());
+        let served = svc
+            .get_previews_for_messages(&[MessageId::new()])
+            .await
+            .expect("serve");
+        assert!(served.is_empty());
     }
 }
