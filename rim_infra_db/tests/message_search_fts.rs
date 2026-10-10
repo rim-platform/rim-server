@@ -1,9 +1,9 @@
 //! DB-integration tests for [`SeaOrmMessageRepository::search_messages_fts`] — the Postgres
-//! full-text-search backing `searchMessages` (Track B1). Run with:
+//! full-text-search backing `searchMessages`. Run with:
 //! `cargo test -p rim_infra_db --features db-tests -- --test-threads=1` (requires `DATABASE_URL`;
 //! panics loudly if unset — see `support::db_conn`).
 //!
-//! Covers, per the implementation spec:
+//! Covers:
 //! 1. Stemmed matching (proves tsvector, not LIKE).
 //! 2. Relevance ranking is present and results are ordered by recency, not rank.
 //! 3. **Permission isolation** — the repository never returns a message from a conversation
@@ -141,8 +141,8 @@ async fn search_messages_fts_ranks_matches_and_orders_by_recency() {
         "every match must have a positive rank: {hits:?}"
     );
     // Ordered by (sent_at DESC, id DESC) — recency — even though `newer` has a much higher
-    // rank (repeats "deploy" 3x) than `older`. This is the load-bearing property from spec
-    // §6: relevance is informational, never the sort key.
+    // rank (repeats "deploy" 3x) than `older`. Relevance is informational, never the sort
+    // key.
     assert_eq!(
         hits.iter().map(|h| h.message.id).collect::<Vec<_>>(),
         vec![newer.id, older.id],
@@ -435,10 +435,9 @@ async fn search_messages_fts_excludes_deleted_messages() {
     );
 }
 
-/// `Before` (toward newer) selects the rows nearest the cursor (finding A-H1), still returned
+/// `Before` (toward newer) selects the rows nearest the cursor, still returned
 /// `(sent_at DESC, id DESC)`, so the `limit + 1` overflow row is the **first** one — the newest,
-/// farthest from the cursor. The pre-fix query returned the newest rows overall and skipped the
-/// ones just after the cursor.
+/// farthest from the cursor — and the rows just after the cursor are not skipped.
 #[tokio::test]
 async fn search_messages_fts_before_selects_rows_nearest_the_cursor() {
     let ctx = support::TestCtx::new().await;

@@ -4,7 +4,7 @@ use crate::m20251029_222439_create_server::Server;
 use crate::m20251122_154540_create_conversation::Conversation;
 use sea_orm_migration::{prelude::*, schema::*};
 
-/// Moderation state (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`).
+/// Moderation state.
 ///
 /// - `server_ban` — one row per banned user and workspace, primary key `(server_id, user_id)`.
 ///   A ban with `expires_at` in the past is ignored; `unban` deletes the row.

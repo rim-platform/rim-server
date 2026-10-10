@@ -246,7 +246,7 @@ impl ModerationRepository for SeaOrmModerationRepository {
         if let Some(cursor) = cursor {
             let cursor_id: Uuid = cursor.report_id.into();
             let cursor_ts: DateTimeWithTimeZone = cursor.created_at.into();
-            // DESC endpoint (docs/pagination.md): `Before` is newer than the cursor, `After`
+            // DESC endpoint: `Before` is newer than the cursor, `After`
             // is older.
             let cond = match dir {
                 PageDir::Before => Condition::any()

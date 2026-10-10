@@ -1,6 +1,6 @@
 #![cfg(feature = "db-tests")]
 
-//! Track 1.2: bans, timeouts, reports, slow mode and the role migration data step against a
+//! Bans, timeouts, reports, slow mode and the role migration data step against a
 //! live Postgres. Destructive for the shared test database: run single-threaded.
 
 mod support;

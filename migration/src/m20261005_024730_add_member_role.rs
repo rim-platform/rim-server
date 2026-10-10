@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-/// A real `member` role and guest invites (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`).
+/// A real `member` role and guest invites.
 ///
 /// - `server_member_role` gains `member` (between `moderator` and `guest`), and
 ///   `server_member.member_role` now defaults to `member`.
@@ -35,8 +35,8 @@ const UP_SQL: &[&str] = &[
     "ALTER TABLE invite ADD COLUMN role server_member_role NOT NULL DEFAULT 'member'",
 ];
 
-/// Reverts to the three-value enum. `member` and `guest` both become `guest` (the pre-Track-1.2
-/// meaning of `guest`: an ordinary member), so the role distinction is lost on the way down.
+/// Reverts to the three-value enum. `member` and `guest` both become `guest` (which means an
+/// ordinary member in the three-value enum), so the role distinction is lost on the way down.
 const DOWN_SQL: &[&str] = &[
     "ALTER TABLE invite DROP COLUMN role",
     "CREATE TYPE server_member_role_v1 AS ENUM ('owner', 'moderator', 'guest')",

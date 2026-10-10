@@ -192,12 +192,8 @@ async fn typed_verb_filter_returns_matching_rows_only() {
     assert_eq!(unfiltered.items.len(), 3);
 }
 
-/// P6-M1 regression: all 7 `AuditOutcome` variants must be accepted by the
-/// DB `outcome` CHECK constraint after migration `m20260427_000001_audit_outcome_widen_check`.
-///
-/// Before the fix, `rate_limited`, `step_error`, and `macro_partial_failure`
-/// violated the 4-value CHECK in the original migration and were silently
-/// dropped via the "audit write failed" fallback.
+/// All 7 `AuditOutcome` variants are accepted by the DB `outcome` CHECK constraint. A variant
+/// the constraint rejected would be dropped silently via the "audit write failed" fallback.
 #[tokio::test]
 async fn all_audit_outcome_variants_accepted_by_db_constraint() {
     let ctx = support::TestCtx::new().await;
@@ -242,11 +238,8 @@ async fn all_audit_outcome_variants_accepted_by_db_constraint() {
     );
 }
 
-/// Regression test for the missing `parent_audit_id` column (Track A item 4,
-/// 2026-07-08, migration `m20260708_220447_add_command_audit_log_parent_audit_id`).
-/// Pre-fix, this insert failed with `column "parent_audit_id" does not exist`
-/// because the column was declared on the entity and written by the
-/// repository but never created by any migration.
+/// The `parent_audit_id` column the entity declares and the repository writes exists in the
+/// schema, so an insert carrying it succeeds.
 #[tokio::test]
 async fn audit_insert_roundtrips_parent_audit_id() {
     let ctx = support::TestCtx::new().await;

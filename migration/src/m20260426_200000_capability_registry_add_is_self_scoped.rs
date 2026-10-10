@@ -1,18 +1,15 @@
-//! P6-FU5 — Black Widow H2 high-latent finding closure.
-//!
 //! Adds `is_self_scoped BOOL NOT NULL DEFAULT false` to `capability_registry`.
 //!
-//! **Why**: `membership_holds(actor, None)` previously short-circuited to
-//! `Ok(true)` unconditionally when `workspace_id` is absent. A future builtin
-//! requiring a workspace-scoped cap (e.g. `chat.read`) dispatched without
-//! workspace context would have silently bypassed the membership check.
+//! **Why**: without the flag, a capability check with no `workspace_id` cannot tell a
+//! self-scoped capability from a workspace-scoped one, so a workspace-scoped cap (e.g.
+//! `chat.read`) dispatched without workspace context would skip the membership check.
 //!
 //! **What this column encodes**: a self-scoped capability (e.g.
 //! `audit.read.self`) is one whose semantics do NOT require a workspace
 //! context — the actor can exercise it purely on their own identity. All
 //! other capabilities are workspace-scoped and MUST be called with a
-//! `workspace_id`; `CapabilityService::check()` now enforces this via the
-//! DB-stored flag rather than a hardcoded static set.
+//! `workspace_id`; `CapabilityService::check()` enforces this via the
+//! DB-stored flag.
 //!
 //! **Backfill**: `audit.read.self` is the only builtin that is genuinely
 //! self-scoped. Conservative default of `false` forces every other row to

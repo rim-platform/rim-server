@@ -344,9 +344,8 @@ async fn set_has_attachments_updates_flag() {
     assert!(!fetched.has_attachments);
 }
 
-/// `Before` pages hold the rows adjacent to the cursor (finding A-H1): walking `Before` from one
-/// end of the list, following `next`, visits every other row exactly once, nearest first. The
-/// pre-fix query returned the far end of the range and skipped the rows next to the cursor.
+/// `Before` pages hold the rows adjacent to the cursor: walking `Before` from one end of the list,
+/// following `next`, visits every other row exactly once, nearest first.
 #[tokio::test]
 async fn before_pagination_returns_rows_adjacent_to_cursor() {
     let ctx = support::TestCtx::new().await;

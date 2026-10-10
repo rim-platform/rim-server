@@ -306,7 +306,7 @@ async fn list_channels_for_user_paginates_and_orders_oldest_first() {
     assert_eq!(after.items.len(), 1);
 }
 
-/// `Before` pages hold the inbox conversations adjacent to the cursor (finding A-H1). Endpoint
+/// `Before` pages hold the inbox conversations adjacent to the cursor. Endpoint
 /// order is `last_activity_at DESC`, so `Before` walks toward more recently active ones.
 #[tokio::test]
 async fn list_inbox_before_returns_conversations_adjacent_to_cursor() {
@@ -369,7 +369,7 @@ async fn list_inbox_before_returns_conversations_adjacent_to_cursor() {
     assert_eq!(page2.prev, Some(cursor_of(3)));
 }
 
-/// `Before` pages hold the channels adjacent to the cursor (finding A-H1). Endpoint order is
+/// `Before` pages hold the channels adjacent to the cursor. Endpoint order is
 /// `created_at ASC`, so `Before` walks toward older channels.
 #[tokio::test]
 async fn list_channels_before_returns_channels_adjacent_to_cursor() {
@@ -440,7 +440,7 @@ async fn list_channels_before_returns_channels_adjacent_to_cursor() {
     assert_eq!(page2.prev, Some(cursor_of(1)));
 }
 
-// ── Track 1.1: private channels, joined filter, archive, accessible ids, back-fill ──
+// ── Private channels, joined filter, archive, accessible ids, back-fill ──
 
 async fn channel(
     repo: &SeaOrmConversationRepository,
@@ -646,8 +646,8 @@ async fn accessible_ids_include_private_channels_only_for_members() {
     assert_eq!(carol_ids, expected);
 }
 
-/// The Track 1.1 migration data step: every workspace member becomes a member of every channel
-/// of their workspace; existing rows, other workspaces and non-channels are untouched.
+/// The channel-membership migration data step: every workspace member becomes a member of every
+/// channel of their workspace; existing rows, other workspaces and non-channels are untouched.
 #[tokio::test]
 async fn migration_backfill_makes_workspace_members_channel_members() {
     let ctx = support::TestCtx::new().await;
