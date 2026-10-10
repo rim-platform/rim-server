@@ -19,7 +19,7 @@ RIM_KEY_LOGIN_AUDIENCES=localhost:8080,127.0.0.1:8080 \
 cargo run -p rim_server
 ```
 
-Open registration makes signup easy; the web app also needs the CORS origin of the Vite dev
+Both audience variables matter: a non-loopback bind without `RIM_KEY_LOGIN_AUDIENCES` or `RIM_PUBLIC_BASE_URL` refuses to start (rim-server #74). The first start writes `data/server-key.json`, `data/franking-key.json` and a recovery key file it tells you to move away. Open registration makes signup easy; the web app also needs the CORS origin of the Vite dev
 server allowed (`cors_allowed_origin` in `rim_server/src/config.rs`; `http://localhost:1420`).
 Keep `psql` open on `rim_dev` for the server-side checks below.
 
