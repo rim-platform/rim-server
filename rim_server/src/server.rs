@@ -8,6 +8,7 @@ use crate::file_handlers::{
 use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
 };
+use crate::health::{ReadinessProbe, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
@@ -100,6 +101,11 @@ pub async fn serve(
     let alert_rate_limiter = runtime.alert_rate_limiter;
     let alert_max_body_bytes =
         crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
+    let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
+        db: runtime.db.clone(),
+        server_key_file: config.key_files().key_file,
+        franking_key_file: config.franking_key_file(),
+    });
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
@@ -193,16 +199,20 @@ pub async fn serve(
         }
 
         // Server-to-server routes sit outside CORS: peers send no `Origin`, and the discovery
-        // document is readable from any origin.
+        // document is readable from any origin. The health probes sit there too: no session,
+        // no CSRF, no `Origin` needed.
         App::new()
             .wrap(actix_web::middleware::from_fn(crate::metrics::record_http))
             .service(
                 web::resource("/.well-known/rim-server")
                     .route(web::get().to(crate::s2s::discovery::handle)),
             )
+            .service(web::resource("/healthz").route(web::get().to(crate::health::healthz)))
+            .service(web::resource("/readyz").route(web::get().to(crate::health::readyz)))
             .service(web::resource("/s2s/v1/{tail:.*}").to(crate::s2s::handle))
             .service(api)
             .app_data(web::Data::new(s2s_state.clone()))
+            .app_data(web::Data::new(Arc::clone(&readiness)))
             .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))

@@ -10,13 +10,23 @@ fn initialize() -> Option<LoggingHandle> {
     // audit-log background appender alive (P4-A1 §0.5 sink). Dropping it
     // would silently drop pending audit lines.
     let handle = init_tracing_json().ok();
-    tracing::info!("Initializing application...");
+    tracing::info!(
+        version = config::VERSION,
+        "Starting rim-server {}",
+        config::VERSION
+    );
     tracing::info!("Initializing DB");
     handle
 }
 
 #[actix_web::main]
 async fn main() {
+    // Answered before logging starts, so the output is the version line alone.
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("{}", config::version_line());
+        return;
+    }
+
     // Bind the logging handle for the entire lifetime of `main` — must
     // outlive every `tracing::info!(target: "audit", …)` emit and
     // remain alive until after any error is printed so the final log
