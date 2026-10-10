@@ -75,11 +75,19 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
     );
 
     std::fs::remove_file(node.data.path().join("franking-key.json")).expect("remove key");
-    let readyz = http
-        .get(format!("{}/readyz", node.origin))
-        .send()
-        .await
-        .expect("readyz");
+    // A readiness result is reused for one second, so the failure shows once it expires.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let readyz = loop {
+        let readyz = http
+            .get(format!("{}/readyz", node.origin))
+            .send()
+            .await
+            .expect("readyz");
+        if readyz.status() != StatusCode::OK || std::time::Instant::now() > deadline {
+            break readyz;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
     assert_eq!(readyz.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body: Value = readyz.json().await.expect("readyz json");
     assert_eq!(body["status"], "fail");

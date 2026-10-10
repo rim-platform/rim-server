@@ -1,28 +1,4 @@
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
-
-/// Source of a registered capability — controls who is treated as
-/// "holding" it inside [`crate::capability::repository::CapabilityRegistryRepository`].
-///
-/// Phase 1 policy (per design doc §3.3):
-/// - `Builtin` — every authenticated workspace member holds this.
-/// - `Plugin` — held only by actors whom the plugin's grant store explicitly
-///   accepts. No grant store ships in Phase 1, so `Plugin` keys deny by
-///   default until Phase 5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilitySourceKind {
-    Builtin,
-    Plugin,
-}
-
-impl CapabilitySourceKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CapabilitySourceKind::Builtin => "builtin",
-            CapabilitySourceKind::Plugin => "plugin",
-        }
-    }
-}
 
 /// A row from the `capability_registry` table — the source-of-truth for
 /// "does this capability key exist at all?". Unknown keys deny by default
@@ -31,12 +7,9 @@ impl CapabilitySourceKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredCapability {
     pub capability_key: String,
-    pub source_kind: CapabilitySourceKind,
-    /// Populated only when `source_kind = Plugin`.
-    pub plugin_id: Option<Uuid>,
     pub registered_at: DateTime<Utc>,
     /// Soft-retire timestamp. `None` ⇒ active. The runtime gate treats a
-    /// row with `retired_at` set as unregistered so retiring a plugin's caps cleanly
+    /// row with `retired_at` set as unregistered so retiring a capability cleanly
     /// closes the gate without touching audit history.
     pub retired_at: Option<DateTime<Utc>>,
     /// When `true` the capability is self-scoped: it does not require a

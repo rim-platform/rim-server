@@ -7,7 +7,7 @@ use crate::file_handlers::{
 use crate::graphql_support::{
     apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
 };
-use crate::health::{ReadinessProbe, SystemProbe};
+use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
@@ -77,7 +77,7 @@ pub async fn serve(
         "Configuration loaded"
     );
     let enable_graphiql = config.enable_graphiql;
-    let cors_allowed_origin = config.cors_allowed_origin.clone();
+    let allowed_origins = crate::origin::AllowedOrigins::from_config(config);
     let handler_config = HandlerConfig {
         session_ttl_days: config.session_ttl_days,
         trust_forwarded_headers: config.trust_forwarded_headers(),
@@ -95,11 +95,11 @@ pub async fn serve(
     let moderation_service = runtime.moderation_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
     let feature_gate = runtime.feature_gate;
-    let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
+    let readiness = web::Data::new(ReadinessCache::new(Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
         franking_key_file: config.franking_key_file(),
-    });
+    })));
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
@@ -115,27 +115,7 @@ pub async fn serve(
         let schema = schema.clone();
         let handler_cfg = handler_config.clone();
 
-        let cors = match cors_allowed_origin {
-            Some(ref origin) => actix_cors::Cors::default()
-                .allowed_origin(origin)
-                .allowed_methods(vec!["GET", "POST", "OPTIONS"])
-                .allowed_headers(vec![
-                    "Content-Type",
-                    "Authorization",
-                    "x-csrf-token",
-                    "x-request-id",
-                ])
-                .supports_credentials()
-                .max_age(3600),
-            None => {
-                // No CORS origin configured: block all cross-origin requests.
-                // The browser will deny requests from any non-same-origin page
-                // because no Access-Control-Allow-Origin header is emitted.
-                actix_cors::Cors::default()
-                    .allowed_origin("https://0.0.0.0")
-                    .block_on_origin_mismatch(true)
-            }
-        };
+        let cors = allowed_origins.clone().cors();
 
         let mut api = web::scope("")
             .wrap(cors)
@@ -191,7 +171,7 @@ pub async fn serve(
             .service(web::resource("/s2s/v1/{tail:.*}").to(crate::s2s::handle))
             .service(api)
             .app_data(web::Data::new(s2s_state.clone()))
-            .app_data(web::Data::new(Arc::clone(&readiness)))
+            .app_data(readiness.clone())
             .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
