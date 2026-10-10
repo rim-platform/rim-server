@@ -1334,6 +1334,33 @@ async fn listed(person: &Person, direct: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `person` sees of `conversation` in `direct`: its unread count, its notifications, and
+/// the notification bell's count.
+async fn signals(person: &Person, direct: &str, conversation: &str) -> (i64, usize, i64) {
+    let data = person
+        .ok(
+            "query($s: ID!) { unreadCounts(workspaceId: $s) { conversationId count } \
+             myNotifications(serverId: $s, dir: AFTER, limit: 50) { items { conversationId } } \
+             myUnreadNotificationCount(serverId: $s) }",
+            json!({ "s": direct }),
+        )
+        .await;
+    let unread = data["unreadCounts"]
+        .as_array()
+        .expect("counts")
+        .iter()
+        .find(|c| c["conversationId"] == json!(conversation))
+        .map_or(0, |c| c["count"].as_i64().expect("count"));
+    let notifications = data["myNotifications"]["items"]
+        .as_array()
+        .expect("notifications")
+        .iter()
+        .filter(|n| n["conversationId"] == json!(conversation))
+        .count();
+    let bell = data["myUnreadNotificationCount"].as_i64().expect("bell");
+    (unread, notifications, bell)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
     let (a, b) = relays().await;
@@ -1402,6 +1429,73 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         "a request is not a live conversation"
     );
 
+    // Bob writes before Alice decides: her notification is stored, but her unread count, her
+    // notifications and the bell leave the conversation out until she accepts.
+    let claimed = bob
+        .remote(
+            &a,
+            CLAIM,
+            json!({ "input": {
+                "serverId": direct,
+                "conversationId": from_bob,
+                "devices": [{ "principalId": alice.principal(), "deviceId": alice.device_id() }],
+            } }),
+        )
+        .await["claimMlsKeyPackages"]
+        .clone();
+    let alice_principal = alice.principal();
+    let (commit, welcome) = bob.mls.create_group(
+        from_bob.parse().expect("uuid"),
+        &[(
+            alice_principal.as_str(),
+            alice.device_id(),
+            claimed[0]["keyPackage"].as_str().expect("package"),
+        )],
+    );
+    bob.remote(
+        &a,
+        SUBMIT,
+        json!({ "input": {
+            "serverId": direct, "conversationId": from_bob, "incarnation": 1, "epoch": 0,
+            "cipherSuite": 0x004f, "commit": commit, "welcome": welcome,
+        } }),
+    )
+    .await;
+    bob.mls.merge_pending();
+    let message_id = Uuid::now_v7();
+    let envelope = bob.mls.encrypt(
+        message_id,
+        &content(message_id, 0, "hello", &[]),
+        [7; 32],
+        &[],
+    );
+    bob.remote(
+        &a,
+        SEND_ENCRYPTED,
+        json!({ "input": { "serverId": direct, "conversationId": from_bob, "messageId": message_id, "envelope": envelope } }),
+    )
+    .await;
+    let alice_id = user_id(&a, &alice.principal()).await;
+    eventually("Alice's notification row", || async {
+        let row = a
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS n FROM user_notification WHERE user_id = $1 AND message_id = $2",
+                [Uuid::from(alice_id).into(), message_id.into()],
+            ))
+            .await
+            .expect("query")
+            .expect("row");
+        (row.try_get::<i64>("", "n").expect("n") == 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        signals(&alice, &direct, &from_bob).await,
+        (0, 0, 0),
+        "a pending request adds no unread count and no notification"
+    );
+
     // Dave, her contact, starts one too: it is live at once.
     let from_dave = dave.remote(&a, CREATE, create_with_alice).await["createConversation"]["id"]
         .as_str()
@@ -1427,6 +1521,11 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     assert!(listed(&alice, &direct).await.contains(&from_bob));
+    assert_eq!(
+        signals(&alice, &direct, &from_bob).await,
+        (1, 1, 1),
+        "an accepted conversation counts"
+    );
 
     a.stop().await;
     b.stop().await;

@@ -581,8 +581,10 @@ items of any other conversation are refused.
 When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
 its creator is someone else, from another relay or not), the home files its own `DmInvite` for
 Bob through the same rule instead of delivering it. The invite and the conversation's events are
-held as above, and until Bob accepts, the conversation is left out of his `inboxConversations` and
-its events out of his `workspaceEvents`; ignoring keeps it out, and so does blocking its creator.
+held as above, and until Bob accepts, the conversation is left out of his `inboxConversations`,
+its events out of his `workspaceEvents`, and its notifications, mentions and unread messages out
+of his `myNotifications`, `myUnreadNotificationCount`, `myMentions`, `unreadCounts` and email
+digest; ignoring keeps it out, and so does blocking its creator.
 Once accepted it is an ordinary conversation of the space he uses directly.
 
 | Action | Effect |

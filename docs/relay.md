@@ -83,8 +83,10 @@ has no invite for are refused (`not_subscribed`), so a host cannot skip the inbo
 The same rule covers conversations of this server's own direct space whose creator is someone
 else: a person from another relay creating a DM with a local user through the forward path, or a
 local stranger. The server files its own invite for the local member; until they accept, the
-conversation is left out of their `inboxConversations` and its events out of their
-`workspaceEvents`, and its first events are held with the request. This needs
+conversation is left out of their `inboxConversations`, its events out of their
+`workspaceEvents`, and its notifications, mentions and unread counts out of the notification
+list, the bell, `myMentions`, `unreadCounts` and the email digest; its first events are held with
+the request. Everything appears once they accept. This needs
 server-to-server traffic to be on; with it off, conversations in the direct space are live at
 once.
 
