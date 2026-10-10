@@ -147,7 +147,10 @@ Point desktop **A** (Ada) at `http://127.0.0.1:8080` and desktop **B** (Bob) at 
 | 6.7 | Stop server B (Bob's relay) while B is in Ada's workspace; wait a minute | B offers **Connect directly to <A>** with the IP notice; after accepting, B keeps reading and sending under the "Connected directly" banner (A's log shows a direct key login for a remote user). Start B again: within two minutes the banner goes and nothing shows twice |
 | 6.8 | Kick Bob from the workspace on A | B's workspace vanishes after the `MemberLeft`; `host_delegation` rows for Bob are ended |
 | 6.9 | Tamper: on `rim_dev_b`, `update relay_envelope set signature = 'x' where id = (select max(id) from relay_envelope);` then trigger a sync on B | The item is refused ("could not be verified" in the log), nothing shows; no crash |
-| 6.10 | Public relay checks (S5-6, once merged): start B with `RIM_REGISTRATION_POW_BITS=16` and `RIM_ROLE=relay` | Key signup on B shows a short "proving this is a real device" wait, then succeeds; `rim_server principal block <id>` on B ends that account's sessions; `rim_server peer block <A's id>` makes A's deliveries answer 403 |
+| 6.10 | Public relay: restart B with `RIM_REGISTRATION_POW_BITS=16 RIM_ROLE=relay` added; on a fresh desktop (new OS user) pointed at B, sign-in page > **Join** > key signup | The form shows "Proving this is a real device…" for well under a second, then the account exists; `curl -s http://127.0.0.1:8090/.well-known/rim-server` shows `"mode":"pow"` in the descriptor payload |
+| 6.11 | On B: `cargo run -p rim_server -- principal block <bob's rimp1_ id> --reason test` (same env as the server) | Bob's desktop is signed out and cannot sign in ("blocked on this server"); `principal unblock` restores it |
+| 6.12 | On B: `cargo run -p rim_server -- peer block <A's rims1_ id>`; send a message from A to Bob | A's server log shows `403 peer_not_allowed` from B and the message does not reach Bob until `peer unblock`; then it does |
+| 6.13 | On B as Carl (a stranger to Ada): send a DM request to Ada; on A, in the request, choose **Report** | `cargo run -p rim_server -- abuse-reports list --open` on A lists it; `resolve <id>` clears it |
 
 ## 7. Regressions for Stage 5
 
