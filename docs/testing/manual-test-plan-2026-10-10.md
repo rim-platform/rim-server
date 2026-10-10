@@ -43,7 +43,7 @@ the step number here.
 
 | # | Do | Expected |
 |---|---|---|
-| 1.1 | On A, sign-in page > **Join** (the link under the form; needs `RIM_OPEN_REGISTRATION=true`, or paste a link from `cargo run -p rim_server -- bootstrap-user --email you@example.com`), choose **Create account with a key**, username `ada`, device name `Ada desktop` | Keys are created; a 12-word recovery phrase and the account id are shown as a numbered grid; "Create account" is disabled until "I saved it" is ticked |
+| 1.1 | On A, sign-in page > **Join** (the link under the form; needs `RIM_OPEN_REGISTRATION=true`, or paste a link from `cargo run -p rim_server -- bootstrap-user --email you@example.com`). The desktop opens on the key signup (rim-ui #56; "Create account with a password" is the fallback toggle): username `ada`, device name `Ada desktop`, **Create keys** | Keys are created; a 12-word recovery phrase and the account id are shown as a numbered grid; "Create account" is disabled until "I saved it" is ticked |
 | 1.2 | Copy the kit (keep it in a text file for later), tick, create | Signed in; Settings > Security shows the key identity, this device listed, "Key sign-in is on" and the **Sign out other sessions** offer |
 | 1.3 | `psql`: `select username, password_hash, email, principal_id from "user";` | `ada` has `NULL` password and email and a `rimp1_…` id |
 | 1.4 | Sign out on A; on the sign-in screen choose **Sign in with this device** | Signed in without a password |
