@@ -81,6 +81,12 @@ to move offline, and the franking key file for encrypted-message reports
 (`RIM_FRANKING_KEY_FILE`); server-to-server traffic (`RIM_ROLE`, `RIM_S2S_*`) is off until
 `RIM_PUBLIC_BASE_URL` is an `https` URL (`docs/server-identity.md`).
 
+## Self-hosting
+
+`deploy/compose.yml` runs a server with PostgreSQL, the web client and Caddy on one domain;
+`docs/self-hosting.md` covers the first start, the recovery key, the first account, updates,
+backups and monitoring. A public relay adds `deploy/compose.relay.yml` (`deploy/README.md`).
+
 ## Development
 
 ```sh

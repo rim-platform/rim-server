@@ -185,8 +185,8 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 ### The public relay
 
 A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
-`deploy/compose.relay.yml`; `deploy/README.md` brings it up and `docs/oncall/relay-public.md` is
-its runbook.
+`deploy/compose.relay.yml` on top of `deploy/compose.yml`; `deploy/README.md` brings it up and
+`docs/oncall/relay-public.md` is its runbook.
 
 **Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
 registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
