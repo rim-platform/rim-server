@@ -39,6 +39,7 @@ pub mod on_call_schedule;
 pub mod password_reset_token;
 pub mod pipeline;
 pub mod relay;
+pub mod remote_workspace;
 pub mod s2s;
 pub mod server;
 pub mod server_member;

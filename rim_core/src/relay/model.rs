@@ -127,3 +127,98 @@ pub struct CachedIdentity {
     pub identity: String,
     pub fetched_at: DateTime<Utc>,
 }
+
+/// Where a relay's subscription to a workspace on another host stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionStatus {
+    /// A device's delegation is active at the host.
+    Active,
+    /// Every delegation expired; the app renews it when a device comes back.
+    Lapsed,
+    /// Cancelled, or refused by the host.
+    Ended,
+}
+
+impl SubscriptionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Lapsed => "lapsed",
+            Self::Ended => "ended",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "active" => Some(Self::Active),
+            "lapsed" => Some(Self::Lapsed),
+            "ended" => Some(Self::Ended),
+            _ => None,
+        }
+    }
+}
+
+/// A local user's subscription to a workspace on another host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelaySubscription {
+    pub user_id: UserId,
+    pub host_server_id: String,
+    pub workspace_id: Uuid,
+    pub status: SubscriptionStatus,
+    /// When the host stops honouring the delegation that keeps it active.
+    pub expires_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Where a revocation's delivery to one host stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FanoutStatus {
+    Pending,
+    /// The host answered with an acknowledgement that verified.
+    Acked,
+    /// 24 hours passed, or the host does not know the device.
+    GaveUp,
+}
+
+impl FanoutStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Acked => "acked",
+            Self::GaveUp => "gave_up",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "acked" => Some(Self::Acked),
+            "gave_up" => Some(Self::GaveUp),
+            _ => None,
+        }
+    }
+}
+
+/// A revoked device's revocation on its way to one host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevocationFanout {
+    pub device_key_id: DeviceKeyId,
+    pub host_server_id: String,
+    pub status: FanoutStatus,
+    pub attempts: i32,
+    pub next_attempt_at: DateTime<Utc>,
+    /// The host's signed acknowledgement, once it answered.
+    pub ack_payload: Option<String>,
+    pub ack_signature: Option<String>,
+}
+
+/// A fan-out due for an attempt, with what the request carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueFanout {
+    pub fanout: RevocationFanout,
+    pub user_id: UserId,
+    pub principal_id: String,
+    pub revocation_payload: String,
+    pub revocation_signature: String,
+    pub revoked_at: DateTime<Utc>,
+}
