@@ -1,7 +1,11 @@
 [package]
 name = "rim_api"
+description = "GraphQL schema and resolvers of the RIM server"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 actix-web = "4.11.0"

@@ -1,7 +1,11 @@
 [package]
 name = "rim_s2s"
+description = "RIM server identity and the server-to-server transport"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 base64 = "0.22.1"

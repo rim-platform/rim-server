@@ -1,7 +1,11 @@
 [package]
 name = "rim_logging"
+description = "Structured tracing setup for RIM"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 dotenvy = "0.15.7"

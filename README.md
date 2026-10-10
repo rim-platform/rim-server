@@ -30,7 +30,7 @@ Tauri v2 desktop client lives in the separate `rim-ui` repository.
 
 | Crate | Role |
 |---|---|
-| `rim_server` | Actix Web bootstrap, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, server-to-server) |
+| `rim_server` | Actix Web startup, config, CORS/CSRF/cookies, composition root, non-GraphQL transports (uploads, server-to-server) |
 | `rim_api` | async-graphql schema, resolvers, auth context |
 | `rim_core` | Domain models, repository traits, strongly-typed IDs |
 | `rim_services` | Service traits, `*Cmd`/`*Query`/`*Dto` types, `ServiceError` |

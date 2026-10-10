@@ -15,7 +15,6 @@ use metrics::{
     Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
-use migration::MigratorTrait;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use sea_orm::{DatabaseConnection, DbBackend};
 use tokio::sync::watch;
@@ -255,14 +254,9 @@ async fn sample_database(db: &DatabaseConnection) {
         Ok(Err(e)) => tracing::warn!(error = %e, "could not read the relay queue for metrics"),
         Err(_) => tracing::warn!("reading the relay queue for metrics timed out"),
     }
-    match tokio::time::timeout(
-        SAMPLE_TIMEOUT,
-        migration::Migrator::get_pending_migrations(db),
-    )
-    .await
-    {
+    match tokio::time::timeout(SAMPLE_TIMEOUT, crate::health::count_pending_migrations(db)).await {
         Ok(Ok(pending)) => {
-            gauge!(PENDING_MIGRATIONS).set(pending.len() as f64);
+            gauge!(PENDING_MIGRATIONS).set(pending as f64);
         }
         Ok(Err(e)) => tracing::warn!(error = %e, "could not read the pending migrations"),
         Err(_) => tracing::warn!("reading the pending migrations timed out"),

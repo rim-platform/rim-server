@@ -170,10 +170,7 @@ impl CapabilityService for DefaultCapabilityService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        // Step 3: membership leg. Plugin-source caps would also need a
-        // grant-store check here (Phase 5). Since Phase 1 only seeds
-        // builtin caps and rejects plugin grants by default, the membership
-        // check is the only gate beyond the registry check today.
+        // Step 3: membership leg, the only gate beyond the registry check.
         if !self.membership_holds(actor, workspace_id).await? {
             tracing::warn!(
                 target: "audit",
@@ -242,7 +239,7 @@ mod tests {
 
     use super::*;
     use mockall::predicate::*;
-    use rim_core::capability::model::{CapabilitySourceKind, RegisteredCapability};
+    use rim_core::capability::model::RegisteredCapability;
     use rim_core::capability::repository::MockCapabilityRegistryRepository;
     use rim_core::server::model::ServerId;
     use rim_core::server_member::repository::MockServerMemberRepository;
@@ -272,8 +269,6 @@ mod tests {
     fn active_cap(key: &str, is_self_scoped: bool) -> RegisteredCapability {
         RegisteredCapability {
             capability_key: key.to_string(),
-            source_kind: CapabilitySourceKind::Builtin,
-            plugin_id: None,
             registered_at: chrono::Utc::now(),
             retired_at: None,
             is_self_scoped,

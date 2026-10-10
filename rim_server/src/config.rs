@@ -761,9 +761,24 @@ fn url_authority(url: &str) -> Option<String> {
     (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
 }
 
+/// Variables the configuration reads without the `RIM_` prefix. Every other setting needs the
+/// prefix, so a bare `ROLE` or `SERVER_PORT` left in the environment by something else changes
+/// nothing. `RUST_LOG` is read unprefixed by the logger, not here.
+const UNPREFIXED_VARIABLES: &[&str] = &["DATABASE_URL"];
+
 impl RIMConfig {
     #[allow(clippy::missing_errors_doc)]
     pub fn load() -> Result<Self, ConfigError> {
+        Self::load_from(std::env::vars().collect())
+    }
+
+    /// Builds the configuration from the given environment variables over the defaults.
+    fn load_from(env: config::Map<String, String>) -> Result<Self, ConfigError> {
+        let unprefixed: config::Map<String, String> = env
+            .iter()
+            .filter(|(name, _)| UNPREFIXED_VARIABLES.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
         let c = Config::builder()
             .set_default("server_host", "0.0.0.0")?
             .set_default("server_port", 8080)?
@@ -777,8 +792,8 @@ impl RIMConfig {
                 i64::from(DEFAULT_S2S_PEER_RATE_PER_MIN),
             )?
             .set_default("s2s_max_body_bytes", DEFAULT_S2S_MAX_BODY_BYTES as i64)?
-            .add_source(Environment::with_prefix("RIM"))
-            .add_source(Environment::default());
+            .add_source(Environment::with_prefix("RIM").source(Some(env)))
+            .add_source(Environment::default().source(Some(unprefixed)));
         c.build()?.try_deserialize()
     }
 }
@@ -814,6 +829,48 @@ mod tests {
             version_line(),
             format!("rim-server {}", workspace_version())
         );
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> config::Map<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn only_database_url_is_read_without_the_prefix() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("ROLE", "relay"),
+            ("DATA_DIR", "/elsewhere"),
+            ("SERVER_PORT", "1"),
+            ("ENABLE_GRAPHIQL", "true"),
+        ]))
+        .expect("loads");
+        assert_eq!(config.database_url, "postgres://localhost/rim");
+        assert_eq!(config.role, None);
+        assert_eq!(config.data_dir, "./data");
+        assert_eq!(config.server_port, 8080);
+        assert!(!config.enable_graphiql);
+
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_ROLE", "relay"),
+            ("RIM_DATA_DIR", "/elsewhere"),
+            ("RIM_SERVER_PORT", "9000"),
+            ("RIM_ENABLE_GRAPHIQL", "true"),
+        ]))
+        .expect("loads");
+        assert_eq!(config.role.as_deref(), Some("relay"));
+        assert_eq!(config.data_dir, "/elsewhere");
+        assert_eq!(config.server_port, 9000);
+        assert!(config.enable_graphiql);
+    }
+
+    #[test]
+    fn database_url_is_required() {
+        assert!(RIMConfig::load_from(env(&[("RIM_SERVER_PORT", "9000")])).is_err());
     }
 
     #[test]
