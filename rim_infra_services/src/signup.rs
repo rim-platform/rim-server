@@ -46,6 +46,11 @@ pub(crate) enum CheckedToken {
     WorkspaceInvite(Invite),
 }
 
+/// The refusal of a signup an email-bound instance invite does not admit: another address, or
+/// a key-only signup, which has none.
+pub(crate) const EMAIL_BOUND_INVITE_REFUSAL: &str =
+    "this invite admits only a password signup with the email address it was issued for";
+
 /// Prefix reserved for people from other servers held here as remote users; local signups
 /// may not use it, in either case.
 pub(crate) const REMOTE_USERNAME_PREFIX: &str = "r_";
@@ -190,7 +195,7 @@ pub(crate) async fn check_instance_invite(
                 "signup refused: the instance invite is bound to another email address"
             );
             return Err(ServiceError::Validation(
-                "this invite admits only the email address it was issued for".to_string(),
+                EMAIL_BOUND_INVITE_REFUSAL.to_string(),
             ));
         }
     }
@@ -561,7 +566,10 @@ mod tests {
             if admitted {
                 assert!(res.is_ok(), "{email:?}");
             } else {
-                assert!(matches!(res, Err(ServiceError::Validation(_))), "{email:?}");
+                assert!(
+                    matches!(&res, Err(ServiceError::Validation(m)) if m == EMAIL_BOUND_INVITE_REFUSAL),
+                    "{email:?}: {res:?}"
+                );
             }
         }
     }

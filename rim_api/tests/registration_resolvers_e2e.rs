@@ -470,6 +470,10 @@ async fn mutation_signup_with_an_email_bound_invite_admits_only_its_address() {
         code,
         Some(async_graphql::Value::String("VALIDATION".to_string()))
     );
+    assert_eq!(
+        refused.errors[0].message,
+        "this invite admits only a password signup with the email address it was issued for"
+    );
 
     let admitted = schema
         .execute(Request::new(signup("Ops@Example.com")))

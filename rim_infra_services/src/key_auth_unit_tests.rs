@@ -2288,7 +2288,10 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == crate::signup::EMAIL_BOUND_INVITE_REFUSAL),
+            "{err:?}"
+        );
         assert_eq!(h.user_count(), 0);
     }
 
