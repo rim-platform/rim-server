@@ -27,9 +27,6 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
-pub(crate) mod escalation;
-pub(crate) mod incident;
-pub(crate) mod ingest_token;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
 pub(crate) mod keybind;
@@ -37,15 +34,12 @@ pub(crate) mod macro_def;
 pub(crate) mod message;
 pub(crate) mod moderation;
 pub(crate) mod notification;
-pub(crate) mod oncall;
 pub(crate) mod pipeline;
 pub(crate) mod presence;
 pub(crate) mod profile;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
-pub(crate) mod skill_profile;
 pub(crate) mod workspace;
-pub(crate) mod workspace_feature;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
@@ -93,24 +87,16 @@ pub(crate) struct MutationGroup4(
     auth::PasswordResetMutations,
     custom_emoji::CustomEmojiMutations,
     macro_def::MacroMutations,
-    skill_profile::SkillProfileMutations,
     channel_lens::ChannelLensMutations,
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup5(
-    incident::IncidentMutations,
-    escalation::EscalationMutations,
-    ingest_token::IngestTokenMutations,
-    workspace_feature::WorkspaceFeatureMutations,
-    workspace_state::WorkspaceStateMutations,
-);
+pub(crate) struct MutationGroup5(workspace_state::WorkspaceStateMutations);
 
 #[derive(MergedObject, Default)]
 pub(crate) struct MutationGroup6(
     pipeline::PipelineMutations,
     profile::ProfileMutations,
-    oncall::OnCallMutations,
     moderation::ModerationMutations,
     notification::NotificationMutations,
 );

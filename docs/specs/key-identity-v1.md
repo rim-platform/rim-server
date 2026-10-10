@@ -276,8 +276,7 @@ identity alone: no password, no email.
 4. A key-only account has no password. `login` answers `UNAUTHENTICATED` with the same timing as
    a wrong password, `requestPasswordReset` sends nothing, and `resetPassword` is `FORBIDDEN`, as
    for an enrolled account.
-5. Nothing emails an account without an email address: notification digests, incident and
-   escalation emails skip it.
+5. Nothing emails an account without an email address: notification digests skip it.
 
 ### Challenge login
 

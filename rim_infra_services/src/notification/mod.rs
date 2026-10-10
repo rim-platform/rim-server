@@ -3,7 +3,7 @@
 
 pub(crate) mod decide;
 // pub: `DefaultNotificationJobs`/`NotificationJobs` are constructed and driven by the
-// composition root (rim_server/src/app.rs), like the escalation driver.
+// composition root (rim_server/src/app.rs).
 pub mod digest;
 pub(crate) mod service;
 

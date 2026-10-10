@@ -140,7 +140,15 @@ async fn down_refuses_while_a_key_only_account_exists() {
     ))
     .await
     .expect("delete key-only account");
-    Migrator::down(&conn, Some(steps_to_before_migration()))
+    // The refused down left this migration the newest applied one; undo just it.
+    let applied = Migrator::get_applied_migrations(&conn)
+        .await
+        .expect("list applied migrations");
+    assert_eq!(
+        applied.last().map(|m| m.name().to_string()).as_deref(),
+        Some(MIGRATION_NAME)
+    );
+    Migrator::down(&conn, Some(1))
         .await
         .expect("down without key-only accounts");
     let refused = conn

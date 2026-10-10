@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rim_services::command::rate_limit::{RateLimitDecision, check_sliding_window};
 
-/// Maximum number of distinct ingest-token buckets held in memory.
+/// Maximum number of distinct key buckets held in memory.
 ///
 /// Mirrors the cap on [`crate::registration_rate_limiter::RegistrationRateLimiter`]: an
 /// unbounded map is a memory-DoS vector. Once the map exceeds this limit, the
@@ -14,20 +14,15 @@ const MAX_BUCKETS: usize = 100_000;
 
 type RateLimitStore = DashMap<String, VecDeque<DateTime<Utc>>>;
 
-/// Shared, thread-safe per-ingest-token sliding-window rate limiter for the alert-ingest
-/// webhook endpoints (Track B2).
+/// Shared, thread-safe sliding-window rate limiter keyed by an arbitrary string, such as a
+/// peer server id.
 ///
-/// Unlike [`crate::registration_rate_limiter::RegistrationRateLimiter`], this is keyed by
-/// the **ingest token's id**, not the caller's IP: alert sources (Alertmanager, Grafana,
-/// generic webhooks) are typically dispatched from a small, fixed set of infrastructure IPs
-/// behind NAT/load balancers, so per-IP limiting would either be too permissive (shared IP)
-/// or too strict (legitimate IP rotation behind a proxy). Per-token limiting instead bounds
-/// how many alerts a single credential can push, which is the actual abuse/misconfiguration
-/// surface (e.g. a flapping alert rule hammering the endpoint).
+/// Unlike [`crate::registration_rate_limiter::RegistrationRateLimiter`], the key is chosen by
+/// the caller rather than being the caller's IP.
 ///
 /// Single-node only; DashMap-backed.
 #[derive(Debug, Clone)]
-pub struct AlertRateLimiter {
+pub struct KeyedRateLimiter {
     store: std::sync::Arc<RateLimitStore>,
     /// FIFO queue of inserted keys, used for eviction when the cap is reached.
     insertion_order: std::sync::Arc<Mutex<VecDeque<String>>>,
@@ -35,15 +30,14 @@ pub struct AlertRateLimiter {
     limit: u32,
 }
 
-impl AlertRateLimiter {
-    /// Construct a new limiter with the given sliding-window size and per-token request
-    /// limit.
+impl KeyedRateLimiter {
+    /// Construct a new limiter with the given sliding-window size and per-key request limit.
     ///
     /// # Examples
     /// ```
-    /// use rim_infra_services::alert_rate_limiter::AlertRateLimiter;
-    /// // 60 requests per 60-second window per ingest token
-    /// let limiter = AlertRateLimiter::new(60, 60);
+    /// use rim_infra_services::keyed_rate_limiter::KeyedRateLimiter;
+    /// // 60 requests per 60-second window per key
+    /// let limiter = KeyedRateLimiter::new(60, 60);
     /// ```
     pub fn new(window_secs: u64, limit: u32) -> Self {
         Self {
@@ -54,7 +48,7 @@ impl AlertRateLimiter {
         }
     }
 
-    /// Record one alert-ingest call for `token_id` and return whether it is allowed.
+    /// Record one call for `key` and return whether it is allowed.
     ///
     /// Stale timestamps outside the sliding window are evicted before checking the count,
     /// bounding per-bucket memory to at most `limit` entries. If the store exceeds
@@ -62,13 +56,13 @@ impl AlertRateLimiter {
     ///
     /// # Examples
     /// ```
-    /// use rim_infra_services::alert_rate_limiter::AlertRateLimiter;
+    /// use rim_infra_services::keyed_rate_limiter::KeyedRateLimiter;
     /// use chrono::Utc;
-    /// let limiter = AlertRateLimiter::new(60, 60);
-    /// let decision = limiter.check_and_record("some-token-id", Utc::now());
+    /// let limiter = KeyedRateLimiter::new(60, 60);
+    /// let decision = limiter.check_and_record("some-key", Utc::now());
     /// ```
-    pub fn check_and_record(&self, token_id: &str, now: DateTime<Utc>) -> RateLimitDecision {
-        let map_key = token_id.to_string();
+    pub fn check_and_record(&self, key: &str, now: DateTime<Utc>) -> RateLimitDecision {
+        let map_key = key.to_string();
         let is_new = !self.store.contains_key(&map_key);
 
         let mut entry = self.store.entry(map_key.clone()).or_default();
@@ -116,7 +110,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_limit_then_blocks() {
-        let rl = AlertRateLimiter::new(60, 3);
+        let rl = KeyedRateLimiter::new(60, 3);
         let token = "tok-1";
 
         for i in 1..=3 {
@@ -137,8 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn different_tokens_are_isolated() {
-        let rl = AlertRateLimiter::new(60, 1);
+    fn different_keys_are_isolated() {
+        let rl = KeyedRateLimiter::new(60, 1);
 
         assert_eq!(
             rl.check_and_record("tok-a", now()),
@@ -149,7 +143,7 @@ mod tests {
             RateLimitDecision::Limited { .. }
         ));
 
-        // A different token has its own bucket.
+        // A different key has its own bucket.
         assert_eq!(
             rl.check_and_record("tok-b", now()),
             RateLimitDecision::Allowed
@@ -158,7 +152,7 @@ mod tests {
 
     #[test]
     fn stale_entries_evicted_before_check() {
-        let rl = AlertRateLimiter::new(60, 1);
+        let rl = KeyedRateLimiter::new(60, 1);
         let token = "tok-stale";
 
         {
@@ -177,7 +171,7 @@ mod tests {
 
     #[test]
     fn cap_evicts_oldest_entry_when_full() {
-        let rl = AlertRateLimiter::new(60, 100);
+        let rl = KeyedRateLimiter::new(60, 100);
 
         {
             let mut order = rl.insertion_order.lock().unwrap();

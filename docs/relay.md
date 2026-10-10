@@ -52,8 +52,8 @@ identity when the stored copy is over an hour old. If such a person later signs 
 their key, the remote row becomes their local account and keeps its memberships.
 
 Remote users never sign in here and never run account mutations here: sign-in, sign-up, device
-and key changes, card publishing, profile, workspace creation, ingest tokens, device links, instance
-invites and the relay's own mutations are refused with `FORBIDDEN` ("not available to remote
+and key changes, card publishing, profile, workspace creation, device links, instance invites
+and the relay's own mutations are refused with `FORBIDDEN` ("not available to remote
 members").
 
 ### Queues and the outbox

@@ -1,4 +1,3 @@
-use crate::alert_handlers::{ingest_alertmanager, ingest_generic, ingest_grafana};
 use crate::app::{S2sRuntime, build_app_runtime};
 use crate::config::RIMConfig;
 use crate::file_handlers::{
@@ -94,13 +93,7 @@ pub async fn serve(
     let storage_service = runtime.storage_service;
     let message_attachment_service = runtime.message_attachment_service;
     let moderation_service = runtime.moderation_service;
-    let ingest_token_service = runtime.ingest_token_service;
-    let incident_service = runtime.incident_service;
-    let workspace_feature_service = runtime.workspace_feature_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
-    let alert_rate_limiter = runtime.alert_rate_limiter;
-    let alert_max_body_bytes =
-        crate::alert_handlers::AlertMaxBodyBytes(runtime.alert_max_body_bytes);
     let readiness: Arc<dyn ReadinessProbe> = Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
@@ -177,21 +170,6 @@ pub async fn serve(
                 web::resource("/api/remote/{host_server_id}/{tail:.*}")
                     .route(web::get().to(crate::remote_handlers::handle_remote))
                     .route(web::post().to(crate::remote_handlers::handle_remote)),
-            )
-            .service(
-                web::resource("/api/hooks/alerts/generic")
-                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
-                    .route(web::post().to(ingest_generic)),
-            )
-            .service(
-                web::resource("/api/hooks/alerts/alertmanager")
-                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
-                    .route(web::post().to(ingest_alertmanager)),
-            )
-            .service(
-                web::resource("/api/hooks/alerts/grafana")
-                    .app_data(web::PayloadConfig::new(alert_max_body_bytes.0))
-                    .route(web::post().to(ingest_grafana)),
             );
 
         if enable_graphiql {
@@ -219,12 +197,7 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&storage_service)))
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
             .app_data(web::Data::new(Arc::clone(&moderation_service)))
-            .app_data(web::Data::new(Arc::clone(&ingest_token_service)))
-            .app_data(web::Data::new(Arc::clone(&incident_service)))
-            .app_data(web::Data::new(Arc::clone(&workspace_feature_service)))
             .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))
-            .app_data(web::Data::new(Arc::clone(&alert_rate_limiter)))
-            .app_data(web::Data::new(alert_max_body_bytes))
             .app_data(web::Data::new(handler_cfg))
     })
     .listen(listener)?

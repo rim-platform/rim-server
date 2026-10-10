@@ -21,7 +21,6 @@ mod tests {
     use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
     use rim_services::message::service::MockMessageService;
-    use rim_services::workspace_feature::service::MockWorkspaceFeatureService;
     use rim_services::{Actor, ServiceError};
 
     use crate::CommandRepos;
@@ -115,15 +114,6 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                incident_service: std::sync::Arc::new(
-                    rim_services::incident::service::MockIncidentService::new(),
-                ),
-                oncall_service: std::sync::Arc::new(
-                    rim_services::oncall::service::MockOnCallService::new(),
-                ),
-                workspace_feature_service: std::sync::Arc::new(
-                    MockWorkspaceFeatureService::all_enabled(),
-                ),
                 moderation_service: Arc::new(moderation_service),
                 notification_service: Arc::new(
                     rim_services::notification::service::MockNotificationService::new(),
@@ -360,7 +350,6 @@ mod tests {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: rim_services::command::verb::TypedVerb::Other,
             rate_limit_per_minute: None,
-            feature: None,
         }
     }
 
@@ -519,29 +508,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Without a workspace context, feature-gated builtins (Track 0.4) are hidden.
         let expected_palette_count = registry::builtin_commands()
             .iter()
-            .filter(|c| c.visible_in_palette && c.feature.is_none())
+            .filter(|c| c.visible_in_palette)
             .count();
         assert_eq!(palette.len(), expected_palette_count);
         assert!(palette.iter().any(|c| c.id == "chat.post_message"));
     }
 
     #[tokio::test]
-    // C2 (`docs/specs/track-c2-agent-operator.md` §1) flips 4 more builtins to
-    // `ai_callable: true` — `incident.ack`/`incident.escalate`/`oncall.who`/
-    // `oncall.take_shift`, all with `required_capabilities: []` (§2) — so they
-    // surface here unconditionally regardless of the mocked capability grants.
-    // Renamed 12→16 to match the sibling inventory gate in `registry/mod.rs`.
-    // Track 1.1 adds five agent-callable membership/archive builtins (`chat.write`, granted by
-    // the mock): 16→21. Track 1.2 adds three moderation builtins — `chat.set_slow_mode`,
-    // `chat.report_message` (`chat.write`) and `admin.timeout` (`admin.manage_members`, now also
-    // granted by the mock): 21→24. Track 1.3 adds three notification builtins with no
-    // capability (`notifications.set_level`, `notifications.dnd`, `notifications.mark_all_read`):
-    // 24→27. Track 4.1 flips eighteen general builtins (navigation, `chat.mark_as_read`,
-    // `chat.create_group`, `state.*`), none needing a new capability: 27→45.
-    async fn list_commands_ai_surface_returns_forty_five_commands_with_caps() {
+    // Every AI-callable builtin whose capabilities the mock grants (`chat.read`, `chat.write`,
+    // `admin.manage_members`) or that needs none.
+    async fn list_commands_ai_surface_returns_forty_one_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -572,9 +550,6 @@ mod tests {
             cap,
         );
 
-        // The four incident/on-call commands are feature-gated (Track 0.4): they only surface
-        // with a workspace context whose `incidents` feature is on (the mocked feature service
-        // reports every feature enabled).
         let ai = svc
             .list_commands(ListCommandsQuery {
                 actor,
@@ -617,13 +592,9 @@ mod tests {
                 "chat.set_slow_mode",
                 "chat.toggle_reaction",
                 "chat.unarchive_channel",
-                "incident.ack",
-                "incident.escalate",
                 "notifications.dnd",
                 "notifications.mark_all_read",
                 "notifications.set_level",
-                "oncall.take_shift",
-                "oncall.who",
                 "state.delete",
                 "state.get",
                 "state.incr",
@@ -1060,7 +1031,6 @@ mod tests {
             sensitivity: CommandSensitivityDto::Safe,
             typed_verb: rim_services::command::verb::TypedVerb::Read,
             rate_limit_per_minute: Some(limit),
-            feature: None,
         }
     }
 
@@ -1093,15 +1063,6 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: audit_svc,
-                incident_service: std::sync::Arc::new(
-                    rim_services::incident::service::MockIncidentService::new(),
-                ),
-                oncall_service: std::sync::Arc::new(
-                    rim_services::oncall::service::MockOnCallService::new(),
-                ),
-                workspace_feature_service: std::sync::Arc::new(
-                    MockWorkspaceFeatureService::all_enabled(),
-                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -1247,15 +1208,6 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                incident_service: std::sync::Arc::new(
-                    rim_services::incident::service::MockIncidentService::new(),
-                ),
-                oncall_service: std::sync::Arc::new(
-                    rim_services::oncall::service::MockOnCallService::new(),
-                ),
-                workspace_feature_service: std::sync::Arc::new(
-                    MockWorkspaceFeatureService::all_enabled(),
-                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -1423,7 +1375,6 @@ mod tests {
                         sensitivity: CommandSensitivityDto::Safe,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
-                        feature: None,
                     }])
                 })
             });
@@ -1597,7 +1548,6 @@ mod tests {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
-            feature: None,
         };
 
         DefaultCommandService::with_extra_builtins(
@@ -1629,15 +1579,6 @@ mod tests {
                     rim_services::workspace_state::service::MockWorkspaceStateService::new(),
                 ),
                 audit_log_service: None,
-                incident_service: std::sync::Arc::new(
-                    rim_services::incident::service::MockIncidentService::new(),
-                ),
-                oncall_service: std::sync::Arc::new(
-                    rim_services::oncall::service::MockOnCallService::new(),
-                ),
-                workspace_feature_service: std::sync::Arc::new(
-                    MockWorkspaceFeatureService::all_enabled(),
-                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -1792,7 +1733,6 @@ mod tests {
             sensitivity: CommandSensitivityDto::Mutating,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
-            feature: None,
         };
 
         assert!(
@@ -1849,7 +1789,6 @@ mod tests {
                         sensitivity: CommandSensitivityDto::Safe,
                         typed_verb: rim_services::command::verb::TypedVerb::Other,
                         rate_limit_per_minute: None,
-                        feature: None,
                     }])
                 })
             });

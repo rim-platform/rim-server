@@ -20,23 +20,6 @@ pub fn generate_session_token() -> String {
     format!("rim_sess_{token}")
 }
 
-/// Generate a new alert-ingest webhook token: 32 random bytes, base64url-nopad,
-/// prefixed `rim_ingest_`. Presented once to the caller at creation time; only
-/// its [`hash_token`] digest is ever persisted (mirrors [`generate_session_token`]).
-pub fn generate_ingest_token() -> String {
-    let mut bytes = [0u8; 32];
-    if let Err(e) = fill(&mut bytes) {
-        tracing::error!(
-            target: "audit",
-            error = %e,
-            "fatal: OS entropy source failed; cannot generate ingest token"
-        );
-        panic!("getrandom failed: {e}");
-    }
-    let token = URL_SAFE_NO_PAD.encode(bytes);
-    format!("rim_ingest_{token}")
-}
-
 /// Generate a key-login challenge nonce: 32 random bytes, base64url-nopad, no prefix. It is
 /// public (the client signs it), so it is stored as is rather than hashed.
 pub fn generate_challenge_nonce() -> String {
@@ -171,42 +154,6 @@ mod tests {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             "token should only contain URL-safe base64 characters, got: {after_prefix}"
         );
-    }
-
-    #[test]
-    fn generate_ingest_token_has_prefix() {
-        let token = generate_ingest_token();
-        assert!(
-            token.starts_with("rim_ingest_"),
-            "expected prefix rim_ingest_, got: {token}"
-        );
-    }
-
-    #[test]
-    fn generate_ingest_token_has_sufficient_length() {
-        let token = generate_ingest_token();
-        let after_prefix = token.strip_prefix("rim_ingest_").unwrap();
-        assert!(
-            after_prefix.len() >= 43,
-            "expected at least 43 chars after prefix (256-bit base64url), got {}",
-            after_prefix.len()
-        );
-    }
-
-    #[test]
-    fn two_ingest_tokens_are_unique() {
-        let t1 = generate_ingest_token();
-        let t2 = generate_ingest_token();
-        assert_ne!(t1, t2, "two generated tokens should be unique");
-    }
-
-    #[test]
-    fn ingest_token_hashes_via_shared_hash_token() {
-        let token = generate_ingest_token();
-        let h1 = hash_token(&token);
-        let h2 = hash_token(&token);
-        assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 64);
     }
 
     #[test]

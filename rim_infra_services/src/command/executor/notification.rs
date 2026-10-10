@@ -197,12 +197,6 @@ mod tests {
                 rim_services::workspace_state::service::MockWorkspaceStateService::new(),
             ),
             audit_log_service: None,
-            incident_service: Arc::new(rim_services::incident::service::MockIncidentService::new()),
-            oncall_service: Arc::new(rim_services::oncall::service::MockOnCallService::new()),
-            workspace_feature_service: Arc::new(
-                rim_services::workspace_feature::service::MockWorkspaceFeatureService::all_enabled(
-                ),
-            ),
             moderation_service: Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),

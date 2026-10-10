@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use rim_core::conversation::model::ConversationId;
-use rim_core::escalation::model::EscalationPolicyId;
-use rim_core::incident::model::IncidentId;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::notification::model::UserNotificationId;
@@ -245,78 +243,6 @@ pub enum WorkspaceEvent {
         pipeline_name: String,
         reason: String,
     },
-    /// A new incident was declared (manually via `start_incident`, or by alert ingestion —
-    /// see `IncidentService::ingest_alert`).
-    ///
-    /// Carries `conversation_type` (like `NewMessage`/`ConversationCreated`) rather than
-    /// relying on `member_user_ids` alone: incidents aren't restricted to channels the way
-    /// alert-ingest tokens are (`start_incident` accepts any conversation type), and
-    /// `member_user_ids` is left empty for a public-channel incident. The subscription filter
-    /// treats a public `Channel` (`!is_private`) as visible to all workspace members and falls
-    /// back to `member_user_ids` otherwise.
-    IncidentDeclared {
-        workspace_id: ServerId,
-        conversation_id: ConversationId,
-        conversation_type: String,
-        incident_id: IncidentId,
-        severity: Option<String>,
-        title: String,
-        #[serde(skip_serializing)]
-        member_user_ids: Vec<UserId>,
-        /// Server-side only (never serialized): a private channel's events reach its members
-        /// alone, so the subscription filter must not treat it like a public channel.
-        #[serde(skip_serializing, default)]
-        is_private: bool,
-    },
-    /// An incident's status changed (mitigated/resolved/reopened, or updated in place by a
-    /// repeat alert with the same fingerprint). See [`Self::IncidentDeclared`] for why
-    /// `conversation_type` is carried alongside `member_user_ids`.
-    IncidentUpdated {
-        workspace_id: ServerId,
-        conversation_id: ConversationId,
-        conversation_type: String,
-        incident_id: IncidentId,
-        status: String,
-        #[serde(skip_serializing)]
-        member_user_ids: Vec<UserId>,
-        /// Server-side only (never serialized): a private channel's events reach its members
-        /// alone, so the subscription filter must not treat it like a public channel.
-        #[serde(skip_serializing, default)]
-        is_private: bool,
-    },
-    /// An escalation step fired (mention + email best-effort actions performed) — see
-    /// `IncidentService::fire_escalation_step` (C1b, §5/§9). Carries `conversation_type` for the
-    /// same channel-visibility-bypass reason as `IncidentDeclared`.
-    EscalationStepFired {
-        workspace_id: ServerId,
-        conversation_id: ConversationId,
-        conversation_type: String,
-        incident_id: IncidentId,
-        escalation_policy_id: EscalationPolicyId,
-        step_index: i32,
-        /// Serialized (not `skip_serializing`) — the FE shows who was paged.
-        target_user_ids: Vec<UserId>,
-        #[serde(skip_serializing)]
-        member_user_ids: Vec<UserId>,
-        /// Server-side only (never serialized): a private channel's events reach its members
-        /// alone, so the subscription filter must not treat it like a public channel.
-        #[serde(skip_serializing, default)]
-        is_private: bool,
-    },
-    /// An incident was acknowledged — see `IncidentService::acknowledge_incident` (C1b, §4/§9).
-    IncidentAcknowledged {
-        workspace_id: ServerId,
-        conversation_id: ConversationId,
-        conversation_type: String,
-        incident_id: IncidentId,
-        acknowledged_by: UserId,
-        #[serde(skip_serializing)]
-        member_user_ids: Vec<UserId>,
-        /// Server-side only (never serialized): a private channel's events reach its members
-        /// alone, so the subscription filter must not treat it like a public channel.
-        #[serde(skip_serializing, default)]
-        is_private: bool,
-    },
     /// The server decided to notify `user_id` about a message (Track 1.3): emitted once per
     /// recipient after the notification row is stored. Delivered to that user only
     /// (`member_user_ids == [user_id]`). `reason` is the snake_case notification reason
@@ -496,10 +422,6 @@ impl WorkspaceEvent {
             | Self::WorkspaceStateDeleted { workspace_id, .. }
             | Self::PipelineFired { workspace_id, .. }
             | Self::PipelineSuspended { workspace_id, .. }
-            | Self::IncidentDeclared { workspace_id, .. }
-            | Self::IncidentUpdated { workspace_id, .. }
-            | Self::EscalationStepFired { workspace_id, .. }
-            | Self::IncidentAcknowledged { workspace_id, .. }
             | Self::NotificationDue { workspace_id, .. }
             | Self::WorkspacePluginChanged { workspace_id, .. }
             | Self::MlsCommitAccepted { workspace_id, .. }
@@ -571,18 +493,6 @@ impl WorkspaceEvent {
             Self::PipelineFired { .. }
             | Self::PipelineSuspended { .. }
             | Self::WorkspacePluginChanged { .. } => None,
-            Self::IncidentDeclared {
-                member_user_ids, ..
-            }
-            | Self::IncidentUpdated {
-                member_user_ids, ..
-            }
-            | Self::EscalationStepFired {
-                member_user_ids, ..
-            }
-            | Self::IncidentAcknowledged {
-                member_user_ids, ..
-            } => Some(member_user_ids),
             // NotificationDue is scoped to its one recipient.
             Self::NotificationDue {
                 member_user_ids, ..
