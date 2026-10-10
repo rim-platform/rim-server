@@ -12,8 +12,10 @@ use rim_api::AppSchema;
 use rim_api::auth_context::{AuthActorCtx, RemoteIp};
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::federation::{ForwardedRequest, refused_account_mutation};
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_s2s::host::sign_host_response;
+use rim_services::feature::service::FeatureGate;
 use rim_services::host::dto::{ForwardAuth, ForwardRefusal, ForwardRequest};
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::storage::service::StorageService;
@@ -143,6 +145,17 @@ fn multipart(req: &HttpRequest, verified: &Verified) -> Multipart {
     Multipart::new(req.headers(), stream)
 }
 
+/// The feature a forwarded file route belongs to, when it belongs to one.
+fn route_feature(method: &str, segments: &[&str]) -> Option<ServerFeature> {
+    match (method, segments) {
+        ("GET", ["api", "attachments", _, "download"]) | ("POST", ["api", "files", "upload"]) => {
+            Some(ServerFeature::Attachments)
+        }
+        ("GET", ["api", "plugin-bundles", _, _]) => Some(ServerFeature::WorkspacePlugins),
+        _ => None,
+    }
+}
+
 /// Run the forwarded request's handler as its user and device.
 async fn execute(
     req: &HttpRequest,
@@ -152,6 +165,16 @@ async fn execute(
     path: &str,
 ) -> Reply {
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if let Some(feature) = route_feature(method, &segments) {
+        let Some(features) = req.app_data::<web::Data<Arc<dyn FeatureGate>>>() else {
+            return internal("features are not configured");
+        };
+        if let Err(resp) =
+            crate::file_handlers::require_feature(features.get_ref().as_ref(), feature)
+        {
+            return reply_of(resp).await;
+        }
+    }
     match (method, segments.as_slice()) {
         ("POST", ["api"]) => graphql(req, auth, &verified.peer.server_id, &verified.body).await,
         ("GET", ["api", "attachments", id, "download"]) => {

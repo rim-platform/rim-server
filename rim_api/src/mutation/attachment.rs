@@ -1,4 +1,5 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::message_attachment::command::{
     CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
@@ -7,6 +8,7 @@ use rim_services::message_attachment::service::MessageAttachmentService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::features::require_feature;
 use crate::ids::parse_uuid_id;
 use crate::types::{Attachment, UploadTicket};
 
@@ -20,6 +22,7 @@ impl AttachmentMutations {
         ctx: &Context<'_>,
         input: CreateAttachmentInput,
     ) -> Result<UploadTicket> {
+        require_feature(ctx, ServerFeature::Attachments)?;
         let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
@@ -54,6 +57,7 @@ impl AttachmentMutations {
         ctx: &Context<'_>,
         input: FinalizeAttachmentInput,
     ) -> Result<Attachment> {
+        require_feature(ctx, ServerFeature::Attachments)?;
         let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
@@ -79,6 +83,7 @@ impl AttachmentMutations {
         ctx: &Context<'_>,
         input: DeleteAttachmentInput,
     ) -> Result<bool> {
+        require_feature(ctx, ServerFeature::Attachments)?;
         let actor = require_actor(ctx)?;
 
         let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;

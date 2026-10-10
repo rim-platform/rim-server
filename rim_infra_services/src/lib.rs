@@ -16,6 +16,9 @@ pub(crate) mod e2ee;
 // constructed directly by the composition root (rim_server/src/app.rs) — mirrors the
 // DefaultAuthService precedent above (Track B3, 2026-07-10).
 pub mod email;
+/// Public for `rim_server`, whose composition root builds the instance gate from its
+/// configuration, and for `rim_api`'s tests.
+pub mod feature_gate;
 pub mod file_storage;
 /// Public for `rim_server`, which loads the key file at boot and runs `franking-key rotate`.
 pub mod franking_keys;

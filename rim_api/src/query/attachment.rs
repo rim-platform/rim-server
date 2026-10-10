@@ -1,9 +1,11 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::message_attachment::command::GetAttachmentQuery;
 use rim_services::message_attachment::service::MessageAttachmentService;
 
 use crate::auth_context::require_actor;
+use crate::features::require_feature;
 use crate::ids::parse_uuid_id;
 use crate::types::Attachment;
 
@@ -18,6 +20,7 @@ impl AttachmentQueries {
         server_id: ID,
         attachment_id: ID,
     ) -> Result<Attachment> {
+        require_feature(ctx, ServerFeature::Attachments)?;
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MessageAttachmentService>>()?;
         let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;

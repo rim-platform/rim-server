@@ -169,6 +169,11 @@ pub struct RIMConfig {
     /// Days command audit log rows are kept before the daily purge exports and deletes them;
     /// unset keeps them forever. 1 to 3650. Controlled by `RIM_AUDIT_RETENTION_DAYS`.
     pub audit_retention_days: Option<u32>,
+
+    /// Comma-separated optional features switched off on this instance, e.g.
+    /// `attachments,custom_emoji`; unset or empty keeps every feature on. Controlled by
+    /// `RIM_FEATURES_DISABLED`; see [`RIMConfig::features_disabled`].
+    pub features_disabled: Option<String>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -278,6 +283,7 @@ impl fmt::Debug for RIMConfig {
             )
             .field("metrics_addr", &self.metrics_addr)
             .field("audit_retention_days", &self.audit_retention_days)
+            .field("features_disabled", &self.features_disabled)
             .finish()
     }
 }
@@ -329,6 +335,7 @@ impl Default for RIMConfig {
             relay_dm_requests_per_day: None,
             metrics_addr: None,
             audit_retention_days: None,
+            features_disabled: None,
         }
     }
 }
@@ -723,6 +730,50 @@ impl RIMConfig {
             "RIM_HOST_ALLOWED_RELAYS",
             self.host_allowed_relays.as_deref(),
         )
+    }
+}
+
+impl RIMConfig {
+    /// `RIM_FEATURES_DISABLED` as features; empty when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable and the first name that is not a feature, so a typo
+    /// stops the server instead of leaving a feature on.
+    pub fn features_disabled(
+        &self,
+    ) -> Result<Vec<rim_core::server_feature::model::ServerFeature>, String> {
+        rim_core::server_feature::model::ServerFeature::parse_list(
+            self.features_disabled.as_deref().unwrap_or_default(),
+        )
+        .map_err(|e| format!("RIM_FEATURES_DISABLED: {e}"))
+    }
+
+    /// The features the rest of the configuration cannot support, each with the reason: email
+    /// without SMTP.
+    pub fn features_unavailable(
+        &self,
+    ) -> Vec<(rim_core::server_feature::model::ServerFeature, String)> {
+        let mut unavailable = Vec::new();
+        if self.smtp_config().is_none() {
+            unavailable.push((
+                rim_core::server_feature::model::ServerFeature::Email,
+                "SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM".to_string(),
+            ));
+        }
+        unavailable
+    }
+
+    /// The instance's feature gate: the disabled features, then the unavailable ones.
+    ///
+    /// # Errors
+    /// The message of [`RIMConfig::features_disabled`].
+    pub fn feature_gate(
+        &self,
+    ) -> Result<rim_infra_services::feature_gate::InstanceFeatureGate, String> {
+        Ok(rim_infra_services::feature_gate::InstanceFeatureGate::new(
+            &self.features_disabled()?,
+            &self.features_unavailable(),
+        ))
     }
 }
 
@@ -1182,5 +1233,94 @@ mod tests {
         assert_eq!(config.audit_retention_days(), Ok(Some(90)));
         assert!(parse("ninety").is_err());
         assert!(parse("-1").is_err());
+    }
+
+    #[test]
+    fn features_disabled_is_empty_when_unset_or_blank() {
+        assert_eq!(RIMConfig::default().features_disabled(), Ok(vec![]));
+        let config = RIMConfig {
+            features_disabled: Some(" , ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.features_disabled(), Ok(vec![]));
+    }
+
+    #[test]
+    fn features_disabled_ignores_spaces_around_names() {
+        use rim_core::server_feature::model::ServerFeature;
+        let config = RIMConfig {
+            features_disabled: Some(" attachments , custom_emoji ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.features_disabled(),
+            Ok(vec![ServerFeature::Attachments, ServerFeature::CustomEmoji])
+        );
+    }
+
+    #[test]
+    fn an_unknown_feature_refuses_to_start_naming_it() {
+        let config = RIMConfig {
+            features_disabled: Some("attachments,incidents".to_string()),
+            ..Default::default()
+        };
+        let err = config.features_disabled().unwrap_err();
+        assert!(err.contains("RIM_FEATURES_DISABLED"), "{err}");
+        assert!(err.contains("incidents"), "{err}");
+        assert!(config.feature_gate().is_err());
+    }
+
+    #[test]
+    fn email_is_unavailable_without_smtp_and_disabled_wins() {
+        use rim_core::server_feature::model::{FeatureState, ServerFeature};
+        use rim_services::feature::service::FeatureGate;
+
+        let gate = RIMConfig::default().feature_gate().expect("gate");
+        assert!(matches!(
+            gate.state(ServerFeature::Email),
+            FeatureState::Unavailable { reason } if reason.contains("RIM_SMTP_HOST")
+        ));
+        for feature in ServerFeature::ALL {
+            if feature != ServerFeature::Email {
+                assert_eq!(gate.state(feature), FeatureState::Enabled, "{feature}");
+            }
+        }
+
+        let smtp = RIMConfig {
+            smtp_host: Some("smtp.example.com".to_string()),
+            smtp_from: Some("RIM <noreply@example.com>".to_string()),
+            ..Default::default()
+        };
+        assert!(smtp.features_unavailable().is_empty());
+        let gate = smtp.feature_gate().expect("gate");
+        assert_eq!(gate.state(ServerFeature::Email), FeatureState::Enabled);
+
+        let disabled = RIMConfig {
+            features_disabled: Some("email".to_string()),
+            ..Default::default()
+        };
+        let gate = disabled.feature_gate().expect("gate");
+        assert_eq!(gate.state(ServerFeature::Email), FeatureState::Disabled);
+    }
+
+    #[test]
+    fn features_disabled_is_read_from_its_variable() {
+        let config = Config::builder()
+            .set_override("server_host", "127.0.0.1")
+            .and_then(|b| b.set_override("server_port", 8090))
+            .and_then(|b| b.set_override("database_url", "postgres://localhost/rim"))
+            .and_then(|b| b.set_override("session_ttl_days", 30))
+            .and_then(|b| b.set_override("enable_graphiql", false))
+            .and_then(|b| b.set_override("data_dir", "./data"))
+            .and_then(|b| b.set_override("features_disabled", "custom_emoji"))
+            .and_then(|b| b.build())
+            .and_then(|c| c.try_deserialize::<RIMConfig>())
+            .expect("parses");
+        assert_eq!(
+            config.features_disabled(),
+            Ok(vec![
+                rim_core::server_feature::model::ServerFeature::CustomEmoji
+            ])
+        );
     }
 }

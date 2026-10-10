@@ -12,6 +12,10 @@ and the "unconfigured → log-only" fallback behavior. Implementation: Track B3 
 | set | unset | Same as above — `RIM_SMTP_FROM` is also required. |
 | set | set | `SmtpEmailSender` — real SMTP delivery via `lettre`. |
 
+`RIM_FEATURES_DISABLED=email` overrides the matrix: every message is dropped, the digest job does
+not run and `requestPasswordReset` answers `FEATURE_DISABLED`. Without SMTP, `serverInfo.features`
+reports email as `UNAVAILABLE` (`docs/operations/features.md`).
+
 Both `RIM_SMTP_HOST` and `RIM_SMTP_FROM` must be present to enable real delivery
 (`SmtpConfig::from_parts`); this is the minimum needed to construct a `From:` mailbox and a
 transport. Everything else is optional:

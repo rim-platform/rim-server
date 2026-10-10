@@ -1,7 +1,9 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 
 use crate::auth_context::require_actor;
+use crate::features::require_feature;
 use crate::ids::parse_uuid_id;
 use crate::types::CustomEmoji;
 
@@ -11,6 +13,7 @@ pub(crate) struct CustomEmojiQueries;
 #[Object]
 impl CustomEmojiQueries {
     async fn custom_emojis(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<CustomEmoji>> {
+        require_feature(ctx, ServerFeature::CustomEmoji)?;
         let actor = require_actor(ctx)?;
 
         let svc = ctx
