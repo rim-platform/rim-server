@@ -38,7 +38,3 @@ pub struct UpdateUserCommand {
     pub steps_json: serde_json::Value,
     pub is_enabled: bool,
 }
-
-pub fn is_user_command_key(command_key: &str) -> bool {
-    command_key.starts_with("user.")
-}

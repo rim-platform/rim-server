@@ -186,11 +186,7 @@ impl InviteMutations {
                 )
             }
             None => {
-                // Open mode. Proof-of-wiring: fail closed if signup rate limiter token is absent.
-                let _ =
-                    ctx.data::<std::sync::Arc<rim_services::auth::dto::SignupRateLimiterToken>>();
-
-                // Remote IP for rate limiting — service enforces the limit.
+                // Open mode. Remote IP for rate limiting — service enforces the limit.
                 let remote_ip = crate::auth_context::remote_ip(ctx);
 
                 let res = auth

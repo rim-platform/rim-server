@@ -5,15 +5,11 @@ use mockall::automock;
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
-use crate::workspace_state::model::{
-    NewWorkspaceState, UpdateWorkspaceState, WorkspaceState, WorkspaceStateId, WorkspaceStateScope,
-};
+use crate::workspace_state::model::{NewWorkspaceState, WorkspaceState, WorkspaceStateScope};
 
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait WorkspaceStateRepository: Send + Sync {
-    async fn get_by_id(&self, id: WorkspaceStateId) -> RepoResult<Option<WorkspaceState>>;
-
     async fn get_by_key(
         &self,
         server_id: ServerId,
@@ -39,14 +35,6 @@ pub trait WorkspaceStateRepository: Send + Sync {
     ) -> RepoResult<u64>;
 
     async fn upsert(&self, new: NewWorkspaceState) -> RepoResult<WorkspaceState>;
-
-    async fn update(
-        &self,
-        id: WorkspaceStateId,
-        update: UpdateWorkspaceState,
-    ) -> RepoResult<WorkspaceState>;
-
-    async fn delete(&self, id: WorkspaceStateId) -> RepoResult<()>;
 
     async fn delete_by_key(
         &self,

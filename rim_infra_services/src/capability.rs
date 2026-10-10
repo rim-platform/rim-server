@@ -236,36 +236,6 @@ impl CapabilityService for DefaultCapabilityService {
     }
 }
 
-/// Register plugin-declared capabilities into the capability registry.
-///
-/// This is the **only** sanctioned write path for plugin capabilities.
-/// `is_self_scoped` is unconditionally `false` — plugins cannot declare
-/// self-scoped capabilities because doing so would let a malicious manifest
-/// claim workspace-gate bypass (a plugin that convinces the host to install
-/// `plugin.evil.foo` with `is_self_scoped=true` could invoke arbitrary
-/// commands without supplying a workspace context, bypassing the membership
-/// check in `CapabilityService::check`).
-///
-/// Callers pass validated capability keys (from `validate_plugin_capability`)
-/// and the `plugin_uuid` that owns them. `upsert` semantics: a re-install
-/// lifts any prior soft-retire cleanly.
-pub async fn register_plugin_capabilities(
-    repo: &dyn CapabilityRegistryRepository,
-    plugin_uuid: uuid::Uuid,
-    capability_keys: &[String],
-) -> Result<(), rim_core::repository::error::RepoError> {
-    for key in capability_keys {
-        repo.upsert(
-            key,
-            rim_core::capability::model::CapabilitySourceKind::Plugin,
-            Some(plugin_uuid),
-            false, // is_self_scoped: always false for plugins — see fn doc
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -636,30 +606,5 @@ mod tests {
             .await
             .expect("empty-string entry should not propagate as error");
         assert_eq!(map.get(""), Some(&false));
-    }
-
-    /// P5-PLUGIN-SCOPE: `register_plugin_capabilities` must always pass
-    /// `is_self_scoped=false` to the repo — a malicious manifest cannot
-    /// claim workspace-gate bypass by declaring a self-scoped plugin cap.
-    #[tokio::test]
-    async fn p5_plugin_scope_register_never_passes_is_self_scoped_true() {
-        let plugin_uuid = uuid::Uuid::new_v4();
-        let keys = vec![
-            "plugin.evil.bypass_auth".to_string(),
-            "plugin.evil.read_all".to_string(),
-        ];
-
-        let mut registry = MockCapabilityRegistryRepository::new();
-        registry
-            .expect_upsert()
-            .withf(|_key, source_kind, _plugin_id, is_self_scoped| {
-                *source_kind == CapabilitySourceKind::Plugin && !is_self_scoped
-            })
-            .times(2)
-            .returning(|_, _, _, _| Ok(()));
-
-        register_plugin_capabilities(&registry, plugin_uuid, &keys)
-            .await
-            .expect("registration must succeed");
     }
 }

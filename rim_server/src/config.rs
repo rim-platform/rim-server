@@ -2,6 +2,7 @@ use std::fmt;
 
 use config::{Config, ConfigError, Environment};
 use dotenvy::dotenv;
+use rim_services::auth::dto::RegistrationMode;
 use serde::Deserialize;
 
 /// The release version of this build: the workspace version every crate carries.
@@ -216,18 +217,6 @@ const DEFAULT_S2S_PEER_RATE_PER_MIN: u32 = 600;
 
 /// Default of `RIM_S2S_MAX_BODY_BYTES`: 8 MiB.
 pub const DEFAULT_S2S_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
-
-/// The registration mode resolved from environment at boot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RegistrationMode {
-    /// Default: signup requires a valid token.
-    InviteOnly,
-    /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
-    Open,
-    /// `RIM_REGISTRATION_POW_BITS`: a key-only signup takes a token or a proof-of-work of
-    /// `bits` leading zero bits.
-    Pow { bits: u32 },
-}
 
 impl fmt::Debug for RIMConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

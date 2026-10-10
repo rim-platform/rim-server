@@ -1,13 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use entity::conversation_read_state;
 use rim_core::conversation::model::ConversationId;
-use rim_core::conversation_read_state::model::ConversationReadState;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, Statement};
+use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -50,23 +48,6 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
             .map_err(map_db_err)?;
 
         Ok(())
-    }
-
-    async fn get(
-        &self,
-        user_id: UserId,
-        conversation_id: ConversationId,
-    ) -> RepoResult<Option<ConversationReadState>> {
-        let model = conversation_read_state::Entity::find()
-            .filter(conversation_read_state::Column::UserId.eq::<Uuid>(user_id.into()))
-            .filter(
-                conversation_read_state::Column::ConversationId.eq::<Uuid>(conversation_id.into()),
-            )
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-
-        Ok(model.map(Into::into))
     }
 
     async fn get_unread_counts(

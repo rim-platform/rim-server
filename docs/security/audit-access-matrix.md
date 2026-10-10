@@ -28,12 +28,10 @@ The relevant actors for audit reads:
 |---|---|---|
 | Workspace member (any role with `audit.read`) | `audit.read`, `audit.read.self` | Full workspace dump for the scoped workspace |
 | Any authenticated user | `audit.read.self` | Own audit history only, no workspace scope required |
-| Plugin | Per-plugin grant, never `is_self_scoped=true` | Plugins cannot self-scope; see `rim_infra_services/src/capability.rs:register_plugin_capabilities` |
 | System / server-internal | `write_entry` path — no capability check | Write path is server-internal only; see `rim_services/src/audit/service.rs:13` |
 
-Plugins declared in the registry have `is_self_scoped` forced to `false` by
-`register_plugin_capabilities`. A plugin manifest cannot claim workspace-gate
-bypass. See `rim_infra_services/src/capability.rs:293-308`.
+Only the builtin capabilities are in the registry; nothing registers plugin capabilities on the
+server.
 
 ---
 

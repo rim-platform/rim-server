@@ -13,9 +13,3 @@ pub struct MessageThread {
     pub created_at: DateTime<Utc>,
     pub last_message_at: DateTime<Utc>,
 }
-
-impl MessageThread {
-    pub fn has_root_message(&self) -> bool {
-        self.first_message_id.is_some()
-    }
-}

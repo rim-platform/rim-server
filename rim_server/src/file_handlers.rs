@@ -15,7 +15,7 @@ use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
 use rim_services::moderation::service::ModerationService;
 use rim_services::storage::service::StorageService;
 
-use crate::graphql_support::{extract_actor_and_session_id, validate_csrf_header};
+use crate::graphql_support::{extract_auth, validate_csrf_header};
 
 /// Map a ServiceError to an HTTP response for REST endpoints.
 ///
@@ -135,14 +135,14 @@ pub(crate) async fn require_auth(
             .json(serde_json::json!({"error": "auth not configured"}))
     })?;
 
-    let (actor, _session_id) = extract_actor_and_session_id(req, authenticator.as_ref())
+    let auth = extract_auth(req, authenticator.as_ref())
         .await
         .map_err(|_| {
             HttpResponse::InternalServerError()
                 .json(serde_json::json!({"error": "auth check failed"}))
         })?;
 
-    actor.ok_or_else(|| {
+    auth.user_id.ok_or_else(|| {
         HttpResponse::Unauthorized().json(serde_json::json!({"error": "authentication required"}))
     })
 }
@@ -333,24 +333,15 @@ pub(crate) async fn upload_as(
         content_type: upload.content_type,
         data: upload.data,
     };
-    let attachment = match attachment_service.complete_upload(cmd).await {
-        Ok(attachment) => attachment,
+    match attachment_service.complete_upload(cmd).await {
+        Ok(attachment) => HttpResponse::Ok().json(serde_json::json!({
+            "size_bytes": attachment.size_bytes,
+        })),
         Err(e) => {
             tracing::error!(error = %e, "failed to complete upload via service");
-            return map_service_error_to_response(e);
+            map_service_error_to_response(e)
         }
-    };
-    let Some(storage_key) = attachment.storage_key else {
-        tracing::error!(attachment_id = %attachment.id, "completed upload has no storage key");
-        return HttpResponse::InternalServerError()
-            .json(serde_json::json!({"error": "upload failed"}));
-    };
-
-    HttpResponse::Ok().json(serde_json::json!({
-        "path": storage_key,
-        "size_bytes": attachment.size_bytes,
-        "url": format!("/api/files/{}", storage_key),
-    }))
+    }
 }
 
 /// GET /api/files/{path:.*}
@@ -359,17 +350,11 @@ pub async fn handle_file_download(
     path: web::Path<String>,
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
 ) -> HttpResponse {
-    let file_path = path.into_inner();
-    if !file_path.starts_with(LEGACY_UPLOADS_PREFIX)
-        && let Err(resp) = require_auth(&req).await
-    {
+    if let Err(resp) = require_auth(&req).await {
         return resp;
     }
-    file_download_as(&file_path, storage_backend.get_ref().as_ref()).await
+    file_download_as(&path.into_inner(), storage_backend.get_ref().as_ref()).await
 }
-
-/// Legacy uploads, now served by `/api/attachments/{id}/download`.
-const LEGACY_UPLOADS_PREFIX: &str = "uploads/";
 
 /// Serve a stored file to an authenticated user: avatars only. The session path above and
 /// forwarded requests from another relay share it.
@@ -377,10 +362,6 @@ pub(crate) async fn file_download_as(
     file_path: &str,
     storage_backend: &dyn StorageBackend,
 ) -> HttpResponse {
-    if file_path.starts_with(LEGACY_UPLOADS_PREFIX) {
-        return HttpResponse::Gone()
-            .json(serde_json::json!({"error": "use /api/attachments/{id}/download"}));
-    }
     // Avatars are readable by every authenticated user; any other prefix is denied.
     if !file_path.starts_with("avatars/") {
         return HttpResponse::Forbidden().json(serde_json::json!({"error": "access denied"}));

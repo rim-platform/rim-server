@@ -854,11 +854,6 @@ impl MessageService for DefaultMessageService {
         self.ensure_slow_mode_allows(&conv, &standing, cmd.actor.user_id)
             .await?;
 
-        if !cmd.attachments.is_empty() {
-            return Err(ServiceError::Validation(
-                "attachments are not supported in v0".to_string(),
-            ));
-        }
         if let Some(source) = cmd.forwarded_from_message_id {
             self.ensure_forward_source_readable(cmd.actor.user_id, cmd.server_id, source)
                 .await?;
@@ -903,7 +898,6 @@ impl MessageService for DefaultMessageService {
             thread_id: None,
             parent_message_id,
             forwarded_from_message_id: cmd.forwarded_from_message_id,
-            attachments: vec![],
         };
 
         // Run create + activity touch inside a transaction when DB is available.
@@ -988,12 +982,7 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::NotFound);
         }
 
-        // 3. Validate text and attachments
-        if !cmd.attachments.is_empty() {
-            return Err(ServiceError::Validation(
-                "attachments are not supported in v0".to_string(),
-            ));
-        }
+        // 3. Validate text
 
         let text = cmd.text.trim().to_string();
         if text.is_empty() {
@@ -1046,7 +1035,6 @@ impl MessageService for DefaultMessageService {
             thread_id: Some(thread.id),
             parent_message_id,
             forwarded_from_message_id: None,
-            attachments: vec![],
         };
 
         let message = repos.message_repo.create_message(&new_msg).await?;
@@ -1655,7 +1643,6 @@ impl MessageService for DefaultMessageService {
             thread_id: None,
             parent_message_id: None,
             forwarded_from_message_id: Some(cmd.message_id),
-            attachments: vec![],
         };
 
         let (repos, scope) = self.begin_write().await?;

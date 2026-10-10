@@ -46,7 +46,6 @@ use rim_services::workspace_state::service::MockWorkspaceStateService;
 use crate::auth_context::AuthActorCtx;
 use crate::broadcast::InMemoryBroadcaster;
 use crate::build_schema;
-use crate::export_sdl;
 
 mod attachment;
 mod audit;
@@ -85,8 +84,6 @@ fn test_observers() -> Arc<rim_services::events::Observers> {
 fn test_registration_context() -> crate::RegistrationContext {
     crate::RegistrationContext {
         registration_mode: Arc::new(rim_services::auth::dto::RegistrationMode::InviteOnly),
-        preview_rate_limiter: Arc::new(rim_services::auth::dto::PreviewInviteRateLimiterToken),
-        signup_rate_limiter: Arc::new(rim_services::auth::dto::SignupRateLimiterToken),
     }
 }
 
@@ -683,8 +680,22 @@ fn schema_with_audit_mock(
     )
 }
 
-/// Fully-mocked `AppServiceProvider` for tests that only need `export_sdl`
-/// to build (no resolver is actually invoked, so every mock is empty).
+/// The SDL of a schema built on [`test_service_provider`].
+fn test_sdl() -> String {
+    crate::build_schema(
+        test_service_provider(),
+        InMemoryBroadcaster::new(16),
+        test_presence_manager(),
+        test_typing_tracker(),
+        test_observers(),
+        test_registration_context(),
+        None,
+    )
+    .sdl()
+}
+
+/// Fully-mocked `AppServiceProvider` for tests that only need the schema to build (no resolver
+/// is actually invoked, so every mock is empty).
 fn test_service_provider() -> Arc<dyn AppServiceProvider> {
     Arc::new(TestAppServiceProvider {
         audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),

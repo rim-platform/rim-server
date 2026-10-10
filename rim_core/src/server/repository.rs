@@ -12,7 +12,5 @@ pub trait ServerRepository: Send + Sync {
 
     async fn create_server(&self, name: &str) -> RepoResult<Server>;
 
-    async fn find_by_name(&self, name: &str) -> RepoResult<Option<Server>>;
-
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>>;
 }

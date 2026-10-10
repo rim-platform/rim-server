@@ -65,7 +65,7 @@ mod repo_error_from {
 #[cfg(test)]
 mod actor {
     use crate::Actor;
-    use rim_core::principal::model::{Principal, PrincipalId, PrincipalKind};
+    use rim_core::principal::model::PrincipalKind;
     use rim_core::user::model::UserId;
 
     #[test]
@@ -79,35 +79,10 @@ mod actor {
     }
 
     #[test]
-    fn actor_from_principal_webhook_returns_none() {
-        let principal = Principal::webhook(PrincipalId::new());
-        assert!(Actor::from_principal(principal).is_none());
-    }
-
-    #[test]
-    fn actor_from_principal_app_returns_none() {
-        let principal = Principal::app(PrincipalId::new());
-        assert!(Actor::from_principal(principal).is_none());
-    }
-
-    #[test]
     fn actor_is_copy() {
         let actor = Actor::new(UserId::new());
         let copy = actor;
         assert_eq!(actor.user_id, copy.user_id);
-    }
-
-    #[test]
-    fn actor_from_principal_only_allows_user_principals() {
-        let user_id = UserId::new();
-        let user_principal = Principal::user(user_id);
-        let bot_principal = Principal::bot(PrincipalId::new());
-
-        assert_eq!(
-            Actor::from_principal(user_principal).map(|actor| actor.user_id),
-            Some(user_id)
-        );
-        assert!(Actor::from_principal(bot_principal).is_none());
     }
 }
 

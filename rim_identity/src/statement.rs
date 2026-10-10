@@ -18,9 +18,6 @@ pub enum StatementVersion {
 }
 
 impl StatementVersion {
-    /// The version clients should write.
-    pub const LATEST: Self = Self::V2;
-
     /// The value of the `"v"` field.
     pub fn number(self) -> u32 {
         match self {

@@ -1,6 +1,5 @@
 use crate::conversation::model::ConversationId;
 use crate::key_identity::model::DeviceKeyId;
-use crate::message_attachment::model::NewMessageAttachment;
 use crate::message_thread::model::MessageThreadId;
 use crate::model_id;
 use crate::user::model::UserId;
@@ -41,16 +40,6 @@ pub struct MessageEncryption {
     pub franking_key_id: i32,
 }
 
-impl Message {
-    pub fn is_timeline_message(&self) -> bool {
-        self.thread_id.is_none()
-    }
-
-    pub fn is_thread_reply(&self) -> bool {
-        self.thread_id.is_some()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMessage {
     pub conversation_id: ConversationId,
@@ -59,15 +48,4 @@ pub struct NewMessage {
     pub thread_id: Option<MessageThreadId>,
     pub parent_message_id: Option<MessageId>,
     pub forwarded_from_message_id: Option<MessageId>,
-    pub attachments: Vec<NewMessageAttachment>,
-}
-
-impl NewMessage {
-    pub fn is_timeline_message(&self) -> bool {
-        self.thread_id.is_none()
-    }
-
-    pub fn is_thread_reply(&self) -> bool {
-        self.thread_id.is_some()
-    }
 }

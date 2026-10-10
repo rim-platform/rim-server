@@ -11,7 +11,7 @@ mod tests {
     use rim_core::conversation::repository::{
         ConversationActivityCursor, ConversationCreatedCursor,
     };
-    use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+    use rim_core::conversation_member::model::ConversationMember;
     use rim_core::message::model::{Message, MessageId, NewMessage};
     use rim_core::message::repository::{
         ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
@@ -22,7 +22,7 @@ mod tests {
     use rim_core::repository::error::RepoResult;
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
-    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::user::model::UserId;
     use rim_services::message_reaction::command::{GetMessageReactionsQuery, ToggleReactionCmd};
     use rim_services::message_reaction::service::MessageReactionService;
@@ -142,7 +142,6 @@ mod tests {
         ConversationMemberRepository {}
         #[async_trait]
         impl rim_core::conversation_member::repository::ConversationMemberRepository for ConversationMemberRepository {
-            async fn get_by_id(&self, id: ConversationMemberId) -> RepoResult<Option<ConversationMember>>;
             async fn add_member(
                 &self,
                 conversation_id: ConversationId,
@@ -206,7 +205,6 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepository {
-            async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>>;
             async fn get_member(
                 &self,
                 server_id: ServerId,

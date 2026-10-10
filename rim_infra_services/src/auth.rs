@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use tracing::{info, instrument, warn};
 
 use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
-use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::NewInvite;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_infra_db::begin_transaction;
@@ -109,17 +109,8 @@ impl DefaultAuthService {
 
     /// Replace the login rate limiters (per-IP attempts, per-(IP, username) failures,
     /// per-username failures from any IP).
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let svc = DefaultAuthService::new(/* ... */).with_login_rate_limiters(
-    ///     RegistrationRateLimiter::new(300, 30),
-    ///     RegistrationRateLimiter::new(900, 10),
-    ///     RegistrationRateLimiter::new(3600, 100),
-    /// );
-    /// ```
-    #[allow(dead_code)]
-    pub fn with_login_rate_limiters(
+    #[cfg(test)]
+    pub(crate) fn with_login_rate_limiters(
         mut self,
         ip_limiter: RegistrationRateLimiter,
         ip_account_limiter: RegistrationRateLimiter,
@@ -145,17 +136,10 @@ impl DefaultAuthService {
         self
     }
 
-    /// Construct with explicit rate limiters — for testing or custom deployments.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let svc = DefaultAuthService::with_rate_limiters(
-    ///     repos, Some(db), Duration::days(30), observers,
-    ///     preview_rl, signup_rl, email_sender, None,
-    /// );
-    /// ```
-    #[allow(dead_code, clippy::too_many_arguments)]
-    pub fn with_rate_limiters(
+    /// Construct with explicit preview and signup rate limiters.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_rate_limiters(
         repos: AuthRepos,
         db: Option<DatabaseConnection>,
         session_ttl: Duration,
@@ -565,12 +549,7 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
 
-        let raw_token = {
-            let t = generate_session_token();
-            t.strip_prefix("rim_sess_")
-                .map(|s| format!("rim_inv_{s}"))
-                .unwrap_or_else(|| format!("rim_inv_{t}"))
-        };
+        let raw_token = generate_token("rim_inv_");
         let token_hash = hash_token(&raw_token);
 
         let inv = self

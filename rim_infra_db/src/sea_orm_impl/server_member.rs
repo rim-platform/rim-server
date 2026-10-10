@@ -26,14 +26,6 @@ impl SeaOrmServerMemberRepository {
 
 #[async_trait]
 impl ServerMemberRepository for SeaOrmServerMemberRepository {
-    async fn get_by_id(&self, id: ServerMemberId) -> RepoResult<Option<ServerMember>> {
-        let model = server_member::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(model.map(Into::into))
-    }
-
     async fn get_member(
         &self,
         server_id: ServerId,

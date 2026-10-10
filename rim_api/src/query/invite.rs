@@ -29,19 +29,6 @@ impl RegistrationQueries {
         ctx: &Context<'_>,
         token: String,
     ) -> Result<InviteTokenPreviewGql> {
-        // Marker token: the rate limiter is internal to `DefaultAuthService` and is
-        // always present — "missing limiter" is a state the type system makes
-        // unrepresentable (spec §4.7 R2). This context lookup is kept as a
-        // proof-of-wiring artifact; the marker is wired at schema-build time in
-        // `RegistrationContext`. Nit1 hardening: comment updated — limiter is
-        // internal; context just carries this marker token.
-        let _ = ctx
-            .data::<std::sync::Arc<rim_services::auth::dto::PreviewInviteRateLimiterToken>>()
-            .map_err(|_| {
-                async_graphql::Error::new("internal error: preview rate limiter not configured")
-                    .extend_with(|_, e| e.set("code", "INTERNAL"))
-            })?;
-
         let remote_ip = crate::auth_context::remote_ip(ctx);
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
