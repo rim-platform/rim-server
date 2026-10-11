@@ -15,9 +15,11 @@ use rim_api::AppSchema;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_err_code, exec_ok};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+};
 use support::roles::{Roles, create_channel};
+use support::{TestCtx, unknown_id};
 
 /// `$operation` followed by the fragment selecting every `MacroDef` field.
 macro_rules! with_macro_fields {
@@ -228,7 +230,7 @@ impl Fixture {
 #[tokio::test]
 async fn macro_roots_refuse_anonymous_callers() {
     let f = setup().await;
-    let missing = uuid::Uuid::now_v7().to_string();
+    let missing = unknown_id();
     let steps = json!([f.post_step("x")]);
     let calls = [
         (CREATE_MACRO, f.create_vars("m", steps.clone(), json!({}))),
@@ -255,10 +257,7 @@ async fn macro_roots_refuse_non_members() {
         ),
         (MACRO_BY_NAME, f.by_name_vars("greet")),
     ];
-    assert_each_refused(&f.schema, &calls, "FORBIDDEN", |q, v| {
-        f.ws.olive.request(q, v)
-    })
-    .await;
+    assert_each_refused_as(&f.schema, &f.ws.olive, &calls, "FORBIDDEN").await;
     assert!(f.mine(&f.ws.olive).await.is_empty());
 }
 
@@ -426,7 +425,7 @@ async fn update_macro_is_author_only_and_validated() {
             "FORBIDDEN"
         );
     }
-    let missing = uuid::Uuid::now_v7().to_string();
+    let missing = unknown_id();
     assert_eq!(
         f.update_code(&f.ws.bob, &missing, "x", f.post_steps(1))
             .await,
@@ -615,7 +614,7 @@ async fn execute_macro_is_author_only() {
     }
     assert!(f.channel_texts().await.is_empty());
 
-    let missing = uuid::Uuid::now_v7().to_string();
+    let missing = unknown_id();
     assert_eq!(
         f.execute_code(&f.ws.bob, &missing, json!({})).await,
         "NOT_FOUND"

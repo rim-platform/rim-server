@@ -18,10 +18,11 @@ use rim_services::auth::dto::RegistrationMode;
 use rim_services::events::WorkspaceEvent;
 
 use support::graphql::{
-    Caller, anonymous_request, assert_each_refused, exec_err_code, exec_err_message, exec_ok,
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
+    exec_err_message, exec_ok,
 };
 use support::roles::{Roles, create_channel};
-use support::{RecordingBroadcaster, TestCtx};
+use support::{RecordingBroadcaster, TestCtx, unknown_id};
 
 const SET_ARCHIVED: &str = r#"
 mutation Archive($serverId: ID!, $conversationId: ID!) {
@@ -165,10 +166,7 @@ async fn presence_writes_refuse_non_members() {
         (HEARTBEAT, f.heartbeat_vars("ONLINE")),
         (START_TYPING, f.typing_vars(&f.channel_id)),
     ];
-    assert_each_refused(&f.schema, &calls, "FORBIDDEN", |q, v| {
-        f.ws.olive.request(q, v)
-    })
-    .await;
+    assert_each_refused_as(&f.schema, &f.ws.olive, &calls, "FORBIDDEN").await;
     assert!(f.presence_changes().is_empty());
     assert!(f.typing_events().is_empty());
 }
@@ -278,7 +276,7 @@ async fn start_typing_emits_one_event_per_throttle_window() {
 #[tokio::test]
 async fn start_typing_refuses_conversations_the_caller_cannot_see() {
     let f = setup().await;
-    let missing = uuid::Uuid::now_v7().to_string();
+    let missing = unknown_id();
     let foreign = create_channel(&f.schema, &f.ws.olive, &f.ws.other_server_id, "x", false).await;
     let private = create_channel(&f.schema, &f.ws.alice, &f.ws.server_id, "staff", true).await;
 

@@ -18,11 +18,11 @@ use serde_json::{Value, json};
 
 use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
 use support::graphql::{Caller, exec_err_code, exec_ok};
+use support::roles::create_channel;
 
 const CREATE_CONVERSATION: &str = r#"
 mutation Create($input: CreateConversationInput!) {
@@ -161,13 +161,6 @@ struct Fixture {
     general: String,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
     let server = ctx.create_server("notifications-e2e").await;
@@ -181,16 +174,16 @@ async fn setup() -> Fixture {
         .await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let mut f = Fixture {
-        alice: caller(&ctx, &alice_user).await,
-        bob: caller(&ctx, &bob_user).await,
-        carol: caller(&ctx, &carol_user).await,
+        alice: ctx.caller(&alice_user).await,
+        bob: ctx.caller(&bob_user).await,
+        carol: ctx.caller(&carol_user).await,
         server_id: server.id.to_string(),
         schema,
         ctx,
         general: String::new(),
     };
     let alice = f.alice;
-    f.general = f.create_channel(&alice, "general", false).await;
+    f.general = create_channel(&f.schema, &alice, &f.server_id, "general", false).await;
     let (bob, carol, general) = (f.bob, f.carol, f.general.clone());
     f.join(&bob, &general).await;
     f.join(&carol, &general).await;
@@ -204,21 +197,6 @@ fn mention(who: &Caller) -> String {
 impl Fixture {
     fn ids(&self, conversation_id: &str) -> Value {
         json!({ "serverId": self.server_id, "conversationId": conversation_id })
-    }
-
-    async fn create_channel(&self, who: &Caller, title: &str, is_private: bool) -> String {
-        let data = exec_ok(
-            &self.schema,
-            who.request(
-                CREATE_CONVERSATION,
-                json!({ "input": {
-                    "serverId": self.server_id, "isChannel": true, "title": title,
-                    "isPrivate": is_private,
-                } }),
-            ),
-        )
-        .await;
-        data["conversation"]["id"].as_str().expect("id").to_string()
     }
 
     async fn create_dm(&self, who: &Caller, other: &Caller) -> String {
@@ -709,7 +687,7 @@ async fn notifications_page_and_mark_read() {
 #[tokio::test]
 async fn reading_the_conversation_clears_its_notifications() {
     let f = setup().await;
-    let other = f.create_channel(&f.alice, "random", false).await;
+    let other = create_channel(&f.schema, &f.alice, &f.server_id, "random", false).await;
     f.join(&f.bob, &other).await;
     f.send(&f.bob, &f.general, "one").await;
     f.send(&f.bob, &f.general, "two").await;
@@ -739,7 +717,7 @@ async fn reading_the_conversation_clears_its_notifications() {
 #[tokio::test]
 async fn private_channel_never_notifies_non_members() {
     let f = setup().await;
-    let secret = f.create_channel(&f.alice, "secret", true).await;
+    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
     exec_ok(
         &f.schema,
         f.alice.request(
@@ -917,7 +895,7 @@ async fn notification_commands_dispatch_to_the_service() {
 async fn membership_gates() {
     let f = setup().await;
     let outsider_user = f.ctx.create_user("nt-outsider").await;
-    let outsider = caller(&f.ctx, &outsider_user).await;
+    let outsider = f.ctx.caller(&outsider_user).await;
     let code = exec_err_code(
         &f.schema,
         outsider.request(UNREAD_COUNT, json!({ "serverId": f.server_id })),
@@ -925,7 +903,7 @@ async fn membership_gates() {
     .await;
     assert_eq!(code, "FORBIDDEN");
 
-    let secret = f.create_channel(&f.alice, "secret", true).await;
+    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
     let mut vars = f.ids(&secret);
     vars["level"] = json!("ALL");
     let code = exec_err_code(&f.schema, f.carol.request(SET_LEVEL, vars)).await;
