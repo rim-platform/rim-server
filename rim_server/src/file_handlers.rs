@@ -611,40 +611,49 @@ pub(crate) async fn avatar_upload_as(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use actix_web::App;
     use actix_web::cookie::Cookie;
     use actix_web::test as actix_test;
     use rim_core::auth::model::SessionId;
+    use rim_core::message_attachment::model::MessageAttachmentId;
     use rim_core::moderation::model::MessageReportId;
     use rim_core::storage::{StorageError, StoredFile};
     use rim_core::user::model::UserId;
+    use rim_services::ServiceError;
     use rim_services::auth::dto::RequestAuthResultDto;
     use rim_services::auth::service::MockRequestAuthenticator;
+    use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus};
+    use rim_services::message_attachment::service::MockMessageAttachmentService;
     use rim_services::moderation::dto::ReportAttachmentDto;
     use rim_services::moderation::service::MockModerationService;
+    use rim_services::storage::service::MockStorageService;
+    use serde_json::{Value, json};
 
-    use crate::graphql_support::COOKIE_SESSION;
+    use super::*;
+    use crate::graphql_support::{COOKIE_CSRF, COOKIE_SESSION};
 
     const SESSION: &str = "rim_sess_test";
+    const BOUNDARY: &str = "rimboundary";
     const BLOB: &[u8] = b"opaque blob";
+    const AVATAR: &[u8] = b"\x89PNG avatar";
     /// Unpadded base64url of 32 bytes of 0x07.
     const BLOB_SHA256: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 
-    /// Storage holding one file, `uploads/blob`.
-    struct OneFile;
+    /// Storage holding `uploads/blob` and `avatars/u/avatar.png`; `broken` fails to read.
+    struct Files;
 
     #[async_trait::async_trait]
-    impl StorageBackend for OneFile {
+    impl StorageBackend for Files {
         async fn put(&self, _: &str, _: &[u8], _: &str) -> Result<StoredFile, StorageError> {
-            Err(StorageError::NotFound("read only".to_string()))
+            Err(StorageError::Unsupported("read only".to_string()))
         }
 
         async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            if key == "uploads/blob" {
-                Ok(BLOB.to_vec())
-            } else {
-                Err(StorageError::NotFound(key.to_string()))
+            match key {
+                "uploads/blob" => Ok(BLOB.to_vec()),
+                "avatars/u/avatar.png" => Ok(AVATAR.to_vec()),
+                "broken" => Err(StorageError::Unsupported("disk gone".to_string())),
+                _ => Err(StorageError::NotFound(key.to_string())),
             }
         }
 
@@ -674,24 +683,76 @@ mod tests {
         auth
     }
 
-    macro_rules! test_app {
-        ($auth:expr, $service:expr) => {
+    /// The services behind the routes, for the session of `user_id`. Unprimed mocks panic on
+    /// any call, so a test that leaves one alone also pins that the handler never reached it.
+    struct Deps {
+        user_id: UserId,
+        attachments: MockMessageAttachmentService,
+        storage: MockStorageService,
+        moderation: MockModerationService,
+        disabled: Vec<ServerFeature>,
+    }
+
+    impl Deps {
+        fn new() -> Self {
+            Self {
+                user_id: UserId::new(),
+                attachments: MockMessageAttachmentService::new(),
+                storage: MockStorageService::new(),
+                moderation: MockModerationService::new(),
+                disabled: Vec::new(),
+            }
+        }
+    }
+
+    /// Every file route, served over `$deps`.
+    macro_rules! app {
+        ($deps:expr) => {{
+            let deps: Deps = $deps;
             actix_test::init_service(
                 App::new()
+                    .service(
+                        web::resource("/api/files/upload")
+                            .route(web::post().to(handle_file_upload)),
+                    )
+                    .service(
+                        web::resource("/api/files/avatar")
+                            .route(web::post().to(handle_avatar_upload)),
+                    )
+                    .service(
+                        web::resource("/api/files/{path:.*}")
+                            .route(web::get().to(handle_file_download)),
+                    )
+                    .service(
+                        web::resource("/api/attachments/{attachment_id}/download")
+                            .route(web::get().to(handle_attachment_download)),
+                    )
                     .service(
                         web::resource("/api/reports/{report_id}/attachments/{blob_sha256}")
                             .route(web::get().to(handle_report_attachment_download)),
                     )
                     .app_data(web::Data::new(
-                        Arc::new($auth) as Arc<dyn RequestAuthenticator>
+                        Arc::new(authenticator(deps.user_id)) as Arc<dyn RequestAuthenticator>
                     ))
                     .app_data(web::Data::new(
-                        Arc::new($service) as Arc<dyn ModerationService>
+                        Arc::new(deps.attachments) as Arc<dyn MessageAttachmentService>
                     ))
-                    .app_data(web::Data::new(Arc::new(OneFile) as Arc<dyn StorageBackend>)),
+                    .app_data(web::Data::new(
+                        Arc::new(deps.storage) as Arc<dyn StorageService>
+                    ))
+                    .app_data(web::Data::new(
+                        Arc::new(deps.moderation) as Arc<dyn ModerationService>
+                    ))
+                    .app_data(web::Data::new(Arc::new(Files) as Arc<dyn StorageBackend>))
+                    .app_data(web::Data::new(Arc::new(
+                        rim_infra_services::feature_gate::InstanceFeatureGate::new(
+                            &deps.disabled,
+                            &[],
+                        ),
+                    ) as Arc<dyn FeatureGate>)),
             )
             .await
-        };
+        }};
     }
 
     fn get(path: &str, signed_in: bool) -> actix_test::TestRequest {
@@ -703,12 +764,463 @@ mod tests {
         }
     }
 
+    /// One part of a multipart body.
+    #[derive(Clone, Copy)]
+    enum Part<'a> {
+        Text(&'a str, &'a [u8]),
+        /// File name, content type, bytes.
+        File(&'a str, &'a str, &'a [u8]),
+    }
+
+    /// A small text file.
+    const TXT: Part<'static> = Part::File("a.txt", "text/plain", b"x");
+
+    fn multipart_body(parts: &[Part<'_>]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for part in parts {
+            body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+            let (head, data) = match part {
+                Part::Text(name, value) => (
+                    format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n"),
+                    *value,
+                ),
+                Part::File(filename, content_type, data) => (
+                    format!(
+                        "Content-Disposition: form-data; name=\"file\"; \
+                         filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                    ),
+                    *data,
+                ),
+            };
+            body.extend_from_slice(head.as_bytes());
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+        body
+    }
+
+    /// A multipart POST of `body` to `path`; signed in with a valid CSRF pair when `signed_in`.
+    fn post_body(path: &str, body: Vec<u8>, signed_in: bool) -> actix_test::TestRequest {
+        let req = actix_test::TestRequest::post()
+            .uri(path)
+            .insert_header((
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            ))
+            .set_payload(body);
+        if !signed_in {
+            return req;
+        }
+        let csrf = rim_auth::csrf::generate_csrf_token(SESSION);
+        req.cookie(Cookie::new(COOKIE_SESSION, SESSION))
+            .cookie(Cookie::new(COOKIE_CSRF, csrf.clone()))
+            .insert_header(("x-csrf-token", csrf))
+    }
+
+    fn post(path: &str, parts: &[Part<'_>]) -> actix_test::TestRequest {
+        post_body(path, multipart_body(parts), true)
+    }
+
+    /// The parts of a complete attachment upload of `data` typed `content_type`.
+    fn upload_parts<'a>(
+        token: &'a str,
+        attachment_id: &'a str,
+        content_type: &'a str,
+        data: &'a [u8],
+    ) -> [Part<'a>; 3] {
+        [
+            Part::Text("upload_token", token.as_bytes()),
+            Part::Text("attachment_id", attachment_id.as_bytes()),
+            Part::File("dir/a.txt", content_type, data),
+        ]
+    }
+
+    /// Send `$req` to `$app` and return its status and JSON body (`null` for a non-JSON body).
+    macro_rules! status_and_body {
+        ($app:expr, $req:expr) => {{
+            let resp = actix_test::call_service($app, $req.to_request()).await;
+            let status = resp.status().as_u16();
+            let bytes = actix_test::read_body(resp).await;
+            let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            (status, body)
+        }};
+    }
+
+    fn attachment(storage_key: Option<&str>, blob_sha256: Option<Vec<u8>>) -> AttachmentDto {
+        AttachmentDto {
+            id: MessageAttachmentId::new(),
+            status: AttachmentStatus::Ready,
+            filename: "re\"port.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            size_bytes: BLOB.len() as u64,
+            storage_key: storage_key.map(str::to_string),
+            created_at: chrono::Utc::now(),
+            blob_sha256,
+        }
+    }
+
+    // ── Upload ──────────────────────────────────────────────────────────────
+
+    /// A complete upload hands the service the caller, the parsed id, the token, the file's
+    /// last path component, its type and bytes, and answers the stored size.
+    #[actix_web::test]
+    async fn upload_completes_through_the_service_and_answers_the_stored_size() {
+        let mut deps = Deps::new();
+        let user_id = deps.user_id;
+        let attachment_id = MessageAttachmentId::new();
+        deps.attachments
+            .expect_complete_upload()
+            .withf(move |cmd| {
+                cmd.actor_user_id == user_id
+                    && cmd.attachment_id == attachment_id
+                    && cmd.upload_token == "tok"
+                    && cmd.uploaded_filename == "a.txt"
+                    && cmd.content_type == "text/plain"
+                    && cmd.data == b"hello"
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(attachment(Some("uploads/blob"), None)) }));
+        let app = app!(deps);
+
+        let id = attachment_id.to_string();
+        let req = post(
+            "/api/files/upload",
+            &upload_parts(" tok ", &id, "text/plain", b"hello"),
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (200, json!({ "size_bytes": BLOB.len() }))
+        );
+    }
+
+    /// An encrypted conversation's blob type is accepted; a type outside the allow list is
+    /// refused with 415 before the service is asked.
+    #[actix_web::test]
+    async fn upload_accepts_the_encrypted_blob_type_and_refuses_other_types() {
+        let mut deps = Deps::new();
+        deps.attachments
+            .expect_complete_upload()
+            .withf(|cmd| cmd.content_type == "application/octet-stream")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(attachment(Some("uploads/blob"), None)) }));
+        let app = app!(deps);
+        let id = MessageAttachmentId::new().to_string();
+
+        let req = post(
+            "/api/files/upload",
+            &upload_parts("tok", &id, "application/octet-stream", b"x"),
+        );
+        assert_eq!(status_and_body!(&app, req).0, 200);
+
+        let req = post(
+            "/api/files/upload",
+            &upload_parts("tok", &id, "application/x-msdownload", b"x"),
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (415, json!({ "error": "file type not allowed" }))
+        );
+    }
+
+    /// Malformed or incomplete uploads answer 400 with the reason and never reach the service.
+    #[actix_web::test]
+    async fn upload_refuses_missing_and_malformed_fields() {
+        let app = app!(Deps::new());
+        let id = MessageAttachmentId::new().to_string();
+        let long = [b'a'; 257];
+        let cases: Vec<(Vec<Part<'_>>, &str)> = vec![
+            (
+                vec![Part::Text("attachment_id", id.as_bytes()), TXT],
+                "upload_token is required",
+            ),
+            (
+                vec![
+                    Part::Text("upload_token", b"  "),
+                    Part::Text("attachment_id", id.as_bytes()),
+                    TXT,
+                ],
+                "upload_token is required",
+            ),
+            (
+                vec![Part::Text("upload_token", b"tok"), TXT],
+                "attachment_id is required",
+            ),
+            (
+                upload_parts("tok", "nope", "text/plain", b"x").into(),
+                "invalid attachment_id",
+            ),
+            (
+                vec![Part::Text("upload_token", &long), TXT],
+                "field value too long",
+            ),
+            (
+                vec![Part::Text("attachment_id", &long), TXT],
+                "field value too long",
+            ),
+            (
+                vec![Part::Text("upload_token", b"tok")],
+                "no file in upload",
+            ),
+            (
+                vec![TXT, Part::File("b.txt", "text/plain", b"y")],
+                "only one file allowed per upload",
+            ),
+            (
+                vec![Part::File("../a.txt", "text/plain", b"x")],
+                "invalid filename",
+            ),
+        ];
+        for (parts, error) in cases {
+            let req = post("/api/files/upload", &parts);
+            assert_eq!(
+                status_and_body!(&app, req),
+                (400, json!({ "error": error })),
+                "{error}"
+            );
+        }
+    }
+
+    /// A body cut off inside the file answers 400 with the read error.
+    #[actix_web::test]
+    async fn upload_refuses_a_truncated_body() {
+        let app = app!(Deps::new());
+        let mut body = multipart_body(&[Part::File("a.txt", "text/plain", b"hello")]);
+        body.truncate(body.len() - 20);
+        let (status, body) = status_and_body!(&app, post_body("/api/files/upload", body, true));
+        assert_eq!(status, 400);
+        let error = body["error"].as_str().unwrap_or_default();
+        assert!(
+            error.starts_with("read error") || error == "malformed multipart field",
+            "{body}"
+        );
+    }
+
+    /// A file one byte over the attachment cap answers 413 naming the limit.
+    #[actix_web::test]
+    async fn upload_refuses_a_file_over_the_attachment_cap() {
+        let app = app!(Deps::new());
+        let data = vec![b'a'; MAX_UPLOAD_BYTES as usize + 1];
+        let id = MessageAttachmentId::new().to_string();
+        let req = post(
+            "/api/files/upload",
+            &upload_parts("tok", &id, "text/plain", &data),
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (
+                413,
+                json!({ "error": format!("file exceeds {MAX_UPLOAD_BYTES} byte limit") })
+            )
+        );
+    }
+
+    /// A refusal from the attachment service reaches the client as a status and an `error` body.
+    #[actix_web::test]
+    async fn upload_maps_service_refusals_to_http_answers() {
+        let mut deps = Deps::new();
+        deps.attachments.expect_complete_upload().returning(|cmd| {
+            let err = match cmd.upload_token.as_str() {
+                "denied" => ServiceError::PermissionDenied,
+                "gone" => ServiceError::NotFound,
+                "bad" => ServiceError::Validation("size mismatch".to_string()),
+                "busy" => ServiceError::RateLimited {
+                    retry_after_seconds: 7,
+                },
+                _ => ServiceError::internal(anyhow::anyhow!("boom")),
+            };
+            Box::pin(async move { Err(err) })
+        });
+        let app = app!(deps);
+        let id = MessageAttachmentId::new().to_string();
+        let cases = [
+            ("denied", 403, json!({ "error": "access denied" })),
+            ("gone", 404, json!({ "error": "not found" })),
+            ("bad", 400, json!({ "error": "size mismatch" })),
+            (
+                "busy",
+                429,
+                json!({ "error": "rate limit exceeded", "retryAfterSeconds": 7 }),
+            ),
+            ("other", 500, json!({ "error": "internal error" })),
+        ];
+        for (token, status, body) in cases {
+            let req = post(
+                "/api/files/upload",
+                &upload_parts(token, &id, "text/plain", b"x"),
+            );
+            assert_eq!(status_and_body!(&app, req), (status, body), "{token}");
+        }
+    }
+
+    /// With attachments disabled, upload and download answer 403 `FEATURE_DISABLED` before the
+    /// session is looked at.
+    #[actix_web::test]
+    async fn a_disabled_feature_refuses_attachment_upload_and_download() {
+        let mut deps = Deps::new();
+        deps.disabled = vec![ServerFeature::Attachments];
+        let app = app!(deps);
+        let upload = post_body("/api/files/upload", multipart_body(&[TXT]), false);
+        let download = get(
+            &format!("/api/attachments/{}/download", MessageAttachmentId::new()),
+            false,
+        );
+        for req in [upload, download] {
+            let (status, body) = status_and_body!(&app, req);
+            assert_eq!(status, 403);
+            assert_eq!(body["code"], "FEATURE_DISABLED");
+            assert_eq!(body["feature"], "attachments");
+        }
+    }
+
+    /// Without a CSRF pair, upload and avatar upload answer 403 without a feature code.
+    #[actix_web::test]
+    async fn uploads_without_csrf_are_refused() {
+        let app = app!(Deps::new());
+        for path in ["/api/files/upload", "/api/files/avatar"] {
+            let req = post_body(
+                path,
+                multipart_body(&[Part::File("a.png", "image/png", b"x")]),
+                false,
+            )
+            .cookie(Cookie::new(COOKIE_SESSION, SESSION));
+            let (status, body) = status_and_body!(&app, req);
+            assert_eq!(status, 403, "{path}");
+            assert_eq!(body["error"], "csrf validation failed", "{path}");
+        }
+    }
+
+    // ── Downloads ───────────────────────────────────────────────────────────
+
+    /// A readable attachment is served with its type and a sanitised file name; an encrypted one
+    /// as opaque bytes named `encrypted.bin`.
+    #[actix_web::test]
+    async fn attachment_download_serves_the_file_with_its_type_and_name() {
+        let mut deps = Deps::new();
+        let user_id = deps.user_id;
+        let plain = MessageAttachmentId::new();
+        deps.attachments
+            .expect_authorize_download()
+            .withf(move |q| q.actor_user_id == user_id)
+            .returning(move |q| {
+                let blob_sha256 = (q.attachment_id != plain).then(|| vec![7; 32]);
+                Box::pin(async move { Ok(attachment(Some("uploads/blob"), blob_sha256)) })
+            });
+        let app = app!(deps);
+
+        let cases = [
+            (plain, "text/plain", "attachment; filename=\"report.txt\""),
+            (
+                MessageAttachmentId::new(),
+                "application/octet-stream",
+                "attachment; filename=\"encrypted.bin\"",
+            ),
+        ];
+        for (id, content_type, disposition) in cases {
+            let req = get(&format!("/api/attachments/{id}/download"), true);
+            let resp = actix_test::call_service(&app, req.to_request()).await;
+            assert_eq!(resp.status(), 200);
+            let headers = resp.headers();
+            assert_eq!(
+                headers.get(header::CONTENT_TYPE).expect("type"),
+                content_type
+            );
+            assert_eq!(
+                headers
+                    .get(header::CONTENT_DISPOSITION)
+                    .expect("disposition"),
+                disposition
+            );
+            assert_eq!(actix_test::read_body(resp).await, BLOB);
+        }
+    }
+
+    /// Attachment download answers 400 for a malformed id, the service's refusal, 404 while the
+    /// file is pending or missing from storage, and 500 when storage fails.
+    #[actix_web::test]
+    async fn attachment_download_refusals() {
+        let mut deps = Deps::new();
+        let [denied, gone, pending, lost, broken] = [(); 5].map(|_| MessageAttachmentId::new());
+        deps.attachments
+            .expect_authorize_download()
+            .returning(move |q| {
+                let id = q.attachment_id;
+                let result = if id == denied {
+                    Err(ServiceError::PermissionDenied)
+                } else if id == gone {
+                    Err(ServiceError::NotFound)
+                } else if id == pending {
+                    Ok(attachment(None, None))
+                } else if id == lost {
+                    Ok(attachment(Some("uploads/lost"), None))
+                } else {
+                    Ok(attachment(Some("broken"), None))
+                };
+                Box::pin(async move { result })
+            });
+        let app = app!(deps);
+
+        let cases = [
+            ("nope".to_string(), 400, "invalid attachment id"),
+            (denied.to_string(), 403, "access denied"),
+            (gone.to_string(), 404, "not found"),
+            (pending.to_string(), 404, "attachment not yet uploaded"),
+            (lost.to_string(), 404, "file not found"),
+            (broken.to_string(), 500, "download failed"),
+        ];
+        for (id, status, error) in cases {
+            let req = get(&format!("/api/attachments/{id}/download"), true);
+            assert_eq!(
+                status_and_body!(&app, req),
+                (status, json!({ "error": error })),
+                "{error}"
+            );
+        }
+    }
+
+    /// An avatar is served with the type its extension implies and its file name; a missing one
+    /// answers 404 and a signed-out caller 401.
+    #[actix_web::test]
+    async fn avatar_download_serves_the_file_or_answers_404() {
+        let app = app!(Deps::new());
+        let resp = actix_test::call_service(
+            &app,
+            get("/api/files/avatars/u/avatar.png", true).to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        let headers = resp.headers();
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).expect("type"),
+            "image/png"
+        );
+        assert_eq!(
+            headers
+                .get(header::CONTENT_DISPOSITION)
+                .expect("disposition"),
+            "attachment; filename=\"avatar.png\""
+        );
+        assert_eq!(actix_test::read_body(resp).await, AVATAR);
+
+        let req = get("/api/files/avatars/u/missing.png", true);
+        assert_eq!(
+            status_and_body!(&app, req),
+            (404, json!({ "error": "file not found" }))
+        );
+        let req = get("/api/files/avatars/u/avatar.png", false);
+        assert_eq!(
+            status_and_body!(&app, req),
+            (401, json!({ "error": "authentication required" }))
+        );
+    }
+
+    /// A reported encrypted blob is served opaque, with `nosniff`.
     #[actix_web::test]
     async fn a_reported_blob_is_served_opaque() {
-        let user_id = UserId::new();
+        let mut deps = Deps::new();
+        let user_id = deps.user_id;
         let report_id = MessageReportId::new();
-        let mut service = MockModerationService::new();
-        service
+        deps.moderation
             .expect_authorize_report_attachment()
             .withf(move |q| {
                 q.actor_user_id == user_id && q.report_id == report_id && q.blob_sha256 == [7; 32]
@@ -720,7 +1232,7 @@ mod tests {
                     })
                 })
             });
-        let app = test_app!(authenticator(user_id), service);
+        let app = app!(deps);
 
         let path = format!("/api/reports/{report_id}/attachments/{BLOB_SHA256}");
         let resp = actix_test::call_service(&app, get(&path, true).to_request()).await;
@@ -743,13 +1255,13 @@ mod tests {
 
     #[actix_web::test]
     async fn every_refusal_is_a_bare_404_and_no_session_a_401() {
+        let mut deps = Deps::new();
         let report_id = MessageReportId::new();
-        let mut service = MockModerationService::new();
-        service
+        deps.moderation
             .expect_authorize_report_attachment()
             .times(1)
-            .returning(|_| Box::pin(async { Err(rim_services::ServiceError::NotFound) }));
-        let app = test_app!(authenticator(UserId::new()), service);
+            .returning(|_| Box::pin(async { Err(ServiceError::NotFound) }));
+        let app = app!(deps);
 
         let path = format!("/api/reports/{report_id}/attachments/{BLOB_SHA256}");
         let resp = actix_test::call_service(&app, get(&path, false).to_request()).await;
@@ -766,79 +1278,87 @@ mod tests {
         }
     }
 
-    macro_rules! attachment_app {
-        ($gate:expr) => {
-            actix_test::init_service(
-                App::new()
-                    .service(
-                        web::resource("/api/files/upload")
-                            .route(web::post().to(handle_file_upload)),
-                    )
-                    .service(
-                        web::resource("/api/attachments/{attachment_id}/download")
-                            .route(web::get().to(handle_attachment_download)),
-                    )
-                    .app_data(web::Data::new(
-                        Arc::new(MockRequestAuthenticator::new()) as Arc<dyn RequestAuthenticator>
-                    ))
-                    .app_data(web::Data::new(Arc::new(
-                        rim_services::message_attachment::service::MockMessageAttachmentService::new(),
-                    )
-                        as Arc<dyn MessageAttachmentService>))
-                    .app_data(web::Data::new(Arc::new(OneFile) as Arc<dyn StorageBackend>))
-                    .app_data(web::Data::new(Arc::new($gate) as Arc<dyn FeatureGate>)),
-            )
-            .await
-        };
-    }
+    // ── Avatar upload ───────────────────────────────────────────────────────
 
-    fn upload() -> actix_test::TestRequest {
-        actix_test::TestRequest::post()
-            .uri("/api/files/upload")
-            .insert_header((
-                header::CONTENT_TYPE,
-                "multipart/form-data; boundary=rimboundary",
-            ))
-            .set_payload(
-                "--rimboundary\r\nContent-Disposition: form-data; name=\"file\"; \
-                 filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--rimboundary--\r\n",
-            )
-    }
-
-    /// With attachments disabled, upload and download answer 403 `FEATURE_DISABLED` before the
-    /// session is looked at; the unprimed mocks panic on any call.
+    /// An avatar is stored under the caller's key with the extension of its content type, not of
+    /// the client's file name, and the answer carries its path, size and URL.
     #[actix_web::test]
-    async fn a_disabled_feature_refuses_attachment_upload_and_download() {
-        let gate = rim_infra_services::feature_gate::InstanceFeatureGate::new(
-            &[ServerFeature::Attachments],
-            &[],
+    async fn avatar_upload_stores_under_the_callers_key_by_type() {
+        let mut deps = Deps::new();
+        let key = format!("avatars/{}/avatar.jpeg", deps.user_id);
+        let expected = key.clone();
+        deps.storage
+            .expect_upload_file()
+            .withf(move |k, data, content_type| {
+                k == expected && data == b"jpeg" && content_type == "image/jpeg"
+            })
+            .times(1)
+            .returning(|k, data, _| {
+                let stored = StoredFile {
+                    key: k.to_string(),
+                    size_bytes: data.len() as u64,
+                };
+                Box::pin(async move { Ok(stored) })
+            });
+        let app = app!(deps);
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.png", "image/jpeg", b"jpeg")],
         );
-        let app = attachment_app!(gate);
-        for req in [
-            upload().to_request(),
-            actix_test::TestRequest::get()
-                .uri(&format!(
-                    "/api/attachments/{}/download",
-                    uuid::Uuid::now_v7()
-                ))
-                .to_request(),
-        ] {
-            let resp = actix_test::call_service(&app, req).await;
-            assert_eq!(resp.status(), 403);
-            let body: serde_json::Value = actix_test::read_body_json(resp).await;
-            assert_eq!(body["code"], "FEATURE_DISABLED");
-            assert_eq!(body["feature"], "attachments");
-        }
+        assert_eq!(
+            status_and_body!(&app, req),
+            (
+                200,
+                json!({ "path": key, "size_bytes": 4, "url": format!("/api/files/{key}") })
+            )
+        );
     }
 
-    /// With attachments enabled the upload goes on to the CSRF check.
+    /// An avatar must be a png, jpeg, gif or webp image of at most 2 MiB; a storage failure
+    /// answers 500.
     #[actix_web::test]
-    async fn an_enabled_feature_lets_the_upload_reach_the_csrf_check() {
-        let app =
-            attachment_app!(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled());
-        let resp = actix_test::call_service(&app, upload().to_request()).await;
-        assert_eq!(resp.status(), 403);
-        let body: serde_json::Value = actix_test::read_body_json(resp).await;
-        assert!(body.get("code").is_none(), "{body}");
+    async fn avatar_upload_refuses_other_types_large_files_and_storage_failures() {
+        let mut deps = Deps::new();
+        deps.storage
+            .expect_upload_file()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        let app = app!(deps);
+        let image_error = json!({ "error": "avatar must be an image (png, jpeg, gif, webp)" });
+
+        for content_type in ["image/svg+xml", "text/plain"] {
+            let req = post(
+                "/api/files/avatar",
+                &[Part::File("me.png", content_type, b"x")],
+            );
+            assert_eq!(
+                status_and_body!(&app, req),
+                (415, image_error.clone()),
+                "{content_type}"
+            );
+        }
+
+        let large = vec![b'a'; MAX_AVATAR_BYTES as usize + 1];
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.png", "image/png", &large)],
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (
+                413,
+                json!({ "error": format!("file exceeds {MAX_AVATAR_BYTES} byte limit") })
+            )
+        );
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.png", "image/png", b"png")],
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (500, json!({ "error": "upload failed" }))
+        );
     }
 }
