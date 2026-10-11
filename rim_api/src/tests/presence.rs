@@ -19,8 +19,8 @@ async fn workspace_presence_rejects_non_member() {
 
     let mut server_member = MockServerMemberService::new();
     server_member
-        .expect_get_member()
-        .withf(move |q| q.server_id == server_id && q.user_id == actor)
+        .expect_visible_members()
+        .withf(move |q| q.server_id == server_id && q.actor.user_id == actor)
         .times(1)
         .returning(|_q| Box::pin(async { Err(ServiceError::PermissionDenied) }));
 
@@ -48,9 +48,9 @@ async fn workspace_presence_allows_member() {
 
     let mut server_member = MockServerMemberService::new();
     server_member
-        .expect_get_member()
+        .expect_visible_members()
         .times(1)
-        .returning(|_q| Box::pin(async { Ok(test_server_member_dto()) }));
+        .returning(|_q| Box::pin(async { Ok(None) }));
 
     let schema = schema_with_server_mocks(MockServerService::new(), server_member);
     let res = schema

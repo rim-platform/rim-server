@@ -173,6 +173,18 @@ mod tests {
         expected.sort_by_key(|id| id.to_string());
         assert_eq!(ids, expected);
 
+        let visible = |actor| {
+            svc.visible_members(ListServerMembersQuery {
+                actor: Actor::new(actor),
+                server_id,
+            })
+        };
+        assert_eq!(
+            visible(guest).await.expect("guest"),
+            Some(std::collections::HashSet::from([guest, buddy]))
+        );
+        assert_eq!(visible(buddy).await.expect("member"), None);
+
         let err = svc
             .get_member(GetServerMemberQuery {
                 actor: Actor::new(guest),

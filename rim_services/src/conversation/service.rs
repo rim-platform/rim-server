@@ -23,6 +23,13 @@ pub trait ConversationService: Send + Sync {
     async fn get_conversation(&self, query: GetConversationQuery)
     -> ServiceResult<ConversationDto>;
 
+    /// The conversation if the actor may write into it: readable, not archived and the actor not
+    /// timed out.
+    async fn get_writable_conversation(
+        &self,
+        query: GetConversationQuery,
+    ) -> ServiceResult<ConversationDto>;
+
     async fn get_conversations_by_ids(
         &self,
         ids: &[ConversationId],

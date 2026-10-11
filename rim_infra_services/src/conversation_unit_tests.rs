@@ -788,6 +788,17 @@ mod tests {
                 .map(|dto| dto.is_archived())
         }
 
+        async fn get_writable(&self, actor: UserId) -> Result<(), ServiceError> {
+            self.service()
+                .get_writable_conversation(GetConversationQuery {
+                    actor: Actor::new(actor),
+                    server_id: self.server_id,
+                    conversation_id: self.conversation.id,
+                })
+                .await
+                .map(|_| ())
+        }
+
         async fn get(&self, actor: UserId) -> Result<(), ServiceError> {
             self.service()
                 .get_conversation(GetConversationQuery {
@@ -1289,6 +1300,28 @@ mod tests {
         assert!(matches!(err, ServiceError::TimedOut { .. }), "{err:?}");
         // Reads continue.
         fx.get(carol).await.expect("timed-out member still reads");
+    }
+
+    #[tokio::test]
+    async fn writable_conversation_refuses_timed_out_members_and_archived_channels() {
+        let [alice, carol] = users();
+        let fx = Fx::new(ConversationType::Channel, false, &[alice, carol])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .timed_out(carol);
+        fx.get_writable(alice).await.expect("member may write");
+        assert!(matches!(
+            fx.get_writable(carol).await,
+            Err(ServiceError::TimedOut { .. })
+        ));
+
+        let fx = Fx::new(ConversationType::Channel, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .archived();
+        assert!(matches!(
+            fx.get_writable(alice).await,
+            Err(ServiceError::ConversationArchived)
+        ));
     }
 
     #[tokio::test]

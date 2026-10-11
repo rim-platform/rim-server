@@ -531,6 +531,21 @@ impl ConversationService for DefaultConversationService {
         self.to_dto(conversation).await
     }
 
+    async fn get_writable_conversation(
+        &self,
+        query: GetConversationQuery,
+    ) -> ServiceResult<ConversationDto> {
+        let conversation = ensure_conversation_writable(
+            self.access_repos(),
+            query.actor.user_id,
+            query.server_id,
+            query.conversation_id,
+        )
+        .await?;
+
+        self.to_dto(conversation).await
+    }
+
     async fn get_conversations_by_ids(
         &self,
         ids: &[rim_core::conversation::model::ConversationId],

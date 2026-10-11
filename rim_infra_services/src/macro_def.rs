@@ -287,6 +287,13 @@ impl MacroService for DefaultMacroService {
     }
 
     async fn list_user_macros(&self, query: ListUserMacrosQuery) -> ServiceResult<Vec<MacroDto>> {
+        crate::util::ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+
         let macros = self
             .repos
             .macro_repo
@@ -903,7 +910,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_macro_refuses_a_non_member() {
+    async fn create_and_list_refuse_a_non_member() {
         let mut member_repo = MockServerMemberRepository::new();
         member_repo.expect_is_member().returning(|_, _| Ok(false));
         let svc = DefaultMacroService::new(
@@ -935,7 +942,15 @@ mod tests {
             })
             .await
             .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
 
+        let err = svc
+            .list_user_macros(ListUserMacrosQuery {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
