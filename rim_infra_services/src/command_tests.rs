@@ -3338,4 +3338,72 @@ mod tests {
             }
         }
     }
+
+    /// A user command takes the highest tier among its steps, through nested user commands;
+    /// a dangerous step still makes it Restricted.
+    #[tokio::test]
+    async fn user_command_sensitivity_is_the_highest_of_its_steps() {
+        let actor = new_actor();
+        let svc = validating_service(repo_with(vec![
+            calling_command(actor.user_id, "user.peek", "state.list"),
+            bump_command(actor.user_id, "user.bump"),
+            calling_command(actor.user_id, "user.outer", "user.bump"),
+            stored_user_command(
+                actor.user_id,
+                "user.mixed",
+                vec![
+                    step("state.incr", serde_json::json!({ "key": "k" })),
+                    step("state.list", serde_json::Value::Null),
+                ],
+            ),
+            calling_command(actor.user_id, "user.purge", "chat.delete_message"),
+        ]));
+
+        for (command_id, expected) in [
+            ("user.peek", CommandSensitivityDto::Safe),
+            ("user.bump", CommandSensitivityDto::Mutating),
+            ("user.outer", CommandSensitivityDto::Mutating),
+            ("user.mixed", CommandSensitivityDto::Mutating),
+            ("user.purge", CommandSensitivityDto::Restricted),
+        ] {
+            let definition = svc
+                .get_command(GetCommandQuery {
+                    actor,
+                    command_id: command_id.to_string(),
+                })
+                .await
+                .expect("lookup succeeds")
+                .expect("the user command resolves");
+            assert_eq!(definition.sensitivity, expected, "{command_id}");
+        }
+    }
+
+    /// An agent must confirm a user command wrapping a Mutating step, as it would the step
+    /// alone; the palette runs it directly.
+    #[tokio::test]
+    async fn agent_must_confirm_a_user_command_wrapping_a_mutating_step() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 1);
+        let svc = state_service(
+            repo_with(vec![bump_command(actor.user_id, "user.bump")]),
+            workspace_state,
+        );
+
+        let agent = svc
+            .execute_command(ExecuteCommandCmd {
+                initiator: CommandInitiator::Agent,
+                ..palette_cmd(actor, "user.bump")
+            })
+            .await
+            .expect("the agent is asked to confirm");
+        assert_eq!(agent.status, CommandResultStatusDto::ConfirmationRequired);
+        assert!(agent.confirmation_required.is_some());
+
+        let palette = svc
+            .execute_command(palette_cmd(actor, "user.bump"))
+            .await
+            .expect("the palette runs it");
+        assert_eq!(palette.status, CommandResultStatusDto::Success);
+    }
 }
