@@ -115,16 +115,13 @@ impl CommandSensitivityDto {
         }
     }
 
-    /// Max sensitivity across a macro's own tier and all its step definitions.
-    ///
-    /// Prevents a macro declared as `Safe` from silently wrapping a `Mutating`
-    /// step — the effective tier enforced at execute time is the worst-case
-    /// across the whole expansion.
-    pub fn effective(macro_sensitivity: Self, step_sensitivities: &[Self]) -> Self {
+    /// Max sensitivity across a composite command's own tier and the tiers of its steps, so a
+    /// macro or user command never runs below the tier of what it wraps.
+    pub fn effective(own_sensitivity: Self, step_sensitivities: &[Self]) -> Self {
         step_sensitivities
             .iter()
             .copied()
-            .fold(macro_sensitivity, Self::max)
+            .fold(own_sensitivity, Self::max)
     }
 }
 

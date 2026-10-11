@@ -1,6 +1,9 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
+use rim_core::user::model::UserId;
 
 use crate::ServiceResult;
 use crate::server_member::command::{GetServerMemberQuery, ListServerMembersQuery};
@@ -15,4 +18,12 @@ pub trait ServerMemberService: Send + Sync {
         &self,
         query: ListServerMembersQuery,
     ) -> ServiceResult<Vec<ServerMemberDto>>;
+
+    /// The members the actor may see in the workspace: `None` when every member is visible,
+    /// otherwise a guest's own id and everyone who shares a conversation with them.
+    /// `PermissionDenied` for a non-member.
+    async fn visible_members(
+        &self,
+        query: ListServerMembersQuery,
+    ) -> ServiceResult<Option<HashSet<UserId>>>;
 }

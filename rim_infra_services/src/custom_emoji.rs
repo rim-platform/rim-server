@@ -86,18 +86,25 @@ impl CustomEmojiService for DefaultCustomEmojiService {
             .upload_file(&storage_key, &cmd.image_data, "image/png")
             .await?;
 
-        let emoji = self
+        let created = self
             .repos
             .custom_emoji_repo
             .create(NewCustomEmoji {
                 server_id: cmd.server_id,
                 name: cmd.name,
-                image_url: stored.key,
+                image_url: stored.key.clone(),
                 uploaded_by: cmd.actor.user_id,
             })
-            .await?;
+            .await;
 
-        Ok(CustomEmojiDto::from(emoji))
+        match created {
+            Ok(emoji) => Ok(CustomEmojiDto::from(emoji)),
+            Err(err) => {
+                // A refused row, such as a duplicate name, must not leave its image behind.
+                let _ = self.storage_service.delete_file(&stored.key).await;
+                Err(err.into())
+            }
+        }
     }
 
     async fn delete(&self, cmd: DeleteCustomEmojiCmd) -> ServiceResult<()> {
@@ -151,7 +158,71 @@ impl CustomEmojiService for DefaultCustomEmojiService {
 
 #[cfg(test)]
 mod tests {
+    use rim_core::custom_emoji::repository::MockCustomEmojiRepository;
+    use rim_core::repository::error::{RepoError, RepoErrorKind};
+    use rim_core::server::model::ServerId;
+    use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
+    use rim_core::server_member::repository::MockServerMemberRepository;
+    use rim_core::storage::StoredFile;
+    use rim_core::user::model::UserId;
+    use rim_services::Actor;
+    use rim_services::storage::service::MockStorageService;
+
     use super::*;
+
+    #[tokio::test]
+    async fn create_deletes_the_uploaded_image_when_the_row_is_refused() {
+        let server_id = ServerId::new();
+        let user_id = UserId::new();
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |sid, uid| {
+                Ok(Some(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id: sid,
+                    user_id: uid,
+                    member_role: ServerMemberRole::Member,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
+        let mut custom_emoji_repo = MockCustomEmojiRepository::new();
+        custom_emoji_repo
+            .expect_create()
+            .returning(|_| Box::pin(async { Err(RepoError::new(RepoErrorKind::Conflict)) }));
+        let mut storage = MockStorageService::new();
+        storage.expect_upload_file().returning(|key, data, _| {
+            let stored = StoredFile {
+                key: key.to_string(),
+                size_bytes: data.len() as u64,
+            };
+            Box::pin(async move { Ok(stored) })
+        });
+        let prefix = format!("{server_id}/emoji/");
+        storage
+            .expect_delete_file()
+            .withf(move |key| key.starts_with(&prefix))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let svc = DefaultCustomEmojiService::new(
+            CustomEmojiRepos {
+                custom_emoji_repo: Arc::new(custom_emoji_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            Arc::new(storage),
+        );
+
+        let err = svc
+            .create(CreateCustomEmojiCmd {
+                actor: Actor::new(user_id),
+                server_id,
+                name: "party".to_string(),
+                image_data: vec![1, 2, 3],
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+    }
 
     #[test]
     fn validate_emoji_name_rejects_empty() {

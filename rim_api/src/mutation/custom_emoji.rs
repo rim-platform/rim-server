@@ -27,7 +27,11 @@ impl CustomEmojiMutations {
 
         let image_data = base64::engine::general_purpose::STANDARD
             .decode(&input.image_base64)
-            .map_err(|e| async_graphql::Error::new(format!("invalid base64: {e}")))?;
+            .map_err(|e| {
+                map_service_error(rim_services::ServiceError::Validation(format!(
+                    "invalid base64: {e}"
+                )))
+            })?;
 
         let emoji = svc
             .create(rim_services::custom_emoji::command::CreateCustomEmojiCmd {

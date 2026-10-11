@@ -243,8 +243,7 @@ async fn macro_roots_refuse_anonymous_callers() {
     assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
 }
 
-/// A user outside the workspace cannot create a macro in it or look one up by name there, and
-/// lists none of its macros.
+/// A user outside the workspace cannot create, look up by name or list macros there.
 #[tokio::test]
 async fn macro_roots_refuse_non_members() {
     let f = setup().await;
@@ -256,9 +255,9 @@ async fn macro_roots_refuse_non_members() {
             f.create_vars("intrude", json!([f.post_step("x")]), json!({})),
         ),
         (MACRO_BY_NAME, f.by_name_vars("greet")),
+        (MY_MACROS, json!({ "serverId": f.ws.server_id })),
     ];
     assert_each_refused_as(&f.schema, &f.ws.olive, &calls, "FORBIDDEN").await;
-    assert!(f.mine(&f.ws.olive).await.is_empty());
 }
 
 /// `createMacro` returns every field of the new macro, with the defaults for omitted inputs,
