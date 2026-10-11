@@ -122,6 +122,14 @@ async fn custom_emoji_resolvers_answer_feature_disabled() {
         ServerFeature::CustomEmoji,
     )
     .await;
+    assert_feature_disabled(
+        &format!(
+            r#"mutation {{ deleteCustomEmoji(emojiId: "{}") }}"#,
+            uuid::Uuid::now_v7()
+        ),
+        ServerFeature::CustomEmoji,
+    )
+    .await;
 }
 
 #[tokio::test]

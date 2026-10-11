@@ -320,19 +320,6 @@ impl Fixture {
 
 /// Seed the builtin capabilities into the registry, as `rim_server` does at boot, so
 /// `executeCommand` passes the capability gate and reaches the timeout gate.
-async fn seed_capabilities(ctx: &TestCtx) {
-    use rim_core::capability::repository::CapabilityRegistryRepository;
-    let repo =
-        rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(
-            ctx.db.clone(),
-        );
-    for spec in rim_infra_services::capability::builtin_capabilities() {
-        repo.upsert_if_missing(spec.id, spec.is_self_scoped)
-            .await
-            .expect("seed capability");
-    }
-}
-
 fn error_extension(res: &async_graphql::Response, key: &str) -> Option<async_graphql::Value> {
     res.errors
         .first()
@@ -430,7 +417,7 @@ async fn kicked_member_may_rejoin_but_banned_member_may_not() {
 #[tokio::test]
 async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     let f = setup().await;
-    seed_capabilities(&f.ctx).await;
+    f.ctx.seed_capabilities().await;
     let until = chrono::Utc::now() + chrono::Duration::minutes(10);
     let vars = json!({
         "serverId": f.server_id,
@@ -837,7 +824,7 @@ async fn set_member_role_matrix() {
 #[tokio::test]
 async fn audit_log_workspace_reads_need_owner_or_moderator() {
     let f = setup().await;
-    seed_capabilities(&f.ctx).await;
+    f.ctx.seed_capabilities().await;
     let exec_vars = json!({
         "serverId": f.server_id,
         "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": "logged" },
