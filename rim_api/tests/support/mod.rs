@@ -255,6 +255,19 @@ impl TestCtx {
         .id
     }
 
+    /// Register the builtin command capabilities, as the server does at boot.
+    pub async fn seed_capabilities(&self) {
+        use rim_core::capability::repository::CapabilityRegistryRepository;
+        let repo = rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(
+            self.db.clone(),
+        );
+        for spec in rim_infra_services::capability::builtin_capabilities() {
+            repo.upsert_if_missing(spec.id, spec.is_self_scoped)
+                .await
+                .expect("seed capability");
+        }
+    }
+
     /// Build the real [`AppServiceProvider`] over the test database, for tests that need to
     /// reach a service the GraphQL schema does not expose (e.g. the alert-webhook path).
     pub fn build_provider(&self) -> std::sync::Arc<dyn AppServiceProvider> {
@@ -281,6 +294,23 @@ impl TestCtx {
             registration_mode,
         );
         (schema, provider, events)
+    }
+
+    /// Build the schema on an instance that has `disabled` features turned off.
+    pub fn build_schema_with_disabled(
+        &self,
+        disabled: &[rim_core::server_feature::model::ServerFeature],
+    ) -> rim_api::AppSchema {
+        let (provider, observers) = build_test_provider_with_gate(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::new(disabled, &[]),
+        );
+        schema_for(
+            provider,
+            observers,
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        )
     }
 
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
@@ -368,6 +398,19 @@ pub fn build_test_provider(
 pub fn build_test_provider_with(
     conn: &DatabaseConnection,
     broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
+) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
+    build_test_provider_with_gate(
+        conn,
+        broadcaster,
+        rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+    )
+}
+
+/// Build the real service provider over `conn` with the instance feature gate `gate`.
+pub fn build_test_provider_with_gate(
+    conn: &DatabaseConnection,
+    broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
+    gate: rim_infra_services::feature_gate::InstanceFeatureGate,
 ) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
     use std::sync::Arc;
 
@@ -538,7 +581,7 @@ pub fn build_test_provider_with(
             .expect("franking keys"),
         ),
         rim_infra_services::FederationHooks::default(),
-        Arc::new(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled()),
+        Arc::new(gate),
     ));
 
     (service_provider, observers)
