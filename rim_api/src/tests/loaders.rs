@@ -25,13 +25,19 @@ where
     join_all(keys.iter().map(|k| loader.load_one(k.clone()))).await
 }
 
-/// The error message every key got.
-fn errors<V>(results: Vec<Result<V, Arc<async_graphql::Error>>>) -> Vec<String> {
+/// The `(code, message)` of the error every key got.
+fn errors<V>(results: Vec<Result<V, Arc<async_graphql::Error>>>) -> Vec<(Value, String)> {
     results
         .into_iter()
         .map(|r| match r {
             Ok(_) => panic!("expected an error"),
-            Err(e) => e.message.clone(),
+            Err(e) => (
+                e.extensions
+                    .as_ref()
+                    .and_then(|ext| ext.get("code").cloned())
+                    .unwrap_or(Value::Null),
+                e.message.clone(),
+            ),
         })
         .collect()
 }
@@ -159,10 +165,14 @@ async fn link_preview_loader_maps_each_message_to_its_previews() {
     );
 }
 
-/// A failing service call fails the load of every key in the batch with the service's message.
+/// A failing service call fails the load of every key in the batch with the code and message a
+/// root field would carry.
 #[tokio::test]
 async fn a_service_error_fails_every_key_of_the_batch() {
-    let denied = ServiceError::PermissionDenied.to_string();
+    let denied = (
+        Value::from("FORBIDDEN"),
+        ServiceError::PermissionDenied.to_string(),
+    );
     let messages = [MessageId::new(), MessageId::new()];
     let both = vec![denied.clone(), denied.clone()];
 
