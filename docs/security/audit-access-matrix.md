@@ -11,13 +11,15 @@ closed, so they are not reintroduced.
 ## 1. Actors
 
 The audit-read gate is capability-based: it asks whether the caller holds `audit.read` or
-`audit.read.self`, not which workspace role they have. A capability check is a registry lookup
-plus, for a workspace-scoped capability, workspace membership. There is no per-role grant, so
-every member of a workspace (guests included) passes `audit.read` in that workspace.
+`audit.read.self`. A capability check is a registry lookup plus, for a workspace-scoped
+capability, workspace membership. `audit.read` also requires a role: only the Owners and
+Moderators of a workspace hold it there. Members and guests do not; like everyone else they read
+only their own rows.
 
 | Actor type | Capability that passes | Notes |
 |---|---|---|
-| Member of workspace W | `audit.read` in W, `audit.read.self` | Full dump of W's rows |
+| Owner or Moderator of workspace W | `audit.read` in W, `audit.read.self` | Full dump of W's rows |
+| Member or Guest of workspace W | `audit.read.self` | Own rows only; `audit.read` in W is `PermissionDenied` |
 | Any authenticated user | `audit.read.self` | Own rows only, no workspace needed |
 | Server-internal code | none: `write_entry` has no capability check | Only server code writes rows (see section 3) |
 
@@ -34,12 +36,13 @@ and `server_id`. Their combination decides the scope:
 | Scope | `actor_user_id` | `server_id` | Result |
 |---|---|---|---|
 | Self-read | `Some(caller)` | `None` or `Some(W)` | The caller's own rows |
-| Workspace read | `None` | `Some(W)` | Every row of W |
-| Cross-user read | `Some(other)` | `Some(W)` | Every row of W: the user filter is stripped |
+| Workspace read | `None` | `Some(W)` | Every row of W, for an Owner or Moderator of W |
+| Cross-user read | `Some(other)` | `Some(W)` | Every row of W, for an Owner or Moderator of W: the user filter is stripped |
 | Cross-user unscoped | `Some(other)` | `None` | Always `PermissionDenied` |
 | Unscoped | `None` | `None` | Always `PermissionDenied` |
 
-In a cross-user read the caller may read W, but the `actor_user_id` filter is removed from the
+A Member or Guest of W gets `PermissionDenied` on the workspace and cross-user reads. In a
+cross-user read the caller may read W, but the `actor_user_id` filter is removed from the
 database query. The response is the full workspace dump, not one user's timeline, so a caller
 cannot learn whether a given user ever acted in W from an empty or non-empty answer. Section 4.2
 has the details.
@@ -51,14 +54,18 @@ has the details.
 Two capabilities gate audit reads. Both are seeded at startup from `builtin_capabilities()` in
 `rim_infra_services/src/capability.rs`.
 
-| Capability | `is_self_scoped` | Required for |
-|---|---|---|
-| `audit.read` | `false` (workspace-scoped) | Workspace read, cross-user read |
-| `audit.read.self` | `true` (self-scoped) | Self-read, no workspace membership needed |
+| Capability | `is_self_scoped` | `requires_moderator` | Required for |
+|---|---|---|---|
+| `audit.read` | `false` (workspace-scoped) | `true` (Owner or Moderator) | Workspace read, cross-user read |
+| `audit.read.self` | `true` (self-scoped) | `false` | Self-read, no workspace membership needed |
 
 `is_self_scoped` is read from the `capability_registry` row, not hardcoded in the check. A
 workspace-scoped capability checked without a `workspace_id` is `PermissionDenied` before the
-membership leg runs, so passing `None` cannot skip membership.
+workspace leg runs, so passing `None` cannot skip membership.
+
+`requires_moderator` is not in the registry table. It lives only on `BuiltinCapabilitySpec`, and
+the check reads it from `builtin_capabilities()` by key. `audit.read` is the only builtin with it
+set; every other workspace-scoped capability needs membership alone.
 
 **`DefaultCapabilityService::check`:**
 
@@ -66,8 +73,12 @@ membership leg runs, so passing `None` cannot skip membership.
 step 1: empty or whitespace key → Validation
 step 2: registry lookup; unknown or retired key → PermissionDenied (strict default-deny)
 step 2b: workspace-scoped capability with workspace_id = None → PermissionDenied
-step 3: membership_holds(actor, workspace_id) → PermissionDenied if not a member
+step 3: workspace_id = None (self-scoped only) → allowed
+        not a member of workspace_id → PermissionDenied
+        requires_moderator and role is Member or Guest → PermissionDenied
 ```
+
+`check_many` looks up the caller's role once and applies the same rules to every key.
 
 **Write path.** `write_entry` has no capability check. Only server-internal code calls it: the
 command executor, the macro executor, the moderation audit helper and the remote-workspace host.
@@ -87,13 +98,14 @@ values through unchanged. The service is the only trust boundary.
 - `actor_user_id = Some(other)` with `server_id = None` is `PermissionDenied` before any
   capability check or database call.
 - Every non-self path needs a `server_id`; the `audit.read` check passes
-  `workspace_id = Some(W)` to `CapabilityService::check`, which runs the membership leg.
+  `workspace_id = Some(W)` to `CapabilityService::check`, which runs the workspace leg and
+  requires an Owner or Moderator of W.
 
 ### 4.2 The cross-user filter is stripped
 
 When the caller sends `actor_user_id = Some(other)` with `server_id = Some(W)`, the service:
 
-1. checks `audit.read` in W;
+1. checks `audit.read` in W (Owner or Moderator of W);
 2. logs a `cross_user_filter_stripped` warning on the `audit` target;
 3. sets `actor_user_id = None` in the repository query.
 
@@ -102,9 +114,9 @@ acted there.
 
 ### 4.3 No membership bypass through a missing workspace
 
-`membership_holds(actor, None)` returns `Ok(true)`. Step 2b of `check` makes sure only
-self-scoped capabilities reach it with `None`: a workspace-scoped capability without a workspace
-is refused first.
+Step 3 of `check` allows a check with no workspace without looking at membership. Step 2b makes
+sure only self-scoped capabilities reach it with `None`: a workspace-scoped capability without a
+workspace is refused first.
 
 ---
 
@@ -155,11 +167,19 @@ built with `actor_user_id = None`, returning the full workspace dump.
 ### Membership skipped for a capability without a workspace
 
 **Vector:** a workspace-scoped capability (for example `audit.read`) checked with
-`workspace_id = None` reached `membership_holds(actor, None)`, which answered `Ok(true)` for any
-actor.
+`workspace_id = None` reached the membership leg, which answered "allowed" for any actor when
+there was no workspace.
 
-**Fix:** step 2b of `check` refuses `workspace_id.is_none() && !reg.is_self_scoped` before
-`membership_holds` runs. Self-scoped capabilities such as `audit.read.self` are exempt by design.
+**Fix:** step 2b of `check` refuses `workspace_id.is_none() && !reg.is_self_scoped` before the
+workspace leg runs. Self-scoped capabilities such as `audit.read.self` are exempt by design.
+
+### Every member read the whole workspace log
+
+**Vector:** `audit.read` was granted on membership alone, so any member of W, guests included,
+could read every row of W, including other members' commands and moderation actions.
+
+**Fix:** `audit.read` carries `requires_moderator`, and step 3 of `check` denies it to a Member or
+Guest of W. They keep `audit.read.self` for their own rows.
 
 ---
 
@@ -167,9 +187,10 @@ actor.
 
 | File | Coverage |
 |---|---|
-| `rim_infra_services/src/audit/mod.rs` | Unit tests of the whole matrix in section 2, including the regressions for the first two bypasses of section 6 |
-| `rim_infra_services/src/capability.rs` | Unit tests of the capability gate: strict default-deny, and `check` / `check_many` with a workspace-scoped capability and no workspace (the third bypass) |
+| `rim_infra_services/src/audit/mod.rs` | Unit tests of the whole matrix in section 2, including the regressions for the first two bypasses of section 6, and the role outcome of every arm through the real capability gate |
+| `rim_infra_services/src/capability.rs` | Unit tests of the capability gate: strict default-deny, `check` / `check_many` with a workspace-scoped capability and no workspace (the third bypass), and the Owner/Moderator requirement of `audit.read` (the fourth) |
 | `rim_api/src/tests/audit.rs` | `listAuditLog` refuses an unauthenticated caller; an authenticated query returns a page and maps `AuditOutcome::Success` to `SUCCESS` |
+| `rim_api/tests/moderation_e2e.rs` | `listAuditLog` through GraphQL and Postgres under `--features e2e-tests`: Owners and Moderators read the workspace log, Members and Guests are `FORBIDDEN` and still read their own rows |
 | `rim_infra_db/tests/audit_log_repo.rs` | Repository insert and list under `--features db-tests`; all seven outcomes written and read back |
 
 A test asserting that this matrix holds end to end belongs in `rim_infra_services/src/audit/mod.rs`

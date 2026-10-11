@@ -1,5 +1,6 @@
 //! Default `CapabilityService` implementation: a strict default-deny gate backed by the
-//! `capability_registry` table plus a workspace-membership check.
+//! `capability_registry` table plus a workspace-membership check, and for some capabilities a
+//! minimum role in that workspace.
 //!
 //! See [`rim_services::capability::service::CapabilityService`] for the
 //! gate contract. This module also exports [`builtin_capabilities`] for the
@@ -11,6 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::server::model::ServerId;
+use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 
 use rim_services::capability::service::CapabilityService;
@@ -33,6 +35,10 @@ pub struct BuiltinCapabilitySpec {
     /// meaningful membership to validate without a workspace. Callers must
     /// supply a workspace context for all workspace-scoped caps.
     pub is_self_scoped: bool,
+    /// When `true` the caller must be an Owner or Moderator of the workspace; membership alone
+    /// is not enough. Lives only here, not in `capability_registry`: the gate reads it from this
+    /// table by key.
+    pub requires_moderator: bool,
 }
 
 pub fn builtin_capabilities() -> &'static [BuiltinCapabilitySpec] {
@@ -40,32 +46,56 @@ pub fn builtin_capabilities() -> &'static [BuiltinCapabilitySpec] {
         BuiltinCapabilitySpec {
             id: "chat.read",
             is_self_scoped: false,
+            requires_moderator: false,
         },
         BuiltinCapabilitySpec {
             id: "chat.write",
             is_self_scoped: false,
+            requires_moderator: false,
         },
         BuiltinCapabilitySpec {
             id: "action.invoke",
             is_self_scoped: false,
+            requires_moderator: false,
         },
         BuiltinCapabilitySpec {
             id: "event.emit",
             is_self_scoped: false,
+            requires_moderator: false,
         },
         BuiltinCapabilitySpec {
             id: "audit.read",
             is_self_scoped: false,
+            requires_moderator: true,
         },
         BuiltinCapabilitySpec {
             id: "audit.read.self",
             is_self_scoped: true,
+            requires_moderator: false,
         },
         BuiltinCapabilitySpec {
             id: "admin.manage_members",
             is_self_scoped: false,
+            requires_moderator: false,
         },
     ]
+}
+
+/// Whether the builtin capability `key` requires an Owner or Moderator role. `false` for keys
+/// that are not builtin.
+fn requires_moderator(key: &str) -> bool {
+    builtin_capabilities()
+        .iter()
+        .any(|spec| spec.id == key && spec.requires_moderator)
+}
+
+/// Whether a caller holding `role` in the workspace (`None`: not a member) passes the
+/// workspace leg for capability `key`.
+fn role_satisfies(key: &str, role: Option<ServerMemberRole>) -> bool {
+    match role {
+        None => false,
+        Some(role) => !requires_moderator(key) || role.is_moderator(),
+    }
 }
 
 #[derive(Clone)]
@@ -84,27 +114,19 @@ impl DefaultCapabilityService {
         Self { repos }
     }
 
-    /// Workspace-membership leg of the gate. Returns `Ok(true)` when the
-    /// actor is a member of `workspace_id`, `Ok(false)` otherwise. When
-    /// `workspace_id` is `None` the leg short-circuits to `Ok(true)` —
-    /// this path is only reached for self-scoped capabilities (e.g.
-    /// `audit.read.self`) after `check()` verifies `is_self_scoped == true`
-    /// in the registry row. Workspace-scoped caps never reach this
-    /// method with `None` — `check()` rejects them first with
-    /// `PermissionDenied`.
-    async fn membership_holds(
+    /// The actor's role in `workspace_id`, or `None` when they are not a member.
+    async fn member_role(
         &self,
         actor: &Actor,
-        workspace_id: Option<ServerId>,
-    ) -> ServiceResult<bool> {
-        let Some(workspace_id) = workspace_id else {
-            return Ok(true);
-        };
-        self.repos
+        workspace_id: ServerId,
+    ) -> ServiceResult<Option<ServerMemberRole>> {
+        let member = self
+            .repos
             .server_member_repo
-            .is_member(workspace_id, actor.user_id)
+            .get_member(workspace_id, actor.user_id)
             .await
-            .map_err(ServiceError::from)
+            .map_err(ServiceError::from)?;
+        Ok(member.map(|m| m.member_role))
     }
 }
 
@@ -167,15 +189,33 @@ impl CapabilityService for DefaultCapabilityService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        // Step 3: membership leg, the only gate beyond the registry check.
-        if !self.membership_holds(actor, workspace_id).await? {
+        // Step 3: workspace leg. Without a workspace only self-scoped caps get here and there is
+        // nothing more to check. With one, the actor must be a member, and an Owner or
+        // Moderator for caps that require it.
+        let Some(workspace_id) = workspace_id else {
+            return Ok(());
+        };
+        let role = self.member_role(actor, workspace_id).await?;
+        if role.is_none() {
             tracing::warn!(
                 target: "audit",
                 event = "capability_check_not_a_member",
                 user_id = %actor.user_id,
-                workspace_id = ?workspace_id,
+                workspace_id = %workspace_id,
                 capability = key,
                 "capability check denied — actor is not a member of workspace"
+            );
+            return Err(ServiceError::PermissionDenied);
+        }
+        if !role_satisfies(key, role) {
+            tracing::warn!(
+                target: "audit",
+                event = "capability_check_role_too_low",
+                user_id = %actor.user_id,
+                workspace_id = %workspace_id,
+                capability = key,
+                role = ?role,
+                "capability check denied — capability requires an owner or moderator"
             );
             return Err(ServiceError::PermissionDenied);
         }
@@ -189,11 +229,14 @@ impl CapabilityService for DefaultCapabilityService {
         workspace_id: Option<ServerId>,
         capabilities: &[String],
     ) -> ServiceResult<HashMap<String, bool>> {
-        // Compute membership ONCE. The hot path here is "filter the AI
+        // Look up the role ONCE. The hot path here is "filter the AI
         // tool surface to caps the user can call", which can be 50+ caps —
         // re-querying server_member on every loop iteration would be a
         // pointless N+1.
-        let member = self.membership_holds(actor, workspace_id).await?;
+        let role = match workspace_id {
+            Some(workspace_id) => self.member_role(actor, workspace_id).await?,
+            None => None,
+        };
 
         let mut out = HashMap::with_capacity(capabilities.len());
         for cap in capabilities {
@@ -224,7 +267,8 @@ impl CapabilityService for DefaultCapabilityService {
                 continue;
             }
 
-            out.insert(cap.clone(), member);
+            let allowed = workspace_id.is_none() || role_satisfies(key, role);
+            out.insert(cap.clone(), allowed);
         }
         Ok(out)
     }
@@ -239,12 +283,32 @@ mod tests {
     use rim_core::capability::model::RegisteredCapability;
     use rim_core::capability::repository::MockCapabilityRegistryRepository;
     use rim_core::server::model::ServerId;
+    use rim_core::server_member::model::{ServerMember, ServerMemberId};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use uuid::Uuid;
 
     fn actor() -> Actor {
         Actor::new(UserId::from(Uuid::new_v4()))
+    }
+
+    /// A member repo whose `get_member` returns `role` (`None`: not a member), called at most
+    /// `times` times.
+    fn members_with(role: Option<ServerMemberRole>, times: usize) -> MockServerMemberRepository {
+        let mut members = MockServerMemberRepository::new();
+        members
+            .expect_get_member()
+            .times(times)
+            .returning(move |server_id, user_id| {
+                Ok(role.map(|member_role| ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
+        members
     }
 
     fn workspace() -> ServerId {
@@ -361,11 +425,7 @@ mod tests {
             .with(eq("chat.write"))
             .times(1)
             .returning(|_| Ok(Some(active_cap("chat.write", false))));
-        let mut members = MockServerMemberRepository::new();
-        members
-            .expect_is_member()
-            .times(1)
-            .returning(|_, _| Ok(true));
+        let members = members_with(Some(ServerMemberRole::Member), 1);
 
         let svc = build(registry, members);
         svc.check(&actor(), Some(workspace()), "chat.write")
@@ -379,8 +439,7 @@ mod tests {
         registry
             .expect_get()
             .returning(|_| Ok(Some(active_cap("chat.write", false))));
-        let mut members = MockServerMemberRepository::new();
-        members.expect_is_member().returning(|_, _| Ok(false));
+        let members = members_with(None, 1);
 
         let svc = build(registry, members);
         let err = svc
@@ -410,8 +469,7 @@ mod tests {
     }
 
     /// A workspace-scoped cap with `workspace_id = None` is `PermissionDenied`;
-    /// `membership_holds(actor, None)` would otherwise return `Ok(true)` and skip the
-    /// membership check.
+    /// without a workspace there is no membership to check.
     #[tokio::test]
     async fn check_workspace_scoped_cap_without_workspace_denies() {
         let mut registry = MockCapabilityRegistryRepository::new();
@@ -446,9 +504,8 @@ mod tests {
             .expect_get()
             .with(eq("chat.write"))
             .returning(|_| Ok(Some(active_cap("chat.write", false))));
-        let mut members = MockServerMemberRepository::new();
-        // workspace_id is None → membership_holds short-circuits Ok(true)
-        members.expect_is_member().returning(|_, _| Ok(true));
+        // workspace_id is None → the member repo is never queried
+        let members = MockServerMemberRepository::new();
 
         let svc = build(registry, members);
         let map = svc
@@ -482,13 +539,9 @@ mod tests {
             .expect_get()
             .with(eq("plugin.unknown.x"))
             .returning(|_| Ok(None));
-        let mut members = MockServerMemberRepository::new();
-        members
-            .expect_is_member()
-            // Crucial — bulk path computes membership exactly once even
-            // though we ask for two caps. Catches an N+1 regression.
-            .times(1)
-            .returning(|_, _| Ok(true));
+        // Crucial — bulk path looks up the role exactly once even
+        // though we ask for two caps. Catches an N+1 regression.
+        let members = members_with(Some(ServerMemberRole::Member), 1);
 
         let svc = build(registry, members);
         let map = svc
@@ -577,8 +630,7 @@ mod tests {
         // A buggy caller passing an empty cap shouldn't poison the whole
         // batch. Bulk path keeps the input/output shape symmetric.
         let registry = MockCapabilityRegistryRepository::new();
-        let mut members = MockServerMemberRepository::new();
-        members.expect_is_member().returning(|_, _| Ok(true));
+        let members = members_with(Some(ServerMemberRole::Member), 1);
 
         let svc = build(registry, members);
         let map = svc
@@ -586,5 +638,121 @@ mod tests {
             .await
             .expect("empty-string entry should not propagate as error");
         assert_eq!(map.get(""), Some(&false));
+    }
+    /// `check("audit.read", Some(W))` for a caller holding `role` in W (`None`: not a member).
+    async fn check_audit_read(role: Option<ServerMemberRole>) -> ServiceResult<()> {
+        let mut registry = MockCapabilityRegistryRepository::new();
+        registry
+            .expect_get()
+            .with(eq("audit.read"))
+            .times(1)
+            .returning(|_| Ok(Some(active_cap("audit.read", false))));
+        let svc = build(registry, members_with(role, 1));
+        svc.check(&actor(), Some(workspace()), "audit.read").await
+    }
+
+    #[tokio::test]
+    async fn check_audit_read_owner_passes() {
+        check_audit_read(Some(ServerMemberRole::Owner))
+            .await
+            .expect("owner must hold audit.read");
+    }
+
+    #[tokio::test]
+    async fn check_audit_read_moderator_passes() {
+        check_audit_read(Some(ServerMemberRole::Moderator))
+            .await
+            .expect("moderator must hold audit.read");
+    }
+
+    #[tokio::test]
+    async fn check_audit_read_member_denied() {
+        let err = check_audit_read(Some(ServerMemberRole::Member))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn check_audit_read_guest_denied() {
+        let err = check_audit_read(Some(ServerMemberRole::Guest))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn check_audit_read_non_member_denied() {
+        let err = check_audit_read(None).await.unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+    }
+
+    /// The role requirement is per capability: a guest still holds the membership-only
+    /// `chat.read`.
+    #[tokio::test]
+    async fn check_membership_only_cap_passes_for_guest() {
+        let mut registry = MockCapabilityRegistryRepository::new();
+        registry
+            .expect_get()
+            .with(eq("chat.read"))
+            .returning(|_| Ok(Some(active_cap("chat.read", false))));
+        let svc = build(registry, members_with(Some(ServerMemberRole::Guest), 1));
+        svc.check(&actor(), Some(workspace()), "chat.read")
+            .await
+            .expect("guest holds membership-only caps");
+    }
+
+    /// `audit.read.self` carries no role requirement: a guest passes it inside a workspace and
+    /// without one.
+    #[tokio::test]
+    async fn check_audit_read_self_unaffected_by_role() {
+        let mut registry = MockCapabilityRegistryRepository::new();
+        registry
+            .expect_get()
+            .with(eq("audit.read.self"))
+            .returning(|_| Ok(Some(active_cap("audit.read.self", true))));
+        let svc = build(registry, members_with(Some(ServerMemberRole::Guest), 1));
+        svc.check(&actor(), Some(workspace()), "audit.read.self")
+            .await
+            .expect("guest holds audit.read.self in a workspace");
+        svc.check(&actor(), None, "audit.read.self")
+            .await
+            .expect("audit.read.self needs no workspace");
+    }
+
+    /// `check_many` applies the role requirement per cap from the single role lookup.
+    #[tokio::test]
+    async fn check_many_applies_role_requirement_per_cap() {
+        let caps = ["audit.read", "audit.read.self", "chat.read"].map(String::from);
+        for (role, audit_read) in [
+            (ServerMemberRole::Owner, true),
+            (ServerMemberRole::Moderator, true),
+            (ServerMemberRole::Member, false),
+            (ServerMemberRole::Guest, false),
+        ] {
+            let mut registry = MockCapabilityRegistryRepository::new();
+            registry
+                .expect_get()
+                .returning(|key| Ok(Some(active_cap(key, key == "audit.read.self"))));
+            let svc = build(registry, members_with(Some(role), 1));
+            let map = svc
+                .check_many(&actor(), Some(workspace()), &caps)
+                .await
+                .expect("check_many must not error");
+            assert_eq!(map.get("audit.read"), Some(&audit_read), "{role:?}");
+            assert_eq!(map.get("audit.read.self"), Some(&true), "{role:?}");
+            assert_eq!(map.get("chat.read"), Some(&true), "{role:?}");
+        }
+    }
+
+    /// Only `audit.read` requires an Owner or Moderator among the builtin caps.
+    #[test]
+    fn only_audit_read_requires_moderator() {
+        let gated: Vec<&str> = builtin_capabilities()
+            .iter()
+            .filter(|c| c.requires_moderator)
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(gated, vec!["audit.read"]);
     }
 }
