@@ -1,8 +1,8 @@
 use std::env;
-use std::sync::OnceLock;
 
 use migration::MigratorTrait;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
+use tokio::sync::OnceCell;
 
 use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
@@ -21,7 +21,8 @@ use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 
 use rim_core::conversation::model::ConversationId;
 
-static MIGRATED: OnceLock<()> = OnceLock::new();
+/// Set once this process has recreated and migrated the test database.
+static FRESH: OnceCell<()> = OnceCell::const_new();
 
 fn is_test_db_url(url: &str) -> bool {
     // Very small safety heuristic: only allow URLs that clearly point to a test database.
@@ -55,7 +56,8 @@ fn redact_url(url: &str) -> String {
 /// Connect to the test database, or **panic loudly**. Only reachable under the
 /// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
 /// so a panic here means the feature was enabled without a usable test DB —
-/// which must fail CI, not silently skip.
+/// which must fail CI, not silently skip. The first call in a process starts from a
+/// freshly created, migrated database.
 pub async fn db_conn() -> DatabaseConnection {
     let url = match env::var("DATABASE_URL") {
         Ok(v) if !v.trim().is_empty() => v,
@@ -72,23 +74,51 @@ pub async fn db_conn() -> DatabaseConnection {
         redact_url(&url),
     );
 
-    let mut opts = ConnectOptions::new(url.clone());
-    opts.sqlx_logging(false);
+    FRESH.get_or_init(|| recreate_database(&url)).await;
 
-    let conn = Database::connect(opts)
-        .await
-        .expect("failed to connect to DATABASE_URL");
-
+    let conn = connect(&url).await;
     eprintln!("db-tests: connected to {}", redact_url(&url));
-
-    if MIGRATED.get().is_none() {
-        migration::Migrator::up(&conn, None)
-            .await
-            .expect("failed to run migrations");
-        let _ = MIGRATED.set(());
-    }
-
     conn
+}
+
+async fn connect(url: &str) -> DatabaseConnection {
+    let mut opts = ConnectOptions::new(url.to_string());
+    opts.sqlx_logging(false);
+    Database::connect(opts)
+        .await
+        .expect("failed to connect to the test database")
+}
+
+/// Drops and recreates the test database through the `postgres` maintenance database, then
+/// migrates it up. The migration round-trip tests leave dropped columns behind, which Postgres
+/// never reclaims, so a reused database eventually hits the 1600-column limit.
+async fn recreate_database(url: &str) {
+    let (base, query) = url.split_once('?').unwrap_or((url, ""));
+    let (prefix, name) = base
+        .rsplit_once('/')
+        .expect("database name in DATABASE_URL");
+    let query = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
+
+    let maintenance = connect(&format!("{prefix}/postgres{query}")).await;
+    maintenance
+        .execute_unprepared(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
+        .await
+        .expect("drop the test database");
+    maintenance
+        .execute_unprepared(&format!("CREATE DATABASE \"{name}\""))
+        .await
+        .expect("create the test database");
+    maintenance.close().await.expect("close");
+
+    let conn = connect(url).await;
+    migration::Migrator::up(&conn, None)
+        .await
+        .expect("failed to run migrations");
+    conn.close().await.expect("close");
 }
 
 pub async fn reset_db(conn: &DatabaseConnection) {
