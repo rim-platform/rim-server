@@ -1032,6 +1032,21 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         .await;
     let direct = alice.direct_space().await;
 
+    // Opening her direct inbox before any DM is a first use: an empty list, and she is a
+    // guest of the direct space who sees only herself.
+    assert_eq!(listed(&alice, &direct).await, Vec::<String>::new());
+    let members = alice
+        .ok(
+            "query($s: ID!) { serverMembers(serverId: $s) { principalId memberRole } }",
+            json!({ "s": direct }),
+        )
+        .await["serverMembers"]
+        .clone();
+    assert_eq!(
+        members,
+        json!([{ "principalId": alice.principal(), "memberRole": "GUEST" }])
+    );
+
     // A conversation with someone on another relay is encrypted only.
     let code = alice
         .err(
