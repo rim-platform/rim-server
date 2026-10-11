@@ -18,9 +18,12 @@ use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
+use support::graphql::{
+    Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err,
+    exec_err_code, exec_ok, merged,
+};
 use support::roles::create_channel;
+use support::{TestCtx, unknown_id};
 
 const CREATE_CHANNEL: &str = r#"
 mutation Create($input: CreateConversationInput!) {
@@ -836,8 +839,7 @@ async fn audit_log_workspace_reads_need_owner_or_moderator() {
         }
     }
 
-    let olive = f.ctx.create_user("mod-olive").await;
-    let olive = f.ctx.caller(&olive).await;
+    let olive = f.outsider().await;
     for (who, name) in [
         (&f.carol, "member"),
         (&f.gina, "guest"),
@@ -1050,4 +1052,592 @@ async fn sdl_exposes_the_role_enum_and_moderation_surface() {
     ] {
         assert!(sdl.contains(needle), "SDL is missing `{needle}`");
     }
+}
+
+// ── The checklist: who may call each root, and what each refusal answers ─────────────────────
+
+const MESSAGE_REPORT: &str = r#"
+query Report($serverId: ID!, $reportId: ID!) {
+  report: messageReport(serverId: $serverId, reportId: $reportId) { id status }
+}
+"#;
+
+const BAN_WITH: &str = r#"
+mutation Ban($serverId: ID!, $userId: ID!, $reason: String, $expiresAt: DateTime) {
+  ban: banMember(serverId: $serverId, userId: $userId, reason: $reason, expiresAt: $expiresAt) {
+    userId
+  }
+}
+"#;
+
+const MY_SERVERS: &str = "query { myServers { id } }";
+
+const SERVER: &str = r#"
+query Server($serverId: ID!) { server(serverId: $serverId) { id name } }
+"#;
+
+const CREATE_SERVER: &str = r#"
+mutation CreateServer($name: String!) { server: createServer(input: { name: $name }) { id name } }
+"#;
+
+/// The ids a moderation call names.
+#[derive(Clone)]
+struct Ids {
+    server: String,
+    user: String,
+    conversation: String,
+    message: String,
+    report: String,
+}
+
+/// `minutes` from now, as GraphQL `DateTime`.
+fn in_minutes(minutes: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::minutes(minutes)).to_rfc3339()
+}
+
+/// One call to each root that acts on the member `user` of `server`: kick, ban, time out, clear
+/// the timeout.
+fn targeting(server: &str, user: &str) -> Vec<Call> {
+    let member = json!({ "serverId": server, "userId": user });
+    vec![
+        (KICK, member.clone()),
+        (BAN, member.clone()),
+        (
+            TIMEOUT,
+            merged(member.clone(), json!({ "until": in_minutes(10) })),
+        ),
+        (CLEAR_TIMEOUT, member),
+    ]
+}
+
+/// One call to each moderation root a Moderator or Owner may make, naming `ids`.
+fn moderator_roots(ids: &Ids) -> Vec<Call> {
+    let server = json!({ "serverId": ids.server });
+    let report = merged(server.clone(), json!({ "reportId": ids.report }));
+    let mut calls = vec![
+        (BANS, server.clone()),
+        (REPORTS, server.clone()),
+        (MESSAGE_REPORT, report.clone()),
+        (RESOLVE, merged(report, json!({ "outcome": "DISMISSED" }))),
+        (
+            SET_MEMBER_ROLE,
+            merged(
+                server.clone(),
+                json!({ "userId": ids.user, "role": "GUEST" }),
+            ),
+        ),
+        (UNBAN, merged(server.clone(), json!({ "userId": ids.user }))),
+        (
+            SET_SLOW_MODE,
+            merged(
+                server,
+                json!({ "conversationId": ids.conversation, "seconds": 60 }),
+            ),
+        ),
+    ];
+    calls.extend(targeting(&ids.server, &ids.user));
+    calls
+}
+
+/// The `reportMessage` call naming `ids`; any member who reads the message may make it.
+fn report_call(ids: &Ids) -> Call {
+    (
+        REPORT,
+        json!({
+            "serverId": ids.server, "conversationId": ids.conversation,
+            "messageId": ids.message, "reason": "spam",
+        }),
+    )
+}
+
+/// One call to every moderation root, naming `ids`.
+fn every_moderation_root(ids: &Ids) -> Vec<Call> {
+    let mut calls = moderator_roots(ids);
+    calls.push(report_call(ids));
+    calls
+}
+
+/// One call to every workspace root that names the workspace `server`.
+fn workspace_roots(server: &str) -> Vec<Call> {
+    let server = json!({ "serverId": server });
+    vec![(SERVER, server.clone()), (SERVER_MEMBERS, server)]
+}
+
+impl Fixture {
+    /// A user who belongs to no workspace.
+    async fn outsider(&self) -> Caller {
+        let olive = self.ctx.create_user("mod-olive").await;
+        self.ctx.caller(&olive).await
+    }
+
+    /// Ids of a message bob sent to the channel, carol's report of it, and carol as the target.
+    async fn reported(&self) -> Ids {
+        let message = self.send(&self.bob, &self.channel_id, "report me").await;
+        let mut ids = Ids {
+            server: self.server_id.clone(),
+            user: self.carol.user_id.to_string(),
+            conversation: self.channel_id.clone(),
+            message,
+            report: String::new(),
+        };
+        let data = exec_ok(&self.schema, self.carol.call(report_call(&ids))).await;
+        ids.report = data["report"]["id"]
+            .as_str()
+            .expect("report id")
+            .to_string();
+        ids
+    }
+
+    async fn code(&self, who: &Caller, call: Call) -> String {
+        exec_err_code(&self.schema, who.call(call)).await
+    }
+}
+
+#[tokio::test]
+async fn every_moderation_and_workspace_root_refuses_an_anonymous_caller() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    let mut calls = every_moderation_root(&ids);
+    calls.extend(workspace_roots(&f.server_id));
+    calls.push((MY_SERVERS, json!({})));
+    calls.push((CREATE_SERVER, json!({ "name": "mine" })));
+    assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
+}
+
+/// An outsider and a caller naming a workspace that does not exist get the same answer.
+#[tokio::test]
+async fn every_moderation_and_workspace_root_refuses_an_outsider_and_an_unknown_workspace() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    let mut calls = every_moderation_root(&ids);
+    calls.extend(workspace_roots(&f.server_id));
+    assert_each_refused_as(&f.schema, &f.outsider().await, &calls, "FORBIDDEN").await;
+
+    let elsewhere = Ids {
+        server: unknown_id(),
+        ..ids
+    };
+    let mut calls = every_moderation_root(&elsewhere);
+    calls.extend(workspace_roots(&elsewhere.server));
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "FORBIDDEN").await;
+}
+
+#[tokio::test]
+async fn members_and_guests_may_not_moderate() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    for who in [&f.bob, &f.gina] {
+        assert_each_refused_as(&f.schema, who, &moderator_roots(&ids), "FORBIDDEN").await;
+    }
+    assert!(
+        f.member_ids(&f.alice)
+            .await
+            .contains(&f.carol.user_id.to_string())
+    );
+    let page = exec_ok(
+        &f.schema,
+        f.mona.request(
+            REPORTS,
+            json!({ "serverId": f.server_id, "status": "OPEN" }),
+        ),
+    )
+    .await;
+    assert_eq!(page["page"]["items"][0]["id"], json!(ids.report));
+}
+
+#[tokio::test]
+async fn every_moderation_and_workspace_root_refuses_a_malformed_id() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    let bad_server = Ids {
+        server: "not-a-uuid".to_string(),
+        ..ids.clone()
+    };
+    let mut calls = every_moderation_root(&bad_server);
+    calls.extend(workspace_roots(&bad_server.server));
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+
+    let bad_rest = Ids {
+        server: ids.server,
+        user: "not-a-uuid".to_string(),
+        conversation: "not-a-uuid".to_string(),
+        message: "not-a-uuid".to_string(),
+        report: "not-a-uuid".to_string(),
+    };
+    let calls: Vec<Call> = every_moderation_root(&bad_rest)
+        .into_iter()
+        .filter(|(query, _)| ![BANS, REPORTS].contains(query))
+        .collect();
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+}
+
+/// An unknown member, report, conversation or message is `NOT_FOUND`, and so is a report or a
+/// message of another workspace or conversation named under this one. Lifting a ban or a timeout
+/// that is not there answers `false`.
+#[tokio::test]
+async fn moderation_roots_answer_not_found_for_an_unknown_target() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    let unknown = Ids {
+        server: f.server_id.clone(),
+        user: unknown_id(),
+        conversation: unknown_id(),
+        message: unknown_id(),
+        report: unknown_id(),
+    };
+    let calls: Vec<Call> = every_moderation_root(&unknown)
+        .into_iter()
+        .filter(|(query, _)| ![BANS, REPORTS, UNBAN, CLEAR_TIMEOUT].contains(query))
+        .collect();
+    assert_each_refused_as(&f.schema, &f.mona, &calls, "NOT_FOUND").await;
+    for query in [UNBAN, CLEAR_TIMEOUT] {
+        let data = exec_ok(
+            &f.schema,
+            f.mona.request(
+                query,
+                json!({ "serverId": f.server_id, "userId": unknown.user }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            data.as_object().expect("data").values().next(),
+            Some(&json!(false))
+        );
+    }
+
+    // A report of olive's workspace, named under this one.
+    let olive_user = f.ctx.create_user("mod-olive").await;
+    let other = f.ctx.create_server("moderation-e2e-other").await;
+    f.ctx.add_owner(&other, &olive_user).await;
+    let olive = f.ctx.caller(&olive_user).await;
+    let other_id = other.id.to_string();
+    let other_channel = create_channel(&f.schema, &olive, &other_id, "elsewhere", false).await;
+    let theirs = exec_ok(
+        &f.schema,
+        olive.request(
+            SEND_MESSAGE,
+            json!({ "input": {
+                "serverId": other_id, "conversationId": other_channel, "text": "x",
+            } }),
+        ),
+    )
+    .await;
+    let foreign = Ids {
+        server: other_id,
+        user: f.carol.user_id.to_string(),
+        conversation: other_channel,
+        message: theirs["msg"]["id"].as_str().expect("id").to_string(),
+        report: String::new(),
+    };
+    let data = exec_ok(&f.schema, olive.call(report_call(&foreign))).await;
+    let here = json!({ "serverId": f.server_id,
+                       "reportId": data["report"]["id"].as_str().expect("report id") });
+    let calls = [
+        (MESSAGE_REPORT, here.clone()),
+        (RESOLVE, merged(here, json!({ "outcome": "RESOLVED" }))),
+    ];
+    assert_each_refused_as(&f.schema, &f.mona, &calls, "NOT_FOUND").await;
+
+    // A message of the channel, named under another channel of the workspace.
+    let second = create_channel(&f.schema, &f.alice, &f.server_id, "second", false).await;
+    let misplaced = Ids {
+        conversation: second,
+        ..ids
+    };
+    assert_eq!(f.code(&f.mona, report_call(&misplaced)).await, "NOT_FOUND");
+}
+
+/// Kick, ban, timeout and clearing it refuse the caller themselves (`VALIDATION`), the owner and,
+/// for a moderator, a fellow moderator (`FORBIDDEN`).
+#[tokio::test]
+async fn nobody_moderates_themselves_the_owner_or_a_fellow_moderator() {
+    let f = setup().await;
+    let alice = f.alice.user_id.to_string();
+    let mona = f.mona.user_id.to_string();
+    for (who, me) in [(&f.alice, &alice), (&f.mona, &mona)] {
+        assert_each_refused_as(&f.schema, who, &targeting(&f.server_id, me), "VALIDATION").await;
+    }
+    assert_each_refused_as(
+        &f.schema,
+        &f.mona,
+        &targeting(&f.server_id, &alice),
+        "FORBIDDEN",
+    )
+    .await;
+
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            SET_MEMBER_ROLE,
+            json!({ "serverId": f.server_id, "userId": f.bob.user_id.to_string(),
+                    "role": "MODERATOR" }),
+        ),
+    )
+    .await;
+    let bob = f.bob.user_id.to_string();
+    assert_each_refused_as(
+        &f.schema,
+        &f.mona,
+        &targeting(&f.server_id, &bob),
+        "FORBIDDEN",
+    )
+    .await;
+    assert_eq!(f.member_ids(&f.alice).await.len(), 5, "nobody was removed");
+}
+
+#[tokio::test]
+async fn moderation_roots_refuse_out_of_range_times_reasons_and_conversations() {
+    let f = setup().await;
+    let ids = f.reported().await;
+    let carol = f.member_vars(&f.carol);
+    let group = exec_ok(
+        &f.schema,
+        f.alice.request(
+            CREATE_CHANNEL,
+            json!({ "input": { "serverId": f.server_id, "isChannel": false, "title": "g",
+                               "memberIds": [f.carol.user_id.to_string()] } }),
+        ),
+    )
+    .await;
+    let group_id = group["conversation"]["id"].as_str().expect("group id");
+    let slow = |conversation: &str, seconds: i64| {
+        (
+            SET_SLOW_MODE,
+            json!({ "serverId": f.server_id, "conversationId": conversation, "seconds": seconds }),
+        )
+    };
+    let calls = [
+        (
+            BAN_WITH,
+            merged(carol.clone(), json!({ "expiresAt": in_minutes(-1) })),
+        ),
+        (
+            BAN_WITH,
+            merged(carol.clone(), json!({ "reason": "r".repeat(513) })),
+        ),
+        (
+            TIMEOUT,
+            merged(carol.clone(), json!({ "until": in_minutes(-1) })),
+        ),
+        (
+            TIMEOUT,
+            merged(
+                carol.clone(),
+                json!({ "until": in_minutes(30 * 24 * 60 + 5) }),
+            ),
+        ),
+        slow(&f.channel_id, -1),
+        slow(group_id, 60),
+    ];
+    assert_each_refused_as(&f.schema, &f.mona, &calls, "VALIDATION").await;
+
+    let report = |reason: String| {
+        let (query, vars) = report_call(&ids);
+        (query, merged(vars, json!({ "reason": reason })))
+    };
+    let calls = [report("  ".to_string()), report("r".repeat(1001))];
+    assert_each_refused_as(&f.schema, &f.bob, &calls, "VALIDATION").await;
+
+    let data = exec_ok(
+        &f.schema,
+        f.mona.request(
+            BAN_WITH,
+            merged(carol, json!({ "reason": "r".repeat(512) })),
+        ),
+    )
+    .await;
+    assert_eq!(data["ban"]["userId"], json!(f.carol.user_id.to_string()));
+}
+
+#[tokio::test]
+async fn create_server_refuses_a_blank_or_overlong_name() {
+    let f = setup().await;
+    let calls = [
+        (CREATE_SERVER, json!({ "name": "   " })),
+        (CREATE_SERVER, json!({ "name": "n".repeat(129) })),
+    ];
+    assert_each_refused_as(&f.schema, &f.bob, &calls, "VALIDATION").await;
+    let data = exec_ok(
+        &f.schema,
+        f.bob.request(
+            CREATE_SERVER,
+            json!({ "name": format!(" {} ", "n".repeat(128)) }),
+        ),
+    )
+    .await;
+    assert_eq!(data["server"]["name"], json!("n".repeat(128)));
+    let mine = exec_ok(&f.schema, f.bob.request(MY_SERVERS, json!({}))).await;
+    assert_eq!(mine["myServers"].as_array().expect("servers").len(), 2);
+}
+
+// ── User commands and command discovery ───────────────────────────────────────────────────────
+
+const CREATE_USER_COMMAND: &str = r#"
+mutation Create($input: CreateUserCommandInput!) {
+  command: createUserCommand(input: $input) { id title }
+}
+"#;
+
+const UPDATE_USER_COMMAND: &str = r#"
+mutation Update($input: UpdateUserCommandInput!) {
+  command: updateUserCommand(input: $input) { id title }
+}
+"#;
+
+const DELETE_USER_COMMAND: &str = r#"
+mutation Delete($commandId: String!) { deleted: deleteUserCommand(input: { commandId: $commandId }) }
+"#;
+
+const COMMAND_DISCOVER: &str = r#"
+query Discover($workspaceId: ID) { commandDiscover(workspaceId: $workspaceId, limit: 100) { id } }
+"#;
+
+/// A user command `key` titled `title` that runs `step`.
+fn user_command(key: &str, title: &str, step: &str) -> Value {
+    json!({ "commandId": key, "title": title, "description": "", "steps": [{ "commandId": step }] })
+}
+
+fn create_command(key: &str, step: &str) -> Call {
+    (
+        CREATE_USER_COMMAND,
+        json!({ "input": user_command(key, "made", step) }),
+    )
+}
+
+fn update_command(key: &str) -> Call {
+    let input = merged(
+        user_command(key, "changed", "chat.post_message"),
+        json!({ "isEnabled": true }),
+    );
+    (UPDATE_USER_COMMAND, json!({ "input": input }))
+}
+
+fn delete_command(key: &str) -> Call {
+    (DELETE_USER_COMMAND, json!({ "commandId": key }))
+}
+
+/// One call to every user command root, naming the command `key`.
+fn every_user_command_root(key: &str) -> Vec<Call> {
+    vec![
+        create_command(key, "chat.post_message"),
+        update_command(key),
+        delete_command(key),
+    ]
+}
+
+impl Fixture {
+    /// The ids `who` discovers, scoped to `workspace` when given.
+    async fn discovered(&self, who: &Caller, workspace: Option<&str>) -> Vec<String> {
+        let data = exec_ok(
+            &self.schema,
+            who.request(COMMAND_DISCOVER, json!({ "workspaceId": workspace })),
+        )
+        .await;
+        data["commandDiscover"]
+            .as_array()
+            .expect("commands")
+            .iter()
+            .map(|c| c["id"].as_str().expect("id").to_string())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn every_command_root_refuses_an_anonymous_caller() {
+    let f = setup().await;
+    exec_ok(
+        &f.schema,
+        f.bob
+            .call(create_command("user.greet", "chat.post_message")),
+    )
+    .await;
+    let mut calls = every_user_command_root("user.greet");
+    calls.push((COMMAND_DISCOVER, json!({ "workspaceId": f.server_id })));
+    assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
+}
+
+/// User commands are per account: another member and the workspace owner see no command of
+/// bob's (`NOT_FOUND`) and may name their own command the same, and a step may name only the
+/// caller's own user commands.
+#[tokio::test]
+async fn a_user_command_belongs_to_its_creator_alone() {
+    let f = setup().await;
+    exec_ok(
+        &f.schema,
+        f.bob
+            .call(create_command("user.greet", "chat.post_message")),
+    )
+    .await;
+    let changes = [update_command("user.greet"), delete_command("user.greet")];
+    for who in [&f.carol, &f.alice] {
+        assert_each_refused_as(&f.schema, who, &changes, "NOT_FOUND").await;
+    }
+    let (code, message) = exec_err(
+        &f.schema,
+        f.carol.call(create_command("user.borrowed", "user.greet")),
+    )
+    .await;
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("VALIDATION", "unknown command step `user.greet`")
+    );
+
+    let theirs = exec_ok(
+        &f.schema,
+        f.carol
+            .call(create_command("user.greet", "chat.list_channels")),
+    )
+    .await;
+    assert_eq!(theirs["command"]["id"], json!("user.greet"));
+    let mine = exec_ok(&f.schema, f.bob.call(update_command("user.greet"))).await;
+    assert_eq!(mine["command"]["title"], json!("changed"));
+    let deleted = exec_ok(&f.schema, f.bob.call(delete_command("user.greet"))).await;
+    assert_eq!(deleted["deleted"], json!(true));
+    assert_each_refused_as(&f.schema, &f.bob, &changes, "NOT_FOUND").await;
+    let kept = exec_ok(&f.schema, f.carol.call(update_command("user.greet"))).await;
+    assert_eq!(kept["command"]["title"], json!("changed"));
+}
+
+/// An id outside the `user.` namespace is `VALIDATION` on create and, like an unknown id,
+/// `NOT_FOUND` on update and delete.
+#[tokio::test]
+async fn user_command_roots_refuse_an_unknown_or_malformed_id() {
+    let f = setup().await;
+    let calls = [
+        update_command("user.nothing"),
+        delete_command("user.nothing"),
+        update_command("greet"),
+        delete_command("greet"),
+    ];
+    assert_each_refused_as(&f.schema, &f.bob, &calls, "NOT_FOUND").await;
+    let call = create_command("greet", "chat.post_message");
+    assert_eq!(f.code(&f.bob, call).await, "VALIDATION");
+}
+
+/// Discovery filters by capability, not by role: every member of the workspace discovers the
+/// agent-callable moderation commands, which only a Moderator or the Owner may run. Outside the
+/// workspace, or without one, only the commands that need no capability are listed.
+#[tokio::test]
+async fn command_discover_lists_by_capability_not_by_role() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let moderation = ["admin.timeout", "chat.set_slow_mode", "chat.post_message"];
+    for who in [&f.bob, &f.gina, &f.mona] {
+        let ids = f.discovered(who, Some(&f.server_id)).await;
+        for id in moderation {
+            assert!(ids.contains(&id.to_string()), "{id} for {:?}", who.user_id);
+        }
+    }
+
+    let olive = f.outsider().await;
+    for (who, workspace) in [(&olive, Some(f.server_id.as_str())), (&f.bob, None)] {
+        let ids = f.discovered(who, workspace).await;
+        assert!(ids.contains(&"state.get".to_string()));
+        for id in moderation {
+            assert!(!ids.contains(&id.to_string()), "{id} for {workspace:?}");
+        }
+    }
+
+    let call = (COMMAND_DISCOVER, json!({ "workspaceId": "not-a-uuid" }));
+    assert_eq!(f.code(&f.bob, call).await, "VALIDATION");
 }
