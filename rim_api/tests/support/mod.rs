@@ -47,6 +47,12 @@ use rim_services::provider::AppServiceProvider;
 
 static MIGRATED: OnceLock<()> = OnceLock::new();
 
+/// A well-formed id that names nothing.
+#[allow(dead_code)]
+pub fn unknown_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 fn is_test_db_url(url: &str) -> bool {
     let db_name = url.rsplit('/').next().unwrap_or("");
     let db_name = db_name.split('?').next().unwrap_or(db_name);

@@ -18,12 +18,20 @@ pub struct Caller {
     pub session_id: SessionId,
 }
 
+/// A GraphQL document and its variables, ready to send as any caller.
+pub type Call = (&'static str, Value);
+
 impl Caller {
     /// Build a request carrying this caller's auth context and the given JSON `variables`.
     pub fn request(&self, query: &str, variables: Value) -> Request {
         Request::new(query)
             .variables(Variables::from_json(variables))
             .data(AuthActorCtx::new(Some(self.user_id), Some(self.session_id)))
+    }
+
+    /// [`Caller::request`] for a prepared [`Call`].
+    pub fn call(&self, (query, variables): Call) -> Request {
+        self.request(query, variables)
     }
 }
 
@@ -66,16 +74,6 @@ pub async fn exec_err(schema: &AppSchema, request: Request) -> (String, String) 
     }
 }
 
-/// Execute `request`, assert it failed, and return the first error's message.
-pub async fn exec_err_message(schema: &AppSchema, request: Request) -> String {
-    let res = schema.execute(request).await;
-    res.errors
-        .first()
-        .unwrap_or_else(|| panic!("expected a GraphQL error, got data: {:?}", res.data))
-        .message
-        .clone()
-}
-
 /// Assert that each `(query, variables)` call, sent through `request`, fails with `code`.
 pub async fn assert_each_refused(
     schema: &AppSchema,
@@ -85,6 +83,16 @@ pub async fn assert_each_refused(
 ) {
     for (query, variables) in calls {
         let got = exec_err_code(schema, request(query, variables.clone())).await;
-        assert_eq!(got, code, "{query}");
+        assert_eq!(got, code, "{query} {variables}");
     }
+}
+
+/// [`assert_each_refused`] with every call sent as `who`.
+pub async fn assert_each_refused_as(
+    schema: &AppSchema,
+    who: &Caller,
+    calls: &[(&str, Value)],
+    code: &str,
+) {
+    assert_each_refused(schema, calls, code, |q, v| who.request(q, v)).await;
 }

@@ -39,6 +39,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use support::nodes::{Node, databases_with, start};
+use support::unknown_id;
 
 /// Everything these tests touch, emptied on both databases first.
 const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, \
@@ -812,7 +813,7 @@ async fn a_delegation_expires_and_is_renewed() {
     assert_eq!(rita.forward(&h, heads).await.status, 200);
 
     // A workspace Rita is not a member of is refused by the host, with its reason.
-    let elsewhere = rita.delegation(&h, &r, &Uuid::now_v7().to_string(), 6);
+    let elsewhere = rita.delegation(&h, &r, &unknown_id(), 6);
     let refused = rita
         .ok(RENEW, json!({ "d": [statement(&elsewhere)] }))
         .await["renewDelegations"][0]

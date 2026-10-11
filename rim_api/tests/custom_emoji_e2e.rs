@@ -17,9 +17,11 @@ use serde_json::{Value, json};
 use rim_api::AppSchema;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_err_code, exec_ok};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+};
 use support::roles::Roles;
+use support::{TestCtx, unknown_id};
 
 const CREATE_EMOJI: &str = r#"
 mutation Create($input: CreateCustomEmojiInput!) {
@@ -138,7 +140,7 @@ async fn custom_emoji_roots_refuse_anonymous_callers() {
             CREATE_EMOJI,
             create_vars(&f.ws.server_id, "party", &image(16)),
         ),
-        (DELETE_EMOJI, delete_vars(&uuid::Uuid::now_v7().to_string())),
+        (DELETE_EMOJI, delete_vars(&unknown_id())),
         (CUSTOM_EMOJIS, json!({ "serverId": f.ws.server_id })),
     ];
     assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
@@ -157,10 +159,7 @@ async fn custom_emoji_roots_refuse_non_members() {
         (DELETE_EMOJI, delete_vars(id(&emoji))),
         (CUSTOM_EMOJIS, json!({ "serverId": f.ws.server_id })),
     ];
-    assert_each_refused(&f.schema, &calls, "FORBIDDEN", |q, v| {
-        f.ws.olive.request(q, v)
-    })
-    .await;
+    assert_each_refused_as(&f.schema, &f.ws.olive, &calls, "FORBIDDEN").await;
     assert_eq!(f.list(&f.ws.alice).await, vec![emoji]);
 }
 
@@ -292,6 +291,6 @@ async fn delete_custom_emoji_is_for_the_uploader_and_the_owner() {
     assert!(f.list(&f.ws.alice).await.is_empty());
 
     assert_eq!(f.delete_code(&f.ws.bob, id(&bobs)).await, "NOT_FOUND");
-    let unknown = uuid::Uuid::now_v7().to_string();
+    let unknown = unknown_id();
     assert_eq!(f.delete_code(&f.ws.alice, &unknown).await, "NOT_FOUND");
 }
