@@ -1,6 +1,7 @@
-//! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host) and
-//! the host's checks of forwarded device requests (the device, its signature, the forwarded
-//! body, the `seq` window, and which relay may carry a user's traffic).
+//! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), its
+//! queue cap, identity fetches and remote server lookups, and the host's checks of forwarded
+//! device requests (the device, its signature, the forwarded body, the `seq` window, and which
+//! relay may carry a user's traffic).
 
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +16,7 @@ use rim_core::host::model::{SeqDecision, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
 use rim_core::key_identity::model::{DeviceKey, DeviceKeyId, StoredProfileCard};
 use rim_core::key_identity::repository::MockKeyIdentityRepository;
+use rim_core::relay::model::{CachedIdentity, DroppedSpace};
 use rim_core::relay::repository::{
     MockRelayAbuseRepository, MockRelayRepository, MockSubscriptionRepository,
 };
@@ -23,28 +25,35 @@ use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberR
 use rim_core::server_member::repository::MockServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_core::user::repository::MockUserRepository;
-use rim_identity::testing::signing_key;
-use rim_identity::{PublicKey, Purpose, device_request_payload, sign_with_context};
+use rim_identity::testing::{TestIdentity, signing_key};
+use rim_identity::{KeyState, PublicKey, Purpose, device_request_payload, sign_with_context};
+use rim_s2s::host::{HostEventFields, sign_host_event};
 use rim_s2s::{
     Endpoints, Limits, Registration, RegistrationMode, Role, ServerDescriptor, ServerIdentity,
     ServerKeyState, ServerSigner, SharedIdentity, sign_descriptor, sign_inception, timestamp,
 };
-use rim_services::ServiceError;
 use rim_services::host::dto::{ForwardRefusal, ForwardRequest};
 use rim_services::host::service::{HostService, MockDelegationCheck};
 use rim_services::relay::dto::{ClaimConversation, Claimer, PeerClaimRequest};
+use rim_services::relay::dto::{
+    DeliverItem, IdentityDocument, QueueSpace, RelayNotice, SignedJson,
+};
 use rim_services::relay::service::RelayService;
+use rim_services::s2s::dto::{PeerDto, PeerKeysDto, PeerLookup, S2sClientError, S2sResponse};
 use rim_services::s2s::service::{MockPeerService, MockS2sClient};
+use rim_services::{Actor, ServiceError};
 use uuid::Uuid;
 
 use crate::host::{DefaultHostService, HostRepos};
 use crate::quota::Quotas;
+use crate::relay::identity::testing::document;
 use crate::relay::{DefaultRelayService, RelayRepos, RelaySettings};
 
 const PEER: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
 const PEER_ORIGIN: &str = "https://relay.example";
 const BOB: &str = "rimp1_bob";
 const ALICE: &str = "rimp1_alice";
+const QUEUE_CAP: i64 = 1 << 20;
 
 fn identity(seed: u8) -> SharedIdentity {
     let signer = ServerSigner::from_seed([seed; 32]);
@@ -112,6 +121,39 @@ fn device(id: DeviceKeyId, user_id: UserId, revoked: bool) -> DeviceKey {
     }
 }
 
+/// Repositories with no expectations, where no principal is blocked.
+fn empty_repos() -> RelayRepos {
+    RelayRepos {
+        relay_repo: Arc::new(MockRelayRepository::new()),
+        host_repo: Arc::new(MockHostRepository::new()),
+        key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+        e2ee_repo: Arc::new(MockE2eeRepository::new()),
+        user_repo: Arc::new(MockUserRepository::new()),
+        subscription_repo: Arc::new(MockSubscriptionRepository::new()),
+        relay_abuse_repo: Arc::new(blocks(&[])),
+    }
+}
+
+/// A relay over `repos` whose queue holds `QUEUE_CAP` bytes per user.
+fn relay_service(
+    repos: RelayRepos,
+    peers: MockPeerService,
+    client: MockS2sClient,
+) -> DefaultRelayService {
+    DefaultRelayService::new(
+        repos,
+        None,
+        identity(30),
+        Arc::new(peers),
+        Arc::new(client),
+        RelaySettings {
+            queue_bytes_per_user: QUEUE_CAP,
+            retention: Duration::days(30),
+            quotas: Quotas::default(),
+        },
+    )
+}
+
 // ── The relay's claims for hosts ─────────────────────────────────────────────────────────
 
 /// A relay holding Bob, whose one device has packages; `one_time` records each claim's flag.
@@ -160,25 +202,17 @@ fn relay_with_blocks(
                 }))
             })
         });
-    DefaultRelayService::new(
+    relay_service(
         RelayRepos {
             relay_repo: Arc::new(relay),
             host_repo: Arc::new(host),
             key_identity_repo: Arc::new(keys),
             e2ee_repo: Arc::new(e2ee),
-            user_repo: Arc::new(MockUserRepository::new()),
-            subscription_repo: Arc::new(MockSubscriptionRepository::new()),
             relay_abuse_repo: Arc::new(blocks(server_blocks)),
+            ..empty_repos()
         },
-        None,
-        identity(30),
-        Arc::new(MockPeerService::new()),
-        Arc::new(MockS2sClient::new()),
-        RelaySettings {
-            queue_bytes_per_user: 1 << 20,
-            retention: Duration::days(30),
-            quotas: Quotas::default(),
-        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
     )
 }
 
@@ -291,6 +325,563 @@ fn a_strangers_refused_claim_is_counted_under_its_limiter() {
         ),
         1
     );
+}
+
+// ── The relay queue ──────────────────────────────────────────────────────────────────────
+
+fn host_signer(seed: u8) -> ServerSigner {
+    ServerSigner::from_seed([seed; 32])
+}
+
+fn peer_keys(signer: &ServerSigner, head_seq: u32) -> PeerKeysDto {
+    PeerKeysDto {
+        server_id: PEER.to_string(),
+        origin: PEER_ORIGIN.to_string(),
+        head_seq,
+        head_key: signer.public_key().to_string(),
+        previous_key: None,
+        s2s_endpoint: None,
+    }
+}
+
+/// Peers that resolve `PEER` to `keys`, and to `refetched` when asked for a newer key.
+fn peers_resolving(keys: PeerKeysDto, refetched: Option<PeerKeysDto>) -> MockPeerService {
+    let mut peers = MockPeerService::new();
+    peers
+        .expect_resolve()
+        .withf(|server_id, _, key_seq| server_id == PEER && key_seq.is_none())
+        .returning(move |_, _, _| {
+            let keys = keys.clone();
+            Box::pin(async move { Ok(PeerLookup::Ready(keys)) })
+        });
+    peers
+        .expect_resolve()
+        .withf(|server_id, _, key_seq| server_id == PEER && key_seq.is_some())
+        .returning(move |_, _, _| {
+            let lookup = refetched
+                .clone()
+                .map_or(PeerLookup::Unknown, PeerLookup::Ready);
+            Box::pin(async move { Ok(lookup) })
+        });
+    peers
+}
+
+/// An item from `PEER` for Bob, signed by `signer` at `key_seq`.
+fn host_item(signer: &ServerSigner, key_seq: u32) -> DeliverItem {
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let statement = sign_host_event(
+        signer,
+        &HostEventFields {
+            host: PEER,
+            key_seq,
+            workspace_id: &workspace_id,
+            stream: "e",
+            seq: None,
+            event_json: r#"{"type":"MessageCreated"}"#,
+            issued_at: &issued_at,
+        },
+    );
+    DeliverItem {
+        id: "1".to_string(),
+        envelope: SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        recipients: vec![BOB.to_string()],
+        device_id: None,
+    }
+}
+
+/// A relay that queues each delivered item for Bob, who then has `queued` bytes queued.
+/// Dropping his oldest items frees `dropped`; `drops` records the byte count of each drop.
+fn queueing_relay(
+    peers: MockPeerService,
+    queued: i64,
+    dropped: Vec<DroppedSpace>,
+    drops: Arc<Mutex<Vec<i64>>>,
+) -> (DefaultRelayService, UserId) {
+    let bob = UserId::new();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_insert_item()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_queued_bytes()
+        .returning(move |_| Box::pin(async move { Ok(queued) }));
+    relay.expect_drop_oldest().returning(move |user_id, bytes| {
+        assert_eq!(user_id, bob);
+        drops.lock().expect("lock").push(bytes);
+        let dropped = dropped.clone();
+        Box::pin(async move { Ok(dropped) })
+    });
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers,
+        MockS2sClient::new(),
+    );
+    (svc, bob)
+}
+
+/// Delivers one item signed by the pinned host and returns the notices it raised.
+async fn deliver_one(svc: &DefaultRelayService) -> Vec<RelayNotice> {
+    let signer = host_signer(40);
+    let mut notices = svc.subscribe();
+    let response = svc
+        .deliver(PEER.to_string(), vec![host_item(&signer, 0)])
+        .await
+        .expect("delivered");
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+    std::iter::from_fn(|| notices.try_recv().ok()).collect()
+}
+
+fn dropped_space(host: &str, workspace: u128) -> DroppedSpace {
+    DroppedSpace {
+        host_server_id: host.to_string(),
+        workspace_id: Uuid::from_u128(workspace),
+    }
+}
+
+/// A queue over its cap drops the overflow from the oldest items and names the spaces it
+/// dropped from in one notice.
+#[tokio::test]
+async fn a_queue_over_its_cap_drops_the_overflow_and_names_the_spaces() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let (svc, bob) = queueing_relay(
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        QUEUE_CAP + 300,
+        vec![dropped_space(PEER, 5), dropped_space("rims1_other", 6)],
+        drops.clone(),
+    );
+
+    let notices = deliver_one(&svc).await;
+
+    assert_eq!(*drops.lock().expect("lock"), vec![300]);
+    assert_eq!(
+        notices,
+        vec![
+            RelayNotice::Items { user_id: bob },
+            RelayNotice::QueueOverflow {
+                user_id: bob,
+                spaces: vec![
+                    QueueSpace {
+                        host_server_id: PEER.to_string(),
+                        workspace_id: Uuid::from_u128(5),
+                    },
+                    QueueSpace {
+                        host_server_id: "rims1_other".to_string(),
+                        workspace_id: Uuid::from_u128(6),
+                    },
+                ],
+            },
+        ]
+    );
+}
+
+/// A queue at its cap drops nothing, and a drop that frees nothing sends no overflow notice.
+#[tokio::test]
+async fn a_queue_at_its_cap_or_with_nothing_to_drop_raises_no_overflow() {
+    for (queued, expected_drops) in [(QUEUE_CAP, vec![]), (QUEUE_CAP + 1, vec![1])] {
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let (svc, bob) = queueing_relay(
+            peers_resolving(peer_keys(&host_signer(40), 0), None),
+            queued,
+            vec![],
+            drops.clone(),
+        );
+
+        let notices = deliver_one(&svc).await;
+
+        assert_eq!(*drops.lock().expect("lock"), expected_drops, "{queued}");
+        assert_eq!(
+            notices,
+            vec![RelayNotice::Items { user_id: bob }],
+            "{queued}"
+        );
+    }
+}
+
+/// An envelope signed at a key newer than the pinned head is checked against the host's keys
+/// fetched again at that seq.
+#[tokio::test]
+async fn an_envelope_signed_at_a_newer_key_is_checked_against_refetched_keys() {
+    let rotated = host_signer(41);
+    let (svc, _) = queueing_relay(
+        peers_resolving(peer_keys(&host_signer(40), 0), Some(peer_keys(&rotated, 1))),
+        0,
+        vec![],
+        Arc::new(Mutex::new(Vec::new())),
+    );
+
+    let response = svc
+        .deliver(PEER.to_string(), vec![host_item(&rotated, 1)])
+        .await
+        .expect("delivered");
+
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+}
+
+/// An envelope at a newer key the host cannot confirm, or at a key older than the head and
+/// its predecessor, is refused as invalid and not queued.
+#[tokio::test]
+async fn an_envelope_at_an_unconfirmed_or_retired_key_is_refused() {
+    let cases = [
+        // Newer than the pin, and the host is not pinned there.
+        (peer_keys(&host_signer(40), 0), None, host_signer(41), 1),
+        // Newer than the pin, and the refetched keys still stop below it.
+        (
+            peer_keys(&host_signer(40), 0),
+            Some(peer_keys(&host_signer(40), 0)),
+            host_signer(41),
+            1,
+        ),
+        // Two keys behind the head.
+        (peer_keys(&host_signer(42), 2), None, host_signer(40), 0),
+    ];
+    for (keys, refetched, signer, key_seq) in cases {
+        let mut relay = MockRelayRepository::new();
+        relay
+            .expect_received_through()
+            .returning(|_| Box::pin(async { Ok(0) }));
+        relay
+            .expect_advance_received_through()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        relay.expect_insert_item().never();
+        let svc = relay_service(
+            RelayRepos {
+                relay_repo: Arc::new(relay),
+                ..empty_repos()
+            },
+            peers_resolving(keys, refetched),
+            MockS2sClient::new(),
+        );
+
+        let response = svc
+            .deliver(PEER.to_string(), vec![host_item(&signer, key_seq)])
+            .await
+            .expect("answered");
+
+        assert_eq!(response.refused.len(), 1, "key seq {key_seq}");
+        assert_eq!(response.refused[0].reason, "invalid_envelope");
+        assert_eq!(response.acked_through, "1");
+    }
+}
+
+// ── Identity fetches ─────────────────────────────────────────────────────────────────────
+
+const SERVING_RELAY: &str = "rims1_serving_relay";
+
+/// What an identity fetch gets back: a status and body, or a transport error.
+type FetchAnswer = Result<(u16, Vec<u8>), S2sClientError>;
+
+fn alice_document() -> IdentityDocument {
+    let id = TestIdentity::new(1);
+    let state = KeyState::from_inception(&id.inception()).expect("inception");
+    document(&id, &state)
+}
+
+/// A client whose identity fetch of `principal_id` from `SERVING_RELAY` gets `answer`.
+fn serving(principal_id: &str, answer: FetchAnswer) -> MockS2sClient {
+    let path = format!("/principals/{principal_id}");
+    let mut client = MockS2sClient::new();
+    client
+        .expect_send()
+        .withf(move |request| {
+            request.peer_server_id == SERVING_RELAY
+                && request.path == path
+                && request.method == rim_services::s2s::dto::S2sMethod::Get
+        })
+        .times(1)
+        .returning(move |_| {
+            let answer = answer.clone().map(|(status, body)| S2sResponse {
+                status,
+                content_type: "application/json".to_string(),
+                body,
+                key_seq: 0,
+                headers: Vec::new(),
+            });
+            Box::pin(async move { answer })
+        });
+    client
+}
+
+/// A relay with no local identity for `principal_id`, holding `cached` for it; `stored`
+/// counts the identities it stores.
+fn identity_relay(
+    principal_id: &str,
+    cached: Option<CachedIdentity>,
+    client: MockS2sClient,
+    stored: Arc<Mutex<usize>>,
+) -> DefaultRelayService {
+    let principal_id = principal_id.to_string();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_cached_identity()
+        .withf(move |p| p == principal_id)
+        .returning(move |_| {
+            let cached = cached.clone();
+            Box::pin(async move { Ok(cached) })
+        });
+    relay
+        .expect_store_identity()
+        .returning(move |_, served_by, _| {
+            assert_eq!(served_by, SERVING_RELAY);
+            *stored.lock().expect("lock") += 1;
+            Box::pin(async { Ok(()) })
+        });
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        client,
+    )
+}
+
+/// `document` cached from `SERVING_RELAY`, fetched `age` ago.
+fn cached(document: &IdentityDocument, age: Duration) -> Option<CachedIdentity> {
+    Some(CachedIdentity {
+        principal_id: document.principal_id.clone(),
+        served_by: SERVING_RELAY.to_string(),
+        identity: serde_json::to_string(document).expect("json"),
+        fetched_at: Utc::now() - age,
+    })
+}
+
+fn actor() -> Actor {
+    Actor::new(UserId::new())
+}
+
+/// A cached identity younger than a day is served without a fetch.
+#[tokio::test]
+async fn a_cached_identity_younger_than_a_day_is_served_as_is() {
+    let doc = alice_document();
+    let stored = Arc::new(Mutex::new(0));
+    let mut client = MockS2sClient::new();
+    client.expect_send().never();
+    let svc = identity_relay(
+        &doc.principal_id,
+        cached(&doc, Duration::hours(23)),
+        client,
+        stored.clone(),
+    );
+
+    let identity = svc
+        .remote_identity(actor(), doc.principal_id.clone(), None)
+        .await
+        .expect("served from the cache");
+
+    assert_eq!(identity.document, doc);
+    assert_eq!(identity.served_by, SERVING_RELAY);
+    assert_eq!(*stored.lock().expect("lock"), 0);
+}
+
+/// An older cached identity is fetched again from the relay that served it, verified, and
+/// stored.
+#[tokio::test]
+async fn a_stale_cached_identity_is_refetched_from_the_relay_that_served_it() {
+    let doc = alice_document();
+    let stored = Arc::new(Mutex::new(0));
+    let body = serde_json::to_vec(&doc).expect("json");
+    let svc = identity_relay(
+        &doc.principal_id,
+        cached(&doc, Duration::hours(25)),
+        serving(&doc.principal_id, Ok((200, body))),
+        stored.clone(),
+    );
+
+    let identity = svc
+        .remote_identity(actor(), doc.principal_id.clone(), None)
+        .await
+        .expect("refetched");
+
+    assert_eq!(identity.document, doc);
+    assert_eq!(identity.served_by, SERVING_RELAY);
+    assert_eq!(*stored.lock().expect("lock"), 1);
+}
+
+/// A refetch is refused as the serving relay being unavailable when the relay fails, answers
+/// with something that is not an identity, serves another principal's identity, or serves
+/// one whose signatures do not verify; a 404 is NotFound. Nothing is stored.
+#[tokio::test]
+async fn a_refetch_that_fails_its_checks_is_refused_and_not_stored() {
+    let doc = alice_document();
+    let other = {
+        let id = TestIdentity::new(2);
+        document(
+            &id,
+            &KeyState::from_inception(&id.inception()).expect("inception"),
+        )
+    };
+    let mut tampered = doc.clone();
+    tampered.devices[0].certificate.signature = doc.key_log[0].signature.clone();
+    let json = |d: &IdentityDocument| serde_json::to_vec(d).expect("json");
+    let cases: Vec<(&str, FetchAnswer)> = vec![
+        ("transport error", Err(S2sClientError::UnknownPeer)),
+        ("server error", Ok((500, Vec::new()))),
+        ("not json", Ok((200, b"<html>".to_vec()))),
+        ("another principal", Ok((200, json(&other)))),
+        ("bad signature", Ok((200, json(&tampered)))),
+    ];
+    for (case, answer) in cases {
+        let stored = Arc::new(Mutex::new(0));
+        let svc = identity_relay(
+            &doc.principal_id,
+            cached(&doc, Duration::hours(25)),
+            serving(&doc.principal_id, answer),
+            stored.clone(),
+        );
+
+        let err = svc
+            .remote_identity(actor(), doc.principal_id.clone(), None)
+            .await
+            .expect_err(case);
+
+        assert!(
+            matches!(
+                &err,
+                ServiceError::UpstreamUnavailable { host_server_id: Some(id), origin: None }
+                    if id == SERVING_RELAY
+            ),
+            "{case}: {err:?}"
+        );
+        assert_eq!(*stored.lock().expect("lock"), 0, "{case}");
+    }
+
+    let svc = identity_relay(
+        &doc.principal_id,
+        cached(&doc, Duration::hours(25)),
+        serving(&doc.principal_id, Ok((404, Vec::new()))),
+        Arc::new(Mutex::new(0)),
+    );
+    let err = svc
+        .remote_identity(actor(), doc.principal_id.clone(), None)
+        .await
+        .expect_err("not served");
+    assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+}
+
+/// Without a cached identity there is no relay to ask, so a relay URL is required.
+#[tokio::test]
+async fn an_identity_never_cached_needs_a_relay_url() {
+    let doc = alice_document();
+    let mut client = MockS2sClient::new();
+    client.expect_send().never();
+    let svc = identity_relay(&doc.principal_id, None, client, Arc::new(Mutex::new(0)));
+
+    let err = svc
+        .remote_identity(actor(), doc.principal_id.clone(), None)
+        .await
+        .expect_err("no relay to ask");
+
+    assert!(
+        matches!(&err, ServiceError::Validation(m) if m == "relayUrl is required"),
+        "{err:?}"
+    );
+}
+
+// ── Remote servers ───────────────────────────────────────────────────────────────────────
+
+/// Peers that pin any origin as `PEER` and hold `discovery` for it.
+fn pinning_peers(discovery: Option<&str>) -> MockPeerService {
+    let discovery = discovery.map(str::to_string);
+    let mut peers = MockPeerService::new();
+    peers.expect_pin().returning(|origin, _| {
+        let pinned = PeerDto {
+            server_id: PEER.to_string(),
+            origin: origin.to_string(),
+            status: "active".to_string(),
+            head_seq: 0,
+            descriptor_version: 1,
+            descriptor_payload: "{}".to_string(),
+            fetched_at: Utc::now(),
+        };
+        Box::pin(async move { Ok(pinned) })
+    });
+    peers
+        .expect_discovery_document()
+        .withf(|server_id| server_id == PEER)
+        .returning(move |_| {
+            let discovery = discovery.clone();
+            Box::pin(async move { Ok(discovery) })
+        });
+    peers
+}
+
+/// A remote server is looked up by its bare origin, a trailing slash allowed, and answered
+/// with its pinned id and discovery document.
+#[tokio::test]
+async fn a_remote_server_is_pinned_by_its_origin() {
+    let svc = relay_service(
+        empty_repos(),
+        pinning_peers(Some(r#"{"serverId":"x"}"#)),
+        MockS2sClient::new(),
+    );
+
+    let server = svc
+        .remote_server(actor(), format!("{PEER_ORIGIN}/"))
+        .await
+        .expect("pinned");
+
+    assert_eq!(server.server_id, PEER);
+    assert_eq!(server.origin, PEER_ORIGIN);
+    assert_eq!(server.discovery, r#"{"serverId":"x"}"#);
+}
+
+/// An origin with a path, query or a scheme other than http(s) is refused before pinning, and
+/// a pinned server without a discovery document is NotFound.
+#[tokio::test]
+async fn a_remote_server_needs_a_bare_origin_and_a_discovery_document() {
+    let mut peers = MockPeerService::new();
+    peers.expect_pin().never();
+    let svc = relay_service(empty_repos(), peers, MockS2sClient::new());
+    for origin in [
+        format!("{PEER_ORIGIN}/s2s"),
+        format!("{PEER_ORIGIN}?x=1"),
+        "ftp://relay.example".to_string(),
+    ] {
+        let err = svc
+            .remote_server(actor(), origin.clone())
+            .await
+            .expect_err(&origin);
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "origin must be scheme://host[:port]"),
+            "{origin}: {err:?}"
+        );
+    }
+
+    let svc = relay_service(empty_repos(), pinning_peers(None), MockS2sClient::new());
+    let err = svc
+        .remote_server(actor(), PEER_ORIGIN.to_string())
+        .await
+        .expect_err("no discovery document");
+    assert!(matches!(err, ServiceError::NotFound), "{err:?}");
 }
 
 // ── The host's checks of forwarded requests ─────────────────────────────────────────────
