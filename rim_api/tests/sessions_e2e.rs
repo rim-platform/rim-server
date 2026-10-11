@@ -24,7 +24,7 @@ use rim_services::auth::dto::RegistrationMode;
 use rim_services::provider::AppServiceProvider;
 
 use support::TestCtx;
-use support::graphql::{anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{anonymous_request, assert_each_refused, exec_err_code, exec_ok};
 
 const PASSWORD: &str = "correct horse battery";
 
@@ -34,6 +34,8 @@ mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
 const LOGOUT_OTHER_SESSIONS: &str = "mutation { logoutOtherSessions }";
 
 const ME: &str = "query { me { id username } }";
+
+const LOGOUT: &str = "mutation { logout }";
 
 async fn create_user(ctx: &TestCtx, username: &str) {
     SeaOrmUserRepository::new(ctx.db.clone())
@@ -117,14 +119,51 @@ async fn logout_other_sessions_ends_every_session_but_the_callers() {
     assert_eq!(data["logoutOtherSessions"], json!(0));
 }
 
-/// Without a session the mutation is refused.
+/// Without a session every session root but `login` is refused.
 #[tokio::test]
-async fn logout_other_sessions_needs_a_session() {
+async fn every_session_root_needs_a_session() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
-    assert_eq!(
-        exec_err_code(&schema, anonymous_request(LOGOUT_OTHER_SESSIONS, json!({}))).await,
-        "UNAUTHENTICATED"
-    );
+    let calls = [LOGOUT_OTHER_SESSIONS, LOGOUT, ME].map(|query| (query, json!({})));
+    assert_each_refused(&schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
+}
+
+/// `logout` ends the calling session only: its cookie no longer authenticates, even to log out
+/// again, and the account's other session goes on.
+#[tokio::test]
+async fn logout_ends_only_the_calling_session() {
+    let ctx = TestCtx::new().await;
+    create_user(&ctx, "ada").await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let provider = ctx.build_provider();
+    let desktop = login(&schema, "ada").await;
+    let laptop = login(&schema, "ada").await;
+
+    let data = exec_ok(&schema, with_session(&provider, &laptop, LOGOUT).await).await;
+    assert_eq!(data["logout"], json!(true));
+
+    for query in [ME, LOGOUT] {
+        let request = with_session(&provider, &laptop, query).await;
+        assert_eq!(exec_err_code(&schema, request).await, "UNAUTHENTICATED");
+    }
+    let data = exec_ok(&schema, with_session(&provider, &desktop, ME).await).await;
+    assert_eq!(data["me"]["username"], json!("ada"));
+}
+
+/// A wrong password and an unknown username get the same answer.
+#[tokio::test]
+async fn login_answers_a_wrong_password_like_an_unknown_user() {
+    let ctx = TestCtx::new().await;
+    create_user(&ctx, "ada").await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+
+    let calls =
+        [("ada", "wrong horse battery"), ("nobody", PASSWORD)].map(|(username, password)| {
+            (
+                LOGIN,
+                json!({ "input": { "username": username, "password": password } }),
+            )
+        });
+    assert_each_refused(&schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
 }

@@ -32,8 +32,11 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::workspace_plugin::command::{DownloadPluginBundleQuery, UploadPluginBundleCmd};
 use rim_services::{Actor, ServiceError};
 
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
-use support::{RecordingBroadcaster, TestCtx};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+    merged,
+};
+use support::{RecordingBroadcaster, TestCtx, unknown_id};
 
 const SHA: &str = "5b154b3eb45c3ebc44f6820ba30a389ce85b43dea34bcbf652b9b1a5416fbe85";
 const PLUGIN: &str = "dev.example.hello-web";
@@ -263,38 +266,31 @@ async fn a_signed_plugin_goes_through_the_registry() {
     )
     .await;
     assert_eq!(listed_by(w.guest).await["workspacePlugins"], json!([entry]));
-    assert_eq!(
-        exec_err_code(
-            &w.schema,
-            w.outsider
-                .request(&list_query(), json!({ "serverId": w.server_id() })),
-        )
-        .await,
-        "FORBIDDEN"
-    );
+    assert_each_refused(
+        &w.schema,
+        &refs(&w.every_root(&w.server_id())),
+        "FORBIDDEN",
+        |q, v| w.outsider.request(q, v),
+    )
+    .await;
     assert!(matches!(
         w.download(w.outsider).await,
         Err(ServiceError::NotFound)
     ));
-    assert_eq!(
-        exec_err_code(
-            &w.schema,
-            anonymous_request(&list_query(), json!({ "serverId": w.server_id() })),
-        )
-        .await,
-        "UNAUTHENTICATED"
-    );
+    assert_each_refused(
+        &w.schema,
+        &refs(&w.every_root(&w.server_id())),
+        "UNAUTHENTICATED",
+        anonymous_request,
+    )
+    .await;
 
-    // A member may not add; a tampered signature does not verify; a second add conflicts.
-    assert_eq!(
-        exec_err_code(
-            &w.schema,
-            w.member
-                .request(&add_mutation(), w.add_input(known_statement())),
-        )
-        .await,
-        "FORBIDDEN"
-    );
+    // Members and guests may not change the registry; a tampered signature does not verify; a
+    // second add conflicts.
+    let changes = w.every_change(&w.server_id());
+    for reader in [w.member, w.guest] {
+        assert_each_refused_as(&w.schema, &reader, &refs(&changes), "FORBIDDEN").await;
+    }
     let mut tampered = known_statement();
     tampered["signature"] = json!(KNOWN_PLUGIN_MANIFEST_SIGNATURE.replacen('F', "G", 1));
     let res = w
@@ -410,5 +406,79 @@ async fn the_default_url_needs_the_bundle_uploaded_here() {
     assert_eq!(
         exec_err_code(&w.schema, w.owner.request(&add_mutation(), input)).await,
         "VALIDATION"
+    );
+}
+
+/// `calls` as the borrowed call list the refusal helpers take.
+fn refs(calls: &[(String, Value)]) -> Vec<(&str, Value)> {
+    calls.iter().map(|(q, v)| (q.as_str(), v.clone())).collect()
+}
+
+impl World {
+    /// One call to every root that changes the registry of `server_id`, aimed at [`PLUGIN`].
+    fn every_change(&self, server_id: &str) -> Vec<(String, Value)> {
+        let mut add = self.add_input(known_statement());
+        add["input"]["serverId"] = json!(server_id);
+        let plugin = json!({ "serverId": server_id, "pluginId": PLUGIN });
+        vec![
+            (add_mutation(), add),
+            (
+                update_mutation(),
+                json!({ "input": merged(plugin.clone(), json!({ "status": "REQUIRED" })) }),
+            ),
+            (REMOVE.to_string(), plugin),
+        ]
+    }
+
+    /// One call to every registry root of `server_id`.
+    fn every_root(&self, server_id: &str) -> Vec<(String, Value)> {
+        let mut calls = vec![(list_query(), json!({ "serverId": server_id }))];
+        calls.extend(self.every_change(server_id));
+        calls
+    }
+}
+
+/// A workspace that does not exist answers like one the caller is not in; a malformed id is
+/// `VALIDATION`, an unknown plugin `NOT_FOUND`, and an update that changes nothing `VALIDATION`.
+#[tokio::test]
+async fn registry_roots_refuse_unknown_and_malformed_ids() {
+    let ctx = TestCtx::new().await;
+    let w = world(&ctx).await;
+    let owner = &w.owner;
+    let calls = w.every_root(&unknown_id());
+    assert_each_refused_as(&w.schema, owner, &refs(&calls), "FORBIDDEN").await;
+    let calls = w.every_root("not-a-uuid");
+    assert_each_refused_as(&w.schema, owner, &refs(&calls), "VALIDATION").await;
+    let calls: Vec<_> = w.every_change(&w.server_id()).into_iter().skip(1).collect();
+    assert_each_refused_as(&w.schema, owner, &refs(&calls), "NOT_FOUND").await;
+
+    let nothing = json!({ "input": { "serverId": w.server_id(), "pluginId": PLUGIN } });
+    assert_eq!(
+        exec_err_code(&w.schema, owner.request(&update_mutation(), nothing)).await,
+        "VALIDATION"
+    );
+}
+
+/// A Moderator manages the registry like the Owner.
+#[tokio::test]
+async fn a_moderator_manages_the_registry() {
+    let ctx = TestCtx::new().await;
+    let w = world(&ctx).await;
+    let moderator = ctx.create_user("moderator").await;
+    ctx.add_member(&w.server, &moderator, ServerMemberRole::Moderator)
+        .await;
+    let moderator = ctx.caller(&moderator).await;
+    w.upload(moderator).await.expect("upload");
+
+    for (query, vars) in w.every_change(&w.server_id()) {
+        exec_ok(&w.schema, moderator.request(&query, vars)).await;
+    }
+    assert_eq!(
+        w.plugin_events(),
+        [
+            WorkspacePluginChange::Added,
+            WorkspacePluginChange::Updated,
+            WorkspacePluginChange::Removed
+        ]
     );
 }

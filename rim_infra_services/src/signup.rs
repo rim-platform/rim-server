@@ -162,14 +162,14 @@ pub(crate) async fn check_token(
     })
 }
 
-/// The instance invite `raw`, if it is unrevoked, unexpired and, when bound to an address,
-/// presented with that address (compared trimmed and case-insensitively). `email` is `None` for
-/// a key-only signup, which an email-bound invite does not admit. Whether uses remain is decided
-/// when it is claimed.
+/// The instance invite `raw`, if it is unrevoked, not used up, unexpired and, when bound to an
+/// address, presented with that address (compared trimmed and case-insensitively). `email` is
+/// `None` for a key-only signup, which an email-bound invite does not admit. The claim checks the
+/// uses again.
 ///
 /// # Errors
-/// `InvalidToken` when unknown or revoked, `ExpiredToken` when expired, `Validation` when the
-/// invite is bound to another address or the signup has none.
+/// `InvalidToken` when unknown, revoked or used up, `ExpiredToken` when expired, `Validation`
+/// when the invite is bound to another address or the signup has none.
 pub(crate) async fn check_instance_invite(
     repo: &dyn InstanceInviteRepository,
     raw: &str,
@@ -179,7 +179,7 @@ pub(crate) async fn check_instance_invite(
         .get_by_token_hash(&hash_token(raw))
         .await?
         .ok_or(ServiceError::InvalidToken)?;
-    if invite.revoked_at.is_some() {
+    if invite.revoked_at.is_some() || invite.use_count >= invite.max_uses {
         return Err(ServiceError::InvalidToken);
     }
     if invite.expires_at < Utc::now() {
@@ -202,11 +202,11 @@ pub(crate) async fn check_instance_invite(
     Ok(invite)
 }
 
-/// The workspace invite `raw`, if it is unrevoked and unexpired. Whether uses remain is decided
-/// when it is claimed.
+/// The workspace invite `raw`, if it is unrevoked, not used up and unexpired. The claim checks
+/// the uses again.
 ///
 /// # Errors
-/// `NotFound` when unknown, `PermissionDenied` when revoked or expired.
+/// `InvalidToken` when unknown, revoked or used up, `ExpiredToken` when expired.
 pub(crate) async fn check_workspace_invite(
     repo: &dyn InviteRepository,
     raw: &str,
@@ -214,14 +214,14 @@ pub(crate) async fn check_workspace_invite(
     let invite = repo
         .get_by_token_hash(&hash_token(raw))
         .await?
-        .ok_or(ServiceError::NotFound)?;
-    if invite.revoked_at.is_some() {
-        return Err(ServiceError::PermissionDenied);
+        .ok_or(ServiceError::InvalidToken)?;
+    if invite.revoked_at.is_some() || invite.use_count >= invite.max_uses {
+        return Err(ServiceError::InvalidToken);
     }
     if let Some(expires_at) = invite.expires_at
         && expires_at < Utc::now()
     {
-        return Err(ServiceError::PermissionDenied);
+        return Err(ServiceError::ExpiredToken);
     }
     Ok(invite)
 }
@@ -233,8 +233,8 @@ pub(crate) async fn check_workspace_invite(
 /// # Errors
 /// - Instance invite: `InvalidToken` when it was used up since the check (the double-spend
 ///   race; the caller's transaction rolls back).
-/// - Workspace invite: `PermissionDenied` when the user is banned there or the invite was used
-///   up since the check.
+/// - Workspace invite: `PermissionDenied` when the user is banned there, `InvalidToken` when the
+///   invite was used up since the check.
 pub(crate) async fn claim_token(
     repos: &SignupRepos,
     token: &CheckedToken,
@@ -262,8 +262,8 @@ pub(crate) async fn claim_token(
             )
             .await?;
             if !repos.invite_repo.try_consume(invite.id).await? {
-                // Don't leak whether it's exhausted vs missing.
-                return Err(ServiceError::PermissionDenied);
+                // Used up reads like unknown.
+                return Err(ServiceError::InvalidToken);
             }
             Ok(Some(invite.server_id))
         }
@@ -578,12 +578,12 @@ mod tests {
     async fn check_token_workspace_invite_outcomes() {
         for (invite, expected) in [
             (Some(workspace_invite(None, false)), None),
-            (Some(workspace_invite(None, true)), Some("PermissionDenied")),
+            (Some(workspace_invite(None, true)), Some("InvalidToken")),
             (
                 Some(workspace_invite(Some(Duration::minutes(-5)), false)),
-                Some("PermissionDenied"),
+                Some("ExpiredToken"),
             ),
-            (None, Some("NotFound")),
+            (None, Some("InvalidToken")),
         ] {
             let mut repo = MockInviteRepository::new();
             repo.expect_get_by_token_hash()
@@ -593,8 +593,8 @@ mod tests {
             let res = check_token(&r, &SignupToken::WorkspaceInvite("raw".to_string()), None).await;
             match expected {
                 None => assert!(matches!(res, Ok(CheckedToken::WorkspaceInvite(_)))),
-                Some("NotFound") => assert!(matches!(res, Err(ServiceError::NotFound))),
-                Some(_) => assert!(matches!(res, Err(ServiceError::PermissionDenied))),
+                Some("InvalidToken") => assert!(matches!(res, Err(ServiceError::InvalidToken))),
+                Some(_) => assert!(matches!(res, Err(ServiceError::ExpiredToken))),
             }
         }
     }
