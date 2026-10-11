@@ -32,7 +32,7 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::workspace_plugin::command::{DownloadPluginBundleQuery, UploadPluginBundleCmd};
 use rim_services::{Actor, ServiceError};
 
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
 use support::{RecordingBroadcaster, TestCtx};
 
 const SHA: &str = "5b154b3eb45c3ebc44f6820ba30a389ce85b43dea34bcbf652b9b1a5416fbe85";
@@ -61,6 +61,9 @@ fn update_mutation() -> String {
         "mutation Update($input: UpdateWorkspacePluginInput!) {{ updateWorkspacePlugin(input: $input) {{ {ENTRY_FIELDS} }} }}"
     )
 }
+
+const CREATE_DM: &str = r#"
+mutation CreateDm($input: CreateConversationInput!) { createConversation(input: $input) { id } }"#;
 
 const REMOVE: &str = r#"
 mutation Remove($serverId: ID!, $pluginId: String!) { removeWorkspacePlugin(serverId: $serverId, pluginId: $pluginId) }"#;
@@ -235,19 +238,31 @@ async fn a_signed_plugin_goes_through_the_registry() {
     let manifest = entry["manifest"].as_str().expect("manifest");
     assert!(manifest.contains(r#""plugin_id":"dev.example.hello-web""#));
 
-    // Members and guests read the registry and download the bundle; others do not.
-    for reader in [w.member, w.guest] {
-        let listed = exec_ok(
+    // Members and guests read the registry and download the bundle; others do not. A guest
+    // sees the approver only once they share a conversation, like the member list.
+    let listed_by = |reader: Caller| {
+        exec_ok(
             &w.schema,
             reader.request(&list_query(), json!({ "serverId": w.server_id() })),
         )
-        .await;
-        assert_eq!(listed["workspacePlugins"], json!([entry.clone()]));
+    };
+    let without_approver = merged(entry.clone(), json!({ "approvedBy": null }));
+    for (reader, seen) in [(w.member, entry), (w.guest, &without_approver)] {
+        assert_eq!(listed_by(reader).await["workspacePlugins"], json!([seen]));
         assert_eq!(
             w.download(reader).await.expect("download"),
             KNOWN_PLUGIN_BUNDLE
         );
     }
+    exec_ok(
+        &w.schema,
+        w.guest.request(
+            CREATE_DM,
+            json!({ "input": { "serverId": w.server_id(), "otherUserId": w.owner.user_id.to_string() } }),
+        ),
+    )
+    .await;
+    assert_eq!(listed_by(w.guest).await["workspacePlugins"], json!([entry]));
     assert_eq!(
         exec_err_code(
             &w.schema,
