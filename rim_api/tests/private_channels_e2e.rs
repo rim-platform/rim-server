@@ -25,8 +25,15 @@ use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, exec_err_code, exec_ok};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+    merged,
+};
+use support::roots::{
+    ATTACHMENT_ROOTS, CONVERSATION_MESSAGE_ROOTS, CONVERSATION_NOTIFICATION_ROOTS,
+    CONVERSATION_ROOTS, JOIN_ROOTS, MESSAGE_ROOTS, Targets,
+};
+use support::{TestCtx, unknown_id};
 
 const CONVERSATION_FIELDS: &str = r#"
 fragment ConversationFields on Conversation {
@@ -121,10 +128,6 @@ mutation Send($input: SendMessageInput!) {
 
 const PIN_MESSAGE: &str = r#"
 mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }
-"#;
-
-const MARK_AS_READ: &str = r#"
-mutation MarkRead($input: MarkAsReadInput!) { markAsRead(input: $input) }
 "#;
 
 const UNREAD_COUNTS: &str = r#"
@@ -391,50 +394,28 @@ async fn private_channel_is_invisible_to_non_members() {
         vec![msg_id.clone()]
     );
 
-    // carol (workspace member, not in the channel) gets NOT_FOUND everywhere.
-    assert_eq!(f.conversation_err(&f.carol, &private_id).await, "NOT_FOUND");
-    for query in [MESSAGES_QUERY, PINNED_QUERY] {
-        assert_eq!(
-            exec_err_code(&f.schema, f.carol.request(query, f.ids(&private_id))).await,
-            "NOT_FOUND"
-        );
-    }
-    assert_eq!(f.send_err(&f.carol, &private_id, "hi").await, "NOT_FOUND");
-    assert_eq!(
-        exec_err_code(
-            &f.schema,
-            f.carol.request(
-                MARK_AS_READ,
-                json!({ "input": { "workspaceId": f.server_id, "conversationId": private_id,
-                                   "readAt": chrono::Utc::now().to_rfc3339() } }),
-            ),
-        )
-        .await,
-        "NOT_FOUND",
-        "read state is gated like the messages"
-    );
-    assert_eq!(
-        exec_err_code(
-            &f.schema,
-            f.carol.request(&q(JOIN_CHANNEL), f.ids(&private_id))
-        )
-        .await,
-        "NOT_FOUND",
-        "a private channel cannot be joined"
-    );
-    assert_eq!(
-        exec_err_code(
-            &f.schema,
-            f.carol.request(
-                &q(ADD_MEMBERS),
-                json!({ "serverId": f.server_id, "conversationId": private_id,
-                        "userIds": [f.carol.user_id.to_string()] }),
-            ),
-        )
-        .await,
-        "NOT_FOUND",
-        "a non-member cannot invite themselves"
-    );
+    // carol (workspace member, not in the channel) gets NOT_FOUND from every root that names
+    // the channel, its messages, its thread or its attachment, inviting herself included.
+    let (alice, bob, carol) = (&f.alice, &f.bob, &f.carol);
+    let t = Targets::seed(
+        &f.schema,
+        &f.server_id,
+        &private_id,
+        alice,
+        bob,
+        carol,
+        "agenda",
+    )
+    .await;
+    let roots = [
+        CONVERSATION_MESSAGE_ROOTS,
+        MESSAGE_ROOTS,
+        ATTACHMENT_ROOTS,
+        CONVERSATION_ROOTS,
+        JOIN_ROOTS,
+        CONVERSATION_NOTIFICATION_ROOTS,
+    ];
+    assert_each_refused_as(&f.schema, carol, &t.calls(&roots), "NOT_FOUND").await;
     let browse = json!({ "includeArchived": true });
     assert!(
         !f.channel_titles(&f.carol, browse.clone())
@@ -778,4 +759,166 @@ async fn new_workspace_member_auto_joins_public_channels() {
         "the private channel stays invisible"
     );
     assert_eq!(f.conversation_err(&dave, &private_id).await, "NOT_FOUND");
+}
+
+// ── Every conversation root ───────────────────────────────────────────────
+
+/// Roots over workspace `$s` as a whole.
+const WORKSPACE_ROOTS: &[&str] = &[
+    "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 5) { items { id } } }",
+    "query($s: ID!) { inboxConversations(serverId: $s, dir: AFTER, limit: 5) { items { id } } }",
+    "query($s: ID!) { unreadCounts(workspaceId: $s) { count } }",
+    "mutation($s: ID!) { createConversation(input: { serverId: $s, isChannel: true, \
+     title: \"new\" }) { id } }",
+    "mutation($s: ID!) { markAllAsRead(input: { workspaceId: $s }) }",
+];
+
+/// Roots only an Owner or Moderator may call on channel `$c`.
+const MODERATOR_ROOTS: &[&str] = &["mutation($s: ID!, $c: ID!) { setConversationArchived(\
+     serverId: $s, conversationId: $c, archived: true) { id } }"];
+
+const MY_SERVERS: &str = "query { myServers { id name } }";
+
+impl Fixture {
+    /// Channel `conversation_id` of the workspace, with `user` as the member the roots remove
+    /// or add.
+    fn targets(&self, conversation_id: &str, user: &Caller) -> Targets {
+        Targets::conversation(&self.server_id, conversation_id, user)
+    }
+}
+
+/// Every conversation and workspace root refuses a caller without a session and one outside
+/// the workspace, who changes nothing; `myServers` lists only the caller's own workspaces.
+#[tokio::test]
+async fn every_conversation_root_refuses_callers_outside_the_workspace() {
+    let f = setup().await;
+    let id = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let roots = [
+        CONVERSATION_ROOTS,
+        JOIN_ROOTS,
+        MODERATOR_ROOTS,
+        WORKSPACE_ROOTS,
+    ];
+    let calls = f.targets(&id, &f.bob).calls(&roots);
+    let mut anonymous = calls.clone();
+    anonymous.push((MY_SERVERS, json!({})));
+    assert_each_refused(&f.schema, &anonymous, "UNAUTHENTICATED", anonymous_request).await;
+    let olive = f.ctx.outsider("pc-olive").await;
+    assert_each_refused_as(&f.schema, &olive, &calls, "FORBIDDEN").await;
+
+    let lobby = f.conversation(&f.alice, &id).await;
+    assert_eq!(
+        (&lobby["isArchived"], &lobby["memberCount"]),
+        (&json!(false), &json!(1))
+    );
+    let servers = |who: &Caller| exec_ok(&f.schema, who.request(MY_SERVERS, json!({})));
+    assert_eq!(servers(&olive).await["myServers"], json!([]));
+    assert_eq!(
+        servers(&f.carol).await["myServers"],
+        json!([{ "id": f.server_id, "name": "private-channels-e2e" }])
+    );
+}
+
+/// A guest nobody added to a public channel gets `NOT_FOUND` from every root that needs to see
+/// it, removing someone else included. A guest opens direct messages but not groups.
+#[tokio::test]
+async fn a_guest_does_not_see_a_public_channel_nobody_added_them_to() {
+    let f = setup().await;
+    let id = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let gina = f
+        .ctx
+        .newcomer(&f.server_id, "pc-gina", ServerMemberRole::Guest)
+        .await;
+    let calls = f.targets(&id, &f.alice).calls(&[CONVERSATION_ROOTS]);
+    assert_each_refused_as(&f.schema, &gina, &calls, "NOT_FOUND").await;
+
+    let with = |participants: Value| {
+        let input = json!({ "serverId": f.server_id });
+        gina.request(
+            &q(CREATE_CONVERSATION),
+            json!({ "input": merged(input, participants) }),
+        )
+    };
+    let bob = f.bob.user_id.to_string();
+    let group = with(json!({ "memberIds": [bob, f.carol.user_id.to_string()] }));
+    assert_eq!(exec_err_code(&f.schema, group).await, "FORBIDDEN");
+    let dm = exec_ok(&f.schema, with(json!({ "otherUserId": bob }))).await;
+    assert_eq!(dm["conversation"]["conversationType"], "DIRECT");
+}
+
+/// An id that names nothing is `NOT_FOUND`; a malformed one is `VALIDATION`.
+#[tokio::test]
+async fn every_conversation_root_answers_unknown_and_malformed_ids() {
+    let f = setup().await;
+    let roots = [CONVERSATION_ROOTS, JOIN_ROOTS, MODERATOR_ROOTS];
+    let nowhere = f.targets(&unknown_id(), &f.bob).calls(&roots);
+    assert_each_refused_as(&f.schema, &f.alice, &nowhere, "NOT_FOUND").await;
+
+    let mut malformed = f.targets("not-an-id", &f.bob);
+    malformed.user = "not-an-id".to_string();
+    let mut calls = malformed.calls(&roots);
+    malformed.server = "not-an-id".to_string();
+    calls.extend(malformed.calls(&[WORKSPACE_ROOTS]));
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+}
+
+/// `pinMessage` and `unpinMessage` reach only a message of the conversation they name: a
+/// member of a public channel cannot touch the pins of a private one through it.
+#[tokio::test]
+async fn pins_reach_only_messages_of_the_named_conversation() {
+    let f = setup().await;
+    let board = id_of(&f.create_channel(&f.alice, "board", true).await);
+    let lobby = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let msg = f.send(&f.alice, &board, "the plan").await;
+    let msg_id = msg["id"].as_str().expect("id").to_string();
+    let pin = |conversation_id: &str| {
+        json!({ "input": {
+            "serverId": f.server_id, "conversationId": conversation_id, "messageId": msg_id,
+        } })
+    };
+    exec_ok(&f.schema, f.alice.request(PIN_MESSAGE, pin(&board))).await;
+
+    let unpin = "mutation Unpin($input: UnpinMessageInput!) { unpinMessage(input: $input) }";
+    for doc in [PIN_MESSAGE, unpin] {
+        let code = exec_err_code(&f.schema, f.carol.request(doc, pin(&lobby))).await;
+        assert_eq!(code, "NOT_FOUND", "{doc}");
+    }
+    let pinned = exec_ok(&f.schema, f.alice.request(PINNED_QUERY, f.ids(&board))).await;
+    assert_eq!(pinned["pinnedMessages"], json!([{ "id": msg_id }]));
+}
+
+/// Inputs a conversation root refuses: a title over 100 characters, a topic over 512, an empty
+/// invitation, inviting or messaging someone outside the workspace, and a DM with oneself.
+#[tokio::test]
+async fn conversation_inputs_are_bounded() {
+    let f = setup().await;
+    let id = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let olive = f.ctx.outsider("pc-olive").await;
+    let (olive_id, alice_id) = (olive.user_id.to_string(), f.alice.user_id.to_string());
+    let create = |input: Value| {
+        let input = merged(json!({ "serverId": f.server_id }), input);
+        (q(CREATE_CONVERSATION), json!({ "input": input }))
+    };
+    let invite = |user_ids: Value| {
+        let vars = json!({ "serverId": f.server_id, "conversationId": id, "userIds": user_ids });
+        (q(ADD_MEMBERS), vars)
+    };
+    let topic = json!({ "input": {
+        "serverId": f.server_id, "conversationId": id, "topic": "t".repeat(513),
+    } });
+    let refused = [
+        create(json!({ "isChannel": true, "title": "t".repeat(101) })),
+        (UPDATE_TOPIC.to_string(), topic),
+        invite(json!([])),
+        invite(json!([olive_id])),
+        create(json!({ "otherUserId": alice_id })),
+    ];
+    for (doc, vars) in refused {
+        let code = exec_err_code(&f.schema, f.alice.request(&doc, vars.clone())).await;
+        assert_eq!(code, "VALIDATION", "{vars}");
+    }
+    // Naming someone outside the workspace for a new DM is answered as a refusal of the caller.
+    let dm = create(json!({ "otherUserId": olive_id }));
+    let code = exec_err_code(&f.schema, f.alice.request(&dm.0, dm.1)).await;
+    assert_eq!(code, "FORBIDDEN");
 }

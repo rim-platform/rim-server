@@ -13,6 +13,7 @@ pub struct Model {
     pub forwarded_from_message_id: Option<Uuid>,
     pub sent_at: DateTimeWithTimeZone,
     pub sent_by: Uuid,
+    #[sea_orm(column_type = "Text", nullable)]
     pub text: Option<String>,
     pub is_deleted: bool,
     pub has_attachments: bool,

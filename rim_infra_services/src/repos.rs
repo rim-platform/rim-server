@@ -495,6 +495,8 @@ impl AppRepos {
         crate::notification_preference::NotificationPreferenceRepos {
             notification_preference_repo: Arc::clone(&self.notification_preference_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 

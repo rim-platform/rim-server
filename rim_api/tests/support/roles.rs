@@ -83,6 +83,20 @@ impl TestCtx {
     }
 }
 
+impl TestCtx {
+    /// A new user named `name`, with a session, in no workspace.
+    pub async fn outsider(&self, name: &str) -> Caller {
+        self.caller(&self.create_user(name).await).await
+    }
+
+    /// A new user named `name`, with a session, in the workspace `server_id` with `role`.
+    pub async fn newcomer(&self, server_id: &str, name: &str, role: ServerMemberRole) -> Caller {
+        let who = self.outsider(name).await;
+        self.join(server_id, &who, role).await;
+        who
+    }
+}
+
 /// Create a channel titled `title` in `server_id` as `who` and return its id.
 pub async fn create_channel(
     schema: &AppSchema,

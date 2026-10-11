@@ -305,21 +305,6 @@ pub async fn ensure_conversation_in_server(
     Ok(conv)
 }
 
-/// [`ensure_conversation_access_as`] for a non-guest member.
-pub async fn ensure_conversation_access(
-    conversation_member_repo: &dyn ConversationMemberRepository,
-    conversation: &rim_core::conversation::model::Conversation,
-    user_id: rim_core::user::model::UserId,
-) -> ServiceResult<()> {
-    ensure_conversation_access_as(
-        conversation_member_repo,
-        conversation,
-        user_id,
-        ServerMemberRole::Member,
-    )
-    .await
-}
-
 /// Check that a workspace member with `role` can read the conversation (archived or not).
 /// - Public channels: server membership is sufficient — no conversation_member check needed —
 ///   except for a `Guest`, who must be a conversation member like in a private channel

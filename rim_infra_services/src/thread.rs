@@ -18,10 +18,6 @@ impl DefaultThreadService {
         Self { repos }
     }
 
-    // Conversation access check removed — use ensure_conversation_access from util
-    // which correctly handles channels (server membership sufficient) vs DM/group
-    // (explicit conversation_member required).
-
     async fn to_dto(
         &self,
         thread: rim_core::message_thread::model::MessageThread,
@@ -34,7 +30,8 @@ impl DefaultThreadService {
             && let Some(root) = self.repos.message_repo.get_by_id(root_message_id).await?
         {
             root_author_id = Some(root.sent_by);
-            root_text = root.text;
+            // A deleted root is a tombstone and shows no text.
+            root_text = root.text.filter(|_| !root.is_deleted);
         }
 
         Ok(ThreadDto {
