@@ -987,6 +987,22 @@ async fn listed(person: &Person, direct: &str) -> Vec<String> {
         .collect()
 }
 
+/// The members `person` sees in `direct`'s directory, with their roles.
+async fn directory(person: &Person, direct: &str) -> Value {
+    person
+        .ok(
+            "query($s: ID!) { serverMembers(serverId: $s) { principalId memberRole } }",
+            json!({ "s": direct }),
+        )
+        .await["serverMembers"]
+        .clone()
+}
+
+/// A directory listing only `person`, as a guest.
+fn guest(person: &Person) -> Value {
+    json!([{ "principalId": person.principal(), "memberRole": "GUEST" }])
+}
+
 /// What `person` sees of `conversation` in `direct`: its unread count, its notifications, and
 /// the notification bell's count.
 async fn signals(person: &Person, direct: &str, conversation: &str) -> (i64, usize, i64) {
@@ -1030,7 +1046,31 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
             json!({ "p": dave.principal(), "r": [b.origin] }),
         )
         .await;
-    let direct = alice.direct_space().await;
+    // relayInfo answers without a session.
+    let anonymous: Value = reqwest::Client::new()
+        .post(format!("{}/api", a.origin))
+        .json(&json!({ "query": RELAY_INFO }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    let direct = anonymous["data"]["relayInfo"]["directSpaceId"]
+        .as_str()
+        .expect("direct space")
+        .to_string();
+
+    // A signed-in relayInfo is a first use of the direct space: Alice is a guest there before
+    // any DM, sees only herself, and lists an empty inbox.
+    assert_eq!(alice.direct_space().await, direct);
+    assert_eq!(directory(&alice, &direct).await, guest(&alice));
+    assert_eq!(listed(&alice, &direct).await, Vec::<String>::new());
+
+    // Without relayInfo, listing the inbox is the first use.
+    let erin = sign_up(&a, "erin", 6).await;
+    assert_eq!(listed(&erin, &direct).await, Vec::<String>::new());
+    assert_eq!(directory(&erin, &direct).await, guest(&erin));
 
     // A conversation with someone on another relay is encrypted only.
     let code = alice

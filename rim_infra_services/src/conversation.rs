@@ -557,12 +557,18 @@ impl ConversationService for DefaultConversationService {
         &self,
         query: ListInboxConversationsQuery,
     ) -> ServiceResult<Page<ConversationDto, InboxPageCursor>> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            query.server_id,
-            query.actor.user_id,
-        )
-        .await?;
+        // Opening the direct-space inbox is a first use, which makes the actor a guest there.
+        if self.is_direct_space(query.server_id) {
+            self.join_direct_space(query.server_id, &[query.actor.user_id])
+                .await?;
+        } else {
+            ensure_server_member(
+                self.repos.server_member_repo.as_ref(),
+                query.server_id,
+                query.actor.user_id,
+            )
+            .await?;
+        }
 
         let page = self
             .repos

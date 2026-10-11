@@ -1,7 +1,7 @@
 use async_graphql::*;
 use rim_services::Actor;
 
-use crate::auth_context::{require_actor, require_mls_caller};
+use crate::auth_context::{optional_actor, require_actor, require_mls_caller};
 use crate::errors::map_service_error;
 use crate::federation::{federation, relay};
 use crate::ids::parse_uuid_id;
@@ -27,9 +27,18 @@ pub(crate) struct RelayQueries;
 
 #[Object]
 impl RelayQueries {
-    /// This server's id, roles and direct space. Readable without a session.
+    /// This server's id, roles and direct space. Readable without a session; a signed-in local
+    /// user of a relay becomes a guest of the direct space, if not one yet.
     async fn relay_info(&self, ctx: &Context<'_>) -> Result<RelayInfo> {
-        Ok(federation(ctx)?.info.clone().into())
+        let federation = federation(ctx)?;
+        if let (Some(actor), Ok(relay)) = (optional_actor(ctx), relay(ctx)) {
+            relay
+                .host
+                .join_direct_space(actor)
+                .await
+                .map_err(map_service_error)?;
+        }
+        Ok(federation.info.clone().into())
     }
 
     /// Pin the server at `origin` through this relay and return its discovery document.
