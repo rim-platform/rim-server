@@ -978,6 +978,278 @@ mod tests {
         assert!(results[0].skipped_reason.as_deref() == Some("cooldown active"));
     }
 
+    /// One workspace, conversation and author to build events in.
+    struct Scene {
+        server_id: ServerId,
+        conv_id: rim_core::conversation::model::ConversationId,
+        author_id: UserId,
+    }
+
+    impl Scene {
+        fn new() -> Self {
+            Self {
+                server_id: ServerId::new(),
+                conv_id: rim_core::conversation::model::ConversationId::new(),
+                author_id: UserId::new(),
+            }
+        }
+
+        /// A new message reading "hello world".
+        fn message(&self) -> WorkspaceEvent {
+            make_new_message_event(self.server_id, self.conv_id, self.author_id)
+        }
+
+        /// The same message, end-to-end encrypted.
+        fn encrypted_message(&self) -> WorkspaceEvent {
+            let mut event = self.message();
+            if let WorkspaceEvent::NewMessage { message, .. } = &mut event {
+                message.encryption = Some(rim_services::events::MessageEncryptionData {
+                    incarnation: 0,
+                    epoch: 1,
+                    sender_device_id: uuid::Uuid::now_v7(),
+                    ciphertext: Some("opaque".to_string()),
+                    franking_receipt: String::new(),
+                    franking_key_id: 1,
+                    sent_at_us: String::new(),
+                });
+            }
+            event
+        }
+
+        fn deleted(&self) -> WorkspaceEvent {
+            WorkspaceEvent::MessageDeleted {
+                workspace_id: self.server_id,
+                conversation_id: self.conv_id,
+                conversation_type: "Channel".to_string(),
+                member_user_ids: vec![],
+                is_private: false,
+                message_id: rim_core::message::model::MessageId::new(),
+                thread_id: None,
+            }
+        }
+
+        fn reactions(&self) -> WorkspaceEvent {
+            WorkspaceEvent::ReactionsUpdated {
+                workspace_id: self.server_id,
+                conversation_id: self.conv_id,
+                conversation_type: "Channel".to_string(),
+                member_user_ids: vec![],
+                is_private: false,
+                message_id: rim_core::message::model::MessageId::new(),
+                reactions: vec![],
+            }
+        }
+
+        /// The author joining the workspace.
+        fn member_joined(&self) -> WorkspaceEvent {
+            WorkspaceEvent::MemberJoined {
+                workspace_id: self.server_id,
+                user_id: self.author_id,
+                username: "hello world".to_string(),
+            }
+        }
+
+        /// The author changing a workspace state key.
+        fn state_changed(&self) -> WorkspaceEvent {
+            WorkspaceEvent::WorkspaceStateChanged {
+                workspace_id: self.server_id,
+                key: "hello world".to_string(),
+                value: serde_json::json!("hello world"),
+                scope: rim_services::workspace_state::dto::WorkspaceStateScopeDto::Server,
+                user_id: Some(self.author_id),
+                version: 1,
+            }
+        }
+
+        fn contains(pattern: &str) -> FilterCondition {
+            FilterCondition::MessageContains {
+                pattern: pattern.to_string(),
+            }
+        }
+
+        fn by_author(&self) -> FilterCondition {
+            FilterCondition::MessageFromUser {
+                user_id: self.author_id,
+            }
+        }
+
+        fn in_conversation(&self) -> FilterCondition {
+            FilterCondition::ConversationIs {
+                conversation_id: self.conv_id,
+            }
+        }
+
+        /// A pipeline of this workspace triggered by `kind`, scoped to `conversation`.
+        fn pipeline(
+            &self,
+            kind: PipelineTriggerKind,
+            conversation: Option<rim_core::conversation::model::ConversationId>,
+        ) -> Pipeline {
+            let mut pipeline = make_pipeline(self.server_id, UserId::new());
+            pipeline.trigger = PipelineTrigger {
+                kind,
+                conversation_id: conversation,
+            };
+            pipeline
+        }
+    }
+
+    /// Whether a filter of `conditions` lets `event` through.
+    fn passes(conditions: Vec<FilterCondition>, event: &WorkspaceEvent) -> bool {
+        let mut pipeline = make_pipeline(ServerId::new(), UserId::new());
+        pipeline.filter = Some(PipelineFilter { conditions });
+        DefaultPipelineService::apply_filter(&pipeline, event)
+    }
+
+    #[test]
+    fn message_contains_matches_plain_text_and_never_an_encrypted_message() {
+        let scene = Scene::new();
+        assert!(passes(vec![Scene::contains("lo wo")], &scene.message()));
+        assert!(!passes(vec![Scene::contains("bye")], &scene.message()));
+        assert!(!passes(
+            vec![Scene::contains("lo wo")],
+            &scene.encrypted_message()
+        ));
+    }
+
+    #[test]
+    fn message_from_user_and_conversation_is_match_only_their_own_value() {
+        let scene = Scene::new();
+        let other = Scene::new();
+        assert!(passes(vec![scene.by_author()], &scene.message()));
+        assert!(!passes(vec![other.by_author()], &scene.message()));
+        assert!(passes(vec![scene.in_conversation()], &scene.message()));
+        assert!(!passes(vec![other.in_conversation()], &scene.message()));
+    }
+
+    #[test]
+    fn every_condition_must_hold() {
+        let scene = Scene::new();
+        let other = Scene::new();
+        let event = scene.message();
+        assert!(passes(
+            vec![
+                Scene::contains("hello"),
+                scene.by_author(),
+                scene.in_conversation()
+            ],
+            &event
+        ));
+        for failing in [
+            Scene::contains("bye"),
+            other.by_author(),
+            other.in_conversation(),
+        ] {
+            let conditions = vec![
+                Scene::contains("hello"),
+                scene.by_author(),
+                scene.in_conversation(),
+                failing.clone(),
+            ];
+            assert!(!passes(conditions, &event), "{failing:?}");
+        }
+    }
+
+    #[test]
+    fn no_filter_or_an_empty_condition_list_passes_every_event() {
+        let scene = Scene::new();
+        let unfiltered = make_pipeline(scene.server_id, scene.author_id);
+        for event in [
+            scene.message(),
+            scene.member_joined(),
+            scene.state_changed(),
+        ] {
+            assert!(DefaultPipelineService::apply_filter(&unfiltered, &event));
+            assert!(passes(vec![], &event));
+        }
+    }
+
+    /// Text and author conditions hold only for a message's own text and author, so a member
+    /// joining, a state change, a deletion or a reaction never passes them; a conversation
+    /// condition also holds for a deletion or reaction in that conversation.
+    #[test]
+    fn message_conditions_hold_only_for_events_that_carry_their_value() {
+        let scene = Scene::new();
+        let without_message = [
+            scene.member_joined(),
+            scene.state_changed(),
+            scene.deleted(),
+            scene.reactions(),
+        ];
+        for event in &without_message {
+            assert!(!passes(vec![Scene::contains("hello")], event), "{event:?}");
+            assert!(!passes(vec![scene.by_author()], event), "{event:?}");
+        }
+        assert!(!passes(
+            vec![scene.in_conversation()],
+            &scene.member_joined()
+        ));
+        assert!(!passes(
+            vec![scene.in_conversation()],
+            &scene.state_changed()
+        ));
+        assert!(passes(vec![scene.in_conversation()], &scene.deleted()));
+        assert!(passes(vec![scene.in_conversation()], &scene.reactions()));
+    }
+
+    /// A trigger fires only for its own event kind and, when scoped, only for an event in that
+    /// conversation; workspace-wide events carry no conversation and never match a scope.
+    #[test]
+    fn a_trigger_matches_its_kind_and_its_conversation_scope() {
+        let scene = Scene::new();
+        let elsewhere = Some(rim_core::conversation::model::ConversationId::new());
+        let here = Some(scene.conv_id);
+        let cases = [
+            (PipelineTriggerKind::NewMessage, scene.message()),
+            (PipelineTriggerKind::MessageDeleted, scene.deleted()),
+            (PipelineTriggerKind::ReactionsUpdated, scene.reactions()),
+        ];
+        for (kind, event) in cases {
+            let matches = |scope| {
+                DefaultPipelineService::matches_trigger(&scene.pipeline(kind, scope), &event)
+            };
+            assert!(matches(None), "{kind:?}");
+            assert!(matches(here), "{kind:?}");
+            assert!(!matches(elsewhere), "{kind:?}");
+        }
+        assert!(!DefaultPipelineService::matches_trigger(
+            &scene.pipeline(PipelineTriggerKind::MessageUpdated, None),
+            &scene.message()
+        ));
+        let joined = scene.pipeline(PipelineTriggerKind::MemberJoined, here);
+        assert!(!DefaultPipelineService::matches_trigger(
+            &joined,
+            &scene.member_joined()
+        ));
+        let joined = scene.pipeline(PipelineTriggerKind::MemberJoined, None);
+        assert!(DefaultPipelineService::matches_trigger(
+            &joined,
+            &scene.member_joined()
+        ));
+    }
+
+    /// A triggered pipeline whose filter fails is reported as skipped and runs no action.
+    #[tokio::test]
+    async fn evaluate_reports_a_failed_filter_and_runs_no_action() {
+        let scene = Scene::new();
+        let mut pipeline = scene.pipeline(PipelineTriggerKind::NewMessage, None);
+        pipeline.filter = Some(PipelineFilter {
+            conditions: vec![Scene::contains("bye")],
+        });
+        let mut repo = MockPipelineRepository::new();
+        repo.expect_list_enabled_for_server()
+            .returning(move |_| Ok(vec![pipeline.clone()]));
+        let svc = make_service(repo, make_member_repo());
+
+        let results = svc.evaluate_event(scene.message()).await.expect("evaluate");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].actions_executed, 0);
+        assert_eq!(
+            results[0].skipped_reason.as_deref(),
+            Some("filter did not match")
+        );
+    }
+
     /// What an actor holding `role` in the workspace (`None`: not a member) gets back from
     /// update, toggle and delete, in that order, on a pipeline they did or did not create.
     async fn manage_outcomes(
