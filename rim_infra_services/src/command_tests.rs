@@ -218,25 +218,7 @@ mod tests {
             .return_once(move |cmd| {
                 assert_eq!(cmd.actor.user_id, actor_user_id);
                 assert_eq!(cmd.text.as_deref(), Some("hello"));
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
+                Box::pin(async move { Ok(sent_message(cmd)) })
             });
         let mut capability_service =
             rim_services::capability::service::MockCapabilityService::new();
@@ -821,27 +803,7 @@ mod tests {
         let mut message_service = MockMessageService::new();
         message_service
             .expect_send_message()
-            .return_once(move |cmd| {
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
-            });
+            .return_once(move |cmd| Box::pin(async move { Ok(sent_message(cmd)) }));
 
         let mut repo = MockUserCommandRepository::new();
         repo.expect_list_for_user().returning(|_| Ok(vec![]));
@@ -959,27 +921,7 @@ mod tests {
         let mut message_service = MockMessageService::new();
         message_service
             .expect_send_message()
-            .return_once(move |cmd| {
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
-            });
+            .return_once(move |cmd| Box::pin(async move { Ok(sent_message(cmd)) }));
 
         let mut repo = MockUserCommandRepository::new();
         repo.expect_list_for_user().returning(|_| Ok(vec![]));
