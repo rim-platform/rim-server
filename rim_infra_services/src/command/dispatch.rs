@@ -49,7 +49,7 @@ impl DefaultCommandService {
 
         for step in &user_command.steps {
             let definition = self
-                .resolve_command_definition(actor, &step.command_id)
+                .resolve_command_definition_within(actor, &step.command_id, seen)
                 .await?
                 .ok_or_else(|| {
                     ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
@@ -83,6 +83,7 @@ impl DefaultCommandService {
         &self,
         actor: Actor,
         command_id: &str,
+        seen: &mut std::collections::BTreeSet<String>,
     ) -> ServiceResult<Option<CommandDefinitionDto>> {
         let user_command = self
             .repos
@@ -99,16 +100,32 @@ impl DefaultCommandService {
         }
 
         Ok(Some(
-            self.derive_user_command_definition(actor, dto, &mut std::collections::BTreeSet::new())
+            self.derive_user_command_definition(actor, dto, seen)
                 .await?,
         ))
     }
 
-    #[async_recursion]
     pub(super) async fn resolve_command_definition(
         &self,
         actor: Actor,
         command_id: &str,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        self.resolve_command_definition_within(
+            actor,
+            command_id,
+            &mut std::collections::BTreeSet::new(),
+        )
+        .await
+    }
+
+    /// Resolves `command_id` while the user commands in `seen` are being resolved above it;
+    /// reaching one of them again is a cycle.
+    #[async_recursion]
+    async fn resolve_command_definition_within(
+        &self,
+        actor: Actor,
+        command_id: &str,
+        seen: &mut std::collections::BTreeSet<String>,
     ) -> ServiceResult<Option<CommandDefinitionDto>> {
         #[cfg(test)]
         if let Some(definition) = self
@@ -124,7 +141,8 @@ impl DefaultCommandService {
             return Ok(Some(definition));
         }
 
-        self.get_user_command_definition(actor, command_id).await
+        self.get_user_command_definition(actor, command_id, seen)
+            .await
     }
 
     #[async_recursion]

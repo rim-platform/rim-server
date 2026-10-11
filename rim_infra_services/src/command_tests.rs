@@ -13,8 +13,8 @@ mod tests {
     };
     use rim_services::command::initiator::CommandInitiator;
     use rim_services::command::request::{
-        CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, ListCommandsQuery,
-        UpdateUserCommandCmd,
+        CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
+        ListCommandsQuery, UpdateUserCommandCmd,
     };
     use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::CommandService;
@@ -2076,9 +2076,10 @@ mod tests {
             .collect()
     }
 
-    /// A repository that answers lookups by `(owner, key)` from `commands`.
+    /// A repository that answers lookups and listings by owner from `commands`.
     fn repo_with(commands: Vec<UserCommand>) -> MockUserCommandRepository {
         let mut repo = MockUserCommandRepository::new();
+        let listed = commands.clone();
         repo.expect_get_by_key_for_user()
             .returning(move |owner_user_id, command_key| {
                 Ok(commands
@@ -2086,6 +2087,13 @@ mod tests {
                     .find(|c| c.owner_user_id == owner_user_id && c.command_key == command_key)
                     .cloned())
             });
+        repo.expect_list_for_user().returning(move |owner_user_id| {
+            Ok(listed
+                .iter()
+                .filter(|c| c.owner_user_id == owner_user_id)
+                .cloned()
+                .collect())
+        });
         repo
     }
 
@@ -2660,5 +2668,42 @@ mod tests {
         let stages = result.pipeline_stages.expect("stages are reported");
         assert_eq!(stages[0].status, CommandResultStatusDto::Success);
         assert_eq!(stages[0].message, "user command `user.bump` executed");
+    }
+
+    /// A cycle stored in the repository is refused as a cycle wherever definitions are
+    /// resolved: execution, its capability gate, listing and lookup.
+    #[tokio::test]
+    async fn stored_user_command_cycle_is_refused_when_resolving_definitions() {
+        let actor = new_actor();
+        let svc = validating_service(repo_with(vec![
+            calling_command(actor.user_id, "user.a", "user.b"),
+            calling_command(actor.user_id, "user.b", "user.a"),
+        ]));
+        let cycle = "user command recursion cycle detected";
+
+        let executed = svc
+            .execute_command(palette_cmd(actor, "user.a"))
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(executed), cycle);
+
+        let listed = svc
+            .list_commands(ListCommandsQuery {
+                actor,
+                context: None,
+                surface: CommandSurfaceDto::Palette,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(listed), cycle);
+
+        let looked_up = svc
+            .get_command(GetCommandQuery {
+                actor,
+                command_id: "user.b".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(looked_up), cycle);
     }
 }
