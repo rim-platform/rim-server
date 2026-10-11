@@ -13,8 +13,8 @@ mod tests {
     };
     use rim_services::command::initiator::CommandInitiator;
     use rim_services::command::request::{
-        CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, ListCommandsQuery,
-        UpdateUserCommandCmd,
+        CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
+        ListCommandsQuery, UpdateUserCommandCmd,
     };
     use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::CommandService;
@@ -703,6 +703,7 @@ mod tests {
                 assert_eq!(command_key, existing_for_lookup.command_key.as_str());
                 Ok(Some(existing_for_lookup))
             });
+        repo.expect_list_for_user().returning(|_| Ok(vec![]));
         repo.expect_update_user_command()
             .return_once(move |id, update_cmd| {
                 assert_eq!(id, updated_for_return.id);
@@ -2076,15 +2077,45 @@ mod tests {
             .collect()
     }
 
-    /// A repository that answers lookups by `(owner, key)` from `commands`.
+    /// A repository that answers lookups and listings by owner from `commands`.
     fn repo_with(commands: Vec<UserCommand>) -> MockUserCommandRepository {
         let mut repo = MockUserCommandRepository::new();
+        let listed = commands.clone();
         repo.expect_get_by_key_for_user()
             .returning(move |owner_user_id, command_key| {
                 Ok(commands
                     .iter()
                     .find(|c| c.owner_user_id == owner_user_id && c.command_key == command_key)
                     .cloned())
+            });
+        repo.expect_list_for_user().returning(move |owner_user_id| {
+            Ok(listed
+                .iter()
+                .filter(|c| c.owner_user_id == owner_user_id)
+                .cloned()
+                .collect())
+        });
+        repo
+    }
+
+    /// `repo_with(commands)` that also stores every create and update it receives.
+    fn saving_repo(commands: Vec<UserCommand>) -> MockUserCommandRepository {
+        let owner = commands
+            .first()
+            .map_or_else(rim_core::user::model::UserId::new, |c| c.owner_user_id);
+        let mut repo = repo_with(commands);
+        repo.expect_create_user_command().returning(|new_command| {
+            Ok(UserCommand {
+                steps_json: new_command.steps_json,
+                ..stored_user_command(new_command.owner_user_id, &new_command.command_key, vec![])
+            })
+        });
+        repo.expect_update_user_command()
+            .returning(move |_, update| {
+                Ok(UserCommand {
+                    steps_json: update.steps_json,
+                    ..stored_user_command(owner, "user.updated", vec![])
+                })
             });
         repo
     }
@@ -2152,19 +2183,51 @@ mod tests {
         }
     }
 
+    fn step_dtos(step_ids: &[&str]) -> Vec<UserCommandStepDto> {
+        step_ids
+            .iter()
+            .map(|id| UserCommandStepDto {
+                command_id: id.to_string(),
+                args: None,
+            })
+            .collect()
+    }
+
     fn create_cmd(actor: Actor, key: &str, step_ids: &[&str]) -> CreateUserCommandCmd {
         CreateUserCommandCmd {
             actor,
             command_key: key.to_string(),
             title: "Composite".to_string(),
             description: String::new(),
-            steps: step_ids
-                .iter()
-                .map(|id| UserCommandStepDto {
-                    command_id: id.to_string(),
-                    args: None,
-                })
-                .collect(),
+            steps: step_dtos(step_ids),
+        }
+    }
+
+    fn update_cmd(actor: Actor, key: &str, step_ids: &[&str]) -> UpdateUserCommandCmd {
+        UpdateUserCommandCmd {
+            actor,
+            command_id: key.to_string(),
+            title: "Composite".to_string(),
+            description: String::new(),
+            steps: step_dtos(step_ids),
+            is_enabled: true,
+        }
+    }
+
+    /// Asserts a create or update was accepted, or refused with the depth message.
+    fn assert_depth_outcome<T: std::fmt::Debug>(result: Result<T, ServiceError>, accepted: bool) {
+        match result {
+            Ok(_) => assert!(accepted, "a chain over the depth limit was accepted"),
+            Err(err) => {
+                assert!(
+                    !accepted,
+                    "a chain within the depth limit was refused: {err:?}"
+                );
+                assert_eq!(
+                    validation_message(err),
+                    "user command recursion depth exceeded"
+                );
+            }
         }
     }
 
@@ -2364,20 +2427,7 @@ mod tests {
     #[tokio::test]
     async fn user_command_may_reference_another_user_command() {
         let actor = new_actor();
-        let mut repo = repo_with(vec![bump_command(actor.user_id, "user.inner")]);
-        repo.expect_create_user_command()
-            .times(1)
-            .returning(|new_command| {
-                Ok(UserCommand {
-                    steps_json: new_command.steps_json,
-                    ..stored_user_command(
-                        new_command.owner_user_id,
-                        &new_command.command_key,
-                        vec![],
-                    )
-                })
-            });
-        let svc = validating_service(repo);
+        let svc = validating_service(saving_repo(vec![bump_command(actor.user_id, "user.inner")]));
 
         let created = svc
             .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
@@ -2453,17 +2503,7 @@ mod tests {
         let svc = validating_service(repo);
 
         let err = svc
-            .update_user_command(UpdateUserCommandCmd {
-                actor,
-                command_id: "user.c".to_string(),
-                title: "C".to_string(),
-                description: String::new(),
-                steps: vec![UserCommandStepDto {
-                    command_id: "user.a".to_string(),
-                    args: None,
-                }],
-                is_enabled: true,
-            })
+            .update_user_command(update_cmd(actor, "user.c", &["user.a"]))
             .await
             .unwrap_err();
 
@@ -2660,5 +2700,85 @@ mod tests {
         let stages = result.pipeline_stages.expect("stages are reported");
         assert_eq!(stages[0].status, CommandResultStatusDto::Success);
         assert_eq!(stages[0].message, "user command `user.bump` executed");
+    }
+
+    /// A cycle stored in the repository is refused as a cycle wherever definitions are
+    /// resolved: execution, its capability gate, listing and lookup.
+    #[tokio::test]
+    async fn stored_user_command_cycle_is_refused_when_resolving_definitions() {
+        let actor = new_actor();
+        let svc = validating_service(repo_with(vec![
+            calling_command(actor.user_id, "user.a", "user.b"),
+            calling_command(actor.user_id, "user.b", "user.a"),
+        ]));
+        let cycle = "user command recursion cycle detected";
+
+        let executed = svc
+            .execute_command(palette_cmd(actor, "user.a"))
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(executed), cycle);
+
+        let listed = svc
+            .list_commands(ListCommandsQuery {
+                actor,
+                context: None,
+                surface: CommandSurfaceDto::Palette,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(listed), cycle);
+
+        let looked_up = svc
+            .get_command(GetCommandQuery {
+                actor,
+                command_id: "user.b".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(looked_up), cycle);
+    }
+
+    /// Creating a user command on top of a stored chain is refused once the chain would
+    /// exceed eight user commands.
+    #[tokio::test]
+    async fn create_user_command_refuses_a_chain_deeper_than_eight_levels() {
+        let actor = new_actor();
+        for (stored_levels, accepted) in [(7, true), (8, false)] {
+            let svc = validating_service(saving_repo(user_command_chain(
+                actor.user_id,
+                stored_levels,
+            )));
+
+            let result = svc
+                .create_user_command(create_cmd(actor, "user.top", &["user.level0"]))
+                .await;
+
+            assert_depth_outcome(result, accepted);
+        }
+    }
+
+    /// An update is refused when it would make any chain through the updated command
+    /// exceed eight user commands, whether the chain grows below it or above it.
+    #[tokio::test]
+    async fn update_user_command_refuses_a_chain_deeper_than_eight_levels() {
+        let actor = new_actor();
+        for (stored_levels, accepted) in [(7, true), (8, false)] {
+            let mut commands = user_command_chain(actor.user_id, stored_levels);
+            commands.push(calling_command(actor.user_id, "user.top", "state.list"));
+            commands.push(bump_command(actor.user_id, "user.extra"));
+            let svc = validating_service(saving_repo(commands));
+
+            let below = svc
+                .update_user_command(update_cmd(actor, "user.top", &["user.level0"]))
+                .await;
+            assert_depth_outcome(below, accepted);
+
+            let last_level = format!("user.level{}", stored_levels - 1);
+            let above = svc
+                .update_user_command(update_cmd(actor, &last_level, &["user.extra"]))
+                .await;
+            assert_depth_outcome(above, accepted);
+        }
     }
 }
