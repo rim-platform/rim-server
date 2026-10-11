@@ -22,6 +22,8 @@ pub(super) struct ExecutionContext {
     pub depth: usize,
 }
 
+const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
+
 impl DefaultCommandService {
     pub(super) fn builtin_definition(command_id: &str) -> Option<CommandDefinitionDto> {
         Self::builtin_commands()
@@ -203,6 +205,32 @@ impl DefaultCommandService {
         Ok(())
     }
 
+    /// Refuses `steps` for `command_key` when, with the actor's stored user commands, they
+    /// would form a chain of user commands deeper than the executor runs.
+    pub(super) async fn ensure_user_command_chain_within_depth(
+        &self,
+        actor: Actor,
+        command_key: &str,
+        steps: &[UserCommandStepDto],
+    ) -> ServiceResult<()> {
+        let stored = self
+            .repos
+            .user_command_repo
+            .list_for_user(actor.user_id)
+            .await?
+            .into_iter()
+            .map(Self::parse_user_command)
+            .collect::<ServiceResult<Vec<_>>>()?;
+        if user_commands::longest_chain_through(&stored, command_key, steps)
+            > Self::MAX_RECURSION_DEPTH
+        {
+            return Err(ServiceError::Validation(
+                RECURSION_DEPTH_EXCEEDED.to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn execute_builtin(
         &self,
         actor: Actor,
@@ -221,7 +249,7 @@ impl DefaultCommandService {
     ) -> ServiceResult<CommandResultDto> {
         if ctx.depth >= Self::MAX_RECURSION_DEPTH {
             return Err(ServiceError::Validation(
-                "user command recursion depth exceeded".to_string(),
+                RECURSION_DEPTH_EXCEEDED.to_string(),
             ));
         }
 
