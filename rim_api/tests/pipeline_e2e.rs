@@ -12,11 +12,11 @@ mod support;
 use serde_json::{Value, json};
 
 use rim_api::AppSchema;
-use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_err_message, exec_ok};
+use support::graphql::{Caller, anonymous_request, exec_err, exec_err_code, exec_ok};
+use support::roles::Roles;
 
 const PIPELINE_FIELDS: &str = "id serverId name description \
      trigger { kind conversationId } \
@@ -54,42 +54,16 @@ mutation Delete($pipelineId: ID!) { deleted: deletePipeline(pipelineId: $pipelin
 
 struct Fixture {
     schema: AppSchema,
-    server_id: String,
-    other_server_id: String,
-    /// Owner.
-    alice: Caller,
-    /// Member.
-    bob: Caller,
-    /// Guest.
-    gina: Caller,
-    /// Not a member of the workspace.
-    olive: Caller,
+    ws: Roles,
+    _ctx: TestCtx,
 }
 
-/// alice (Owner), bob (Member), gina (Guest) in one workspace; olive owns a second one.
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
-    let server = ctx.create_server("pipeline-e2e").await;
-    let other = ctx.create_server("pipeline-e2e-other").await;
-    let alice = ctx.create_user("pipe-alice").await;
-    let bob = ctx.create_user("pipe-bob").await;
-    let gina = ctx.create_user("pipe-gina").await;
-    let olive = ctx.create_user("pipe-olive").await;
-    ctx.add_owner(&server, &alice).await;
-    ctx.add_member(&server, &bob, ServerMemberRole::Member)
-        .await;
-    ctx.add_member(&server, &gina, ServerMemberRole::Guest)
-        .await;
-    ctx.add_owner(&other, &olive).await;
-
     Fixture {
         schema: ctx.build_schema(RegistrationMode::InviteOnly).await,
-        server_id: server.id.to_string(),
-        other_server_id: other.id.to_string(),
-        alice: ctx.caller(&alice).await,
-        bob: ctx.caller(&bob).await,
-        gina: ctx.caller(&gina).await,
-        olive: ctx.caller(&olive).await,
+        ws: ctx.roles("pipe").await,
+        _ctx: ctx,
     }
 }
 
@@ -123,7 +97,7 @@ impl Fixture {
     async fn create(&self, who: &Caller, body: Value) -> Value {
         let data = exec_ok(
             &self.schema,
-            self.create_request(who, &self.server_id, body),
+            self.create_request(who, &self.ws.server_id, body),
         )
         .await;
         data["pipeline"].clone()
@@ -132,7 +106,7 @@ impl Fixture {
     async fn create_err(&self, who: &Caller, body: Value) -> String {
         exec_err_code(
             &self.schema,
-            self.create_request(who, &self.server_id, body),
+            self.create_request(who, &self.ws.server_id, body),
         )
         .await
     }
@@ -178,7 +152,7 @@ impl Fixture {
     async fn list_names(&self, who: &Caller, enabled: Option<bool>) -> Vec<String> {
         let data = exec_ok(
             &self.schema,
-            self.list_request(who, &self.server_id, enabled),
+            self.list_request(who, &self.ws.server_id, enabled),
         )
         .await;
         let mut names: Vec<String> = data["pipelines"]
@@ -191,17 +165,12 @@ impl Fixture {
         names
     }
 
-    /// The pipeline `id` as stored, read back through the `pipelines` query.
-    async fn stored(&self, id: &str) -> Value {
-        self.list(&self.alice)
-            .await
-            .into_iter()
-            .find(|p| p["id"] == id)
-            .expect("pipeline listed")
-    }
-
     async fn list(&self, who: &Caller) -> Vec<Value> {
-        let data = exec_ok(&self.schema, self.list_request(who, &self.server_id, None)).await;
+        let data = exec_ok(
+            &self.schema,
+            self.list_request(who, &self.ws.server_id, None),
+        )
+        .await;
         data["pipelines"].as_array().expect("pipelines").clone()
     }
 }
@@ -211,12 +180,12 @@ impl Fixture {
 #[tokio::test]
 async fn every_pipeline_root_refuses_an_anonymous_caller() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("p")).await);
+    let id = id_of(&f.create(&f.ws.alice, minimal_body("p")).await);
     let requests = [
-        anonymous_request(&list_query(), json!({ "serverId": f.server_id })),
+        anonymous_request(&list_query(), json!({ "serverId": f.ws.server_id })),
         anonymous_request(
             &create_mutation(),
-            json!({ "input": with(minimal_body("p"), json!({ "serverId": f.server_id })) }),
+            json!({ "input": with(minimal_body("p"), json!({ "serverId": f.ws.server_id })) }),
         ),
         anonymous_request(
             &update_mutation(),
@@ -236,18 +205,18 @@ async fn every_pipeline_root_refuses_an_anonymous_caller() {
 #[tokio::test]
 async fn every_pipeline_root_refuses_a_non_member() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("p")).await);
+    let id = id_of(&f.create(&f.ws.alice, minimal_body("p")).await);
     let requests = [
-        f.list_request(&f.olive, &f.server_id, None),
-        f.create_request(&f.olive, &f.server_id, minimal_body("p")),
-        f.update_request(&f.olive, &id, minimal_body("taken")),
-        f.toggle_request(&f.olive, &id, false),
-        f.delete_request(&f.olive, &id),
+        f.list_request(&f.ws.olive, &f.ws.server_id, None),
+        f.create_request(&f.ws.olive, &f.ws.server_id, minimal_body("p")),
+        f.update_request(&f.ws.olive, &id, minimal_body("taken")),
+        f.toggle_request(&f.ws.olive, &id, false),
+        f.delete_request(&f.ws.olive, &id),
     ];
     for request in requests {
         assert_eq!(exec_err_code(&f.schema, request).await, "FORBIDDEN");
     }
-    let listed = f.list(&f.alice).await;
+    let listed = f.list(&f.ws.alice).await;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["name"], "p");
     assert_eq!(listed[0]["enabled"], true);
@@ -256,9 +225,37 @@ async fn every_pipeline_root_refuses_a_non_member() {
 #[tokio::test]
 async fn a_guest_may_create_a_pipeline() {
     let f = setup().await;
-    let created = f.create(&f.gina, minimal_body("guest pipeline")).await;
-    assert_eq!(created["createdBy"], f.gina.user_id.to_string().as_str());
-    assert_eq!(f.list_names(&f.alice, None).await, ["guest pipeline"]);
+    let created = f.create(&f.ws.gina, minimal_body("guest pipeline")).await;
+    assert_eq!(created["createdBy"], f.ws.gina.user_id.to_string().as_str());
+    assert_eq!(f.list_names(&f.ws.alice, None).await, ["guest pipeline"]);
+}
+
+#[tokio::test]
+async fn only_its_creator_or_a_moderator_may_change_a_pipeline() {
+    let f = setup().await;
+    let id = id_of(&f.create(&f.ws.alice, minimal_body("owner's")).await);
+    for request in [
+        f.update_request(&f.ws.bob, &id, minimal_body("taken")),
+        f.toggle_request(&f.ws.bob, &id, false),
+        f.delete_request(&f.ws.bob, &id),
+    ] {
+        assert_eq!(exec_err_code(&f.schema, request).await, "FORBIDDEN");
+    }
+    assert_eq!(f.list_names(&f.ws.alice, Some(true)).await, ["owner's"]);
+
+    let data = exec_ok(
+        &f.schema,
+        f.update_request(&f.ws.mona, &id, minimal_body("moderated")),
+    )
+    .await;
+    assert_eq!(
+        data["pipeline"]["createdBy"],
+        f.ws.alice.user_id.to_string().as_str()
+    );
+    let data = exec_ok(&f.schema, f.toggle_request(&f.ws.mona, &id, false)).await;
+    assert_eq!(data["pipeline"]["enabled"], false);
+    let data = exec_ok(&f.schema, f.delete_request(&f.ws.mona, &id)).await;
+    assert_eq!(data["deleted"], true);
 }
 
 // ── Create ────────────────────────────────────────────────────────────────
@@ -267,7 +264,7 @@ async fn a_guest_may_create_a_pipeline() {
 async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
     let f = setup().await;
     let conversation = uuid::Uuid::now_v7().to_string();
-    let author = f.bob.user_id.to_string();
+    let author = f.ws.bob.user_id.to_string();
     let body = json!({
         "name": "Echo deploys",
         "description": "Repost deploy notices",
@@ -283,10 +280,10 @@ async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
         ],
         "cooldownSecs": 30,
     });
-    let p = f.create(&f.alice, body).await;
+    let p = f.create(&f.ws.alice, body).await;
 
     assert!(p["id"].as_str().is_some_and(|id| !id.is_empty()));
-    assert_eq!(p["serverId"], f.server_id.as_str());
+    assert_eq!(p["serverId"], f.ws.server_id.as_str());
     assert_eq!(p["name"], "Echo deploys");
     assert_eq!(p["description"], "Repost deploy notices");
     assert_eq!(
@@ -314,22 +311,23 @@ async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
     );
     assert_eq!(p["enabled"], true);
     assert_eq!(p["cooldownSecs"], 30);
-    assert_eq!(p["createdBy"], f.alice.user_id.to_string().as_str());
+    assert_eq!(p["createdBy"], f.ws.alice.user_id.to_string().as_str());
     assert_eq!(p["schemaVersion"], 1);
     assert_eq!(p["lastFiredAt"], Value::Null);
     assert!(p["createdAt"].is_string());
     assert!(p["updatedAt"].is_string());
 
-    let listed = f.list(&f.bob).await;
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0]["filter"], p["filter"]);
-    assert_eq!(listed[0]["actions"], p["actions"]);
+    assert_eq!(
+        f.list(&f.ws.bob).await,
+        [p],
+        "the create response is what a read returns"
+    );
 }
 
 #[tokio::test]
 async fn create_pipeline_leaves_the_optional_fields_null() {
     let f = setup().await;
-    let p = f.create(&f.alice, minimal_body("bare")).await;
+    let p = f.create(&f.ws.alice, minimal_body("bare")).await;
     assert_eq!(p["description"], Value::Null);
     assert_eq!(
         p["trigger"],
@@ -359,12 +357,12 @@ async fn create_pipeline_refuses_an_invalid_name_cooldown_or_trigger() {
     ];
     for body in invalid {
         assert_eq!(
-            f.create_err(&f.alice, body.clone()).await,
+            f.create_err(&f.ws.alice, body.clone()).await,
             "VALIDATION",
             "{body}"
         );
     }
-    assert!(f.list_names(&f.alice, None).await.is_empty());
+    assert!(f.list_names(&f.ws.alice, None).await.is_empty());
 
     let valid = [
         minimal_body(&"n".repeat(256)),
@@ -379,7 +377,7 @@ async fn create_pipeline_refuses_an_invalid_name_cooldown_or_trigger() {
         ),
     ];
     for body in valid {
-        f.create(&f.alice, body).await;
+        f.create(&f.ws.alice, body).await;
     }
 }
 
@@ -409,24 +407,27 @@ async fn create_pipeline_refuses_a_filter_condition_missing_its_operand() {
             minimal_body("p"),
             json!({ "filter": { "conditions": [condition] } }),
         );
-        let message =
-            exec_err_message(&f.schema, f.create_request(&f.alice, &f.server_id, body)).await;
-        assert_eq!(message, expected);
+        let err = exec_err(
+            &f.schema,
+            f.create_request(&f.ws.alice, &f.ws.server_id, body),
+        )
+        .await;
+        assert_eq!(err, ("VALIDATION".to_string(), expected.to_string()));
     }
-    assert!(f.list_names(&f.alice, None).await.is_empty());
+    assert!(f.list_names(&f.ws.alice, None).await.is_empty());
 }
 
 #[tokio::test]
 async fn a_member_creates_at_most_fifty_pipelines_per_workspace() {
     let f = setup().await;
     for i in 0..50 {
-        f.create(&f.alice, minimal_body(&format!("p{i}"))).await;
+        f.create(&f.ws.alice, minimal_body(&format!("p{i}"))).await;
     }
     assert_eq!(
-        f.create_err(&f.alice, minimal_body("p50")).await,
+        f.create_err(&f.ws.alice, minimal_body("p50")).await,
         "VALIDATION"
     );
-    f.create(&f.bob, minimal_body("bob's")).await;
+    f.create(&f.ws.bob, minimal_body("bob's")).await;
 }
 
 // ── List ──────────────────────────────────────────────────────────────────
@@ -434,15 +435,19 @@ async fn a_member_creates_at_most_fifty_pipelines_per_workspace() {
 #[tokio::test]
 async fn pipelines_lists_every_members_pipelines_of_the_workspace_only() {
     let f = setup().await;
-    f.create(&f.alice, minimal_body("alice's")).await;
-    f.create(&f.bob, minimal_body("bob's")).await;
+    f.create(&f.ws.alice, minimal_body("alice's")).await;
+    f.create(&f.ws.bob, minimal_body("bob's")).await;
     exec_ok(
         &f.schema,
-        f.create_request(&f.olive, &f.other_server_id, minimal_body("elsewhere")),
+        f.create_request(
+            &f.ws.olive,
+            &f.ws.other_server_id,
+            minimal_body("elsewhere"),
+        ),
     )
     .await;
 
-    assert_eq!(f.list_names(&f.gina, None).await, ["alice's", "bob's"]);
+    assert_eq!(f.list_names(&f.ws.gina, None).await, ["alice's", "bob's"]);
 }
 
 // ── Toggle ────────────────────────────────────────────────────────────────
@@ -450,11 +455,11 @@ async fn pipelines_lists_every_members_pipelines_of_the_workspace_only() {
 #[tokio::test]
 async fn toggle_pipeline_switches_it_off_and_on_and_the_enabled_filter_follows() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("toggled")).await);
-    f.create(&f.alice, minimal_body("steady")).await;
-    let created = f.stored(&id).await;
+    let created = f.create(&f.ws.alice, minimal_body("toggled")).await;
+    let id = id_of(&created);
+    f.create(&f.ws.alice, minimal_body("steady")).await;
 
-    let data = exec_ok(&f.schema, f.toggle_request(&f.alice, &id, false)).await;
+    let data = exec_ok(&f.schema, f.toggle_request(&f.ws.alice, &id, false)).await;
     let off = &data["pipeline"];
     assert_eq!(off["id"], id.as_str());
     assert_eq!(off["enabled"], false);
@@ -462,22 +467,30 @@ async fn toggle_pipeline_switches_it_off_and_on_and_the_enabled_filter_follows()
     assert_eq!(off["createdAt"], created["createdAt"]);
     assert_ne!(off["updatedAt"], created["updatedAt"]);
 
-    assert_eq!(f.list_names(&f.alice, Some(false)).await, ["toggled"]);
-    assert_eq!(f.list_names(&f.alice, Some(true)).await, ["steady"]);
-    assert_eq!(f.list_names(&f.alice, None).await, ["steady", "toggled"]);
+    assert_eq!(f.list_names(&f.ws.alice, Some(false)).await, ["toggled"]);
+    assert_eq!(f.list_names(&f.ws.alice, Some(true)).await, ["steady"]);
+    assert_eq!(f.list_names(&f.ws.alice, None).await, ["steady", "toggled"]);
 
-    let data = exec_ok(&f.schema, f.toggle_request(&f.alice, &id, true)).await;
+    let data = exec_ok(&f.schema, f.toggle_request(&f.ws.alice, &id, true)).await;
     assert_eq!(data["pipeline"]["enabled"], true);
-    assert!(f.list_names(&f.alice, Some(false)).await.is_empty());
+    assert!(f.list_names(&f.ws.alice, Some(false)).await.is_empty());
 }
 
 #[tokio::test]
-async fn toggle_pipeline_gets_not_found_for_an_unknown_pipeline() {
+async fn toggle_pipeline_refuses_an_unknown_or_malformed_id() {
     let f = setup().await;
     let unknown = uuid::Uuid::now_v7().to_string();
     assert_eq!(
-        exec_err_code(&f.schema, f.toggle_request(&f.alice, &unknown, false)).await,
+        exec_err_code(&f.schema, f.toggle_request(&f.ws.alice, &unknown, false)).await,
         "NOT_FOUND"
+    );
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.toggle_request(&f.ws.alice, "not-a-uuid", false)
+        )
+        .await,
+        "VALIDATION"
     );
 }
 
@@ -488,7 +501,7 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
     let f = setup().await;
     let created = f
         .create(
-            &f.alice,
+            &f.ws.alice,
             with(
                 minimal_body("before"),
                 json!({ "description": "old",
@@ -499,15 +512,14 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
         )
         .await;
     let id = id_of(&created);
-    let created = f.stored(&id).await;
-    exec_ok(&f.schema, f.toggle_request(&f.alice, &id, false)).await;
+    exec_ok(&f.schema, f.toggle_request(&f.ws.alice, &id, false)).await;
 
     let body = json!({
         "name": "after",
         "trigger": { "kind": "MESSAGE_DELETED" },
         "actions": [{ "commandId": "chat.react", "args": { "emoji": "x" } }],
     });
-    let data = exec_ok(&f.schema, f.update_request(&f.alice, &id, body)).await;
+    let data = exec_ok(&f.schema, f.update_request(&f.ws.alice, &id, body)).await;
     let updated = &data["pipeline"];
     assert_eq!(updated["id"], id.as_str());
     assert_eq!(updated["name"], "after");
@@ -535,7 +547,7 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
     assert_eq!(updated["schemaVersion"], 1);
     assert_eq!(updated["createdAt"], created["createdAt"]);
 
-    let listed = f.list(&f.alice).await;
+    let listed = f.list(&f.ws.alice).await;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["name"], "after");
     assert_eq!(listed[0]["trigger"], updated["trigger"]);
@@ -545,7 +557,7 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
 #[tokio::test]
 async fn update_pipeline_validates_like_create() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("p")).await);
+    let id = id_of(&f.create(&f.ws.alice, minimal_body("p")).await);
     let conversation = uuid::Uuid::now_v7().to_string();
     let invalid = [
         minimal_body(""),
@@ -558,15 +570,15 @@ async fn update_pipeline_validates_like_create() {
     ];
     for body in invalid {
         assert_eq!(
-            exec_err_code(&f.schema, f.update_request(&f.alice, &id, body.clone())).await,
+            exec_err_code(&f.schema, f.update_request(&f.ws.alice, &id, body.clone())).await,
             "VALIDATION",
             "{body}"
         );
     }
-    let message = exec_err_message(
+    let err = exec_err(
         &f.schema,
         f.update_request(
-            &f.alice,
+            &f.ws.alice,
             &id,
             with(
                 minimal_body("p"),
@@ -575,8 +587,14 @@ async fn update_pipeline_validates_like_create() {
         ),
     )
     .await;
-    assert_eq!(message, "MessageContains requires a pattern");
-    assert_eq!(f.list_names(&f.alice, None).await, ["p"]);
+    assert_eq!(
+        err,
+        (
+            "VALIDATION".to_string(),
+            "MessageContains requires a pattern".to_string()
+        )
+    );
+    assert_eq!(f.list_names(&f.ws.alice, None).await, ["p"]);
 }
 
 #[tokio::test]
@@ -586,7 +604,7 @@ async fn update_pipeline_gets_not_found_for_an_unknown_pipeline() {
     assert_eq!(
         exec_err_code(
             &f.schema,
-            f.update_request(&f.alice, &unknown, minimal_body("p"))
+            f.update_request(&f.ws.alice, &unknown, minimal_body("p"))
         )
         .await,
         "NOT_FOUND"
@@ -598,17 +616,17 @@ async fn update_pipeline_gets_not_found_for_an_unknown_pipeline() {
 #[tokio::test]
 async fn delete_pipeline_removes_it_and_a_second_delete_is_not_found() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("doomed")).await);
-    f.create(&f.alice, minimal_body("kept")).await;
+    let id = id_of(&f.create(&f.ws.alice, minimal_body("doomed")).await);
+    f.create(&f.ws.alice, minimal_body("kept")).await;
 
-    let data = exec_ok(&f.schema, f.delete_request(&f.alice, &id)).await;
+    let data = exec_ok(&f.schema, f.delete_request(&f.ws.alice, &id)).await;
     assert_eq!(data["deleted"], true);
-    assert_eq!(f.list_names(&f.alice, None).await, ["kept"]);
+    assert_eq!(f.list_names(&f.ws.alice, None).await, ["kept"]);
 
     for request in [
-        f.delete_request(&f.alice, &id),
-        f.toggle_request(&f.alice, &id, true),
-        f.update_request(&f.alice, &id, minimal_body("back")),
+        f.delete_request(&f.ws.alice, &id),
+        f.toggle_request(&f.ws.alice, &id, true),
+        f.update_request(&f.ws.alice, &id, minimal_body("back")),
     ] {
         assert_eq!(exec_err_code(&f.schema, request).await, "NOT_FOUND");
     }
