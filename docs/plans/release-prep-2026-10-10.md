@@ -79,6 +79,7 @@ S-3 and D-7. A database is reassigned only after its previous agent has reported
 | D-3, D-4 | rim-server #100 | 2026-10-10 |
 | D-7 | rim-server #104, rim-ui #63 (instance flags only; the workspace toggle went with the incident drop of `cleanup-2026-10-10.md`) | 2026-10-10 |
 | D-5 | rim-server #144 (changelog, upgrade guide, release checklist, migration `down` check) | 2026-10-12 |
+| S-5 | rim-ui #77 (backup endpoint: spec `docs/specs/backup-endpoint-v1.md`, reference service, provider), #78 (S3-compatible storage), #79 (OneDrive, per-device last backup); a real Microsoft sign-in waits for a client id registered under the organisation | 2026-10-12 |
 
 S-5 was added on 2026-10-11 at Jakub's request (the user's own backups to OneDrive, S3 and a self-hosted two-route endpoint,
 next to the folder, Google Drive and Dropbox the archive already has). Outside the rows: rim-server #102 keeps the audit log file writer alive, so audit events reach
