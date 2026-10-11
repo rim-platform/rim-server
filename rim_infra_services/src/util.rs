@@ -501,6 +501,14 @@ mod tests {
         async fn get_servers_for_user(&self, _user_id: UserId) -> RepoResult<Vec<Server>> {
             Ok(vec![])
         }
+
+        async fn find_owned_by_name(
+            &self,
+            _owner: UserId,
+            _name: &str,
+        ) -> RepoResult<Option<Server>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
     }
 
     struct FakeConversationRepo {

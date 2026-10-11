@@ -3,9 +3,13 @@ use entity::{server, server_member};
 use rim_core::repository::error::RepoResult;
 use rim_core::server::model::{Server, ServerId};
 use rim_core::server::repository::ServerRepository;
+use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait, Set};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set,
+};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -67,5 +71,25 @@ impl ServerRepository for SeaOrmServerRepository {
             .map_err(map_db_err)?;
 
         Ok(servers.into_iter().map(Into::into).collect())
+    }
+
+    async fn find_owned_by_name(&self, owner: UserId, name: &str) -> RepoResult<Option<Server>> {
+        let model = server::Entity::find()
+            .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
+            .filter(server_member::Column::UserId.eq::<Uuid>(owner.into()))
+            .filter(server_member::Column::MemberRole.eq(
+                entity::sea_orm_active_enums::ServerMemberRole::from(ServerMemberRole::Owner),
+            ))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
+            .filter(Expr::cust_with_values(
+                r#"lower(trim("server"."name")) = lower(trim($1))"#,
+                [sea_orm::Value::from(name.to_owned())],
+            ))
+            .order_by_asc(server::Column::CreatedAt)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
     }
 }

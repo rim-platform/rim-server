@@ -111,6 +111,17 @@ impl ServerService for DefaultServerService {
                 "server name is too long".to_string(),
             ));
         }
+        if let Some(existing) = self
+            .repos
+            .server_repo
+            .find_owned_by_name(cmd.actor.user_id, name)
+            .await?
+        {
+            return Err(ServiceError::Conflict(format!(
+                "you already own a workspace named \"{}\"",
+                existing.name
+            )));
+        }
 
         // Run create + add_member inside a transaction when DB is available.
         let scope = if let Some(db) = &self.db {
