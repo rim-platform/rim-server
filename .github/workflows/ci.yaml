@@ -77,8 +77,8 @@ jobs:
           name: coverage
           path: coverage/
       - name: Enforce Coverage Thresholds
-        # Temporarily 75% (measured 77.3% on the rebuild); the target is 95%, raise it as tests land.
-        run: python3 .github/scripts/lcov_gate.py coverage/lcov.info 75 0
+        # 90% is the lower bound (measured 92.95% on 2026-10-11); raise it as tests land.
+        run: python3 .github/scripts/lcov_gate.py coverage/lcov.info 90 0
 
   security_audit:
     name: Security Audit
