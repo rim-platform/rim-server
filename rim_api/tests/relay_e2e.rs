@@ -1062,9 +1062,16 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         .to_string();
 
     // A signed-in relayInfo is a first use of the direct space: Alice is a guest there before
-    // any DM, sees only herself, and lists an empty inbox.
+    // any DM, sees only herself, sees no owner, and lists an empty inbox.
     assert_eq!(alice.direct_space().await, direct);
     assert_eq!(directory(&alice, &direct).await, guest(&alice));
+    let space = alice
+        .ok(
+            "query($s: ID!) { server(serverId: $s) { owner { username } } }",
+            json!({ "s": direct }),
+        )
+        .await;
+    assert_eq!(space["server"]["owner"], Value::Null);
     assert_eq!(listed(&alice, &direct).await, Vec::<String>::new());
 
     // Without relayInfo, listing the inbox is the first use.

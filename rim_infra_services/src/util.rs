@@ -465,6 +465,10 @@ mod tests {
             Ok(self.is_member)
         }
 
+        async fn get_owner_id(&self, _server_id: ServerId) -> RepoResult<Option<UserId>> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn get_member_standing(
             &self,
             _server_id: ServerId,

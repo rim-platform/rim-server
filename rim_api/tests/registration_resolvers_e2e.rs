@@ -16,6 +16,7 @@ mod support;
 use async_graphql::Request;
 use chrono::Utc;
 
+use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
@@ -77,7 +78,8 @@ async fn query_registration_mode_returns_invite_only_by_default() {
 /// Verify `previewInviteToken(token)` behaviour for a workspace invite.
 ///
 /// Seeds a user, server, and workspace invite, then:
-/// 1. Asserts `tokenType == WORKSPACE` and populated workspace fields.
+/// 1. Asserts `tokenType == WORKSPACE` and populated workspace fields, the inviter's and the
+///    owner's names included.
 /// 2. Asserts the underlying `invite` row's `use_count` is unchanged (preview
 ///    is read-only — does not consume the token).
 /// 3. Asserts `INVALID_TOKEN` for an unknown token.
@@ -89,13 +91,16 @@ async fn query_preview_invite_token_workspace_happy_path() {
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
-    // Seed: owner user, server, workspace invite.
+    // Seed: owner, a moderator who issues the invite, server, workspace invite.
     let owner = ctx.create_user("preview_owner").await;
+    let inviter = ctx.create_user("preview_inviter").await;
     let server = ctx.create_server("preview_ws").await;
     ctx.add_owner(&server, &owner).await;
+    ctx.add_member(&server, &inviter, ServerMemberRole::Moderator)
+        .await;
 
     let raw_token = "test_raw_preview_ws_token_1234567890abcdef";
-    let _invite_id = seed_workspace_invite(&ctx.db, owner.id, server.id, raw_token).await;
+    let _invite_id = seed_workspace_invite(&ctx.db, inviter.id, server.id, raw_token).await;
 
     // ── Happy path: workspace preview ─────────────────────────────────────
     let query = format!(
@@ -107,6 +112,7 @@ async fn query_preview_invite_token_workspace_happy_path() {
                     serverId
                     serverName
                     invitedByDisplayName
+                    ownerDisplayName
                 }}
             }}
         }}"#
@@ -134,6 +140,17 @@ async fn query_preview_invite_token_workspace_happy_path() {
         json["previewInviteToken"]["workspace"]["serverName"],
         serde_json::json!("preview_ws"),
         "serverName mismatch"
+    );
+    assert_eq!(
+        (
+            &json["previewInviteToken"]["workspace"]["invitedByDisplayName"],
+            &json["previewInviteToken"]["workspace"]["ownerDisplayName"],
+        ),
+        (
+            &serde_json::json!("preview_inviter"),
+            &serde_json::json!("preview_owner")
+        ),
+        "inviter and owner names fall back to usernames"
     );
 
     // ── Verify the invite row is untouched (read-only) ────────────────────

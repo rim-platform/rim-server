@@ -35,6 +35,9 @@ pub trait ServerMemberRepository: Send + Sync {
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
 
+    /// The user holding the `Owner` role in the workspace; `None` when nobody does.
+    async fn get_owner_id(&self, server_id: ServerId) -> RepoResult<Option<UserId>>;
+
     /// The member's role plus any timeout still in force (`until > now()`), in one call.
     /// `None` when the user is not a member. Used by the conversation access gates.
     async fn get_member_standing(

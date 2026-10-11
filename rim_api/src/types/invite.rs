@@ -46,12 +46,14 @@ impl From<rim_services::auth::dto::InviteTokenType> for InviteTokenTypeGql {
 }
 
 /// Minimal workspace info included in a workspace-invite preview. The workspace name and the
-/// inviter's display name are shown to anyone holding the invite link.
+/// inviter's and owner's display names are shown to anyone holding the invite link.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct WorkspaceInvitePreviewGql {
     pub server_id: async_graphql::ID,
     pub server_name: String,
     pub invited_by_display_name: String,
+    /// The workspace owner's display name, else username; null when the workspace has no owner.
+    pub owner_display_name: Option<String>,
 }
 
 impl From<rim_services::auth::dto::WorkspaceInvitePreviewDto> for WorkspaceInvitePreviewGql {
@@ -60,6 +62,7 @@ impl From<rim_services::auth::dto::WorkspaceInvitePreviewDto> for WorkspaceInvit
             server_id: dto.server_id.to_string().into(),
             server_name: dto.server_name,
             invited_by_display_name: dto.invited_by_display_name,
+            owner_display_name: dto.owner_display_name,
         }
     }
 }

@@ -981,7 +981,7 @@ impl AuthService for DefaultAuthService {
                 return Err(ServiceError::ExpiredToken);
             }
 
-            // Fetch workspace name and inviter display name.
+            // Fetch workspace name and the inviter's and owner's display names.
             let server = self
                 .repos
                 .server_repo
@@ -997,6 +997,16 @@ impl AuthService for DefaultAuthService {
             let inviter_display = inviter
                 .display_name
                 .unwrap_or_else(|| inviter.username.clone());
+            let owner = match self
+                .repos
+                .server_member_repo
+                .get_owner_id(inv.server_id)
+                .await?
+            {
+                Some(owner_id) => self.repos.user_repo.get_by_id(owner_id).await?,
+                None => None,
+            };
+            let owner_display = owner.map(|o| o.display_name.unwrap_or(o.username));
 
             return Ok(InviteTokenPreviewDto {
                 token_type: InviteTokenType::Workspace,
@@ -1005,6 +1015,7 @@ impl AuthService for DefaultAuthService {
                     server_id: inv.server_id,
                     server_name: server.name,
                     invited_by_display_name: inviter_display,
+                    owner_display_name: owner_display,
                 }),
             });
         }

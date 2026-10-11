@@ -26,6 +26,7 @@ conversation with them (`ServerMemberService::visible_members`); everyone else s
 | `Conversation.mlsGroup` | the group and its devices | service: `E2eeService::group` checks read access to the conversation | guarded |
 | `Conversation.predecessor` | the host and id this conversation succeeds | parent: same conversation | guarded |
 | `Server.viewerRole` | the viewer's own membership | keyed by the viewer | guarded |
+| `Server.owner` | the owner's `User` through `UserLoader` | service: `ServerMemberService::get_owner` answers members only; the owner is workspace metadata every member sees, guests included | guarded |
 | `ServerBan.user` | the banned user's `User` | root: `serverBans` and `banMember` are for moderators, who see every member | guarded |
 | `WorkspacePlugin.approvedBy` | the approver's `User` | resolver: the member visibility rule; null for a guest who shares no conversation with the approver | guarded |
 
@@ -45,13 +46,13 @@ conversation with them (`ServerMemberService::visible_members`); everyone else s
 | `RemoteIdentity.*` | a principal's key log, devices and card | the same document the S2S identity endpoint serves to any peer | public by design |
 | `PrincipalDevices.devices` | certified devices | root: `principalDevices` answers only principals who share a workspace with the viewer | guarded |
 | `DmRequest.card`, `.heldItems`, `RelayItem.envelope` | the viewer's own requests and queue | keyed by the viewer or the session device | guarded |
-| `InviteTokenPreview.workspace` | workspace name and inviter name | the token holder; meant to be read before joining | public by design |
+| `InviteTokenPreview.workspace` | workspace name, inviter name and owner name | the token holder; meant to be read before joining | public by design |
 
 ## Dataloaders
 
 | Loader | Key | Note |
 |---|---|---|
-| `UserLoader` | user id | No actor. Any call site must pass an id the viewer may see: today a message author, a mentioned user, a banned user (for a moderator) and an approver after the member visibility check. |
+| `UserLoader` | user id | No actor. Any call site must pass an id the viewer may see: today a message author, a mentioned user, a banned user (for a moderator), an approver after the member visibility check and a workspace's owner (for a member). |
 | `ReactionLoader` | message id and viewer | The viewer only sets `reactedByMe`; access comes from the parent message. |
 | `MentionLoader`, `PinLoader`, `LinkPreviewLoader` | message id | No actor; access comes from the parent message. |
 

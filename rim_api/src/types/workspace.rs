@@ -1,4 +1,7 @@
-use async_graphql::{ComplexObject, Context, Enum, Result, SimpleObject};
+use async_graphql::{ComplexObject, Context, Enum, ID, Result, SimpleObject};
+
+use crate::resolve::ResolveExt;
+use crate::types::User;
 
 /// A member's role in a workspace, from most to least privileged. Used by `Server.viewerRole`,
 /// `ServerMember.memberRole`, `CreateInviteInput.role` and `setMemberRole`.
@@ -65,6 +68,30 @@ impl Server {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(member.member_role.into())
+    }
+
+    /// The account holding the owner role; null when there is none, as in the direct space or
+    /// once the owner's account is deleted. Workspace metadata: every member sees it, guests
+    /// included.
+    async fn owner(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let svc = ctx
+            .data::<std::sync::Arc<dyn rim_services::server_member::service::ServerMemberService>>(
+            )?;
+        let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(&self.id)?;
+
+        let owner = svc
+            .get_owner(rim_services::server_member::command::GetServerOwnerQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        match owner {
+            Some(id) => ctx.load_user(&ID(id.to_string())).await,
+            None => Ok(None),
+        }
     }
 }
 

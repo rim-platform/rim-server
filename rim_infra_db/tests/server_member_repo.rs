@@ -7,8 +7,10 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
+/// Members are added, looked up and listed; the owner is the member holding the `Owner` role,
+/// none before one joins.
 #[tokio::test]
-async fn add_get_is_member_get_by_id_and_list_members() {
+async fn add_get_is_member_list_members_and_owner() {
     let ctx = support::TestCtx::new().await;
 
     let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
@@ -19,16 +21,18 @@ async fn add_get_is_member_get_by_id_and_list_members() {
 
     assert!(!repo.is_member(server.id, u1).await.unwrap());
 
-    let m1 = repo
-        .add_member(server.id, u1, ServerMemberRole::Owner)
-        .await
-        .unwrap();
     let _m2 = repo
         .add_member(server.id, u2, ServerMemberRole::Member)
         .await
         .unwrap();
+    assert_eq!(repo.get_owner_id(server.id).await.unwrap(), None);
+    let m1 = repo
+        .add_member(server.id, u1, ServerMemberRole::Owner)
+        .await
+        .unwrap();
 
     assert!(repo.is_member(server.id, u1).await.unwrap());
+    assert_eq!(repo.get_owner_id(server.id).await.unwrap(), Some(u1));
 
     let by_pair = repo.get_member(server.id, u1).await.unwrap().unwrap();
     assert_eq!(by_pair.id, m1.id);

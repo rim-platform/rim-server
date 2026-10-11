@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
-use rim_services::server_member::command::{GetServerMemberQuery, ListServerMembersQuery};
+use rim_services::server_member::command::{
+    GetServerMemberQuery, GetServerOwnerQuery, ListServerMembersQuery,
+};
 use rim_services::server_member::dto::ServerMemberDto;
 use rim_services::server_member::service::ServerMemberService;
 use rim_services::{ServiceError, ServiceResult};
@@ -126,6 +128,23 @@ impl ServerMemberService for DefaultServerMemberService {
     ) -> ServiceResult<Option<std::collections::HashSet<rim_core::user::model::UserId>>> {
         self.visible_member_ids(query.server_id, query.actor.user_id)
             .await
+    }
+
+    async fn get_owner(
+        &self,
+        query: GetServerOwnerQuery,
+    ) -> ServiceResult<Option<rim_core::user::model::UserId>> {
+        member_standing(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+        Ok(self
+            .repos
+            .server_member_repo
+            .get_owner_id(query.server_id)
+            .await?)
     }
 
     async fn list_members(
