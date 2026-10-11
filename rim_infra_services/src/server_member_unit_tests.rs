@@ -43,6 +43,9 @@ mod tests {
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
         server_member_repo
+            .expect_join_direct_space()
+            .returning(|_, _| Ok(false));
+        server_member_repo
             .expect_get_member_standing()
             .returning(|_, _| Ok(None));
 

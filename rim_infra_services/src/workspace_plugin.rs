@@ -271,12 +271,12 @@ impl DefaultWorkspacePluginService {
 
     /// `PermissionDenied` unless the user is a member of the workspace, of any role.
     async fn require_member(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
-        self.repos
-            .server_member_repo
-            .get_member(server_id, user_id)
-            .await?
-            .map(|_| ())
-            .ok_or(ServiceError::PermissionDenied)
+        crate::util::ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            server_id,
+            user_id,
+        )
+        .await
     }
 
     /// `PermissionDenied` unless the user is an Owner or Moderator of the workspace.

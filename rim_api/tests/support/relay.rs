@@ -346,6 +346,23 @@ pub fn verify_item(host: &Node, item: &Value) -> Item {
     }
 }
 
+/// `node`'s direct space, read without a session, so nobody joins it.
+pub async fn anonymous_direct_space(node: &Node) -> String {
+    let body: Value = reqwest::Client::new()
+        .post(format!("{}/api", node.origin))
+        .json(&json!({ "query": RELAY_INFO }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    body["data"]["relayInfo"]["directSpaceId"]
+        .as_str()
+        .expect("direct space")
+        .to_string()
+}
+
 /// Sign up `name` on `node` with a key, publish a card naming the node, and upload key packages.
 pub async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
     sign_up_with_card(node, name, seed, 1).await

@@ -251,6 +251,13 @@ mod tests {
         .into_iter()
         .collect();
         let mut members = MockServerMemberRepository::new();
+        let listed = roles.clone();
+        members
+            .expect_is_member()
+            .returning(move |_, uid| Ok(listed.contains_key(&uid)));
+        members
+            .expect_join_direct_space()
+            .returning(|_, _| Ok(false));
         members.expect_get_member().returning(move |sid, uid| {
             Ok(roles.get(&uid).map(|role| ServerMember {
                 id: ServerMemberId::new(),

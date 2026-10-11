@@ -9,7 +9,8 @@ use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, Statement,
 };
 
 use crate::DbHandle;
@@ -112,6 +113,29 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool> {
         Ok(self.get_member(server_id, user_id).await?.is_some())
+    }
+
+    async fn join_direct_space(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool> {
+        let inserted = self
+            .db
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "INSERT INTO server_member (id, server_id, user_id, member_role, joined_at) \
+                 SELECT $1, s.id, u.id, 'guest'::server_member_role, now() \
+                 FROM server s, \"user\" u \
+                 WHERE s.id = $2 AND s.kind = 'direct' AND u.id = $3 AND u.kind = 'local' \
+                 ON CONFLICT DO NOTHING",
+                [
+                    Uuid::from(ServerMemberId::new()).into(),
+                    Uuid::from(server_id).into(),
+                    Uuid::from(user_id).into(),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .rows_affected();
+        // A concurrent first use may have inserted the row this one skipped.
+        Ok(inserted == 1 || self.is_member(server_id, user_id).await?)
     }
 
     async fn get_owner_id(&self, server_id: ServerId) -> RepoResult<Option<UserId>> {

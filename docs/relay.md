@@ -35,8 +35,9 @@ Before that, a server is the relay and host of its own users only, as it always 
 Each server has one `server` row of kind `direct`, named "Direct messages", created at start. It
 holds the DMs and groups its users start with people on other servers, and is never listed by
 `servers` nor found by name. Everyone in it is a guest: nobody sees its member list, and nobody
-creates channels, invites or plugins there. Local users join it the first time they start a
-conversation there; people from other servers join when a local user adds them.
+creates channels, invites or plugins there. Local users join it on first use: a signed-in
+`relayInfo`, or any read or write of the direct space that needs membership; people from
+other servers join when a local user adds them.
 
 A conversation's home is the relay whose direct space holds it. The home sequences it: it stores
 the messages, Commits and Welcomes, and every member's app reads and writes there, through their

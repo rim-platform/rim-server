@@ -139,12 +139,12 @@ impl CustomEmojiService for DefaultCustomEmojiService {
     }
 
     async fn list(&self, query: ListCustomEmojisQuery) -> ServiceResult<Vec<CustomEmojiDto>> {
-        // Validate actor is a server member
-        self.repos
-            .server_member_repo
-            .get_member(query.server_id, query.actor.user_id)
-            .await?
-            .ok_or(ServiceError::PermissionDenied)?;
+        crate::util::ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
 
         let emojis = self
             .repos

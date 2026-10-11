@@ -61,6 +61,9 @@ impl Mocks {
         self.server_member_repo
             .expect_is_member()
             .returning(move |_, _| Ok(is_member));
+        self.server_member_repo
+            .expect_join_direct_space()
+            .returning(|_, _| Ok(false));
         self
     }
 

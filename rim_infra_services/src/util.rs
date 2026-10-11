@@ -120,12 +120,25 @@ pub async fn ensure_conversation_writable_with_standing(
     Ok((conv, standing))
 }
 
-/// The actor's role and active timeout in `server_id`; `PermissionDenied` for a non-member.
+/// The actor's role and active timeout in `server_id`; `PermissionDenied` for a non-member. A
+/// local user's first use of the direct space makes them a guest there.
 pub async fn member_standing(
     server_member_repo: &dyn ServerMemberRepository,
     server_id: ServerId,
     user_id: UserId,
 ) -> ServiceResult<MemberStanding> {
+    if let Some(standing) = server_member_repo
+        .get_member_standing(server_id, user_id)
+        .await?
+    {
+        return Ok(standing);
+    }
+    if !server_member_repo
+        .join_direct_space(server_id, user_id)
+        .await?
+    {
+        return Err(ServiceError::PermissionDenied);
+    }
     server_member_repo
         .get_member_standing(server_id, user_id)
         .await?
@@ -178,18 +191,21 @@ pub fn ensure_not_archived(conversation: &Conversation) -> ServiceResult<()> {
     Ok(())
 }
 
+/// `PermissionDenied` unless the user is a member of `server_id`. A local user's first use of
+/// the direct space makes them a guest there.
 pub async fn ensure_server_member(
     server_member_repo: &dyn ServerMemberRepository,
     server_id: ServerId,
     user_id: rim_core::user::model::UserId,
 ) -> ServiceResult<()> {
-    let is_member = server_member_repo.is_member(server_id, user_id).await?;
-
-    if !is_member {
-        return Err(ServiceError::PermissionDenied);
+    if server_member_repo.is_member(server_id, user_id).await?
+        || server_member_repo
+            .join_direct_space(server_id, user_id)
+            .await?
+    {
+        return Ok(());
     }
-
-    Ok(())
+    Err(ServiceError::PermissionDenied)
 }
 
 /// The one way a user becomes a workspace member: inserts the `server_member` row, then joins
@@ -465,6 +481,14 @@ mod tests {
             Ok(self.is_member)
         }
 
+        async fn join_direct_space(
+            &self,
+            _server_id: ServerId,
+            _user_id: UserId,
+        ) -> RepoResult<bool> {
+            Ok(false)
+        }
+
         async fn get_owner_id(&self, _server_id: ServerId) -> RepoResult<Option<UserId>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
@@ -658,6 +682,52 @@ mod tests {
         };
 
         let err = ensure_server_member(&repo, ServerId::new(), UserId::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    /// A member repository where the user is no member until `join_direct_space` admits them,
+    /// as a guest, when `direct` is set.
+    fn first_use_repo(
+        direct: bool,
+    ) -> rim_core::server_member::repository::MockServerMemberRepository {
+        let joined = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut repo = rim_core::server_member::repository::MockServerMemberRepository::new();
+        repo.expect_is_member().returning(|_, _| Ok(false));
+        let standing = Arc::clone(&joined);
+        repo.expect_get_member_standing().returning(move |_, _| {
+            Ok(standing
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then(|| MemberStanding::new(ServerMemberRole::Guest)))
+        });
+        repo.expect_join_direct_space()
+            .times(1)
+            .returning(move |_, _| {
+                joined.store(direct, std::sync::atomic::Ordering::SeqCst);
+                Ok(direct)
+            });
+        repo
+    }
+
+    #[tokio::test]
+    async fn the_gates_admit_a_first_use_of_the_direct_space_as_a_guest() {
+        ensure_server_member(&first_use_repo(true), ServerId::new(), UserId::new())
+            .await
+            .expect("admitted");
+        let standing = member_standing(&first_use_repo(true), ServerId::new(), UserId::new())
+            .await
+            .expect("admitted");
+        assert_eq!(standing.role, ServerMemberRole::Guest);
+    }
+
+    #[tokio::test]
+    async fn the_gates_deny_a_non_member_of_any_other_space() {
+        let err = ensure_server_member(&first_use_repo(false), ServerId::new(), UserId::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied));
+        let err = member_standing(&first_use_repo(false), ServerId::new(), UserId::new())
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
