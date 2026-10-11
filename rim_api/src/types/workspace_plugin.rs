@@ -1,12 +1,17 @@
 //! Workspace plugin registry types.
 
+use std::sync::Arc;
+
 use async_graphql::{Context, Enum, ID, InputObject, Object, Result, SimpleObject};
 use chrono::{DateTime, Utc};
 use rim_core::workspace_plugin::model::{
     PluginRuntimeKind as CoreRuntimeKind, PluginSource as CoreSource,
     WorkspacePluginStatus as CoreStatus,
 };
+use rim_services::Actor;
 use rim_services::key_auth::command::SignedPayload;
+use rim_services::server_member::command::ListServerMembersQuery;
+use rim_services::server_member::service::ServerMemberService;
 use rim_services::workspace_plugin::dto::{
     PluginSignatureStatus as DtoSignatureStatus, WorkspacePluginDto,
 };
@@ -208,12 +213,25 @@ impl WorkspacePlugin {
         self.0.signature_status.into()
     }
 
-    /// Who approved the entry last; null once that account is deleted.
+    /// Who approved the entry last; null once that account is deleted, and for a guest who
+    /// shares no conversation with them.
     async fn approved_by(&self, ctx: &Context<'_>) -> Result<Option<User>> {
-        match self.0.approved_by {
-            Some(id) => ctx.load_user(&ID(id.to_string())).await,
-            None => Ok(None),
+        let Some(id) = self.0.approved_by else {
+            return Ok(None);
+        };
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let members = ctx.data::<Arc<dyn ServerMemberService>>()?;
+        let visible = members
+            .visible_members(ListServerMembersQuery {
+                actor: Actor::new(actor),
+                server_id: self.0.server_id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        if visible.is_some_and(|ids| !ids.contains(&id)) {
+            return Ok(None);
         }
+        ctx.load_user(&ID(id.to_string())).await
     }
 
     async fn approved_at(&self) -> DateTime<Utc> {
