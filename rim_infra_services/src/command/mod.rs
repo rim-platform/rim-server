@@ -399,6 +399,8 @@ impl CommandService for DefaultCommandService {
             &mut std::collections::BTreeSet::new(),
         )
         .await?;
+        self.ensure_user_command_chain_within_depth(cmd.actor, key, &cmd.steps)
+            .await?;
 
         let created = self
             .repos
@@ -450,6 +452,8 @@ impl CommandService for DefaultCommandService {
             &mut std::collections::BTreeSet::new(),
         )
         .await?;
+        self.ensure_user_command_chain_within_depth(cmd.actor, key, &cmd.steps)
+            .await?;
 
         let updated = self
             .repos
