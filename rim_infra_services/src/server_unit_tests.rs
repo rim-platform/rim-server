@@ -51,14 +51,11 @@ mod tests {
         Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
     }
 
-    #[tokio::test]
-    async fn create_server_validates_name() {
-        let actor_id = UserId::new();
-        let (server_repo, server_member_repo) = (
-            MockServerRepository::new(),
-            MockServerMemberRepository::new(),
-        );
-        let svc = DefaultServerService::new(
+    fn service(
+        server_repo: MockServerRepository,
+        server_member_repo: MockServerMemberRepository,
+    ) -> DefaultServerService {
+        DefaultServerService::new(
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(server_member_repo),
@@ -67,7 +64,17 @@ mod tests {
             },
             None,
             noop_observers(),
+        )
+    }
+
+    #[tokio::test]
+    async fn create_server_validates_name() {
+        let actor_id = UserId::new();
+        let (server_repo, server_member_repo) = (
+            MockServerRepository::new(),
+            MockServerMemberRepository::new(),
         );
+        let svc = service(server_repo, server_member_repo);
 
         let err = svc
             .create_server(CreateServerCmd {
@@ -86,6 +93,10 @@ mod tests {
         let now = chrono::Utc::now();
 
         let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_find_owned_by_name()
+            .withf(move |owner, name| *owner == actor_id && name == "My server")
+            .returning(|_, _| Ok(None));
         server_repo.expect_create_server().returning(move |name| {
             Ok(Server {
                 id: server_id,
@@ -111,16 +122,7 @@ mod tests {
                 })
             });
 
-        let svc = DefaultServerService::new(
-            ServerRepos {
-                server_repo: Arc::new(server_repo),
-                server_member_repo: Arc::new(server_member_repo),
-                conversation_repo: Arc::new(mock_conversation_repo()),
-                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
-            },
-            None,
-            noop_observers(),
-        );
+        let svc = service(server_repo, server_member_repo);
 
         let dto = svc
             .create_server(CreateServerCmd {
@@ -130,6 +132,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dto.id, server_id);
+    }
+
+    #[tokio::test]
+    async fn create_server_refuses_a_name_the_actor_already_owns() {
+        let actor_id = UserId::new();
+        let now = chrono::Utc::now();
+
+        let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_find_owned_by_name()
+            .withf(move |owner, name| *owner == actor_id && name == "design")
+            .returning(move |_, _| {
+                Ok(Some(Server {
+                    id: ServerId::new(),
+                    name: "Design".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                }))
+            });
+        server_repo.expect_create_server().never();
+
+        let err = service(server_repo, MockServerMemberRepository::new())
+            .create_server(CreateServerCmd {
+                actor: Actor::new(actor_id),
+                name: "  design ".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Conflict(msg) if msg == "you already own a workspace named \"Design\""),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
@@ -145,16 +179,7 @@ mod tests {
         let mut server_repo = MockServerRepository::new();
         server_repo.expect_get_by_id().never();
 
-        let svc = DefaultServerService::new(
-            ServerRepos {
-                server_repo: Arc::new(server_repo),
-                server_member_repo: Arc::new(server_member_repo),
-                conversation_repo: Arc::new(mock_conversation_repo()),
-                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
-            },
-            None,
-            noop_observers(),
-        );
+        let svc = service(server_repo, server_member_repo);
 
         let err = svc
             .get_server(GetServerQuery {
@@ -190,16 +215,7 @@ mod tests {
 
         let server_member_repo = MockServerMemberRepository::new();
 
-        let svc = DefaultServerService::new(
-            ServerRepos {
-                server_repo: Arc::new(server_repo),
-                server_member_repo: Arc::new(server_member_repo),
-                conversation_repo: Arc::new(mock_conversation_repo()),
-                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
-            },
-            None,
-            noop_observers(),
-        );
+        let svc = service(server_repo, server_member_repo);
 
         let list = svc
             .list_my_servers(ListMyServersQuery {

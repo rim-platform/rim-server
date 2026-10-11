@@ -1470,6 +1470,47 @@ async fn create_server_refuses_a_blank_or_overlong_name() {
     assert_eq!(mine["myServers"].as_array().expect("servers").len(), 2);
 }
 
+/// One person may not own two workspaces with the same name; anyone else may reuse it, a mere
+/// member of the first included.
+#[tokio::test]
+async fn create_server_refuses_a_name_the_caller_already_owns() {
+    let f = setup().await;
+    let create = |who: &Caller, name: &str| who.request(CREATE_SERVER, json!({ "name": name }));
+    let sorted = |mut ids: Vec<Value>| {
+        ids.sort_by_key(Value::to_string);
+        ids
+    };
+    let mine = async |who: &Caller| {
+        let data = exec_ok(&f.schema, who.request(MY_SERVERS, json!({}))).await;
+        let servers = data["myServers"].as_array().expect("servers").clone();
+        sorted(servers.into_iter().map(|s| s["id"].clone()).collect())
+    };
+
+    let design = exec_ok(&f.schema, create(&f.alice, "Design")).await["server"]["id"].clone();
+    for name in ["Design", "  design "] {
+        let (code, message) = exec_err(&f.schema, create(&f.alice, name)).await;
+        assert_eq!(
+            (code.as_str(), message.as_str()),
+            ("CONFLICT", r#"you already own a workspace named "Design""#),
+            "{name:?}"
+        );
+    }
+
+    let design_id = design.as_str().expect("server id");
+    f.ctx
+        .join(design_id, &f.bob, ServerMemberRole::Member)
+        .await;
+    let bobs = exec_ok(&f.schema, create(&f.bob, "Design")).await["server"]["id"].clone();
+    assert_ne!(bobs, design);
+
+    let home = json!(f.server_id);
+    assert_eq!(
+        mine(&f.alice).await,
+        sorted(vec![home.clone(), design.clone()])
+    );
+    assert_eq!(mine(&f.bob).await, sorted(vec![home, design, bobs]));
+}
+
 // ── User commands and command discovery ───────────────────────────────────────────────────────
 
 const CREATE_USER_COMMAND: &str = r#"

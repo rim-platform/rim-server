@@ -55,3 +55,45 @@ async fn get_servers_for_user_returns_joined_servers() {
     assert_eq!(servers[0].id, s1.id);
     assert_eq!(servers[1].id, s2.id);
 }
+
+#[tokio::test]
+async fn find_owned_by_name_matches_the_owner_ignoring_case_and_spaces() {
+    let ctx = support::TestCtx::new().await;
+
+    let server_repo = SeaOrmServerRepository::new(ctx.db.clone());
+    let member_repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
+
+    let owner = ctx.create_user("owner").await;
+    let member = ctx.create_user("member").await;
+    let design = server_repo.create_server("Design").await.unwrap();
+    member_repo
+        .add_member(design.id, owner.id, ServerMemberRole::Owner)
+        .await
+        .unwrap();
+    member_repo
+        .add_member(design.id, member.id, ServerMemberRole::Moderator)
+        .await
+        .unwrap();
+
+    let found = server_repo
+        .find_owned_by_name(owner.id, "  dESIGN ")
+        .await
+        .unwrap()
+        .expect("the owner's workspace");
+    assert_eq!((found.id, found.name.as_str()), (design.id, "Design"));
+
+    assert!(
+        server_repo
+            .find_owned_by_name(owner.id, "Design team")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        server_repo
+            .find_owned_by_name(member.id, "Design")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

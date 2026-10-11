@@ -13,4 +13,7 @@ pub trait ServerRepository: Send + Sync {
     async fn create_server(&self, name: &str) -> RepoResult<Server>;
 
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>>;
+
+    /// The workspace `owner` owns whose trimmed name equals `name` ignoring case.
+    async fn find_owned_by_name(&self, owner: UserId, name: &str) -> RepoResult<Option<Server>>;
 }
