@@ -22,24 +22,24 @@ use rim_api::auth_context::RemoteIp;
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 use rim_auth::session_token::hash_token;
 use rim_core::auth::repository::SessionRepository;
-use rim_core::user::model::User;
 use rim_identity::device_link::{
     Answer, LinkCode, LinkId, LinkSecret, Offer, Platform, SealedMessage,
 };
-use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
-use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
+use rim_identity::testing::signing_key;
+use rim_identity::{KeyState, PublicKey, SignedStatement};
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_services::auth::dto::RegistrationMode;
 use sea_orm::ConnectionTrait;
 
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
-use support::{KEY_LOGIN_AUDIENCE, TestCtx};
+use support::TestCtx;
+use support::graphql::{
+    Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
+    exec_ok,
+};
+use support::identity::{signed_login, statement};
 
 const ENDPOINT: &str = "http://localhost:8080/api";
 
-const ENROLL: &str = r#"
-mutation Enroll($input: EnrollIdentityKeyInput!) { enrollIdentityKey(input: $input) { principalId } }"#;
-const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 const LOGIN_WITH_KEY: &str = r#"
 mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId } }"#;
 const ADD_DEVICE: &str = r#"
@@ -65,10 +65,6 @@ const COMPLETE: &str = r#"
 mutation Complete($linkId: String!) { completeDeviceLink(linkId: $linkId) }"#;
 const CANCEL: &str = r#"
 mutation Cancel($linkId: String!) { cancelDeviceLink(linkId: $linkId) }"#;
-
-fn statement(s: &SignedStatement) -> Value {
-    json!({ "payload": s.payload, "signature": s.signature })
-}
 
 fn sealed_json(sealed: &SealedMessage) -> Value {
     json!({ "nonce": sealed.nonce_text(), "ciphertext": sealed.ciphertext_text() })
@@ -102,70 +98,6 @@ async fn error_body(schema: &AppSchema, request: Request) -> Value {
     serde_json::to_value(&res.errors).expect("errors serialize")
 }
 
-/// An account with a key identity (version 2) and its first device, as the old device holds it.
-struct OldDevice {
-    user: User,
-    caller: Caller,
-    identity: TestIdentity,
-    state: KeyState,
-}
-
-async fn enrolled(ctx: &TestCtx, schema: &AppSchema, username: &str, seed: u8) -> OldDevice {
-    let user = ctx.create_user(username).await;
-    let caller = Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(&user).await,
-    };
-    let identity = TestIdentity::with_version(seed, StatementVersion::V2);
-    let inception = identity.inception();
-    let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
-    let device = signing_key(seed.wrapping_add(50));
-    let cert = identity.device_cert(&state, device_id, &device, "Desktop");
-    let proof = signed_login(schema, &device, &state, device_id).await;
-    exec_ok(
-        schema,
-        caller.request(
-            ENROLL,
-            json!({ "input": {
-                "keyLog": [statement(&inception)],
-                "device": statement(&cert),
-                "proof": statement(&proof),
-            } }),
-        ),
-    )
-    .await;
-    OldDevice {
-        user,
-        caller,
-        identity,
-        state,
-    }
-}
-
-/// A login proof by `device` over a fresh challenge.
-async fn signed_login(
-    schema: &AppSchema,
-    device: &SigningKey,
-    state: &KeyState,
-    device_id: Uuid,
-) -> SignedStatement {
-    let data = exec_ok(schema, anonymous(CHALLENGE, json!({}), "192.0.2.1")).await;
-    let challenge = &data["keyLoginChallenge"];
-    device_login(
-        device,
-        state,
-        device_id,
-        challenge["challengeId"]
-            .as_str()
-            .expect("challengeId")
-            .parse()
-            .expect("uuid"),
-        challenge["nonce"].as_str().expect("nonce"),
-        KEY_LOGIN_AUDIENCE,
-    )
-}
-
 async fn start(schema: &AppSchema, caller: &Caller) -> String {
     let data = exec_ok(schema, caller.request(START, json!({}))).await;
     data["startDeviceLink"]["linkId"]
@@ -182,7 +114,7 @@ async fn start(schema: &AppSchema, caller: &Caller) -> String {
 async fn a_new_device_links_signs_in_and_completes() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let old = enrolled(&ctx, &schema, "ada", 1).await;
+    let old = ctx.enrolled(&schema, "ada", 1).await;
 
     // Old device: start the link and show the code.
     let data = exec_ok(&schema, old.caller.request(START, json!({}))).await;
@@ -222,8 +154,15 @@ async fn a_new_device_links_signs_in_and_completes() {
     };
     let data = exec_ok(&schema, send_offer()).await;
     assert_eq!(data["sendDeviceLinkOffer"], json!(true));
-    // A retry with the same bytes (its answer was lost) succeeds.
+    // A retry with the same bytes (its answer was lost) succeeds; other bytes are refused like
+    // any anonymous call.
     exec_ok(&schema, send_offer()).await;
+    let other_offer = anonymous(
+        SEND_OFFER,
+        json!({ "linkId": link_id, "offer": raw_sealed(&[9; 12], &[9; 64]) }),
+        "198.51.100.20",
+    );
+    assert_eq!(exec_err_code(&schema, other_offer).await, "UNAUTHENTICATED");
     // Nothing to fetch yet.
     let poll = || {
         anonymous(
@@ -269,15 +208,22 @@ async fn a_new_device_links_signs_in_and_completes() {
     let sealed_answer = old_channel
         .seal_answer(&Answer { certificate })
         .expect("seal answer");
-    let data = exec_ok(
-        &schema,
-        old.caller.request(
-            SEND_ANSWER,
-            json!({ "linkId": link_id, "answer": sealed_json(&sealed_answer) }),
-        ),
-    )
-    .await;
+    let send_answer = |answer: Value| {
+        old.caller
+            .request(SEND_ANSWER, json!({ "linkId": link_id, "answer": answer }))
+    };
+    let data = exec_ok(&schema, send_answer(sealed_json(&sealed_answer))).await;
     assert_eq!(data["sendDeviceLinkAnswer"]["state"], json!("ANSWERED"));
+    // The same bytes again succeed without moving the expiry; other bytes conflict.
+    let again = exec_ok(&schema, send_answer(sealed_json(&sealed_answer))).await;
+    assert_eq!(
+        again["sendDeviceLinkAnswer"]["expiresAt"],
+        data["sendDeviceLinkAnswer"]["expiresAt"]
+    );
+    assert_eq!(
+        exec_err_code(&schema, send_answer(raw_sealed(&[9; 12], &[9; 64]))).await,
+        "CONFLICT"
+    );
 
     // New device: fetch the answer, verify the certificate against the served key log.
     let data = exec_ok(&schema, poll()).await;
@@ -369,7 +315,16 @@ async fn a_new_device_links_signs_in_and_completes() {
         .expect("linked device");
     assert!(linked["lastUsedAt"].is_string());
 
-    // The link id no longer works for anyone without a session.
+    // The link's user cannot cancel it any more; the link id no longer works for anyone without
+    // a session.
+    assert_eq!(
+        exec_err_code(
+            &schema,
+            old.caller.request(CANCEL, json!({ "linkId": link_id }))
+        )
+        .await,
+        "CONFLICT"
+    );
     assert_eq!(exec_err_code(&schema, poll()).await, "UNAUTHENTICATED");
 }
 
@@ -382,7 +337,7 @@ type AnonymousCall = (&'static str, fn(&str) -> Value, &'static str);
 async fn anonymous_refusals_are_identical_for_every_reason() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
 
     let unknown = URL_SAFE_NO_PAD.encode([0xab; 16]);
     let malformed = "AAECAwQFBgcICQoLDA0ODw==".to_string();
@@ -458,8 +413,36 @@ async fn anonymous_refusals_are_identical_for_every_reason() {
         );
     }
 
+    // The link's user reads the expired link as `EXPIRED`, may cancel it, which keeps it so,
+    // and can no longer answer or complete it.
+    let expired_state = || {
+        ada.caller
+            .request(DEVICE_LINK, json!({ "linkId": expired }))
+    };
+    assert_eq!(
+        exec_ok(&schema, expired_state()).await["deviceLink"]["state"],
+        json!("EXPIRED")
+    );
+    let cancel = ada.caller.request(CANCEL, json!({ "linkId": expired }));
+    assert_eq!(
+        exec_ok(&schema, cancel).await["cancelDeviceLink"],
+        json!(true)
+    );
+    assert_eq!(
+        exec_ok(&schema, expired_state()).await["deviceLink"]["state"],
+        json!("EXPIRED")
+    );
+    let late: Vec<Call> = vec![
+        (
+            SEND_ANSWER,
+            json!({ "linkId": expired, "answer": raw_sealed(&[2; 12], &[2; 64]) }),
+        ),
+        (COMPLETE, json!({ "linkId": expired })),
+    ];
+    assert_each_refused_as(&schema, &ada.caller, &late, "CONFLICT").await;
+
     // A session of another account is just another holder of the link id.
-    let bob = enrolled(&ctx, &schema, "bob", 2).await;
+    let bob = ctx.enrolled(&schema, "bob", 2).await;
     assert_eq!(
         exec_err_code(
             &schema,
@@ -474,8 +457,8 @@ async fn anonymous_refusals_are_identical_for_every_reason() {
 async fn session_calls_on_another_users_link_are_not_found() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
-    let bob = enrolled(&ctx, &schema, "bob", 2).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let bob = ctx.enrolled(&schema, "bob", 2).await;
     let link_id = start(&schema, &ada.caller).await;
     exec_ok(
         &schema,
@@ -487,47 +470,45 @@ async fn session_calls_on_another_users_link_are_not_found() {
     )
     .await;
 
-    for request in [
-        bob.caller
-            .request(DEVICE_LINK, json!({ "linkId": link_id })),
-        bob.caller.request(
-            SEND_ANSWER,
-            json!({ "linkId": link_id, "answer": raw_sealed(&[2; 12], &[2; 64]) }),
-        ),
-        bob.caller.request(COMPLETE, json!({ "linkId": link_id })),
-        ada.caller.request(
-            DEVICE_LINK,
-            json!({ "linkId": URL_SAFE_NO_PAD.encode([0xcd; 16]) }),
-        ),
-        ada.caller
-            .request(DEVICE_LINK, json!({ "linkId": "not-a-link-id" })),
-    ] {
-        assert_eq!(exec_err_code(&schema, request).await, "NOT_FOUND");
+    // Another account's session, an unknown and a malformed link id: `NOT_FOUND`, and the link
+    // is untouched.
+    let session_calls = |link_id: &str| -> Vec<Call> {
+        vec![
+            (DEVICE_LINK, json!({ "linkId": link_id })),
+            (
+                SEND_ANSWER,
+                json!({ "linkId": link_id, "answer": raw_sealed(&[2; 12], &[2; 64]) }),
+            ),
+            (COMPLETE, json!({ "linkId": link_id })),
+        ]
+    };
+    assert_each_refused_as(&schema, &bob.caller, &session_calls(&link_id), "NOT_FOUND").await;
+    let unknown = URL_SAFE_NO_PAD.encode([0xcd; 16]);
+    for other in [unknown.as_str(), "not-a-link-id"] {
+        assert_each_refused_as(&schema, &ada.caller, &session_calls(other), "NOT_FOUND").await;
     }
+    let data = exec_ok(
+        &schema,
+        ada.caller
+            .request(DEVICE_LINK, json!({ "linkId": link_id })),
+    )
+    .await;
+    assert_eq!(data["deviceLink"]["state"], json!("OFFERED"));
 
     // Without a session, the session calls are unauthenticated.
-    for (query, variables) in [
-        (START, json!({})),
-        (DEVICE_LINK, json!({ "linkId": link_id })),
-        (COMPLETE, json!({ "linkId": link_id })),
-        (
-            SEND_ANSWER,
-            json!({ "linkId": link_id, "answer": raw_sealed(&[2; 12], &[2; 64]) }),
-        ),
-    ] {
-        assert_eq!(
-            exec_err_code(&schema, anonymous(query, variables, "203.0.113.9")).await,
-            "UNAUTHENTICATED",
-            "{query}"
-        );
-    }
+    let mut signed_out = session_calls(&link_id);
+    signed_out.push((START, json!({})));
+    assert_each_refused(&schema, &signed_out, "UNAUTHENTICATED", |q, v| {
+        anonymous(q, v, "203.0.113.9")
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn an_answer_before_the_offer_is_a_conflict() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
     assert_eq!(
         exec_err_code(
@@ -562,7 +543,7 @@ async fn an_answer_before_the_offer_is_a_conflict() {
 async fn random_sealed_bytes_are_stored_and_returned_byte_exact() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
 
     let random = |len: usize| -> Vec<u8> {
@@ -611,7 +592,7 @@ async fn random_sealed_bytes_are_stored_and_returned_byte_exact() {
 async fn malformed_or_oversized_sealed_messages_are_validation_errors() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
 
     let padded_nonce = json!({
@@ -680,11 +661,7 @@ async fn malformed_or_oversized_sealed_messages_are_validation_errors() {
 async fn start_needs_a_key_identity() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let grace = ctx.create_user("grace").await;
-    let caller = Caller {
-        user_id: grace.id,
-        session_id: ctx.create_session(&grace).await,
-    };
+    let caller = ctx.outsider("grace").await;
     let res = schema.execute(caller.request(START, json!({}))).await;
     let err = res.errors.first().expect("error");
     assert_eq!(err.message, "this account has no key identity yet");
@@ -700,7 +677,7 @@ async fn start_needs_a_key_identity() {
 async fn the_links_user_cancels_and_a_second_start_replaces_the_first() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = enrolled(&ctx, &schema, "ada", 1).await;
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
 
     let first = start(&schema, &ada.caller).await;
     let second = start(&schema, &ada.caller).await;

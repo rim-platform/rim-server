@@ -10,6 +10,8 @@
 /// `rim_infra_db/tests/support/mod.rs`).
 #[allow(dead_code)] // Not every test binary that includes `support` uses the GraphQL helpers.
 pub mod graphql;
+#[allow(dead_code)] // Only the key identity, device link and encryption suites enroll keys.
+pub mod identity;
 #[allow(dead_code)] // Only the encryption tests use the MLS client.
 pub mod mls;
 #[allow(dead_code)] // Only the server-to-server tests start servers.
@@ -247,7 +249,8 @@ impl TestCtx {
             .expect("add_member failed");
     }
 
-    /// Create a live (unexpired, unrevoked) session row for `user` and return its id.
+    /// Create a live (unexpired, unrevoked) session row for `user` and return its id; each call
+    /// makes another session.
     ///
     /// Pair with [`graphql::Caller`] to execute GraphQL as that user: the HTTP layer would
     /// resolve the session cookie to exactly this `(user_id, session_id)` pair.
@@ -255,7 +258,7 @@ impl TestCtx {
         let repo = SeaOrmSessionRepository::new(self.db.clone());
         repo.create_session(NewSession {
             user_id: user.id,
-            token_hash: format!("e2e-session-{}", user.id),
+            token_hash: format!("e2e-session-{}", uuid::Uuid::now_v7()),
             expires_at: chrono::Utc::now() + chrono::Duration::days(1),
             user_agent: None,
             ip: None,

@@ -19,7 +19,7 @@ use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::{NewUser, UserId};
 use rim_core::user::repository::UserRepository;
-use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
+use rim_identity::testing::{TestIdentity, device_login, device_self_revoke, signing_key};
 use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
@@ -27,7 +27,11 @@ use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{
+    Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
+    exec_ok, merged,
+};
+use support::identity::{Enrolled, signed_login, signed_out, statement, tampered};
 use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
@@ -64,10 +68,6 @@ mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { us
 
 const PASSWORD_LOGIN: &str = r#"
 mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
-
-fn statement(s: &SignedStatement) -> Value {
-    json!({ "payload": s.payload, "signature": s.signature })
-}
 
 fn password_login(username: &str) -> Request {
     anonymous_request(
@@ -145,6 +145,17 @@ async fn enroll_login_revoke(version: StatementVersion) {
         ),
     )
     .await;
+    // Another account replaying the enrollment is refused: its challenge is spent.
+    let eve = ctx.outsider("eve").await;
+    let replay = eve.request(
+        ENROLL,
+        json!({ "input": {
+            "keyLog": [statement(&inception)],
+            "device": statement(&cert),
+            "proof": statement(&proof),
+        } }),
+    );
+    assert_eq!(exec_err_code(&schema, replay).await, "VALIDATION");
     let enrolled = &data["enrollIdentityKey"];
     assert_eq!(enrolled["principalId"], json!(state.principal_id));
     assert_eq!(enrolled["keySeq"], json!(0));
@@ -185,12 +196,14 @@ async fn enroll_login_revoke(version: StatementVersion) {
         data["keyLog"][0]["statement"]["payload"],
         json!(inception.payload)
     );
-    let data = exec_ok(
-        &schema,
-        anonymous_request(KEY_LOG, json!({ "principalId": "rimp1_nobody" })),
-    )
-    .await;
-    assert_eq!(data["keyLog"], json!([]));
+    for nobody in ["rimp1_nobody".to_string(), "x".repeat(65)] {
+        let data = exec_ok(
+            &schema,
+            anonymous_request(KEY_LOG, json!({ "principalId": nobody })),
+        )
+        .await;
+        assert_eq!(data["keyLog"], json!([]));
+    }
 
     // Challenge login.
     let login = |challenge: &Value| {
@@ -247,48 +260,213 @@ async fn enroll_login_revoke(version: StatementVersion) {
     );
 }
 
-/// `myKeyIdentity` is empty for an account without a key, and needs a session.
+/// `myKeyIdentity` is empty for an account without a key.
 #[tokio::test]
 async fn my_key_identity_before_enrollment() {
     let ctx = TestCtx::new().await;
-    let user = ctx.create_user("grace").await;
-    let caller = Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(&user).await,
-    };
+    let caller = ctx.outsider("grace").await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
 
     let data = exec_ok(&schema, caller.request(MY_KEY_IDENTITY, json!({}))).await;
     assert_eq!(data["myKeyIdentity"]["principalId"], Value::Null);
     assert_eq!(data["myKeyIdentity"]["devices"], json!([]));
-
-    assert_eq!(
-        exec_err_code(&schema, anonymous_request(MY_KEY_IDENTITY, json!({}))).await,
-        "UNAUTHENTICATED"
-    );
 }
 
-/// A device's signed proof over a fresh challenge from `schema`.
-async fn fresh_proof(
-    schema: &rim_api::AppSchema,
-    device: &SigningKey,
-    state: &KeyState,
-    device_id: Uuid,
-) -> SignedStatement {
-    let challenge = exec_ok(schema, anonymous_request(CHALLENGE, json!({}))).await;
-    let challenge = &challenge["keyLoginChallenge"];
-    device_login(
-        device,
-        state,
-        device_id,
-        challenge["challengeId"]
-            .as_str()
-            .expect("challengeId")
-            .parse()
-            .expect("uuid"),
-        challenge["nonce"].as_str().expect("nonce"),
-        KEY_LOGIN_AUDIENCE,
+const ROTATE: &str = r#"
+mutation Rotate($input: RotateIdentityKeyInput!) {
+  rotateIdentityKey(input: $input) { keySeq devices { deviceId revokedAt } }
+}"#;
+
+/// The roots that apply a statement to the caller's identity, each taking it as `$s`.
+const SIGNED_ROOTS: [&str; 4] = [
+    "mutation($s: SignedStatementInput!) { addDeviceKey(certificate: $s) { deviceId } }",
+    "mutation($s: SignedStatementInput!) { publishProfileCard(card: $s) { version } }",
+    "mutation($s: SignedStatementInput!) { rotateIdentityKey(input: { entry: $s }) { keySeq } }",
+    "mutation($s: SignedStatementInput!) { revokeDeviceKey(revocation: $s) { revokedAt } }",
+];
+
+/// `who`'s statements for [`SIGNED_ROOTS`], in an order that applies: a certificate for a new
+/// device, a profile card, an identity rotation and the first device retiring itself.
+fn signed_by(who: &mut Enrolled) -> Vec<SignedStatement> {
+    vec![
+        who.identity
+            .device_cert(&who.state, Uuid::now_v7(), &signing_key(200), "Phone"),
+        who.identity
+            .profile_card(&who.state, 1, "Ada", &[], &[(who.device_id, &who.device)]),
+        who.identity.rotate_with_identity(&who.state, 201),
+        device_self_revoke(&who.device, &who.state, who.device_id),
+    ]
+}
+
+/// [`SIGNED_ROOTS`], each sent with `statements` changed by `change`.
+fn signed_calls(
+    statements: &[SignedStatement],
+    change: impl Fn(&SignedStatement) -> SignedStatement,
+) -> Vec<Call> {
+    SIGNED_ROOTS
+        .iter()
+        .zip(statements)
+        .map(|(query, s)| (*query, json!({ "s": statement(&change(s)) })))
+        .collect()
+}
+
+/// Without a session every root on the caller's identity is refused, a rotation by the
+/// identity key and one for a principal nobody here holds included. A statement whose signature
+/// does not verify or whose payload is not a statement is `VALIDATION`. Another account
+/// presenting someone's valid statements changes nothing of theirs. Applied once, the
+/// statements do not apply again: the certificate, card and rotation name a head that moved.
+#[tokio::test]
+async fn signed_statements_apply_only_to_their_own_account_and_once() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let mut ada = ctx.enrolled(&schema, "ada", 6).await;
+    let bob = ctx.enrolled(&schema, "bob", 7).await;
+    let signed = signed_by(&mut ada);
+    let valid = signed_calls(&signed, Clone::clone);
+
+    let mut nobody = TestIdentity::with_version(8, StatementVersion::V2);
+    let nobody_state = KeyState::from_inception(&nobody.inception()).expect("inception");
+    // An enrollment of `inception` whose certificate and proof do not verify.
+    let enroll = |inception: &SignedStatement| {
+        let junk = statement(&tampered(inception));
+        (
+            ENROLL,
+            json!({ "input": { "keyLog": [statement(inception)], "device": junk, "proof": junk } }),
+        )
+    };
+    let mut anonymous = valid.clone();
+    anonymous.extend([
+        (MY_KEY_IDENTITY, json!({})),
+        enroll(&ada.identity.inception()),
+        (
+            ROTATE,
+            json!({ "input": { "entry": statement(&nobody.recover(&nobody_state, 9)) } }),
+        ),
+    ]);
+    assert_each_refused(&schema, &anonymous, "UNAUTHENTICATED", signed_out).await;
+
+    let mut bad = signed_calls(&signed, tampered);
+    bad.extend(signed_calls(&signed, |s| SignedStatement {
+        payload: "{}".to_string(),
+        signature: s.signature.clone(),
+    }));
+    bad.push(enroll(&tampered(
+        &TestIdentity::with_version(10, StatementVersion::V2).inception(),
+    )));
+    assert_each_refused_as(&schema, &ada.caller, &bad, "VALIDATION").await;
+
+    for ((query, variables), code) in
+        valid
+            .iter()
+            .cloned()
+            .zip(["VALIDATION", "VALIDATION", "FORBIDDEN", "NOT_FOUND"])
+    {
+        let got = exec_err_code(&schema, bob.caller.request(query, variables)).await;
+        assert_eq!(got, code, "{query}");
+    }
+    let mine = exec_ok(&schema, ada.caller.request(MY_KEY_IDENTITY, json!({}))).await;
+    assert_eq!(mine["myKeyIdentity"]["keySeq"], json!(0));
+    assert_eq!(
+        mine["myKeyIdentity"]["devices"],
+        json!([{ "deviceId": ada.device_id.to_string(), "revokedAt": null }])
+    );
+
+    for call in &valid {
+        exec_ok(&schema, ada.caller.call(call.clone())).await;
+    }
+    assert_each_refused_as(&schema, &ada.caller, &valid[..3], "VALIDATION").await;
+    let revoked_again = exec_ok(&schema, ada.caller.call(valid[3].clone())).await;
+    assert!(revoked_again["revokeDeviceKey"]["revokedAt"].is_string());
+}
+
+/// An identity rotation keeps the devices. A card is stored once per version. A recovery
+/// rotation needs no session and a device under the new key: it revokes every device, ends
+/// every session and enrolls the new device, which signs in at once. A recovery whose device
+/// reuses a revoked device's id changes nothing.
+#[tokio::test]
+async fn rotation_keeps_devices_and_recovery_replaces_them() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let mut ada = ctx.enrolled(&schema, "ada", 11).await;
+
+    let rotation = ada.identity.rotate_with_identity(&ada.state, 212);
+    let data = exec_ok(
+        &schema,
+        ada.caller.request(
+            ROTATE,
+            json!({ "input": { "entry": statement(&rotation) } }),
+        ),
     )
+    .await;
+    assert_eq!(
+        data["rotateIdentityKey"],
+        json!({ "keySeq": 1, "devices": [{ "deviceId": ada.device_id.to_string(), "revokedAt": null }] })
+    );
+    ada.state = ada.state.apply(&rotation).expect("rotation").0;
+
+    let card = ada.identity.profile_card(&ada.state, 1, "Ada", &[], &[]);
+    let publish = || {
+        ada.caller
+            .request(SIGNED_ROOTS[1], json!({ "s": statement(&card) }))
+    };
+    exec_ok(&schema, publish()).await;
+    assert_eq!(exec_err_code(&schema, publish()).await, "CONFLICT");
+
+    let recovery = ada.identity.recover(&ada.state, 213);
+    let recovered = ada.state.apply(&recovery).expect("recovery").0;
+    let recover = |device: Option<SignedStatement>| {
+        signed_out(
+            ROTATE,
+            json!({ "input": { "entry": statement(&recovery), "device": device.as_ref().map(statement) } }),
+        )
+    };
+    assert_eq!(exec_err_code(&schema, recover(None)).await, "VALIDATION");
+    let reused = ada
+        .identity
+        .device_cert(&recovered, ada.device_id, &signing_key(214), "Phone");
+    assert_eq!(
+        exec_err_code(&schema, recover(Some(reused))).await,
+        "CONFLICT"
+    );
+    let mine = exec_ok(&schema, ada.caller.request(MY_KEY_IDENTITY, json!({}))).await;
+    assert_eq!(mine["myKeyIdentity"]["keySeq"], json!(1));
+
+    let phone_id = Uuid::now_v7();
+    let phone = signing_key(215);
+    let cert = ada
+        .identity
+        .device_cert(&recovered, phone_id, &phone, "Phone");
+    let data = exec_ok(&schema, recover(Some(cert))).await;
+    let devices = &data["rotateIdentityKey"]["devices"];
+    assert_eq!(data["rotateIdentityKey"]["keySeq"], json!(2));
+    assert!(devices[0]["revokedAt"].is_string());
+    assert_eq!(
+        devices[1],
+        json!({ "deviceId": phone_id.to_string(), "revokedAt": null })
+    );
+    let session = SeaOrmSessionRepository::new(ctx.db.clone())
+        .get_by_id(ada.caller.session_id)
+        .await
+        .expect("get session")
+        .expect("session");
+    assert!(session.revoked_at.is_some());
+
+    let login =
+        |proof: &SignedStatement| signed_out(LOGIN_WITH_KEY, json!({ "proof": statement(proof) }));
+    let proof = signed_login(&schema, &phone, &recovered, phone_id).await;
+    let data = exec_ok(&schema, login(&proof)).await;
+    assert_eq!(
+        data["loginWithKey"]["userId"],
+        json!(ada.user.id.to_string())
+    );
+    let proof = signed_login(&schema, &ada.device, &recovered, ada.device_id).await;
+    assert_eq!(exec_err_code(&schema, login(&proof)).await, "FORBIDDEN");
+}
+
+/// `signupWithKey` with `input`, from a fixed address.
+fn signup(input: &Value) -> Request {
+    anonymous_request(SIGNUP_WITH_KEY, json!({ "input": input }))
+        .data(RemoteIp::new("198.51.100.7"))
 }
 
 /// `signupWithKey` for `username`, with a new device of `id` and a fresh proof; `extra` adds
@@ -300,12 +478,23 @@ async fn signup_request(
     device_seed: u8,
     extra: Value,
 ) -> Request {
+    signup(&signup_input(schema, username, id, device_seed, extra).await)
+}
+
+/// The input of [`signup_request`].
+async fn signup_input(
+    schema: &rim_api::AppSchema,
+    username: &str,
+    id: &TestIdentity,
+    device_seed: u8,
+    extra: Value,
+) -> Value {
     let inception = id.inception();
     let state = KeyState::from_inception(&inception).expect("inception");
     let device_id = Uuid::now_v7();
     let device = signing_key(device_seed);
     let cert = id.device_cert(&state, device_id, &device, "Laptop");
-    let proof = fresh_proof(schema, &device, &state, device_id).await;
+    let proof = signed_login(schema, &device, &state, device_id).await;
     let mut input = json!({
         "username": username,
         "keyLog": [statement(&inception)],
@@ -315,8 +504,7 @@ async fn signup_request(
     if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
         input.extend(extra.clone());
     }
-    anonymous_request(SIGNUP_WITH_KEY, json!({ "input": input }))
-        .data(RemoteIp::new("198.51.100.7"))
+    input
 }
 
 /// Open mode: an account is created from a version 2 key identity alone. It signs in with its
@@ -332,7 +520,7 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
     let device_id = Uuid::now_v7();
     let device = signing_key(23);
     let cert = id.device_cert(&state, device_id, &device, "Laptop");
-    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    let proof = signed_login(&schema, &device, &state, device_id).await;
     let data = exec_ok(
         &schema,
         anonymous_request(
@@ -370,7 +558,7 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
     );
 
     // The device signs in with a new challenge.
-    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    let proof = signed_login(&schema, &device, &state, device_id).await;
     let data = exec_ok(
         &schema,
         anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(&proof) }))
@@ -448,62 +636,41 @@ async fn invite_only_signup_with_key_and_operator_invite() {
     );
 }
 
-/// A second account may not take a principal id another account here holds.
+/// A second account may not take a principal id another account here holds, and a signup's
+/// proof does not sign up twice.
 #[tokio::test]
 async fn second_signup_with_the_same_principal_is_a_conflict() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::Open).await;
     let id = TestIdentity::with_version(5, StatementVersion::V2);
 
-    let request = signup_request(&schema, "first", &id, 25, json!({})).await;
-    exec_ok(&schema, request).await;
+    let first = signup_input(&schema, "first", &id, 25, json!({})).await;
+    exec_ok(&schema, signup(&first)).await;
     // The same identity, from another device, under another username.
     let request = signup_request(&schema, "second", &id, 26, json!({})).await;
     assert_eq!(exec_err_code(&schema, request).await, "CONFLICT");
+    // The first signup again, under another username: its challenge is spent.
+    let replay = merged(first, json!({ "username": "third" }));
+    assert_eq!(exec_err_code(&schema, signup(&replay)).await, "VALIDATION");
 }
 
 /// A revoked device's proof answers `FORBIDDEN` only when its challenge and audience are
-/// right; a proof for another server, over an unknown challenge or replayed answers
+/// right; a proof for another server, over an unknown challenge, with a signature that does not
+/// verify, a payload that is not a proof, from an unknown device or replayed answers
 /// `UNAUTHENTICATED` like any other refusal.
 #[tokio::test]
 async fn finding_14_revocation_is_disclosed_only_to_a_proof_that_would_pass() {
     let ctx = TestCtx::new().await;
-    let user = ctx.create_user("lin").await;
-    let caller = Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(&user).await,
-    };
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let id = TestIdentity::with_version(4, StatementVersion::V2);
-    let inception = id.inception();
-    let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
-    let device = signing_key(24);
-    let cert = id.device_cert(&state, device_id, &device, "Laptop");
-    let proof = fresh_proof(&schema, &device, &state, device_id).await;
+    let lin = ctx.enrolled(&schema, "lin", 4).await;
+    let revocation = lin.identity.revoke_device(&lin.state, lin.device_id);
     exec_ok(
         &schema,
-        caller.request(
-            ENROLL,
-            json!({ "input": {
-                "keyLog": [statement(&inception)],
-                "device": statement(&cert),
-                "proof": statement(&proof),
-            } }),
-        ),
-    )
-    .await;
-    let revocation = id.revoke_device(&state, device_id);
-    exec_ok(
-        &schema,
-        caller.request(REVOKE, json!({ "revocation": statement(&revocation) })),
+        lin.caller
+            .request(REVOKE, json!({ "revocation": statement(&revocation) })),
     )
     .await;
 
-    let login = |proof: &SignedStatement| {
-        anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(proof) }))
-            .data(RemoteIp::new("198.51.100.4"))
-    };
     let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
     let challenge = &challenge["keyLoginChallenge"];
     let challenge_id: Uuid = challenge["challengeId"]
@@ -512,42 +679,40 @@ async fn finding_14_revocation_is_disclosed_only_to_a_proof_that_would_pass() {
         .parse()
         .expect("uuid");
     let nonce = challenge["nonce"].as_str().expect("nonce");
-
-    let other_server = device_login(
-        &device,
-        &state,
-        device_id,
-        challenge_id,
-        nonce,
-        "evil.example.com",
-    );
-    assert_eq!(
-        exec_err_code(&schema, login(&other_server)).await,
-        "UNAUTHENTICATED"
-    );
-    let unknown_challenge = device_login(
-        &device,
-        &state,
-        device_id,
-        Uuid::now_v7(),
-        nonce,
-        KEY_LOGIN_AUDIENCE,
-    );
-    assert_eq!(
-        exec_err_code(&schema, login(&unknown_challenge)).await,
-        "UNAUTHENTICATED"
-    );
-    let valid = device_login(
-        &device,
-        &state,
-        device_id,
-        challenge_id,
-        nonce,
-        KEY_LOGIN_AUDIENCE,
-    );
-    assert_eq!(exec_err_code(&schema, login(&valid)).await, "FORBIDDEN");
-    assert_eq!(
-        exec_err_code(&schema, login(&valid)).await,
-        "UNAUTHENTICATED"
-    );
+    let proof = |device_id: Uuid, challenge_id: Uuid, audience: &str| {
+        device_login(
+            &lin.device,
+            &lin.state,
+            device_id,
+            challenge_id,
+            nonce,
+            audience,
+        )
+    };
+    let login = |proof: Value| (LOGIN_WITH_KEY, json!({ "proof": proof }));
+    let valid = proof(lin.device_id, challenge_id, KEY_LOGIN_AUDIENCE);
+    let refused: Vec<Call> = vec![
+        login(statement(&proof(
+            lin.device_id,
+            challenge_id,
+            "evil.example.com",
+        ))),
+        login(statement(&proof(
+            lin.device_id,
+            Uuid::now_v7(),
+            KEY_LOGIN_AUDIENCE,
+        ))),
+        login(statement(&proof(
+            Uuid::now_v7(),
+            challenge_id,
+            KEY_LOGIN_AUDIENCE,
+        ))),
+        login(statement(&tampered(&valid))),
+        login(json!({ "payload": "{\"v\":2}", "signature": valid.signature })),
+    ];
+    assert_each_refused(&schema, &refused, "UNAUTHENTICATED", signed_out).await;
+    let (query, variables) = login(statement(&valid));
+    let valid = || signed_out(query, variables.clone());
+    assert_eq!(exec_err_code(&schema, valid()).await, "FORBIDDEN");
+    assert_eq!(exec_err_code(&schema, valid()).await, "UNAUTHENTICATED");
 }
