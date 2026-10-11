@@ -142,8 +142,10 @@ dc logs -f rim
 ```
 
 `up` runs `migrate` before it starts the new server. To run the migrations alone,
-`dc run --rm migrate`. Rolling the image back leaves the migrations in place, so the way back
-past a migration is the backup taken before the update.
+`dc run --rm migrate`. Rolling the image back leaves the migrations in place: the previous
+release runs on them, started with `dc up -d --no-deps rim web`, and anything further back is the
+backup taken before the update. `docs/operations/upgrade.md` has the whole procedure, what to
+read in `CHANGELOG.md` first, and the rollback.
 
 ## Backups
 
