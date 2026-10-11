@@ -1818,8 +1818,8 @@ impl E2eeService for DefaultE2eeService {
             .iter()
             .find(|d| d.device.device_key_id == device.device_key_id)
         else {
-            return Err(ServiceError::Validation(
-                "this device is not in the group".to_string(),
+            return Err(ServiceError::Forbidden(
+                "this device is not in the conversation's group".to_string(),
             ));
         };
         // A device holding state reached at least the epoch it was last added at, so a request

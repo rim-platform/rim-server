@@ -21,28 +21,30 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use rim_api::AppSchema;
-use rim_api::auth_context::{AuthActorCtx, RemoteIp};
+use rim_api::auth_context::AuthActorCtx;
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::model::DeviceKeyId;
+use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::server::model::Server;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::User;
-use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key};
-use rim_identity::{KeyState, SignedStatement, StatementVersion};
+use rim_identity::testing::{TestIdentity, device_self_revoke, signing_key};
+use rim_identity::{KeyState, StatementVersion};
+use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_services::email::{EmailMessage, EmailSender};
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::provider::AppServiceProvider;
 
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{
+    Call, Caller, anonymous_request, assert_each_refused, exec_err_code, exec_ok, merged,
+};
+use support::identity::statement;
 use support::mls::{
     MlsDevice, SUITE, b64, capabilities, commit_aad, content, hmac, join_config, unb64,
 };
-use support::{FRANKING_KEY, KEY_LOGIN_AUDIENCE, TestCtx};
+use support::{FRANKING_KEY, TestCtx, unknown_id};
 
-const ENROLL: &str = r#"
-mutation Enroll($input: EnrollIdentityKeyInput!) { enrollIdentityKey(input: $input) { principalId } }"#;
-const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 const CREATE_CONVERSATION: &str = r#"
 mutation Create($input: CreateConversationInput!) {
   createConversation(input: $input) { id encryptedAt }
@@ -128,10 +130,6 @@ mutation Readd($input: RequestMlsReaddInput!) { requestMlsReadd(input: $input) }
 const PRINCIPAL_DEVICES: &str = r#"
 query Devices($ids: [String!]!) { principalDevices(principalIds: $ids) { principalId devices { deviceId mlsActive } } }"#;
 
-fn statement(s: &SignedStatement) -> Value {
-    json!({ "payload": s.payload, "signature": s.signature })
-}
-
 /// Execute `request`, which must fail, and return its first error's code and extensions.
 async fn exec_err(schema: &AppSchema, request: Request) -> (String, Value) {
     let res = schema.execute(request).await;
@@ -150,6 +148,8 @@ struct Member {
     user: User,
     caller: Caller,
     device_key_id: DeviceKeyId,
+    /// The seed of the person's identity, which certifies their devices.
+    seed: u8,
     mls: MlsDevice,
 }
 
@@ -181,74 +181,25 @@ impl Member {
 
 // ── Fixture ─────────────────────────────────────────────────────────────────────────────
 
-/// A login proof by `device` over a fresh challenge.
-async fn signed_login(
-    schema: &AppSchema,
-    device: &SigningKey,
-    state: &KeyState,
-    device_id: Uuid,
-) -> SignedStatement {
-    let data = exec_ok(
-        schema,
-        anonymous_request(CHALLENGE, json!({})).data(RemoteIp::new("192.0.2.1")),
-    )
-    .await;
-    let challenge = &data["keyLoginChallenge"];
-    device_login(
-        device,
-        state,
-        device_id,
-        challenge["challengeId"]
-            .as_str()
-            .expect("challengeId")
-            .parse()
-            .expect("uuid"),
-        challenge["nonce"].as_str().expect("nonce"),
-        KEY_LOGIN_AUDIENCE,
-    )
-}
-
-/// A user with a key identity whose session is bound to its first device.
+/// A user who enrolled the identity from `seed`, signed in on its first device.
 async fn member(ctx: &TestCtx, schema: &AppSchema, name: &str, seed: u8) -> Member {
-    let user = ctx.create_user(name).await;
-    let caller = Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(&user).await,
-    };
-    let identity = TestIdentity::with_version(seed, StatementVersion::V2);
-    let inception = identity.inception();
-    let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
-    let device_key = signing_key(seed.wrapping_add(50));
-    let cert = identity.device_cert(&state, device_id, &device_key, "Desktop");
-    let proof = signed_login(schema, &device_key, &state, device_id).await;
-    exec_ok(
-        schema,
-        caller.request(
-            ENROLL,
-            json!({ "input": {
-                "keyLog": [statement(&inception)],
-                "device": statement(&cert),
-                "proof": statement(&proof),
-            } }),
-        ),
-    )
-    .await;
+    let enrolled = ctx.enrolled(schema, name, seed).await;
     let session = SeaOrmSessionRepository::new(ctx.db.clone())
-        .get_by_id(caller.session_id)
+        .get_by_id(enrolled.caller.session_id)
         .await
         .expect("session")
         .expect("session row");
     Member {
-        user,
-        caller,
+        user: enrolled.user,
+        caller: enrolled.caller,
         device_key_id: session
             .device_key_id
             .expect("the enrolling session is bound"),
+        seed,
         mls: MlsDevice::new(
-            device_id,
-            state.principal_id,
-            device_key,
+            enrolled.device_id,
+            enrolled.state.principal_id,
+            enrolled.device,
             signing_key(seed.wrapping_add(150)),
         ),
     }
@@ -429,6 +380,14 @@ impl Fixture {
         let joined = staged.into_group(&self.bob.provider).expect("join");
         assert_eq!(joined.group_id().as_slice(), group_id.as_slice());
         self.bob.group = Some(joined);
+        // Another device cannot acknowledge bob's Welcome.
+        let foreign = exec_ok(
+            &self.schema,
+            self.alice
+                .request(ACK, json!({ "ids": [welcomes[0]["id"].clone()] })),
+        )
+        .await;
+        assert_eq!(foreign["ackMlsWelcomes"], json!(0));
         let acked = exec_ok(
             &self.schema,
             self.bob
@@ -503,6 +462,43 @@ impl Fixture {
         )
         .await["messageChanges"][0]
             .clone()
+    }
+}
+
+impl Fixture {
+    /// A second device of bob's, certified and with key packages, in no group.
+    async fn bobs_phone(&self) -> Member {
+        let identity = TestIdentity::with_version(self.bob.seed, StatementVersion::V2);
+        let state = KeyState::from_inception(&identity.inception()).expect("inception");
+        let device_id = Uuid::now_v7();
+        let key = signing_key(self.bob.seed.wrapping_add(70));
+        let cert = identity.device_cert(&state, device_id, &key, "Phone");
+        exec_ok(
+            &self.schema,
+            self.bob
+                .caller
+                .request(ADD_DEVICE, json!({ "certificate": statement(&cert) })),
+        )
+        .await;
+        let row = SeaOrmKeyIdentityRepository::new(self.ctx.db.clone())
+            .get_device(self.bob.user.id, device_id)
+            .await
+            .expect("get device")
+            .expect("device row");
+        let phone = Member {
+            user: self.bob.user.clone(),
+            caller: self.ctx.caller(&self.bob.user).await,
+            device_key_id: row.id,
+            seed: self.bob.seed,
+            mls: MlsDevice::new(
+                device_id,
+                state.principal_id,
+                key,
+                signing_key(self.bob.seed.wrapping_add(170)),
+            ),
+        };
+        upload(&self.schema, &phone, 1).await;
+        phone
     }
 }
 
@@ -1170,6 +1166,203 @@ async fn sessions_groups_and_members_must_be_ready() {
         devices["principalDevices"][0]["devices"][0]["mlsActive"],
         json!(true)
     );
+}
+
+const ADD_DEVICE: &str = r#"
+mutation Add($certificate: SignedStatementInput!) { addDeviceKey(certificate: $certificate) { deviceId } }"#;
+const REVOKE: &str = r#"
+mutation Revoke($revocation: SignedStatementInput!) { revokeDeviceKey(revocation: $revocation) { revokedAt } }"#;
+
+/// Roots that act as the session's device in conversation `$c` of workspace `$s`.
+const GROUP_DEVICE_ROOTS: [&str; 5] = [
+    "mutation($s: ID!, $c: ID!, $d: [MlsDeviceRefInput!]!) { claimMlsKeyPackages(input: { \
+     serverId: $s, conversationId: $c, devices: $d }) { deviceId } }",
+    "mutation($s: ID!, $c: ID!, $commit: String!) { submitMlsCommit(input: { serverId: $s, \
+     conversationId: $c, incarnation: 1, epoch: 1, commit: $commit }) { epoch } }",
+    "mutation($s: ID!, $c: ID!, $new: ID!, $envelope: String!) { sendEncryptedMessage(input: { \
+     serverId: $s, conversationId: $c, messageId: $new, envelope: $envelope }) { id } }",
+    "mutation($s: ID!, $c: ID!, $m: ID!, $edit: String!) { editEncryptedMessage(input: { \
+     serverId: $s, conversationId: $c, messageId: $m, envelope: $edit }) { id } }",
+    "mutation($s: ID!, $c: ID!, $readd: SignedStatementInput!) { requestMlsReadd(input: { \
+     serverId: $s, conversationId: $c, request: $readd }) }",
+];
+
+/// Roots that need conversation membership and no device.
+const CONVERSATION_MLS_ROOTS: [&str; 2] = [
+    "query($s: ID!, $c: ID!, $limit: Int) { mlsCommits(serverId: $s, conversationId: $c, \
+     incarnation: 1, limit: $limit) { hasMore } }",
+    "mutation($s: ID!, $c: ID!, $m: ID!, $u: ID!, $dev: ID!) { reportEncryptedMessage(input: { \
+     serverId: $s, conversationId: $c, messageId: $m, reason: \"abuse\", content: \"AA\", \
+     frankingKey: \"AA\", receipt: \"AA\", receiptKeyId: 1, senderUserId: $u, \
+     senderDeviceId: $dev, sentAtUs: \"1\" }) }",
+];
+
+/// Roots that act on the session's device alone.
+const SESSION_DEVICE_ROOTS: [&str; 4] = [
+    "query { myMlsKeyPackageStatus { available } }",
+    "query { myMlsWelcomes { id } }",
+    "mutation($kp: [String!]!) { uploadMlsKeyPackages(keyPackages: $kp) { available } }",
+    "mutation($welcomes: [ID!]!) { ackMlsWelcomes(ids: $welcomes) }",
+];
+
+fn calls(roots: &[&'static str], variables: &Value) -> Vec<Call> {
+    roots.iter().map(|q| (*q, variables.clone())).collect()
+}
+
+/// Every E2EE root refuses a caller without a session. A user outside the workspace and a
+/// member outside the conversation get `FORBIDDEN` from the conversation's roots; so does a
+/// device that is not in the group from the roots that act as a group device, a member editing
+/// another's message, and a revoked device from every root that acts as the session's device.
+/// An unknown conversation or message is `NOT_FOUND`, a malformed id or page size `VALIDATION`.
+#[tokio::test]
+async fn mls_roots_refuse_outsiders_devices_outside_the_group_and_revoked_devices() {
+    let mut f = fixture().await;
+    let conv = f.encrypted_dm().await;
+    let server_id = f.server_id();
+    let bobs = Uuid::now_v7();
+    let (request, _, _) = f.send_request(Who::Bob, &conv, bobs, "mine", &[]);
+    exec_ok(&f.schema, request).await;
+    // What the refused callers present: alice's envelopes for a new message, for an edit of
+    // bob's and for a message nobody sent, and her Commit, none of them sent.
+    let (new, ghost) = (Uuid::now_v7(), Uuid::now_v7());
+    let envelope = f
+        .alice
+        .encrypt(new, &content(new, 0, "x", &[]), [1; 32], &[]);
+    let edit = f
+        .alice
+        .encrypt(bobs, &content(bobs, 1, "y", &[]), [2; 32], &[]);
+    let ghost_edit = f
+        .alice
+        .encrypt(ghost, &content(ghost, 1, "z", &[]), [3; 32], &[]);
+    let commit = f.alice.self_update();
+    let phone = f.bobs_phone().await;
+    let readd = rim_identity::testing::device_mls_readd_at(
+        &phone.device_key,
+        &phone.principal_id,
+        phone.device_id,
+        conv.parse().expect("uuid"),
+        1,
+        None,
+        &[7; 16],
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    );
+    let here = json!({
+        "s": server_id, "c": conv, "m": bobs, "new": new, "commit": commit, "envelope": envelope,
+        "edit": edit, "readd": statement(&readd), "limit": null,
+        "d": [{ "principalId": f.bob.principal_id, "deviceId": f.bob.device_id }],
+        "u": f.bob.user.id.to_string(), "dev": f.bob.device_id,
+        "kp": [phone.key_package(false)], "welcomes": [Uuid::now_v7()],
+    });
+    let group_calls = calls(&GROUP_DEVICE_ROOTS, &here);
+    let mut conversation_calls = group_calls.clone();
+    conversation_calls.extend(calls(&CONVERSATION_MLS_ROOTS, &here));
+
+    let mut every = conversation_calls.clone();
+    every.extend(calls(&SESSION_DEVICE_ROOTS, &here));
+    every.push((PRINCIPAL_DEVICES, json!({ "ids": [f.bob.principal_id] })));
+    assert_each_refused(&f.schema, &every, "UNAUTHENTICATED", anonymous_request).await;
+
+    let olive = member(&f.ctx, &f.schema, "olive", 3).await;
+    let carol = member(&f.ctx, &f.schema, "carol", 4).await;
+    f.ctx
+        .add_member(&f.server, &carol.user, ServerMemberRole::Member)
+        .await;
+    for who in [&olive, &carol] {
+        assert_each_refused(&f.schema, &conversation_calls, "FORBIDDEN", |q, v| {
+            who.request(q, v)
+        })
+        .await;
+    }
+    let seen = exec_ok(
+        &f.schema,
+        olive.request(PRINCIPAL_DEVICES, json!({ "ids": [f.bob.principal_id] })),
+    )
+    .await;
+    assert_eq!(
+        seen["principalDevices"],
+        json!([{ "principalId": f.bob.principal_id, "devices": [] }])
+    );
+    assert_each_refused(&f.schema, &group_calls, "FORBIDDEN", |q, v| {
+        phone.request(q, v)
+    })
+    .await;
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.alice.request(GROUP_DEVICE_ROOTS[3], here.clone())
+        )
+        .await,
+        "FORBIDDEN"
+    );
+
+    let mut unknown = calls(
+        &GROUP_DEVICE_ROOTS,
+        &merged(here.clone(), json!({ "c": unknown_id() })),
+    );
+    unknown.extend(calls(
+        &CONVERSATION_MLS_ROOTS,
+        &merged(here.clone(), json!({ "c": unknown_id() })),
+    ));
+    let nothing = merged(here.clone(), json!({ "m": ghost, "edit": ghost_edit }));
+    unknown.push((GROUP_DEVICE_ROOTS[3], nothing.clone()));
+    unknown.push((CONVERSATION_MLS_ROOTS[1], nothing));
+    assert_each_refused(&f.schema, &unknown, "NOT_FOUND", |q, v| {
+        f.alice.request(q, v)
+    })
+    .await;
+    let mut malformed = calls(
+        &GROUP_DEVICE_ROOTS,
+        &merged(here.clone(), json!({ "s": "not-an-id" })),
+    );
+    malformed.extend(calls(
+        &CONVERSATION_MLS_ROOTS,
+        &merged(here.clone(), json!({ "s": "not-an-id" })),
+    ));
+    for limit in [0, 101] {
+        malformed.push((
+            CONVERSATION_MLS_ROOTS[0],
+            merged(here.clone(), json!({ "limit": limit })),
+        ));
+    }
+    let bad_device = json!([{ "principalId": f.bob.principal_id, "deviceId": "not-an-id" }]);
+    malformed.extend([
+        (
+            GROUP_DEVICE_ROOTS[0],
+            merged(here.clone(), json!({ "d": bad_device })),
+        ),
+        (
+            SESSION_DEVICE_ROOTS[3],
+            merged(here.clone(), json!({ "welcomes": ["not-an-id"] })),
+        ),
+        (
+            PRINCIPAL_DEVICES,
+            json!({ "ids": vec![f.bob.principal_id.clone(); 101] }),
+        ),
+    ]);
+    assert_each_refused(&f.schema, &malformed, "VALIDATION", |q, v| {
+        f.alice.request(q, v)
+    })
+    .await;
+
+    // Bob's first device retires itself.
+    let state = KeyState::from_inception(
+        &TestIdentity::with_version(f.bob.seed, StatementVersion::V2).inception(),
+    )
+    .expect("inception");
+    let revocation = device_self_revoke(&f.bob.device_key, &state, f.bob.device_id);
+    exec_ok(
+        &f.schema,
+        f.bob
+            .caller
+            .request(REVOKE, json!({ "revocation": statement(&revocation) })),
+    )
+    .await;
+    let mut device_calls = group_calls;
+    device_calls.extend(calls(&SESSION_DEVICE_ROOTS, &here));
+    assert_each_refused(&f.schema, &device_calls, "FORBIDDEN", |q, v| {
+        f.bob.request(q, v)
+    })
+    .await;
 }
 
 /// An encrypted conversation's attachments are opaque blobs, checked against their SHA-256.

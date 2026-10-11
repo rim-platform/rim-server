@@ -1622,15 +1622,17 @@ mod tests {
                 request(bob, &bob.key, bob.device_id, Uuid::now_v7(), 2),
                 "another conversation",
             ),
-            (
-                request(bob2, &bob2.key, bob2.device_id, conv, 2),
-                "not in the group",
-            ),
         ];
         for (cmd, why) in refusals {
             let err = f.service.request_readd(cmd).await.unwrap_err();
             assert!(validation(err).contains(why), "{why}");
         }
+        let err = f
+            .service
+            .request_readd(request(bob2, &bob2.key, bob2.device_id, conv, 2))
+            .await
+            .unwrap_err();
+        assert!(forbidden(err).contains("not in the conversation's group"));
         let err = f
             .service
             .request_readd(request(bob, &bob.key, bob.device_id, conv, 1))
