@@ -167,6 +167,12 @@ mutation Exec($serverId: ID!, $args: JSON!) {
 }
 "#;
 
+const AUDIT_LOG: &str = r#"
+query Audit($filter: AuditLogFilterInput) {
+  listAuditLog(filter: $filter) { items { actorUserId serverId commandId } }
+}
+"#;
+
 struct Fixture {
     ctx: TestCtx,
     schema: AppSchema,
@@ -824,6 +830,66 @@ async fn set_member_role_matrix() {
     assert_eq!(role_of(&f.carol), Some(json!("GUEST")));
     assert_eq!(role_of(&f.gina), Some(json!("MEMBER")));
     assert_eq!(f.audit_rows("admin.set_member_role").await.len(), 3);
+}
+
+/// Owners and moderators read the workspace audit log, with or without another user's id in
+/// the filter; members and guests are refused both and still read their own rows.
+#[tokio::test]
+async fn audit_log_workspace_reads_need_owner_or_moderator() {
+    let f = setup().await;
+    seed_capabilities(&f.ctx).await;
+    let exec_vars = json!({
+        "serverId": f.server_id,
+        "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": "logged" },
+    });
+    let ok = exec_ok(&f.schema, f.bob.request(EXECUTE_POST, exec_vars)).await;
+    assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+
+    let bob_id = f.bob.user_id.to_string();
+    let workspace = json!({ "filter": { "serverId": f.server_id } });
+    let cross_user = json!({ "filter": { "serverId": f.server_id, "actorUserId": bob_id } });
+    let bob_rows = |data: &Value| {
+        data["listAuditLog"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter(|row| row["actorUserId"] == json!(bob_id))
+            .count()
+    };
+
+    for (who, name) in [(&f.alice, "owner"), (&f.mona, "moderator")] {
+        for vars in [&workspace, &cross_user] {
+            let data = exec_ok(&f.schema, who.request(AUDIT_LOG, vars.clone())).await;
+            assert_eq!(bob_rows(&data), 1, "{name} reads the workspace log");
+        }
+    }
+
+    for (who, name) in [(&f.carol, "member"), (&f.gina, "guest")] {
+        for vars in [&workspace, &cross_user] {
+            let code = exec_err_code(&f.schema, who.request(AUDIT_LOG, vars.clone())).await;
+            assert_eq!(code, "FORBIDDEN", "{name} cannot read the workspace log");
+        }
+    }
+
+    let code = exec_err_code(
+        &f.schema,
+        f.carol.request(AUDIT_LOG, json!({ "filter": {} })),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN", "a filter with neither field is rejected");
+
+    let own = json!({ "filter": { "serverId": f.server_id, "actorUserId": bob_id } });
+    let data = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, own)).await;
+    assert_eq!(bob_rows(&data), 1, "a member reads their own rows in W");
+    let own_anywhere = json!({ "filter": { "actorUserId": bob_id } });
+    let data = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, own_anywhere)).await;
+    assert_eq!(
+        bob_rows(&data),
+        1,
+        "a member reads their own rows without W"
+    );
+    let gina_own = json!({ "filter": { "actorUserId": f.gina.user_id.to_string() } });
+    exec_ok(&f.schema, f.gina.request(AUDIT_LOG, gina_own)).await;
 }
 
 #[tokio::test]
