@@ -10,7 +10,9 @@ mod support;
 
 use async_graphql::Request;
 use chrono::{Duration, Utc};
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
+use rim_api::auth_context::RemoteIp;
 use rim_auth::password::verify_password;
 use rim_auth::session_token::hash_token;
 use rim_core::auth::model::NewSession;
@@ -24,6 +26,7 @@ use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
+use support::graphql::{exec_err_code, exec_ok};
 
 fn reset_mutation(token: &str, new_password: &str) -> String {
     format!(r#"mutation {{ resetPassword(token: "{token}", newPassword: "{new_password}") }}"#)
@@ -114,9 +117,92 @@ async fn reset_password_revokes_sessions_and_outstanding_tokens() {
 
     // Neither link works again.
     for raw in ["rim_rst_used_now", "rim_rst_older_link"] {
-        let replay = schema
-            .execute(Request::new(reset_mutation(raw, "another-password-1")))
-            .await;
-        assert!(!replay.errors.is_empty(), "{raw} must not be reusable");
+        let replay = Request::new(reset_mutation(raw, "another-password-1"));
+        assert_eq!(exec_err_code(&schema, replay).await, "FORBIDDEN", "{raw}");
     }
+}
+
+fn request_reset(username: &str, ip: &str) -> Request {
+    Request::new(format!(
+        r#"mutation {{ requestPasswordReset(username: "{username}") }}"#
+    ))
+    .data(RemoteIp(ip.to_string()))
+}
+
+/// The reset links stored for `user_id`, once the background insert has run.
+async fn reset_links(ctx: &TestCtx, user_id: rim_core::user::model::UserId, expected: u64) -> u64 {
+    let user_id: uuid::Uuid = user_id.into();
+    let mut count = 0;
+    for _ in 0..50 {
+        count = entity::password_reset_token::Entity::find()
+            .filter(entity::password_reset_token::Column::UserId.eq(user_id))
+            .count(&ctx.conn)
+            .await
+            .expect("count reset links");
+        if count >= expected {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    count
+}
+
+/// A known and an unknown username get the same answer; only the known one gets a link. One
+/// address gets ten answers an hour, then `RATE_LIMITED`.
+#[tokio::test]
+async fn request_password_reset_answers_alike_for_any_username_and_limits_an_address() {
+    let ctx = TestCtx::new().await;
+    let user = ctx.create_user("reset-known").await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+
+    for username in ["reset-known", "reset-unknown"] {
+        let data = exec_ok(&schema, request_reset(username, "192.0.2.1")).await;
+        assert_eq!(data["requestPasswordReset"], true, "{username}");
+    }
+    assert_eq!(reset_links(&ctx, user.id, 1).await, 1);
+
+    for i in 0..10 {
+        let data = exec_ok(&schema, request_reset(&format!("anyone-{i}"), "192.0.2.2")).await;
+        assert_eq!(data["requestPasswordReset"], true);
+    }
+    let refused = request_reset("anyone-10", "192.0.2.2");
+    assert_eq!(exec_err_code(&schema, refused).await, "RATE_LIMITED");
+}
+
+/// An unknown link is `NOT_FOUND`, an expired one `FORBIDDEN`, and a short password `VALIDATION`
+/// that leaves the link usable.
+#[tokio::test]
+async fn reset_password_refuses_an_unknown_or_expired_link_and_a_short_password() {
+    let ctx = TestCtx::new().await;
+    let user = ctx.create_user("reset-refused").await;
+    let token_repo = SeaOrmPasswordResetTokenRepository::new(ctx.db.clone());
+    for (raw, expires_in) in [
+        ("rim_rst_live", Duration::hours(1)),
+        ("rim_rst_old", Duration::hours(-1)),
+    ] {
+        token_repo
+            .create(NewPasswordResetToken {
+                user_id: user.id,
+                token_hash: hash_token(raw),
+                expires_at: Utc::now() + expires_in,
+            })
+            .await
+            .expect("create reset token failed");
+    }
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+
+    for (raw, password, code) in [
+        ("rim_rst_unknown", "long-enough-password", "NOT_FOUND"),
+        ("rim_rst_old", "long-enough-password", "FORBIDDEN"),
+        ("rim_rst_live", "short", "VALIDATION"),
+    ] {
+        let request = Request::new(reset_mutation(raw, password));
+        assert_eq!(exec_err_code(&schema, request).await, code, "{raw}");
+    }
+    let data = exec_ok(
+        &schema,
+        Request::new(reset_mutation("rim_rst_live", "long-enough-password")),
+    )
+    .await;
+    assert_eq!(data["resetPassword"], true);
 }
