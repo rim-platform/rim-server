@@ -1,5 +1,4 @@
-//! `SeaORM` entity for the capability registry table — Phase 1 §3.3 (closes
-//! Black Widow C1). The table is the source of truth for which capability
+//! `SeaORM` entity for the capability registry table: the source of truth for which capability
 //! keys exist; an unknown key is denied by default in
 //! `CapabilityService::check`.
 //!
@@ -13,9 +12,8 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "capability_registry")]
 pub struct Model {
-    /// Canonical dotted capability key (e.g. `chat.read`,
-    /// `plugin.youtrack.write`). Constrained at the application layer to
-    /// 4..=128 chars per Widow N1 plugin-key validator.
+    /// Canonical dotted capability key (e.g. `chat.read`, `audit.read.self`). Only the builtin
+    /// catalogue seeded at startup writes rows; the column holds at most 128 chars.
     #[sea_orm(primary_key, auto_increment = false)]
     #[sea_orm(column_type = "String(StringLen::N(128))")]
     pub capability_key: String,
@@ -31,13 +29,11 @@ pub struct Model {
     /// audit history.
     pub retired_at: Option<DateTimeWithTimeZone>,
 
-    /// P6-FU5 (Black Widow H2 closure). When `true` the capability is
-    /// self-scoped: it does not require a workspace context and
+    /// When `true` the capability is self-scoped: it does not require a workspace context and
     /// `CapabilityService::check()` accepts `workspace_id = None`.
     ///
-    /// `DEFAULT false` at the DB level means rows default to
-    /// workspace-scoped, which is the conservative/safe choice. Only `audit.read.self` (and any
-    /// future cap explicitly declared self-scoped) is `true`.
+    /// `DEFAULT false` at the DB level, so rows default to workspace-scoped. Only
+    /// `audit.read.self` is `true`.
     pub is_self_scoped: bool,
 }
 

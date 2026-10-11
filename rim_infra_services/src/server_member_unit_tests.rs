@@ -72,7 +72,7 @@ mod tests {
         );
     }
 
-    /// Track 1.2: a guest's member directory holds only the people who share a conversation
+    /// A guest's member directory holds only the people who share a conversation
     /// with them (and themselves); everyone else is hidden, including from `get_member`.
     #[tokio::test]
     async fn guest_directory_lists_only_shared_conversation_members() {

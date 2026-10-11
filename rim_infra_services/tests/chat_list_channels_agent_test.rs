@@ -1,14 +1,14 @@
-//! P3-A3 integration test — `chat.list_channels` end-to-end through the
-//! agent surface (design §4 Phase 3, dispatch task #37).
+//! Integration test — `chat.list_channels` end-to-end through the agent
+//! surface.
 //!
 //! Three legs of the loop are covered here, each one a distinct guarantee
-//! Phase 3 needs to make to Phase 4 frontend work:
+//! the client's AI tools depend on:
 //!
 //!   1. **Surface filter, positive** — an actor that holds `chat.read` sees
-//!      `chat.list_channels` under `Surface::Ai`. (Already locked in
-//!      `command.rs::list_commands_ai_surface_phase3_returns_chat_list_channels_with_caps`,
-//!      duplicated here at the integration boundary so a refactor that
-//!      bypasses `list_commands` for the AI path doesn't silently widen.)
+//!      `chat.list_channels` under `Surface::Ai`. (The unit tests in
+//!      `command_tests.rs` cover the AI surface listing too; this repeats it
+//!      at the integration boundary so a refactor that bypasses
+//!      `list_commands` for the AI path doesn't silently widen.)
 //!
 //!   2. **Surface filter, negative** — an actor WITHOUT `chat.read` does
 //!      NOT see `chat.list_channels` under `Surface::Ai`. Locks the
@@ -20,13 +20,11 @@
 //!      returns two synthetic channels. Asserts the executor projects them
 //!      to the agreed wire shape
 //!      `{ "channels": [{id,title,conversation_type,is_private,is_archived,is_member}] }`
-//!      and **does NOT leak `member_ids`** (Widow no-go per executor
-//!      comment at executor/chat.rs::list_channels). This is the contract Phase 4
-//!      frontend tools depend on.
+//!      and **does NOT leak `member_ids`**. The client's AI tools depend on
+//!      this contract.
 //!
-//! Test 4 from the dispatch (F1 inventory shipping `chat.list_channels`)
-//! is already locked at `registry::tests::collect_ai_callable_inventory_phase3_yields_chat_list_channels`
-//! — duplicating it here would only add maintenance cost.
+//! That the AI-callable inventory includes `chat.list_channels` is locked at
+//! `registry::tests::collect_ai_callable_inventory_matches_reviewed_set`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -96,13 +94,13 @@ fn build_service(
     )
 }
 
-/// Helper — assert the cap union the AI surface bulk-checks. Post-P4-A4
-/// the union grows to {chat.read, chat.write} because the metadata flips
-/// added 2 Mutating commands (`chat.post_message`, `chat.create_channel`).
-/// The 4 DesktopLocal flips contribute no caps. Track 1.2 adds `admin.manage_members` (the
-/// agent-callable `admin.timeout`). Compared as a set so a future flip that reorders
-/// registration doesn't break the test.
-fn caps_match_phase4_union(caps: &[String]) -> bool {
+/// Helper — assert the cap union the AI surface bulk-checks:
+/// {chat.read, chat.write, admin.manage_members}. `chat.write` comes from the
+/// Mutating commands (`chat.post_message`, `chat.create_channel`, ...),
+/// `admin.manage_members` from the agent-callable `admin.timeout`. The
+/// DesktopLocal commands contribute no caps. Compared as a set so a change
+/// in registration order doesn't break the test.
+fn caps_match_ai_surface_union(caps: &[String]) -> bool {
     let cap_set: std::collections::HashSet<&str> = caps.iter().map(|s| s.as_str()).collect();
     cap_set.len() == 3
         && cap_set.contains("admin.manage_members")
@@ -116,7 +114,7 @@ fn caps_match_phase4_union(caps: &[String]) -> bool {
 async fn ai_surface_lists_chat_list_channels_when_actor_has_chat_read() {
     let mut cap = MockCapabilityService::new();
     cap.expect_check_many()
-        .withf(|_actor, _ws, caps| caps_match_phase4_union(caps))
+        .withf(|_actor, _ws, caps| caps_match_ai_surface_union(caps))
         .returning(|_, _, caps| {
             let mut out = HashMap::with_capacity(caps.len());
             for c in caps {
@@ -148,18 +146,15 @@ async fn ai_surface_lists_chat_list_channels_when_actor_has_chat_read() {
 /// stopped honouring `check_many=false` would only show up at execute time
 /// without this.
 ///
-/// Post-P4-A4 the AI surface lists 7 ai_callable builtins (was 1 in P3).
-/// The 4 DesktopLocal flips have empty `required_capabilities`, so when we
+/// The DesktopLocal commands have empty `required_capabilities`, so when we
 /// deny `chat.read` and `chat.write` the cap-gated commands drop but the
-/// 4 nav/settings DesktopLocal commands survive. The original "must be
-/// empty" assertion held in P3 because `chat.list_channels` was the only
-/// ai_callable command; that invariant flipped this phase. The targeted
-/// "chat.list_channels must be dropped" assertion still holds.
+/// nav/settings DesktopLocal commands survive; `chat.list_channels` must be
+/// dropped.
 #[tokio::test]
 async fn ai_surface_omits_chat_list_channels_when_actor_lacks_chat_read() {
     let mut cap = MockCapabilityService::new();
     cap.expect_check_many()
-        .withf(|_actor, _ws, caps| caps_match_phase4_union(caps))
+        .withf(|_actor, _ws, caps| caps_match_ai_surface_union(caps))
         .returning(|_, _, caps| {
             let mut out = HashMap::with_capacity(caps.len());
             for c in caps {
@@ -194,7 +189,7 @@ async fn ai_surface_omits_chat_list_channels_when_actor_lacks_chat_read() {
         !ids.contains(&"chat.create_channel"),
         "chat.create_channel MUST be filtered out when actor lacks chat.write; got: {ids:?}"
     );
-    // The 4 DesktopLocal navigation/settings flips don't require any cap,
+    // The 4 DesktopLocal navigation/settings commands don't require any cap,
     // so they survive cap denial. They're inert from the backend's
     // perspective — frontend dispatcher routes them client-side.
     let surviving_no_cap_commands = [
@@ -214,7 +209,7 @@ async fn ai_surface_omits_chat_list_channels_when_actor_lacks_chat_read() {
 /// Leg 3 — `execute_command` with `initiator = Agent` reaches the executor
 /// arm, calls `ConversationService::list_channels`, and projects to the
 /// agreed wire shape. Crucially, asserts `member_ids` is **NOT** in the
-/// payload (Widow PII no-go per executor/member.rs::list_members).
+/// payload (no PII, same rule as executor/member.rs::list_members).
 #[tokio::test]
 async fn execute_command_chat_list_channels_returns_projected_payload() {
     let workspace = ServerId::new();
@@ -232,7 +227,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
     let channel_b_id = ConversationId::new();
     let secret_member = UserId::new();
     // The caller is a member of `general` only; `random` is a private, archived channel
-    // (Track 1.1 flags) the mock returns regardless of the default filter.
+    // the mock returns regardless of the default filter.
     let caller = actor();
 
     let mut conv = MockConversationService::new();
@@ -348,20 +343,20 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
             Some(expected_title),
         );
         // Pin the wire string against `ConversationType::as_str()` rather
-        // than the Debug repr — see P4-NIT (#43). If a variant gets renamed
+        // than the Debug repr. If a variant gets renamed
         // (e.g. `Channel` → `PublicChannel`), the contract break surfaces
         // in `as_str()` review, not as a silent agent payload drift.
         assert_eq!(
             channel.get("conversation_type").and_then(|v| v.as_str()),
             Some(rim_core::conversation::model::ConversationType::Channel.as_str()),
         );
-        // The Widow no-go: PII (member_ids) MUST NOT leak through this
-        // tool's payload. If a future refactor changes the projection to
-        // pass `c` directly through serde, this assertion catches it.
+        // PII (member_ids) MUST NOT leak through this tool's payload. If the
+        // projection passes `c` directly through serde, this assertion
+        // catches it.
         assert!(
             channel.get("member_ids").is_none(),
             "member_ids must NOT appear in the chat.list_channels payload \
-             — PII leak (Widow no-go); got channel: {channel}",
+             — PII leak; got channel: {channel}",
         );
     }
 }

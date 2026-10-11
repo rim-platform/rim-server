@@ -1,4 +1,4 @@
-//! Track 1.2 moderation builtins. Authorization (Owner/Moderator role, who may target whom,
+//! Moderation builtins. Authorization (Owner/Moderator role, who may target whom,
 //! guest and timeout gates) lives in `ModerationService`; the executors only adapt arguments.
 
 use rim_services::command::dto::{

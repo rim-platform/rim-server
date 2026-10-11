@@ -3,10 +3,9 @@ use serde_json::Value;
 
 // SECURITY: All keys from the previous stage's output pass through to the next
 // stage without filtering. A crafted first stage could inject unexpected keys
-// into downstream commands. This is acceptable for Phase 1 because builtin
-// commands extract only the args they declare and ignore unknown keys. Phase 2
-// should introduce whitelist filtering based on the receiving command's declared
-// arguments so that only expected keys propagate.
+// into downstream commands. Builtin commands extract only the args they declare
+// and ignore unknown keys, which keeps this harmless; filtering to the receiving
+// command's declared arguments would remove the reliance on that.
 pub(super) fn merge_pipe_args(piped: Option<&Value>, explicit: Option<&Value>) -> Option<Value> {
     match (piped, explicit) {
         (None, None) => None,

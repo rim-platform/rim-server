@@ -546,7 +546,7 @@ mod tests {
         );
     }
 
-    // ── Track 1.1: join / leave / invite / remove / archive authorization ──
+    // ── Join / leave / invite / remove / archive authorization ──
     //
     // `Fx` wires the three repos as small in-memory fakes over one conversation so each test
     // states only the situation (conversation kind, members, actor role) and the outcome.
@@ -566,7 +566,7 @@ mod tests {
         members: Arc<Mutex<Vec<UserId>>>,
         /// Workspace members and their roles; anyone else is not in the workspace.
         roles: Vec<(UserId, ServerMemberRole)>,
-        /// Workspace members whose timeout is in force (Track 1.2).
+        /// Workspace members whose timeout is in force.
         timed_out: Vec<UserId>,
         events: Arc<RecordingBroadcaster>,
     }
@@ -1196,7 +1196,7 @@ mod tests {
         .expect("list");
     }
 
-    // ── Track 1.2: guest restrictions and timeouts ──
+    // ── Guest restrictions and timeouts ──
 
     #[tokio::test]
     async fn guest_cannot_create_channels_or_groups() {

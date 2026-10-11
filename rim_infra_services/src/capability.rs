@@ -1,5 +1,5 @@
-//! Default `CapabilityService` implementation — Phase 1 §3.3 (closes Black
-//! Widow C1, "real capability gate from Phase 1, no no-op-allow stub").
+//! Default `CapabilityService` implementation: a strict default-deny gate backed by the
+//! `capability_registry` table plus a workspace-membership check.
 //!
 //! See [`rim_services::capability::service::CapabilityService`] for the
 //! gate contract. This module also exports [`builtin_capabilities`] for the
@@ -16,16 +16,13 @@ use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::capability::service::CapabilityService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
-/// Catalogue of builtin capabilities Phase 1 ships. Every entry is upserted
-/// into `capability_registry` synchronously at startup BEFORE the HTTP
-/// listener binds, eliminating Widow's "registry-seeding race vs first
-/// request" failure mode.
+/// A builtin capability. Every entry of [`builtin_capabilities`] is inserted into
+/// `capability_registry` at startup, before the HTTP listener binds, so the first request
+/// never races the seeding.
 ///
-/// Adding a new builtin cap = add a row here AND rerun migrations on every
-/// deploy. The strict default-deny gate guarantees a forgotten entry fails
-/// closed (the new command's `required_capabilities` lookup returns
-/// registry lookup finds no row → `PermissionDenied`), which is a louder failure
-/// mode than silently allowing.
+/// Adding a builtin cap means adding a row to [`builtin_capabilities`]; the next startup
+/// seeds it. A forgotten entry fails closed: the registry lookup finds no row and the gate
+/// returns `PermissionDenied`.
 pub struct BuiltinCapabilitySpec {
     pub id: &'static str,
     /// When `true` the capability is self-scoped: it does not require a
@@ -92,9 +89,9 @@ impl DefaultCapabilityService {
     /// `workspace_id` is `None` the leg short-circuits to `Ok(true)` —
     /// this path is only reached for self-scoped capabilities (e.g.
     /// `audit.read.self`) after `check()` verifies `is_self_scoped == true`
-    /// in the registry row (P6-FU5). Workspace-scoped caps never reach this
+    /// in the registry row. Workspace-scoped caps never reach this
     /// method with `None` — `check()` rejects them first with
-    /// `PermissionDenied` (Black Widow H2 closure).
+    /// `PermissionDenied`.
     async fn membership_holds(
         &self,
         actor: &Actor,
@@ -132,7 +129,7 @@ impl CapabilityService for DefaultCapabilityService {
 
         // Step 2: registry lookup — single `get()` call returns the full row
         // (including `is_self_scoped` and `retired_at`) so we can enforce
-        // both strict-default-deny (C1) and workspace-scope (P6-FU5) in one
+        // both strict default-deny and workspace scope in one
         // round-trip instead of two. `get()` returns `None` for unregistered
         // keys; a row with `retired_at IS NOT NULL` is treated as unregistered.
         let row = self.repos.capability_registry_repo.get(key).await?;
@@ -152,7 +149,7 @@ impl CapabilityService for DefaultCapabilityService {
             }
         };
 
-        // Step 2b: workspace-scope enforcement (P6-FU5, Widow H2 closure).
+        // Step 2b: workspace-scope enforcement.
         // DB-stored `is_self_scoped` is the authoritative source — not the
         // static in-memory set. Workspace-scoped caps require a workspace_id;
         // passing None would skip the membership check and is a security
@@ -205,7 +202,7 @@ impl CapabilityService for DefaultCapabilityService {
                 out.insert(cap.clone(), false);
                 continue;
             }
-            // Use `get()` to obtain the full registry row (P6-FU5): we need
+            // Use `get()` to obtain the full registry row: we need
             // the DB-stored `is_self_scoped` flag to enforce workspace-context
             // requirements. Workspace-scoped cap with no workspace_id → deny
             // without reaching the membership leg (same enforcement as
@@ -221,7 +218,7 @@ impl CapabilityService for DefaultCapabilityService {
                 }
             };
 
-            // Workspace-scope check using DB-stored flag (P6-FU5).
+            // Workspace-scope check using the DB-stored flag.
             if workspace_id.is_none() && !reg.is_self_scoped {
                 out.insert(cap.clone(), false);
                 continue;
@@ -265,7 +262,7 @@ mod tests {
     }
 
     /// Build an active (non-retired) `RegisteredCapability` for use in mock
-    /// `get()` expectations. `is_self_scoped` controls the P6-FU5 scope flag.
+    /// `get()` expectations. `is_self_scoped` sets the row's scope flag.
     fn active_cap(key: &str, is_self_scoped: bool) -> RegisteredCapability {
         RegisteredCapability {
             capability_key: key.to_string(),
@@ -304,7 +301,7 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
-    /// **C1 closure** — the canonical "unknown cap denies even when the actor
+    /// An unknown cap denies even when the actor
     /// is a workspace member". `get()` returns `None` → `PermissionDenied`.
     /// If this test ever passes when `get` returns `None`, the strict
     /// default-deny has regressed to no-op-allow.
@@ -329,7 +326,7 @@ mod tests {
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
-    /// **C1 extension** — a retired cap (retired_at IS NOT NULL) is treated
+    /// A retired cap (retired_at IS NOT NULL) is treated
     /// the same as unregistered: strict default-deny.
     #[tokio::test]
     async fn check_retired_capability_denies_strict_default() {
@@ -393,7 +390,7 @@ mod tests {
         assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
-    /// **P6-FU5 regression** — self-scoped cap + workspace_id=None must pass.
+    /// A self-scoped cap with `workspace_id = None` passes.
     /// `audit.read.self` is the canonical self-scoped cap: the actor reads
     /// their own audit history without needing a workspace context.
     #[tokio::test]
@@ -412,9 +409,9 @@ mod tests {
             .expect("self-scoped cap with no workspace must pass");
     }
 
-    /// **P6-FU5 regression** — workspace-scoped cap + workspace_id=None must
-    /// PermissionDenied (previously this silently bypassed the membership
-    /// check via `membership_holds(actor, None) → Ok(true)`).
+    /// A workspace-scoped cap with `workspace_id = None` is `PermissionDenied`;
+    /// `membership_holds(actor, None)` would otherwise return `Ok(true)` and skip the
+    /// membership check.
     #[tokio::test]
     async fn check_workspace_scoped_cap_without_workspace_denies() {
         let mut registry = MockCapabilityRegistryRepository::new();
@@ -433,7 +430,7 @@ mod tests {
         );
     }
 
-    /// **P6-FU5 regression** — `check_many` with workspace_id=None must deny
+    /// `check_many` with `workspace_id = None` denies
     /// workspace-scoped caps but still allow self-scoped ones.
     #[tokio::test]
     async fn check_many_workspace_scoped_cap_without_workspace_returns_false() {
@@ -506,7 +503,7 @@ mod tests {
         assert_eq!(map.get("plugin.unknown.x"), Some(&false));
     }
 
-    /// **Gate 4 M1 closure** — every `required_capabilities` entry on every
+    /// Every `required_capabilities` entry on every
     /// builtin command MUST be in the seeded capability registry, otherwise
     /// the strict default-deny gate silently bricks that command at runtime.
     ///
@@ -515,9 +512,6 @@ mod tests {
     /// to `builtin_capabilities()` will fail this test. The fix is to add
     /// the cap to the seed list (`capability.rs::builtin_capabilities`),
     /// not to special-case the command.
-    ///
-    /// Without this guard, M1 ("admin.manage_members declared but unseeded")
-    /// would have shipped Phase 1.
     #[test]
     fn every_builtin_required_capability_is_seeded_in_registry() {
         let seeded: HashSet<&str> = builtin_capabilities().iter().map(|c| c.id).collect();
@@ -540,19 +534,11 @@ mod tests {
         );
     }
 
-    /// **Gate 4 M1 extension** — every workspace-scoped builtin cap (those
-    /// with `is_self_scoped: false`) must only be used in commands that also
-    /// declare a workspace context requirement. Self-scoped caps are allowed
-    /// with or without a workspace context.
-    ///
-    /// This prevents a future contributor from wiring a workspace-scoped cap
-    /// to a command that never passes a workspace_id, which would cause the
-    /// P6-FU5 gate to fire at runtime with a confusing PermissionDenied.
+    /// Locks the scope classification of the seeded builtin caps: `audit.read.self` is
+    /// self-scoped; `chat.read`, `chat.write`, `audit.read` and `admin.manage_members` are
+    /// workspace-scoped and are denied without a workspace context.
     #[test]
     fn all_builtin_caps_have_explicit_is_self_scoped_flag() {
-        // Structural: every cap in the seed list must have a clear intent.
-        // Workspace-scoped caps default to false — this test documents and
-        // locks the current classification for reviewers.
         let workspace_scoped: Vec<&str> = builtin_capabilities()
             .iter()
             .filter(|c| !c.is_self_scoped)
@@ -564,7 +550,6 @@ mod tests {
             .map(|c| c.id)
             .collect();
 
-        // Expected classification per P6-FU5 design:
         assert!(
             self_scoped.contains(&"audit.read.self"),
             "audit.read.self must be classified as self-scoped"

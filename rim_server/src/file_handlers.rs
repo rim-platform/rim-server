@@ -43,7 +43,7 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
         rim_services::ServiceError::ConversationArchived => {
             HttpResponse::Conflict().json(serde_json::json!({"error": "conversation is archived"}))
         }
-        // Track 1.2: the uploader is timed out in this workspace.
+        // The uploader is timed out in this workspace.
         rim_services::ServiceError::TimedOut { until } => {
             HttpResponse::Forbidden().json(serde_json::json!({
                 "error": "timed out",

@@ -6,13 +6,8 @@ use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
-    // P4-A5 new AI-callable Chat builtins
-    // Five tools migrated from frontend `agent/tools/builtins/` per
-    // Pete's matrix (rows #1, #2, #3, #10, #12). All five hit existing
-    // services; the executor wiring is in `executor/member.rs`.
-    // Sensitivity follows the matrix (Safe for read, Mutating for
-    // writes); required caps follow the seeded `chat.read` /
-    // `chat.write` set.
+    // AI-callable member listing, a Safe read that requires `chat.read`.
+    // The executor is in `executor/member.rs`.
     vec![CommandDefinitionDto {
         id: "chat.list_members".to_string(),
         title: "List Members".to_string(),

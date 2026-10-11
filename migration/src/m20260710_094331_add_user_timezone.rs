@@ -1,9 +1,7 @@
 use sea_orm_migration::prelude::*;
 
-/// Adds an optional `user.timezone` (IANA name, e.g. `"America/Chicago"`), used only for (a)
-/// rendering on-call times in the viewer's local timezone on the FE and (b) defaulting a new
-/// on-call schedule's timezone. Rotation handoff math lives on the **schedule's** timezone, not
-/// the user's — see `docs/oncall.md` and `rim_core::oncall::model::OnCallSchedule` for why.
+/// Adds an optional `user.timezone` (IANA name, e.g. `"America/Chicago"`) that clients use to
+/// render times in the user's local timezone.
 ///
 /// Nullable, no backfill: existing users simply have no timezone until they set one.
 #[derive(DeriveMigrationName)]

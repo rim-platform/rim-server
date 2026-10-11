@@ -1,4 +1,4 @@
-//! Resolver-level e2e tests for registration GraphQL endpoints (spec §8.2, R3).
+//! Resolver-level e2e tests for the registration GraphQL endpoints.
 //!
 //! These tests exercise the *full* GraphQL resolver path:
 //! parse input → resolve via context → call into a real `DefaultAuthService`

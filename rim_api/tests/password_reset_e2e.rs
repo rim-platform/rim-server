@@ -1,4 +1,4 @@
-//! Resolver-level e2e test for `resetPassword` over a real database (finding S-M1).
+//! Resolver-level e2e test for `resetPassword` over a real database.
 //!
 //! Run with:
 //! ```sh

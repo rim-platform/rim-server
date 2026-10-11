@@ -103,8 +103,8 @@ services:
       # never route it through Caddy.
       # RIM_METRICS_ADDR: 0.0.0.0:9090
       # Optional features switched off, comma-separated: attachments, link_previews, email,
-      # custom_emoji, workspace_plugins, ai_commands. docs/operations/features.md says what each
-      # one covers.
+      # custom_emoji, workspace_plugins, ai_commands. A switched-off feature's API fails with
+      # FEATURE_DISABLED.
       # RIM_FEATURES_DISABLED: attachments,custom_emoji
     volumes:
       - rim_data:/data

@@ -48,10 +48,9 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             visible_in_palette: true,
             visible_in_context_menus: false,
             keybind_capable: false,
-            // P4-A4: Mutating tier counts against agent's per-turn cap (§3.7)
-            // and triggers the same-turn-after-tool_result confirmation
-            // ladder per §3.5. `dangerous: false` because confirmation comes
-            // from the tier-based ladder, not the always-confirm flag.
+            // Mutating: an agent-initiated call needs a confirmation proof.
+            // `dangerous: false` because that confirmation comes from the
+            // sensitivity tier, not the always-confirm flag.
             dangerous: false,
             user_command_id: None,
             nl_description: Some(
@@ -159,7 +158,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             category: "Chat".to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
-            // P4-A4: `root_message_id` added so the AI surface can target a
+            // `root_message_id` lets the AI surface target a
             // thread without relying on `selected_message` context (the
             // palette / context-menu path still passes it via context).
             // The frontend dispatcher reads the arg when present and falls

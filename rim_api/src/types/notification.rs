@@ -1,4 +1,4 @@
-//! Notification rules and the notification inbox (Track 1.3).
+//! Notification rules and the notification inbox.
 
 use async_graphql::{
     ComplexObject, Context, Enum, Error, ErrorExtensions, InputObject, Result, SimpleObject,
@@ -323,8 +323,8 @@ impl From<rim_services::notification::dto::NotificationPageCursor> for Notificat
     }
 }
 
-/// Notifications ordered `createdAt DESC, id DESC` (newest first), standard cursor semantics
-/// (`docs/pagination.md`): `AFTER` pages go to older notifications.
+/// Notifications ordered `createdAt DESC, id DESC` (newest first), with the standard cursor
+/// semantics: `AFTER` pages go to older notifications.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct NotificationPage {
     pub items: Vec<Notification>,

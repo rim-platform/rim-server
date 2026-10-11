@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-/// Server-side notification rules (Track 1.3, `docs/specs/track-1-3-notification-rules.md`).
+/// Server-side notification rules.
 ///
 /// - Enums `notification_level` (`all`, `mentions`, `none`), `digest_frequency` (`off`,
 ///   `hourly`, `daily`) and `notification_reason` (`direct`, `mention`, `keyword`, `all`,
@@ -16,8 +16,8 @@ use sea_orm_migration::prelude::*;
 ///   delete-on-message path and the FK cascade.
 ///
 /// **Data step:** a pre-existing permanent mute (a row with `muted_until IS NULL`) becomes an
-/// explicit `level = 'none'`, so a row that only carries a level override is no longer mistaken
-/// for a mute. See [`PERMANENT_MUTE_TO_NONE_SQL`].
+/// explicit `level = 'none'`, so a row that only carries a level override is not mistaken for
+/// a mute. See [`PERMANENT_MUTE_TO_NONE_SQL`].
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

@@ -329,9 +329,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let raw_db_for_tasks = raw_db.clone();
     let db: DbHandle = db.into();
 
-    // Canonical repo constructor (mirrors the FL1 composition-root note in
-    // CLAUDE.md) — keeps this composition root in sync with every other
-    // production UoW path without hand-duplicating the 31-repo literal.
+    // The shared repo constructor keeps this composition root in sync with every other
+    // production UoW path without hand-duplicating the repo literal.
     let repos = AppRepos::with_handle(&db);
 
     // Build the dummy hash that unknown-username logins verify against now, so the first such
@@ -341,22 +340,16 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         std::io::Error::other(format!("failed to prepare dummy password hash: {e}"))
     })?;
 
-    // Phase 1 §3.3 — closes Black Widow C1. Seed builtin capabilities into
-    // the registry SYNCHRONOUSLY before the HTTP listener binds, so the
-    // capability gate cannot deny a legitimate first-request `chat.write`
-    // due to a registry-seeding race. Idempotent: re-runs are no-ops past
-    // the first deploy.
+    // Seed the builtin capabilities into the registry before the HTTP listener binds, so the
+    // capability gate cannot deny a legitimate first request because the registry is still
+    // empty. Idempotent: re-runs are no-ops past the first deploy.
     seed_builtin_capabilities(repos.capability_registry_repo.as_ref())
         .await
         .map_err(|e| std::io::Error::other(format!("failed to seed builtin capabilities: {e}")))?;
 
-    // Phase 1 §3.4 — F1 closure (Ant-Man / Widow). Audit-emit the
-    // AI-callable command inventory at boot so operators have a stable,
-    // grep-able record of which commands the LLM surface can reach. Phase 1
-    // builtins are all `ai_callable: false`; the emission still runs (with
-    // count=0) so a deploy that accidentally promotes a builtin to AI-
-    // callable surfaces the change in the audit log immediately, not after
-    // a real exploit.
+    // Audit-emit the AI-callable builtin command inventory at boot, so operators have a
+    // grep-able record of which commands the AI surface can reach and a deploy that changes
+    // the set shows up in the audit log.
     rim_infra_services::command::emit_ai_callable_inventory_audit();
 
     let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
@@ -394,9 +387,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             max_workspace_bytes,
         ));
 
-    // Track B3 — real SMTP only when RIM_SMTP_HOST + RIM_SMTP_FROM are both configured;
-    // otherwise every send falls back to LogEmailSender (log-only, no delivery). See
-    // docs/email.md. With email disabled every message is dropped.
+    // Real SMTP only when RIM_SMTP_HOST + RIM_SMTP_FROM are both configured; otherwise every
+    // send falls back to LogEmailSender (log-only, no delivery). With email disabled every
+    // message is dropped.
     let email_sender: Arc<dyn rim_infra_services::email::EmailSender> = match config.smtp_config() {
         _ if email_disabled => Arc::new(rim_infra_services::email::DisabledEmailSender),
         Some(smtp) => Arc::new(
@@ -526,7 +519,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
-    // Background tasks: notification digest and retention (Track 1.3), assuming a single
+    // Background tasks: notification digest and retention, assuming a single
     // scheduler node. The jobs live in
     // `rim_infra_services::notification` behind `NotificationJobs`; this loop only times them.
     // The hourly retention tick also purges MLS rows the encryption retention rules let go.
@@ -856,11 +849,8 @@ const NOTIFICATION_RETENTION_INTERVAL_SECS: u64 = 60 * 60;
 
 /// Idempotent startup seeding for the capability registry.
 ///
-/// Runs synchronously before the HTTP listener binds — see the
-/// `build_app_runtime` call site for the rationale (Black Widow C1
-/// registry-seeding race closure). Also emits the F1 `ai_callable_inventory`
-/// audit line so operators can confirm at boot which caps the gate
-/// recognises.
+/// Runs before the HTTP listener binds, so the capability gate never sees an empty registry.
+/// Emits one `capability_registry_seeded` audit line with the number of builtin capabilities.
 async fn seed_builtin_capabilities(
     repo: &dyn rim_core::capability::repository::CapabilityRegistryRepository,
 ) -> Result<(), String> {
@@ -868,8 +858,7 @@ async fn seed_builtin_capabilities(
     for spec in specs {
         // Use the insert-only seed entrypoint so a builtin that has been
         // soft-retired by an operator (e.g. company-wide `audit.read`
-        // disable) is NOT silently re-activated on the next deploy
-        // (Gate 4 M3).
+        // disable) is NOT silently re-activated on the next deploy.
         repo.upsert_if_missing(spec.id, spec.is_self_scoped)
             .await
             .map_err(|e| format!("seed {}: {e:?}", spec.id))?;
@@ -878,7 +867,7 @@ async fn seed_builtin_capabilities(
         target: "audit",
         event = "capability_registry_seeded",
         count = specs.len(),
-        "seeded builtin capabilities into registry (Phase 1 §3.3)"
+        "seeded builtin capabilities into registry"
     );
     Ok(())
 }

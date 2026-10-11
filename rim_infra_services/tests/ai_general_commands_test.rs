@@ -1,10 +1,10 @@
-//! Track 4.1 integration tests: the general chat, navigation and workspace-state builtins are
+//! Integration tests: the general chat, navigation and workspace-state builtins are
 //! AI-callable, and the agent reaches them through the same registry and confirmation gate as
 //! every other builtin.
 //!
-//!   - **AI surface listing**: every Track 4.1 flip appears on `Surface::Ai`, desktop-local
+//!   - **AI surface listing**: every one of these commands appears on `Surface::Ai`, desktop-local
 //!     navigation keeps `execution_target: DesktopLocal` so the client runs it locally.
-//!   - **Confirmation gate**: read-only flips run directly for the agent; the ones that write
+//!   - **Confirmation gate**: read-only commands run directly for the agent; the ones that write
 //!     (`chat.mark_as_read`, `chat.create_group`, `state.set`, `state.incr`, `state.delete`) are
 //!     `Mutating`, so an `Agent` call without a proof gets `CONFIRMATION_REQUIRED` and the
 //!     service is never reached, while human initiators still run them in one step.
@@ -40,8 +40,8 @@ use rim_services::read_state::service::MockReadStateService;
 use rim_services::workspace_state::dto::{WorkspaceStateDto, WorkspaceStateScopeDto};
 use rim_services::workspace_state::service::MockWorkspaceStateService;
 
-/// Desktop-local navigation flipped in Track 4.1; the client runs these, never the server.
-const DESKTOP_LOCAL_FLIPS: [&str; 11] = [
+/// AI-callable desktop-local navigation; the client runs these, never the server.
+const DESKTOP_LOCAL_COMMANDS: [&str; 11] = [
     "workspace.open_search",
     "workspace.search_in_channel",
     "workspace.open_marketplace",
@@ -55,11 +55,11 @@ const DESKTOP_LOCAL_FLIPS: [&str; 11] = [
     "chat.scroll_to_top",
 ];
 
-/// Backend flips that only read: the agent runs them without a confirmation.
-const READ_ONLY_BACKEND_FLIPS: [&str; 2] = ["state.get", "state.list"];
+/// AI-callable backend commands that only read: the agent runs them without a confirmation.
+const READ_ONLY_BACKEND_COMMANDS: [&str; 2] = ["state.get", "state.list"];
 
-/// Backend flips that write: the agent needs a confirmation proof for each.
-const MUTATING_BACKEND_FLIPS: [&str; 5] = [
+/// AI-callable backend commands that write: the agent needs a confirmation proof for each.
+const MUTATING_BACKEND_COMMANDS: [&str; 5] = [
     "chat.mark_as_read",
     "chat.create_group",
     "state.set",
@@ -165,7 +165,7 @@ fn state_entry(workspace: ServerId, key: &str, value: serde_json::Value) -> Work
 }
 
 #[tokio::test]
-async fn ai_surface_lists_every_track_4_1_command() {
+async fn ai_surface_lists_every_general_command() {
     let (svc, _) = build_service(cap_grant_all(), MockWorkspaceStateService::new());
 
     let listed = svc
@@ -177,7 +177,7 @@ async fn ai_surface_lists_every_track_4_1_command() {
         .await
         .expect("Surface::Ai must succeed when all caps granted");
 
-    for id in DESKTOP_LOCAL_FLIPS {
+    for id in DESKTOP_LOCAL_COMMANDS {
         let cmd = listed
             .iter()
             .find(|c| c.id == id)
@@ -192,9 +192,9 @@ async fn ai_surface_lists_every_track_4_1_command() {
             "{id} only moves the user's view and must run without a confirmation"
         );
     }
-    for id in READ_ONLY_BACKEND_FLIPS
+    for id in READ_ONLY_BACKEND_COMMANDS
         .iter()
-        .chain(MUTATING_BACKEND_FLIPS.iter())
+        .chain(MUTATING_BACKEND_COMMANDS.iter())
     {
         let cmd = listed
             .iter()
@@ -226,13 +226,13 @@ async fn confirmation_gate_matches_read_and_write_split() {
             .unwrap_or_else(|| panic!("{id} missing from the Ai surface"))
     };
 
-    for id in READ_ONLY_BACKEND_FLIPS {
+    for id in READ_ONLY_BACKEND_COMMANDS {
         assert!(
             !find(id).requires_confirmation_for_initiator(CommandInitiator::Agent),
             "{id} only reads and must run directly for the agent"
         );
     }
-    for id in MUTATING_BACKEND_FLIPS {
+    for id in MUTATING_BACKEND_COMMANDS {
         let cmd = find(id);
         assert!(
             cmd.requires_confirmation_for_initiator(CommandInitiator::Agent),

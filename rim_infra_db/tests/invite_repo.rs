@@ -65,7 +65,7 @@ async fn try_consume_respects_max_uses() {
     assert!(!repo.try_consume(inv.id).await.unwrap());
 }
 
-/// Track 1.2: an invite stores the role it grants.
+/// An invite stores the role it grants.
 #[tokio::test]
 async fn invite_role_round_trips() {
     let ctx = support::TestCtx::new().await;

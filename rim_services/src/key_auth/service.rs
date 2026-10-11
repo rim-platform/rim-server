@@ -13,7 +13,7 @@ use crate::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
 };
 
-/// Key identity and challenge login (Stage 3, `docs/specs/key-identity-v1.md`).
+/// Key identity and challenge login.
 ///
 /// Sits beside the password [`crate::auth::service::AuthService`]: a key login issues the same
 /// session the password login does. Once an account enrolls a key, its password no longer signs

@@ -63,18 +63,15 @@ pub struct ExecuteMacroCmd {
     pub actor: Actor,
     pub macro_id: MacroId,
     pub command_context: Option<CommandContextDto>,
-    /// Confirmation proof for any dangerous step inside the macro. Phase 1
-    /// note: macros are an "all-or-nothing" confirmation surface — one
-    /// proof issued at macro-issue time covers every nested dangerous
-    /// step. The H1 args-binding still applies per nested call: a proof
-    /// minted for macro M against the macro's input args binds to M's
-    /// input args, NOT to the args of every step. Phase 4 may split this
-    /// into per-step proofs once the modal can render a step list.
+    /// Confirmation proof for the macro. Macros are an all-or-nothing
+    /// confirmation surface: one proof, bound to the macro's own input args
+    /// (not the args of each step), covers every dangerous step. Once it
+    /// verifies, the server issues each step its own single-use token.
     pub confirmation: Option<ConfirmationProof>,
     /// Who triggered the macro. Propagated to every nested
     /// `ExecuteCommandCmd` produced by this macro's expansion — see
     /// [`crate::command::initiator::CommandInitiator`] docstring on
-    /// `Macro` for the propagation rule. Defaults to `Palette` for
-    /// back-compat.
+    /// `Macro` for the propagation rule. The GraphQL layer fills in
+    /// `Palette` when the client sends none.
     pub initiator: CommandInitiator,
 }

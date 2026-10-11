@@ -5,11 +5,9 @@ use migration::{Migrator, MigratorTrait};
 
 /// Every `m<timestamp>_*.rs` migration source file must be registered in `Migrator::migrations()`
 /// (both the `mod` line and the `Box::new(...)` entry). Guards against `sea migrate generate`
-/// silently dropping adjacent registrations when it rewrites `lib.rs` — a tooling hazard that has
-/// bitten this repo repeatedly (each drop was caught by hand via manual `Read`-diff before this
-/// test existed; see `docs/specs/migration-registration-guard.md`). No DB required: this only
+/// silently dropping adjacent registrations when it rewrites `lib.rs`. No DB required: this only
 /// reads the source directory and constructs the migration vec, so it runs in the normal
-/// `cargo test` pass and fails loudly, naming the offender, on the very next push after a drop.
+/// `cargo test` pass and fails loudly, naming the offender.
 #[test]
 fn every_migration_file_is_registered() {
     let src_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");

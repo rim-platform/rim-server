@@ -30,7 +30,7 @@ fn conversation_arg(description: &str) -> CommandArgumentDto {
     }
 }
 
-/// The Track 1.1 membership/archive builtins: backend, mutating, palette and keybind visible.
+/// The membership/archive builtins: backend, mutating, palette and keybind visible.
 /// Authorization (membership, Owner/Moderator role, private-channel visibility) is enforced by
 /// `ConversationService`; the executors only adapt arguments.
 fn membership_command(

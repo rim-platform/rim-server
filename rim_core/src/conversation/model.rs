@@ -81,7 +81,7 @@ pub struct Conversation {
     /// Who created the conversation. `None` for rows that predate the column or whose creator
     /// was deleted.
     pub created_by: Option<UserId>,
-    /// Slow mode (Track 1.2): minimum seconds between two messages of the same non-moderator
+    /// Slow mode: minimum seconds between two messages of the same non-moderator
     /// member in this conversation. `0` means off. Only channels can have it set.
     pub slow_mode_seconds: i32,
     /// When the conversation became end-to-end encrypted; never cleared once set. Only DMs and

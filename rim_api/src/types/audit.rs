@@ -1,6 +1,6 @@
 use async_graphql::{Enum, InputObject, SimpleObject};
 
-// ── Audit log types (Phase 5 Task 1) ────────────────────────────────────────
+// ── Audit log types ─────────────────────────────────────────────────────────
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TypedVerbGql {
@@ -54,8 +54,7 @@ impl From<TypedVerbGql> for rim_services::command::verb::TypedVerb {
     }
 }
 
-/// GraphQL enum for audit log outcome — mirrors [`rim_services::audit::dto::AuditOutcome`].
-/// Rust variants → SCREAMING_SNAKE in GraphQL (e.g. `MacroPartialFailure` → `MACRO_PARTIAL_FAILURE`).
+/// How an audited command or macro execution ended.
 #[derive(async_graphql::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditOutcomeGql {
     Success,

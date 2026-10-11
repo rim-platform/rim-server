@@ -83,14 +83,14 @@ pub enum WorkspaceEvent {
         user_id: UserId,
         username: String,
     },
-    /// A member left the workspace because a moderator kicked or banned them (Track 1.2).
+    /// A member left the workspace because a moderator kicked or banned them.
     /// Wire shape: `{"type":"MemberLeft","workspace_id","user_id"}`. Delivered to every
     /// subscriber of the workspace, including the removed user, whose subscription then ends.
     MemberLeft {
         workspace_id: ServerId,
         user_id: UserId,
     },
-    /// A member's role changed (Track 1.2). `role` is the snake_case role name (`owner`,
+    /// A member's role changed. `role` is the snake_case role name (`owner`,
     /// `moderator`, `member`, `guest`). Wire shape:
     /// `{"type":"MemberRoleChanged","workspace_id","user_id","role"}`.
     MemberRoleChanged {
@@ -243,7 +243,7 @@ pub enum WorkspaceEvent {
         pipeline_name: String,
         reason: String,
     },
-    /// The server decided to notify `user_id` about a message (Track 1.3): emitted once per
+    /// The server decided to notify `user_id` about a message: emitted once per
     /// recipient after the notification row is stored. Delivered to that user only
     /// (`member_user_ids == [user_id]`). `reason` is the snake_case notification reason
     /// (`direct`, `mention`, `keyword`, `thread_reply`, `all`); `quiet` is true inside the

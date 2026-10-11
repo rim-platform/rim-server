@@ -9,8 +9,8 @@ use rim_services::command::rate_limit::{RateLimitDecision, check_sliding_window}
 
 /// Maximum number of distinct (normalised-IP, key) buckets held in memory.
 ///
-/// M6 hardening: an unbounded DashMap is a memory-DoS vector when combined
-/// with H1 (spoofed source IPs) or M5 (IPv6 /64 rotation). Once the map
+/// An unbounded DashMap is a memory-DoS vector when combined with spoofed
+/// source IPs or IPv6 address rotation. Once the map
 /// exceeds this limit, the oldest-inserted bucket is evicted to make room.
 ///
 /// 100 000 buckets × ≈200 bytes each ≈ 20 MiB worst-case, which is
@@ -23,7 +23,7 @@ type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 /// Shared, thread-safe per-(normalised-IP, key) sliding-window rate limiter for
 /// unauthenticated registration and login endpoints.
 ///
-/// Used for:
+/// Used for, among others:
 /// - `previewInviteToken`: 30 req / 5-min / IP (keyed `"preview_invite"`)
 /// - `signupWithInvite` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
 /// - `login`: 30 attempts / 5-min / IP, 10 failures / 15-min / (IP, username), and
@@ -31,7 +31,7 @@ type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 ///
 /// Single-node only; DashMap-backed.
 ///
-/// # IPv6 normalisation (M5)
+/// # IPv6 normalisation
 /// IPv6 source addresses are normalised to their /64 network prefix before
 /// keying the map. This prevents an attacker on a /64 block from cycling
 /// through the remaining 2^64 interface identifiers to bypass per-IP limits.
@@ -44,7 +44,7 @@ type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 /// - /56 would group 256 /64 prefixes under one bucket, which could
 ///   incorrectly limit legitimate users sharing a carrier-grade NAT prefix.
 ///
-/// # Capacity cap (M6)
+/// # Capacity cap
 /// The map is capped at [`MAX_BUCKETS`] entries. When the cap is reached,
 /// the oldest-inserted bucket is evicted (FIFO). This bounds memory usage
 /// and prevents a memory DoS via high-volume IP rotation.
@@ -183,7 +183,7 @@ impl RegistrationRateLimiter {
     /// - **IPv4**: returned unchanged (full /32 precision).
     /// - **IPv6**: zeroes the lower 64 bits, keeping only the /64 network prefix.
     ///   This prevents attacker rotation across the 2^64 interface identifiers
-    ///   within a single /64 allocation (M5 hardening).
+    ///   within a single /64 allocation.
     /// - **Unparseable**: returned unchanged as a fallback so rate-limiting
     ///   degrades gracefully rather than panicking.
     ///
@@ -226,9 +226,9 @@ impl RegistrationRateLimiter {
 
     /// Record one call from `ip` under `key` and return whether it is allowed.
     ///
-    /// Before checking, the IP is normalised via [`Self::normalise_ip`] (M5).
+    /// Before checking, the IP is normalised via [`Self::normalise_ip`].
     /// If the store exceeds [`MAX_BUCKETS`] after inserting a new bucket, the
-    /// oldest bucket is evicted (M6).
+    /// oldest bucket is evicted.
     ///
     /// Stale timestamps outside the sliding window are evicted before checking
     /// the count, bounding per-bucket memory to at most `limit` entries.
@@ -268,7 +268,7 @@ impl RegistrationRateLimiter {
         // potential lock-ordering deadlocks.
         drop(entry);
 
-        // M6: track insertion order and evict when over the cap.
+        // Track insertion order and evict when over the cap.
         if is_new && let Ok(mut order) = self.insertion_order.lock() {
             order.push_back(map_key);
             // Evict oldest bucket(s) until we're within the cap.
@@ -402,9 +402,9 @@ mod tests {
         );
     }
 
-    // ── M5 tests ─────────────────────────────────────────────────────────────
+    // ── IPv6 normalisation tests ─────────────────────────────────────────────
 
-    /// M5 — IPv4 addresses are used as-is (no truncation).
+    /// IPv4 addresses are used as-is (no truncation).
     #[test]
     fn normalise_ip_ipv4_unchanged() {
         assert_eq!(RegistrationRateLimiter::normalise_ip("1.2.3.4"), "1.2.3.4");
@@ -427,7 +427,7 @@ mod tests {
         );
     }
 
-    /// M5 — Two IPv6 addresses in the same /64 share a bucket.
+    /// Two IPv6 addresses in the same /64 share a bucket.
     #[test]
     fn normalise_ip_ipv6_same_slash64_share_bucket() {
         let a = RegistrationRateLimiter::normalise_ip("2001:db8::1");
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(a, b, "same /64 prefix must yield the same normalised key");
     }
 
-    /// M5 — Two IPv6 addresses in different /64s have different buckets.
+    /// Two IPv6 addresses in different /64s have different buckets.
     #[test]
     fn normalise_ip_ipv6_different_slash64_different_bucket() {
         let a = RegistrationRateLimiter::normalise_ip("2001:db8:0:1::1");
@@ -446,7 +446,7 @@ mod tests {
         );
     }
 
-    /// M5 — Two IPv6 addresses in the same /64 hit the same rate-limit bucket.
+    /// Two IPv6 addresses in the same /64 hit the same rate-limit bucket.
     #[test]
     fn ipv6_same_slash64_shares_rate_limit_bucket() {
         let rl = RegistrationRateLimiter::new(300, 2);
@@ -471,7 +471,7 @@ mod tests {
         );
     }
 
-    /// M5 — Two IPv6 addresses in different /64s have independent buckets.
+    /// Two IPv6 addresses in different /64s have independent buckets.
     #[test]
     fn ipv6_different_slash64_independent_buckets() {
         let rl = RegistrationRateLimiter::new(300, 1);
@@ -490,9 +490,9 @@ mod tests {
         );
     }
 
-    // ── M6 tests ─────────────────────────────────────────────────────────────
+    // ── Capacity cap tests ───────────────────────────────────────────────────
 
-    /// M6 — When the map exceeds `MAX_BUCKETS`, the oldest entry is evicted.
+    /// When the map exceeds `MAX_BUCKETS`, the oldest entry is evicted.
     ///
     /// Uses a small cap (3) to keep the test fast.
     #[test]
@@ -527,7 +527,7 @@ mod tests {
         );
     }
 
-    /// M6 — The eviction logic removes the oldest bucket when the limit is hit.
+    /// The eviction logic removes the oldest bucket when the limit is hit.
     ///
     /// We white-box test by manually pre-filling insertion_order to simulate
     /// being at the cap, then verify one more insert evicts the oldest.

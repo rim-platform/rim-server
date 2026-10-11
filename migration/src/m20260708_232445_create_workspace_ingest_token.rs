@@ -3,8 +3,8 @@ use crate::m20251029_222439_create_server::Server;
 use crate::m20251122_154540_create_conversation::Conversation;
 use sea_orm_migration::{prelude::*, schema::*};
 
-/// Creates `workspace_ingest_token` — the auth mechanism for alert-ingestion webhooks
-/// (Track B2, `docs/alerts.md`). Mirrors the `session`/`invite` shape
+/// Creates `workspace_ingest_token` — the auth mechanism for alert-ingestion webhooks.
+/// Mirrors the `session`/`invite` shape
 /// (`m20260212_000001_create_sessions_and_invites`): only a SHA-256 hex hash of the raw
 /// token is stored, never the raw token itself.
 #[derive(DeriveMigrationName)]

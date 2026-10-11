@@ -206,10 +206,10 @@ pub struct CreateInviteInput {
     pub server_id: ID,
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: Option<i32>,
-    /// Optional recipient to email the invite link to (Track B3). Validated server-side;
+    /// Optional recipient to email the invite link to. Validated server-side;
     /// malformed addresses return a validation error.
     pub recipient_email: Option<String>,
-    /// Role granted on join (Track 1.2): `MEMBER` (default) or `GUEST`. Any other value is a
+    /// Role granted on join: `MEMBER` (default) or `GUEST`. Any other value is a
     /// `VALIDATION` error.
     pub role: Option<crate::types::ServerMemberRoleGql>,
 }
@@ -243,7 +243,7 @@ pub struct JoinServerByInvitePayload {
 pub struct SignupWithInviteInput {
     pub username: String,
     /// Required. The user's email address. Trimmed and lowercased before storage.
-    /// Must match the pragmatic email regex from spec §13.3.
+    /// Must look like `local@domain.tld` and be at most 254 characters.
     pub email: String,
     /// Optional display name (1–80 chars when present). Falls back to `username`
     /// when absent or blank after trim.

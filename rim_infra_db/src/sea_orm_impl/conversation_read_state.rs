@@ -64,7 +64,7 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
 
         // Baseline: the last read, else when the user joined (conversation_member.joined_at),
         // else conversation.created_at for a conversation without a member row (callers pass
-        // joined conversations only since Track 1.1, so that fallback is defensive). A
+        // joined conversations only, so that fallback is defensive). A
         // conversation hidden by the request inbox has no count.
         let rows = self
             .db

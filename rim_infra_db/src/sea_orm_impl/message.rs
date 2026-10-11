@@ -177,7 +177,7 @@ impl MessageRepository for SeaOrmMessageRepository {
         // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in
         // `order`, so fetch them nearest-first (reversed order) and flip the page back below;
         // fetching in `order` would return the far end of the range and skip everything between
-        // it and the cursor (finding A-H1).
+        // it and the cursor.
         let fetch_reversed = has_cursor && dir == PageDir::Before;
         let fetch_order = match (order, fetch_reversed) {
             (SortOrder::Asc, false) | (SortOrder::Desc, true) => SortOrder::Asc,
@@ -301,7 +301,7 @@ impl MessageRepository for SeaOrmMessageRepository {
         };
         // Select the rows nearest the cursor: `Before` rows are newer than it, so fetch them
         // oldest-first and flip them back to (sent_at DESC, id DESC) below. Fetching newest-first
-        // would return the far end of the range and skip the rows next to the cursor (A-H1).
+        // would return the far end of the range and skip the rows next to the cursor.
         let fetch_reversed = cursor.is_some() && dir == PageDir::Before;
         let fetch_dir = if fetch_reversed { "ASC" } else { "DESC" };
 

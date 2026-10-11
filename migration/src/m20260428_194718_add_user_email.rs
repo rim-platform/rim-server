@@ -17,7 +17,7 @@ impl MigrationTrait for Migration {
     /// Operators with existing accounts MUST update their email via the
     /// profile-edit mutation before relying on password reset or notifications.
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Phase 1: add nullable column.
+        // Step 1: add nullable column.
         manager
             .alter_table(
                 Table::alter()
@@ -27,7 +27,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Phase 2: backfill — synthetic placeholder for every existing row.
+        // Step 2: backfill — synthetic placeholder for every existing row.
         manager
             .get_connection()
             .execute_unprepared(
@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Phase 3: enforce NOT NULL now that every row has a value.
+        // Step 3: enforce NOT NULL now that every row has a value.
         manager
             .alter_table(
                 Table::alter()
@@ -49,7 +49,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Phase 4: case-insensitive unique index.
+        // Step 4: case-insensitive unique index.
         manager
             .get_connection()
             .execute_unprepared(

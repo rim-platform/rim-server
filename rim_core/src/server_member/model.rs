@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 model_id!(ServerMemberId);
 
-/// The four-role ladder (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`):
+/// The four-role ladder:
 ///
 /// - `Owner`: everything.
 /// - `Moderator`: moderation and channel management; may change roles only between `Member`

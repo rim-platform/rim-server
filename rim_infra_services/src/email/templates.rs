@@ -60,7 +60,7 @@ pub fn password_reset(to: &str, link: &str) -> EmailMessage {
     }
 }
 
-/// Invite email (server invite or instance invite). `link` is the full join URL (or bare token
+/// Workspace invite email. `link` is the full join URL (or bare token
 /// if `public_base_url` was unset).
 ///
 /// # Examples
@@ -103,7 +103,7 @@ pub struct DigestGroup {
     pub items: Vec<DigestItem>,
 }
 
-/// Unread-notification digest (Track 1.3): the count, then each conversation with its message
+/// Unread-notification digest: the count, then each conversation with its message
 /// snippets and links. The subject names only the count and the workspace, so the log-only
 /// sender (which logs recipient and subject) never logs message text. Snippets, conversation
 /// labels and the workspace name are user content and are HTML-escaped in the HTML part.

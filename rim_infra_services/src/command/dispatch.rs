@@ -453,7 +453,7 @@ impl DefaultCommandService {
     }
 
     /// Inner dispatch body for `execute_command`. The public trait method wraps
-    /// this with the P4-A1 audit emit so every branch gets exactly one audit line.
+    /// this with the audit emit so every branch gets exactly one audit line.
     pub(super) async fn execute_command_inner(
         &self,
         cmd: ExecuteCommandCmd,
@@ -464,7 +464,7 @@ impl DefaultCommandService {
             ));
         }
 
-        // ── C1: capability gate ─────────────────────────────────────────
+        // ── Capability gate ─────────────────────────────────────────────
         let required_caps = self.dispatch_required_capabilities(&cmd).await?;
         if !required_caps.is_empty() {
             let workspace_id = cmd.context.as_ref().and_then(|c| c.workspace_id);
@@ -476,7 +476,7 @@ impl DefaultCommandService {
             }
         }
 
-        // ── H1: confirmation gate ────────────────────────────────────────
+        // ── Confirmation gate ────────────────────────────────────────────
         let needs_confirmation = self.dispatch_requires_confirmation(&cmd).await?;
         if needs_confirmation {
             match &cmd.confirmation {
@@ -523,7 +523,7 @@ impl DefaultCommandService {
                 .ok()
                 .flatten()
         };
-        // ── T1: timeout gate (Track 1.2) ────────────────────────────────
+        // ── Timeout gate ────────────────────────────────────────────────
         // A timed-out member cannot run Mutating commands in that workspace; reads still work.
         // Also before the rate limiter, so a refused command consumes no slot.
         if let Some(def) = &top_level_def {
@@ -531,7 +531,7 @@ impl DefaultCommandService {
                 .await?;
         }
 
-        // ── R1: rate-limit gate (runs after capability + confirmation) ───
+        // ── Rate-limit gate (runs after capability + confirmation) ──────
         if let Some(def) = &top_level_def
             && let Some(limit) = def.rate_limit_per_minute
         {

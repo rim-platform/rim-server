@@ -62,7 +62,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Enforces "one active run per incident" (§6) — the service creates a fresh run only
+        // Enforces "one active run per incident" — the service creates a fresh run only
         // after the previous one transitioned out of `active`.
         manager
             .get_connection()

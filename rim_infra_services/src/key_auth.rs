@@ -1,5 +1,4 @@
-//! Key identity and challenge login (Stage 3, Track 7.2). Contract:
-//! `docs/specs/key-identity-v1.md`. Statement verification lives in `rim_identity`; this module
+//! Key identity and challenge login. Statement verification lives in `rim_identity`; this module
 //! decides who may submit what, stores what verified, and issues sessions.
 
 use std::sync::Arc;

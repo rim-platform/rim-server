@@ -162,7 +162,7 @@ impl PresenceManager {
             }
         }
 
-        // Phase 2: Remove entries that have been Offline for > 10 minutes.
+        // Then remove entries that have been Offline for > 10 minutes.
         let stale_threshold = now - chrono::Duration::minutes(10);
         let stale_keys: Vec<UserId> = self
             .states

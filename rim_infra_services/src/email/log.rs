@@ -5,9 +5,8 @@ use super::{EmailMessage, EmailSender};
 
 /// Dev/unconfigured fallback sender: logs that an email *would* be sent, never delivers.
 ///
-/// Used whenever `RIM_SMTP_*` is not configured (see `docs/email.md`). Deliberately logs only
-/// `to`/`subject` at `info` level — never the body — so this never leaks a password-reset or
-/// invite token into production logs, unlike the pre-Track-B3 stub it replaces.
+/// Used whenever `RIM_SMTP_*` is not configured. Deliberately logs only `to`/`subject` at
+/// `info` level — never the body — so a password-reset or invite token never reaches the logs.
 pub struct LogEmailSender;
 
 #[async_trait]

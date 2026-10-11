@@ -22,8 +22,6 @@ impl RegistrationQueries {
     /// Returns minimal metadata so the frontend can render the correct signup
     /// copy before the user submits credentials. Rate-limited at 30 req / 5 min
     /// per IP; no authentication required.
-    ///
-    /// See spec §4.7.
     async fn preview_invite_token(
         &self,
         ctx: &Context<'_>,

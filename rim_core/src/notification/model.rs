@@ -1,5 +1,5 @@
-//! Server-side notification rules (Track 1.3): levels, per-workspace settings and the
-//! notification inbox rows. See `docs/messaging.md` ("Notification rules").
+//! Server-side notification rules: levels, per-workspace settings and the
+//! notification inbox rows.
 
 use std::fmt;
 use std::str::FromStr;

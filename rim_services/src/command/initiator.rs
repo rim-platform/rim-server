@@ -1,49 +1,32 @@
-//! Command initiator classification — *who* asked the system to run a command.
+//! Command initiator classification: *who* asked the system to run a command.
 //!
-//! Phase 1 deliverable (H4 part 1) of the AI Agent Reframe per
-//! `docs/design/ai-agent-reframe-design-2026-04-22-v2.md` §3.11.
+//! Every `ExecuteCommandCmd` / `ExecuteMacroCmd` carries the entry point that produced it. The
+//! tag is consumed by:
 //!
-//! Every `ExecuteCommandCmd` / `ExecuteMacroCmd` is now tagged with the entry
-//! point that produced it. The tag is consumed by:
+//! - **Audit log**: every executed command records its initiator next to the actor, command id
+//!   and argument hash, so a palette `chat.delete_message` is distinguishable from an
+//!   agent-driven one.
+//! - **Confirmation policy**: an agentic initiator running a `Mutating` command needs a
+//!   `ConfirmationProof` even when the command is not `dangerous`; `dangerous` and `Restricted`
+//!   commands need one from every initiator. The dispatch policy reads
+//!   `(initiator, sensitivity, dangerous)` together.
+//! - **AI command surface switch**: an `Agent` call fails while the instance has the AI command
+//!   surface turned off.
 //!
-//! - **Audit log** (Phase 4 / Phase 5) — every executed command records
-//!   `(actor, initiator, command_id, args_hash)`. Without `initiator` an
-//!   audit row cannot distinguish a human-in-palette `chat.delete_message`
-//!   from an agent-driven one — making Phase 5's incident-review surface
-//!   useless for the failure modes Widow named.
-//! - **Confirmation policy** (Phase 4) — `Agent`-initiated execution of a
-//!   `Mutating` or `Restricted` command always requires a `ConfirmationProof`
-//!   regardless of the per-command `dangerous` flag, while `Palette`-initiated
-//!   execution of the same command may inline-confirm. The dispatch policy
-//!   reads `(initiator, sensitivity, dangerous)` together.
-//! - **Per-turn rate limiting** (Phase 4 / §3.7) — the agent's mutating-call
-//!   cap is keyed off `initiator == Agent`. Other initiators are not capped.
-//! - **CSP / IPC origin enforcement** (Phase 4 / C2) — the Tauri IPC proxy
-//!   stamps `Agent` on completions originating from the agent webview and
-//!   refuses any client-supplied initiator that doesn't match the origin.
+//! The initiator is asserted by the client; the server does not verify where a call came from.
 //!
-//! ## Wire contract (frontend codegen)
+//! ## Wire contract
 //!
-//! Exposed as a GraphQL enum `CommandInitiator` with SCREAMING_SNAKE wire
-//! values (`PALETTE`, `AGENT`, `MACRO`, `KEYBIND`, `CONTEXT_MENU`, `PLUGIN`,
-//! `CLI`). The GraphQL `ExecuteCommandInput.initiator` field is
-//! **optional** with backend default `Palette` so existing clients (and the
-//! current frontend dispatcher, which has not been retrofitted) keep working
-//! without a coordinated breaking change.
-//!
-//! Spider-Man's Phase 4 work will start sending the explicit initiator from
-//! every dispatch site in `rim-ui`. Until then, the default-`Palette` rule
-//! preserves Phase-1 conservative behaviour: anything that doesn't say it's
-//! the agent is treated as a human action.
+//! Exposed as the GraphQL enum `CommandInitiator` (`PALETTE`, `AGENT`, `MACRO`, `KEYBIND`,
+//! `CONTEXT_MENU`, `PLUGIN`, `CLI`). `ExecuteCommandInput.initiator` is optional and defaults to
+//! `Palette`: anything that does not say it is the agent is treated as a human action. The
+//! first-party client sends `AGENT` from its agent tools.
 //!
 //! ## Why an enum and not a free-form string
 //!
-//! A closed set keeps audit grep simple and lets the dispatch policy match
-//! exhaustively (compile error if a new initiator is added without updating
-//! every policy site). Plugin-defined initiators are intentionally NOT
-//! supported — every plugin-issued command lands as `CommandInitiator::Plugin`,
-//! and the plugin id travels in the audit row's actor context, not in the
-//! initiator tag.
+//! A closed set keeps audit grep simple and lets the dispatch policy match exhaustively (adding
+//! an initiator is a compile error until every policy site handles it). A command a plugin's
+//! runtime issues on its own is tagged `CommandInitiator::Plugin`.
 
 use std::fmt;
 
@@ -52,16 +35,16 @@ use std::fmt;
 /// Closed set — extending requires updating every match-site that consumes
 /// initiator (dispatch policy, audit serializer, GraphQL `From` impl).
 ///
-/// Per Fury v2 §3.11. Kept in `rim_services` (not `rim_core`) because the
-/// transport-layer GraphQL enum (`rim_api::types::CommandInitiator`) mirrors
-/// it via `From` impl — `rim_core` stays transport-neutral.
+/// Kept in `rim_services` (not `rim_core`) because the transport-layer GraphQL enum
+/// (`rim_api::types::CommandInitiator`) mirrors it via `From` impl — `rim_core` stays
+/// transport-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandInitiator {
     /// User typed/clicked in the command palette. Default for any callsite
     /// that has not been audited and explicitly tagged.
     Palette,
-    /// AI agent issued the command via the dispatcher. Triggers per-turn
-    /// mutating-call cap + always-confirm-for-Mutating policy.
+    /// AI agent issued the command via the dispatcher. Triggers the
+    /// always-confirm-for-Mutating policy.
     Agent,
     /// Inside a macro / user command expansion. The outermost macro's
     /// initiator is preserved on every nested `execute_command` call so a
@@ -80,9 +63,9 @@ pub enum CommandInitiator {
 
 impl CommandInitiator {
     /// Returns `true` when this initiator is non-human and therefore subject
-    /// to the agent-style mutating-call cap and always-confirm-for-Mutating
-    /// rules. `Plugin` counts as agentic for safety; only `Palette`,
-    /// `Keybind`, `ContextMenu`, `Cli`, and (transitively) `Macro` are human.
+    /// to the always-confirm-for-Mutating rule. `Plugin` counts as agentic for
+    /// safety; only `Palette`, `Keybind`, `ContextMenu`, `Cli`, and
+    /// (transitively) `Macro` are human.
     ///
     /// `Macro` is treated as human here because a macro is a recorded series
     /// of human-issued steps; if an agent triggered the macro, the dispatch
@@ -118,7 +101,7 @@ impl Default for CommandInitiator {
     /// Default to `Palette` — back-compat for any caller that constructs
     /// `ExecuteCommandCmd` without setting initiator explicitly. This is the
     /// **conservative** default because `Palette` is human-attributed and
-    /// does not trigger the agent-only rate limits / confirmation rules.
+    /// does not trigger the agent-only confirmation rules.
     /// A genuine missing-initiator bug surfaces as "human action attributed
     /// to a non-human caller" rather than the more dangerous reverse.
     fn default() -> Self {

@@ -16,8 +16,8 @@ pub struct SearchResultMessage {
     pub author_id: async_graphql::ID,
     pub text: Option<String>,
     pub sent_at: chrono::DateTime<chrono::Utc>,
-    /// `ts_rank` relevance score. Informational / for client-side secondary sort — results are
-    /// paginated by recency (`sentAt`, `id`), not by rank. See `docs/search.md`.
+    /// Relevance score of the match. Informational, or for a sort within the page: results are
+    /// paginated by recency (`sentAt`, `id`), not by rank.
     pub rank: f64,
     /// `ts_headline` snippet with `<mark>...</mark>` highlights around matched terms. `None` when
     /// the query had no free-text component (a purely operator-based search, e.g. `from:@alice`).
@@ -192,8 +192,8 @@ impl Message {
     }
 }
 
-/// Input for the `searchMessages` full-text-search query. See `docs/search.md` for the
-/// `from:`/`in:`/`has:`/`before:`/`after:` operator syntax accepted in `query`.
+/// Input for the `searchMessages` full-text-search query. `query` accepts free text plus the
+/// `from:`, `in:`, `has:`, `before:` and `after:` operators.
 #[derive(InputObject, Clone, Debug)]
 pub struct SearchMessagesInput {
     pub server_id: async_graphql::ID,
@@ -209,8 +209,8 @@ pub struct SearchMessagesInput {
 
 // ── Message change feed ───────────────────────────────────────────────────
 //
-// Frozen contract for the client cache: see `docs/message-change-feed.md` before changing any
-// of these types.
+// Clients cache changes and store cursors by these types, so their shape and semantics stay
+// fixed.
 
 /// One conversation to read in `messageChanges`, with the cursor the client stored for it.
 #[derive(InputObject, Clone, Debug)]

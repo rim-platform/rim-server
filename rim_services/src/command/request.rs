@@ -26,21 +26,19 @@ pub struct ExecuteCommandCmd {
     /// caller is not asserting any prior confirmation — the gate decides
     /// based on the command's `dangerous` flag whether to issue a fresh
     /// challenge (a `ConfirmationRequired` result carrying it) or to
-    /// execute. Closes H1 (TOCTOU) by binding the proof to
-    /// `(actor, command_id, args, context)` server-side.
+    /// execute. The proof is bound to `(actor, command_id, args, context)`
+    /// server-side, so it cannot confirm a different call.
     pub confirmation: Option<ConfirmationProof>,
     pub is_pipe: bool,
-    /// Who issued this command. Drives the audit-log entry, the
-    /// confirmation-policy decision, and (Phase 4) the agent's per-turn
-    /// mutating-call cap. Defaults to `Palette` for back-compat with any
-    /// caller that hasn't been retrofitted yet — see
-    /// [`crate::command::initiator::CommandInitiator`] for the policy
-    /// rationale and the wire contract.
+    /// Who issued this command. Drives the audit-log entry and the
+    /// confirmation-policy decision. The GraphQL layer fills in `Palette` when
+    /// the client sends none — see [`crate::command::initiator::CommandInitiator`]
+    /// for the policy and the wire contract.
     ///
     /// **Macro / pipeline expansion preserves the outermost initiator** —
     /// a macro triggered by `Agent` keeps `Agent` on every nested
-    /// `execute_command`, NOT `Macro`. The dispatch policy reads this field
-    /// to decide whether the agent's rate cap applies to nested steps.
+    /// `execute_command`, NOT `Macro`, so the agent confirmation rule applies
+    /// to nested steps too.
     pub initiator: CommandInitiator,
 }
 

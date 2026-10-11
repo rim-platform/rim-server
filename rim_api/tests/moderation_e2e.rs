@@ -1,5 +1,4 @@
-//! Through-the-stack e2e tests for Track 1.2: roles and moderation
-//! (`docs/specs/track-1-2-roles-and-moderation.md`).
+//! Through-the-stack e2e tests for roles and moderation.
 //!
 //! Every assertion goes through GraphQL: resolver → `ModerationService` / `MessageService` /
 //! `ConversationService` / `AuthService` / `CommandService` → SeaORM repositories → Postgres.
@@ -314,7 +313,7 @@ impl Fixture {
 }
 
 /// Seed the builtin capabilities into the registry, as `rim_server` does at boot, so
-/// `executeCommand` passes the capability gate (C1) and reaches the timeout gate.
+/// `executeCommand` passes the capability gate and reaches the timeout gate.
 async fn seed_capabilities(ctx: &TestCtx) {
     use rim_core::capability::repository::CapabilityRegistryRepository;
     let repo =

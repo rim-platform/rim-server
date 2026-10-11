@@ -1,4 +1,4 @@
-//! Track 1.3 notification builtins. They only change the actor's own notification state, so
+//! Notification builtins. They only change the actor's own notification state, so
 //! they need no capability (like `chat.mark_as_read`); `NotificationService` applies the
 //! workspace-membership and conversation-access gates.
 

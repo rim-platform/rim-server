@@ -1,14 +1,14 @@
 use sea_orm_migration::prelude::*;
 
-/// Key identity schema (Stage 3, Track 7.2; `docs/specs/key-identity-v1.md`).
+/// Key identity schema.
 ///
 /// Additive only, so an operator can roll back by running `down`:
 ///
 /// - `user.kind` (`local` | `remote`, default `local`), `user.principal_id`, `user.identity_key`
 ///   and `user.home_relay`. A person stays on their `user` row, so none of the tables that
-///   reference `user.id` move, now or when remote members arrive in Stage 5. `principal_id` is
-///   unique per server and set together with `identity_key` when an account enrolls a key.
-///   `home_relay` and `kind = 'remote'` are unused until Stage 5.
+///   reference `user.id` move when remote members get rows. `principal_id` is unique per server
+///   and set together with `identity_key` when an account enrolls a key. `home_relay` and
+///   `kind = 'remote'` are for remote members.
 /// - `key_log_entry`: the principal's signed key log (inception, then rotations), one row per
 ///   `seq`. Payloads are stored exactly as signed, so any reader can verify them again.
 /// - `device_key`: device keys certified by the identity key. A revoked row stays, so neither its
@@ -19,7 +19,7 @@ use sea_orm_migration::prelude::*;
 ///   device ends its sessions. Password sessions leave it null.
 ///
 /// `password_hash` and `email` stay NOT NULL here: every enrolled account already has both.
-/// They become nullable in the PR that adds key-only signup.
+/// `m20261009_105834_key_only_signup` makes them nullable.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

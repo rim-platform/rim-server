@@ -1,26 +1,23 @@
-//! Phase 1 §3.3 — capability_registry table.
-//!
-//! Closes Black Widow C1 ("real capability gate from Phase 1, no no-op-allow
-//! stub"). The table is the source of truth for which capability keys exist
-//! at all; an unknown key denies by default in `CapabilityService::check`.
+//! Creates the `capability_registry` table: the source of truth for which
+//! capability keys exist at all. An unknown key denies by default in
+//! `CapabilityService::check`.
 //!
 //! Schema:
 //! - `capability_key` — primary key, the canonical dotted identifier
-//!   (`chat.read`, `plugin.<plugin_id>.<verb>`, ...). Length cap matches
-//!   N1 plugin-key validator (4..=128).
+//!   (`chat.read`, `plugin.<plugin_id>.<verb>`, ...), at most 128 characters.
 //! - `source_kind` — `'builtin'` (seeded synchronously at startup) or
 //!   `'plugin'` (upserted at plugin install, retired at uninstall).
-//! - `plugin_id` — nullable FK target; populated only when `source_kind =
-//!   'plugin'`. Phase 1 leaves the FK off because plugin entities don't
-//!   ship until Phase 5; constraint added when plugin_install table lands.
+//! - `plugin_id` — nullable, set only when `source_kind = 'plugin'`. It has
+//!   no FK because there is no plugin table to reference.
+//!   `m20261010_205037_drop_redundant_indexes` drops the plugin column.
 //! - `registered_at` — initial registration timestamp.
-//! - `retired_at` — soft-retire on uninstall (Phase 5). NULL = active.
+//! - `retired_at` — soft-retire timestamp. NULL = active.
 //!
 //! Operationally, `is_registered(key)` filters on `retired_at IS NULL`, so
 //! retiring a plugin's caps cleanly closes the gate for subsequent calls
 //! without needing cascade deletes through audit history.
 //!
-//! Schema-layer integrity (Gate 4 M6 + Fury O-5):
+//! Schema-layer integrity:
 //! - `CHECK (source_kind IN ('builtin', 'plugin'))` — strict-deny gate
 //!   misclassification protection.
 //! - `CHECK ((source_kind='builtin' AND plugin_id IS NULL) OR
@@ -69,9 +66,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // INDEX: (plugin_id) — supports retire-by-plugin sweeps when a
-        // plugin uninstalls (Phase 5). Cheap on small registries; keeps the
-        // sweep query off a sequential scan once the plugin ecosystem grows.
+        // INDEX: (plugin_id) — supports retire-by-plugin sweeps.
         manager
             .create_index(
                 Index::create()
@@ -82,12 +77,9 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // INDEX: (source_kind, retired_at) — reserved for Phase 5 inventory
-        // queries (`SELECT WHERE source_kind = 'plugin' AND retired_at IS
-        // NULL`). The hot-path `is_registered(key)` query is covered by the
-        // PK index alone — `WHERE capability_key = $1 AND retired_at IS
-        // NULL` only needs the PK lookup; the secondary index here is for
-        // the future bulk-list path, not the per-request gate.
+        // INDEX: (source_kind, retired_at) — for inventory queries
+        // (`SELECT WHERE source_kind = 'plugin' AND retired_at IS NULL`).
+        // The per-request `is_registered(key)` query only needs the PK.
         manager
             .create_index(
                 Index::create()
@@ -99,7 +91,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // CHECK constraints — Black Widow Gate 4 M6 + Fury O-5.
+        // CHECK constraints.
         //
         // Defense-in-depth at the storage layer. Without these, a buggy
         // migration / direct SQL / future repo refactor could persist:

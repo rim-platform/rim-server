@@ -42,16 +42,15 @@ impl CommandQueries {
             .collect())
     }
 
-    /// P5-A7 — AI Agent command-discovery meta-tool (v2 §5 R1 #3, M6).
+    /// The AI-callable commands the caller may run, for an AI agent to discover its tools.
     ///
-    /// Returns the actor's accessible AI-callable command surface, optionally
-    /// ranked by `intent_phrase` relevance (literal substring + token-overlap
-    /// against `intent_samples`, `title`, `nl_description`), truncated to
-    /// `limit` (default 50, hard-capped at 100), and scoped to a workspace for
-    /// macro synthesis.
+    /// With `intentPhrase` the commands are ranked by how well the phrase matches their
+    /// intent samples, title and natural-language description. `limit` defaults to 50 and is
+    /// capped at 100. `workspaceId` scopes the list to one workspace, including its AI-callable
+    /// macros.
     ///
-    /// Rate-limited: 5 calls / 60-second sliding window per actor (M6).
-    /// Returns `RATE_LIMITED` on overage.
+    /// Limited to 5 calls per 60-second sliding window per user; more fail with
+    /// `RATE_LIMITED`. Fails with `FEATURE_DISABLED` while the AI command surface is off.
     async fn command_discover(
         &self,
         ctx: &Context<'_>,

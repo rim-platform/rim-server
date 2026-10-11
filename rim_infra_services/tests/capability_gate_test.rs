@@ -1,4 +1,4 @@
-//! C1 regression test — Phase 1 §3.3 (Black Widow / dispatch plan §Task 6).
+//! Capability gate regression test.
 //!
 //! Mandatory CI gate: if `execute_command` returns `Ok` for a command whose
 //! `required_capabilities` is non-empty when invoked through the public path
@@ -8,9 +8,9 @@
 //!
 //! The test wires a full `DefaultCommandService` and exercises the public
 //! `execute_command` entry point — not a unit shortcut around the gate.
-//! That distinction is deliberate: a future refactor that moves the gate
-//! lower in the stack (or accidentally bypasses it for "trusted" call
-//! paths) would only be caught here.
+//! That distinction is deliberate: a refactor that moves the gate lower in
+//! the stack (or accidentally bypasses it for "trusted" call paths) is only
+//! caught here.
 
 use std::sync::Arc;
 
@@ -77,12 +77,12 @@ fn actor() -> Actor {
     Actor::new(UserId::new())
 }
 
-/// **C1 closure — the canonical regression test.**
+/// **The canonical capability gate regression test.**
 ///
 /// `chat.post_message` declares `required_capabilities = ["chat.write"]`.
 /// We wire a CapabilityService that explicitly denies `chat.write`
 /// (simulating either: actor not a workspace member, OR the cap not in the
-/// registry, OR a future plugin-grant denial). The gate must turn the
+/// registry). The gate must turn the
 /// denial into `ServiceError::PermissionDenied` AND prevent the message
 /// from being sent.
 #[tokio::test]
@@ -123,10 +123,12 @@ async fn execute_command_denies_when_capability_check_rejects() {
     match result {
         Err(ServiceError::PermissionDenied) => {}
         Err(other) => {
-            panic!("C1 regression: expected PermissionDenied from capability gate, got {other:?}")
+            panic!(
+                "capability gate regression: expected PermissionDenied from capability gate, got {other:?}"
+            )
         }
         Ok(_) => panic!(
-            "C1 regression: capability gate failed open — execute_command returned Ok despite \
+            "capability gate regression: gate failed open — execute_command returned Ok despite \
              CapabilityService::check returning PermissionDenied"
         ),
     }

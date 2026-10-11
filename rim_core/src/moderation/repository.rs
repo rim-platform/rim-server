@@ -20,7 +20,7 @@ pub struct MessageReportCursor {
     pub report_id: MessageReportId,
 }
 
-/// Bans, timeouts and message reports (Track 1.2). Authorization lives in the service layer.
+/// Bans, timeouts and message reports. Authorization lives in the service layer.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ModerationRepository: Send + Sync {
@@ -81,7 +81,7 @@ pub trait ModerationRepository: Send + Sync {
     ) -> RepoResult<bool>;
 
     /// Reports of a workspace, optionally filtered by status, ordered `created_at ASC, id ASC`
-    /// with the standard cursor semantics (`docs/pagination.md`).
+    /// with the standard cursor semantics.
     async fn list_reports(
         &self,
         server_id: ServerId,

@@ -1,4 +1,4 @@
-//! Roles and moderation (Track 1.2): bans, timeouts and message reports.
+//! Roles and moderation: bans, timeouts and message reports.
 
 use async_graphql::{ComplexObject, Context, Enum, InputObject, Result, SimpleObject};
 use base64::Engine;
@@ -211,7 +211,7 @@ impl From<rim_services::moderation::dto::ReportPageCursor> for MessageReportCurs
     }
 }
 
-/// Reports ordered `createdAt ASC, id ASC`, standard cursor semantics (`docs/pagination.md`).
+/// Reports ordered `createdAt ASC, id ASC`, with the standard cursor semantics.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct MessageReportPage {
     pub items: Vec<MessageReport>,

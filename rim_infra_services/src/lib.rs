@@ -2,7 +2,7 @@ pub(crate) mod audit;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.
 pub mod audit_retention;
-// pub(crate) promoted to pub: DefaultAuthService is re-exported below for integration tests
+// Public: DefaultAuthService is re-exported below for integration tests
 // (signup_txn_regression) that construct the service directly against a live database.
 pub mod auth;
 pub mod capability;
@@ -12,9 +12,8 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
-// pub(crate) promoted to pub: EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig are
-// constructed directly by the composition root (rim_server/src/app.rs) — mirrors the
-// DefaultAuthService precedent above (Track B3, 2026-07-10).
+// Public: the composition root (rim_server/src/app.rs) constructs
+// EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig directly.
 pub mod email;
 /// Public for `rim_server`, whose composition root builds the instance gate from its
 /// configuration, and for `rim_api`'s tests.
@@ -42,7 +41,7 @@ pub(crate) mod message_reaction;
 // Public: `rim_server` describes these metrics and samples the relay queue.
 pub mod metrics;
 pub(crate) mod moderation;
-// pub(crate) promoted to pub: the notification digest/retention jobs are constructed directly
+// Public: the notification digest/retention jobs are constructed directly
 // by the composition root (rim_server/src/app.rs).
 pub mod notification;
 pub(crate) mod notification_preference;

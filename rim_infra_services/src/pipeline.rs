@@ -536,28 +536,20 @@ impl PipelineService for DefaultPipelineService {
                                 command_id: command_id.clone(),
                                 args: args.clone(),
                                 context: context.clone(),
-                                // Pipelines never auto-confirm dangerous
-                                // commands. If a pipeline action targets a
-                                // dangerous command the new gate returns
-                                // `ConfirmationRequired` — the result is
-                                // surfaced as an error in the pipeline log.
-                                // (Pipelines run server-side without a user
-                                // present to OK the modal.) Phase 5 may add
-                                // a "pre-authorized pipeline action" flow
-                                // requiring an admin-issued out-of-band
-                                // proof; tracked under §8.4.
+                                // Pipelines never auto-confirm. An action
+                                // that needs confirmation gets
+                                // `ConfirmationRequired` and is skipped with
+                                // a warning below: pipelines run server-side
+                                // without a user present to confirm.
                                 confirmation: None,
                                 is_pipe: false,
                                 // Pipelines fire in response to backend
                                 // events the user did not explicitly
-                                // initiate (e.g. webhook trigger). Tag as
+                                // initiate (e.g. webhook trigger). Tagged
                                 // `Plugin` because pipelines are config-
-                                // driven non-human automation — same
-                                // agentic-rate-limit class as agent per
-                                // `is_agentic()`. See Fury-handoff
-                                // note in docs/security/ai-reframe-review
-                                // §8.4: if Fury adds a dedicated `Pipeline`
-                                // variant in Phase 2, update this site.
+                                // driven non-human automation: `is_agentic()`
+                                // holds, so a Mutating command needs a
+                                // confirmation proof just as for an agent.
                                 initiator: CommandInitiator::Plugin,
                             })
                             .await;
@@ -570,15 +562,11 @@ impl PipelineService for DefaultPipelineService {
                                         actions_executed += 1;
                                     }
                                     CommandResultStatusDto::ConfirmationRequired => {
-                                        // H1: pipeline-driven invocation hit
-                                        // a dangerous command. Server-side
-                                        // pipelines have no user present to
-                                        // OK the modal, so the issued
-                                        // challenge is unusable. Drop the
-                                        // (unspent) token will TTL-expire.
-                                        // See §8.4 follow-up for an
-                                        // admin-issued out-of-band proof
-                                        // flow tracked for Phase 5.
+                                        // The action needs confirmation.
+                                        // Server-side pipelines have no user
+                                        // present to confirm, so the issued
+                                        // challenge is unusable; the unspent
+                                        // token expires on its TTL.
                                         tracing::warn!(
                                             pipeline_id = %pipeline.id,
                                             command_id = %command_id,

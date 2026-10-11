@@ -36,7 +36,7 @@ pub trait ServerMemberRepository: Send + Sync {
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
 
     /// The member's role plus any timeout still in force (`until > now()`), in one call.
-    /// `None` when the user is not a member. Used by the conversation access gates (Track 1.2).
+    /// `None` when the user is not a member. Used by the conversation access gates.
     async fn get_member_standing(
         &self,
         server_id: ServerId,

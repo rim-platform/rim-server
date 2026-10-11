@@ -394,7 +394,7 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
-    /// Track 1.2: an invite grants `Member` or `Guest`, never a moderating role.
+    /// An invite grants `Member` or `Guest`, never a moderating role.
     #[tokio::test]
     async fn create_invite_rejects_roles_above_member() {
         for role in [
@@ -773,7 +773,7 @@ mod tests {
         assert!(matches!(err, ServiceError::Conflict(m) if m.contains("username")));
     }
 
-    // ── §8.1 Registration unit tests ─────────────────────────────────────────
+    // ── Registration unit tests ──────────────────────────────────────────────
 
     /// Helper: build a service with only the repos configured for a given test.
     #[allow(clippy::too_many_arguments)]
@@ -804,7 +804,6 @@ mod tests {
         )
     }
 
-    // ── Test 5 ──────────────────────────────────────────────────────────────
     /// A signup through an instance invite creates a user with no server_member row.
     #[tokio::test]
     async fn instance_invite_creates_user_with_no_workspace() {
@@ -857,7 +856,6 @@ mod tests {
         );
     }
 
-    // ── Test 6 ──────────────────────────────────────────────────────────────
     /// `max_uses=1` instance invite: first use succeeds, second returns `InvalidToken`.
     #[tokio::test]
     async fn instance_invite_single_use_enforced() {
@@ -930,7 +928,6 @@ mod tests {
         assert!(matches!(err, ServiceError::InvalidToken), "got: {err:?}");
     }
 
-    // ── Test 7 ──────────────────────────────────────────────────────────────
     /// Multi-use invite: three successes, fourth fails with `InvalidToken`.
     #[tokio::test]
     async fn instance_invite_multi_use_allowed_until_exhausted() {
@@ -1003,7 +1000,6 @@ mod tests {
         );
     }
 
-    // ── Test 8 ──────────────────────────────────────────────────────────────
     /// Expired instance invite returns `ExpiredToken`.
     #[tokio::test]
     async fn instance_invite_expired_rejected() {
@@ -1033,7 +1029,6 @@ mod tests {
         assert!(matches!(err, ServiceError::ExpiredToken), "got: {err:?}");
     }
 
-    // ── Test 9 ──────────────────────────────────────────────────────────────
     /// Revoked instance invite returns `InvalidToken`.
     #[tokio::test]
     async fn instance_invite_revoked_rejected() {
@@ -1063,7 +1058,6 @@ mod tests {
         assert!(matches!(err, ServiceError::InvalidToken), "got: {err:?}");
     }
 
-    // ── Test 12 ─────────────────────────────────────────────────────────────
     /// `signup_open` with no tokens and valid creds succeeds in open mode.
     #[tokio::test]
     async fn signup_open_accepts_no_token() {
@@ -1108,10 +1102,9 @@ mod tests {
         assert!(res.server_id.is_none());
     }
 
-    // ── Test 13 ─────────────────────────────────────────────────────────────
     /// Open-mode signup rate-limited after threshold.
     ///
-    /// The signup rate limiter is checked inside `signup_open` (spec §4.4).
+    /// The signup rate limiter is checked inside `signup_open`.
     /// This test verifies the limiter mechanics directly using `RegistrationRateLimiter`.
     #[tokio::test]
     async fn signup_open_rate_limited_after_threshold() {
@@ -1132,7 +1125,6 @@ mod tests {
         );
     }
 
-    // ── Test 14 ─────────────────────────────────────────────────────────────
     /// signup with username already taken returns `Conflict`.
     #[tokio::test]
     async fn signup_username_already_taken_returns_conflict() {
@@ -1169,7 +1161,6 @@ mod tests {
         assert!(matches!(err, ServiceError::Conflict(_)), "got: {err:?}");
     }
 
-    // ── Test 15 ─────────────────────────────────────────────────────────────
     /// signup with password shorter than 8 chars returns `Validation`.
     #[tokio::test]
     async fn signup_password_too_short_returns_validation() {
@@ -1200,7 +1191,6 @@ mod tests {
         );
     }
 
-    // ── Test 16 ─────────────────────────────────────────────────────────────
     /// `previewInviteToken` for a valid workspace invite returns `WORKSPACE` type
     /// with server name and inviter display name; underlying row is NOT mutated.
     #[tokio::test]
@@ -1279,7 +1269,6 @@ mod tests {
         assert_eq!(ws.invited_by_display_name, "Dave Smith");
     }
 
-    // ── Test 17 ─────────────────────────────────────────────────────────────
     /// `previewInviteToken` for a valid instance invite returns `INSTANCE` type
     /// with `expiresAt` set and `workspace` null; row not mutated.
     #[tokio::test]
@@ -1317,7 +1306,6 @@ mod tests {
         assert!(res.workspace.is_none());
     }
 
-    // ── Test 19 ─────────────────────────────────────────────────────────────
     /// `previewInviteToken` on an expired instance invite returns `ExpiredToken`.
     #[tokio::test]
     async fn preview_invite_token_expired_returns_expired_token() {
@@ -1343,7 +1331,6 @@ mod tests {
         assert!(matches!(err, ServiceError::ExpiredToken), "got: {err:?}");
     }
 
-    // ── Test 20 ─────────────────────────────────────────────────────────────
     /// `previewInviteToken` on a missing / consumed / revoked token all collapse to
     /// `InvalidToken` (three sub-cases).
     #[tokio::test]
@@ -1424,7 +1411,6 @@ mod tests {
         }
     }
 
-    // ── Test 21 ─────────────────────────────────────────────────────────────
     /// `previewInviteToken` rate-limited after 30 calls from the same IP within
     /// a 5-minute window; exactly 30 calls succeed.
     #[tokio::test]
@@ -1475,9 +1461,8 @@ mod tests {
         );
     }
 
-    // ── §13.6 Amendment tests ────────────────────────────────────────────────
+    // ── Email and display name at signup ─────────────────────────────────────
 
-    // ── Test 33 ─────────────────────────────────────────────────────────────
     /// Happy path: valid email + displayName are persisted correctly.
     ///
     /// Input `"  Foo@Bar.COM "` must be stored as `"foo@bar.com"` (trimmed + lowercased).
@@ -1553,7 +1538,6 @@ mod tests {
         assert_eq!(res.user_id, user_id);
     }
 
-    // ── Test 34 ─────────────────────────────────────────────────────────────
     /// Duplicate email (case-insensitive) returns `EmailTaken`.
     ///
     /// Pre-seeds a user with `email = "x@y.z"`; signup with `"X@Y.Z"` must
@@ -1596,10 +1580,9 @@ mod tests {
         assert!(matches!(err, ServiceError::EmailTaken), "got: {err:?}");
     }
 
-    // ── Test 35 ─────────────────────────────────────────────────────────────
     /// Malformed email input returns `Validation`.
     ///
-    /// Parametrized over the cases from spec §13.3:
+    /// Parametrized over:
     /// "plain", "@host.com", "a@", "a@b", "a b@c.com", empty string, 255-char string.
     #[tokio::test]
     async fn signup_malformed_email_returns_validation() {
@@ -1644,7 +1627,6 @@ mod tests {
         }
     }
 
-    // ── Test 36 ─────────────────────────────────────────────────────────────
     /// `display_name: None` falls back to `username` on the persisted user.
     #[tokio::test]
     async fn signup_displayname_omitted_falls_back_to_username() {
@@ -1709,7 +1691,6 @@ mod tests {
         .unwrap();
     }
 
-    // ── Test 37 ─────────────────────────────────────────────────────────────
     /// `display_name: Some("   ")` (blank after trim) falls back to `username`.
     ///
     /// Must NOT return a `Validation` error — blank means "use my username."
@@ -1776,7 +1757,6 @@ mod tests {
         .unwrap();
     }
 
-    // ── Test 38 ─────────────────────────────────────────────────────────────
     /// `display_name` of 81 chars (post-trim) returns `Validation`.
     #[tokio::test]
     async fn signup_displayname_too_long_returns_validation() {
@@ -1864,7 +1844,7 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
-    // ─── login rate limiting (S-H3) ─────────────────────────────────────────
+    // ─── login rate limiting ────────────────────────────────────────────────
 
     /// Build a service for login tests with the given user/session repos and login limiters
     /// (per IP, per (IP, username), per username).

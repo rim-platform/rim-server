@@ -144,7 +144,7 @@ pub trait MessageRepository: Send + Sync {
     async fn latest_change_version(&self, conversation_id: ConversationId) -> RepoResult<i64>;
 
     /// `sent_at` of the newest message `author` sent in the conversation (timeline or thread,
-    /// deleted or not), or `None`. The slow-mode check (Track 1.2) reads it instead of keeping
+    /// deleted or not), or `None`. The slow-mode check reads it instead of keeping
     /// in-memory state.
     async fn last_sent_at_by_author(
         &self,
@@ -153,7 +153,7 @@ pub trait MessageRepository: Send + Sync {
     ) -> RepoResult<Option<DateTime<Utc>>>;
 
     /// Distinct authors of a thread: the root message's author plus everyone with a non-deleted
-    /// reply in it. Thread-reply notifications (Track 1.3) go to them.
+    /// reply in it. Thread-reply notifications go to them.
     async fn list_thread_participant_ids(
         &self,
         thread_id: crate::message_thread::model::MessageThreadId,

@@ -1,4 +1,4 @@
-//! Key identity types (Stage 3, `docs/specs/key-identity-v1.md`).
+//! Key identity types: key logs, device certificates, profile cards and challenge login.
 
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};

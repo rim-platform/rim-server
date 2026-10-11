@@ -2,9 +2,9 @@
 //! async-graphql's `MergedObject`.
 //!
 //! The SDL lists merged fields in member order, so the member order of
-//! [`Mutation`] reproduces the field order the schema had before the split
-//! (the frontend codegen diffs against it). Where that historical order
-//! interleaves domains, a domain is split into several objects (for example
+//! [`Mutation`] fixes the field order of the schema (the frontend codegen diffs
+//! against it). Where that order interleaves domains, a domain is split into
+//! several objects (for example
 //! `KeybindMutations` and `KeybindDeleteMutations`). Do not reorder members;
 //! append new domains at the end, or next to the object they extend.
 //!

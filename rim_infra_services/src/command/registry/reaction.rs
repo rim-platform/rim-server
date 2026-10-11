@@ -7,8 +7,8 @@ use rim_services::command::verb::TypedVerb;
 
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
-        // P4-A5 naming decision (Tony): backend mutation is bidirectional,
-        // so the agent tool is `chat.toggle_reaction` rather than
+        // The backend mutation is bidirectional, so the agent tool is
+        // `chat.toggle_reaction` rather than
         // `chat.add_reaction`. The nl_description spells out the toggle
         // semantics so the LLM doesn't assume "add" when the user might
         // have already reacted.
