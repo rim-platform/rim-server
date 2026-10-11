@@ -175,6 +175,9 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
+        server_member_repo
+            .expect_join_direct_space()
+            .returning(|_, _| Ok(false));
 
         let mut server_repo = MockServerRepository::new();
         server_repo.expect_get_by_id().never();

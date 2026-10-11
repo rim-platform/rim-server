@@ -2,9 +2,12 @@
 
 mod support;
 
+use rim_core::host::model::NewRemoteUser;
+use rim_core::host::repository::HostRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 
 /// Members are added, looked up and listed; the owner is the member holding the `Owner` role,
@@ -93,4 +96,42 @@ async fn add_member_conflicts_on_duplicate_server_membership() {
         .await
         .unwrap_err();
     assert!(matches!(err.kind(), RepoErrorKind::Conflict));
+}
+
+/// A local user joins the direct space as a guest, once; a remote user, an ordinary workspace
+/// and an unknown space admit nobody.
+#[tokio::test]
+async fn join_direct_space_admits_local_users_of_the_direct_space_only() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
+    let host = SeaOrmHostRepository::new(ctx.db.clone());
+    let direct = host.ensure_direct_space("Direct messages").await.unwrap();
+    let workspace = ctx.create_server("s").await;
+    let local = ctx.create_user("alice").await.id;
+    let remote = host
+        .create_remote_user(NewRemoteUser {
+            principal_id: "rimp1_bob".to_string(),
+            identity_key: "ed25519:bob".to_string(),
+            username: "r_bob".to_string(),
+            display_name: "Bob".to_string(),
+            home_relay: Some("rims1_relay".to_string()),
+        })
+        .await
+        .unwrap();
+
+    assert!(repo.join_direct_space(direct, local).await.unwrap());
+    assert!(repo.join_direct_space(direct, local).await.unwrap());
+    let standing = repo.get_member_standing(direct, local).await.unwrap();
+    assert!(standing.expect("member").role.is_guest());
+    assert_eq!(repo.get_members_for_server(direct).await.unwrap().len(), 1);
+
+    assert!(!repo.join_direct_space(direct, remote).await.unwrap());
+    assert!(!repo.join_direct_space(workspace.id, local).await.unwrap());
+    assert!(!repo.is_member(workspace.id, local).await.unwrap());
+    assert!(
+        !repo
+            .join_direct_space(rim_core::server::model::ServerId::new(), local)
+            .await
+            .unwrap()
+    );
 }

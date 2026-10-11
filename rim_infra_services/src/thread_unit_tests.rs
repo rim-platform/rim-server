@@ -217,6 +217,7 @@ mod tests {
             async fn remove_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<()>;
             async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
             async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+            async fn join_direct_space(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
             async fn get_member_standing(&self, server_id: rim_core::server::model::ServerId, user_id: rim_core::user::model::UserId) -> RepoResult<Option<rim_core::server_member::model::MemberStanding>>;
             async fn get_owner_id(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<Option<rim_core::user::model::UserId>>;
         }
@@ -267,6 +268,9 @@ mod tests {
         server_member_repo
             .expect_is_member()
             .returning(|_sid, _uid| Ok(false));
+        server_member_repo
+            .expect_join_direct_space()
+            .returning(|_, _| Ok(false));
         server_member_repo
             .expect_get_member_standing()
             .returning(|_, _| Ok(None));

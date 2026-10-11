@@ -621,6 +621,9 @@ mod tests {
                 .returning(move |sid, uid| {
                     Ok(sid == server_id && roles.iter().any(|(u, _)| *u == uid))
                 });
+            server_member_repo
+                .expect_join_direct_space()
+                .returning(|_, _| Ok(false));
             let roles = self.roles.clone();
             let timed_out = self.timed_out.clone();
             server_member_repo

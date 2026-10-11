@@ -35,6 +35,11 @@ pub trait ServerMemberRepository: Send + Sync {
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
 
+    /// Make a local user a guest of `server_id` when it is a direct space and they are not a
+    /// member yet; nobody joins any other space this way, and no remote user joins. `true` when
+    /// the user is a member afterwards.
+    async fn join_direct_space(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
+
     /// The user holding the `Owner` role in the workspace; `None` when nobody does.
     async fn get_owner_id(&self, server_id: ServerId) -> RepoResult<Option<UserId>>;
 

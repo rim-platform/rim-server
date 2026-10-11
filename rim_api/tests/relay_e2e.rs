@@ -34,9 +34,9 @@ use support::mls::content;
 use support::nodes::{Node, databases_with, start};
 use support::relay::{
     ACK_WELCOMES, CLAIM, CREATE, EDIT_ENCRYPTED, HEADS, Item, MARK_READ, PUBLISH, Person,
-    RELAY_INFO, REQUESTS, RESET, SEND_ENCRYPTED, SUBMIT, WELCOMES, device_key_id, drained,
-    eventually, key_signup, keys, login_proof, open_registration, relays, sign_up,
-    sign_up_with_card, statement, user_id, verify_item,
+    RELAY_INFO, REQUESTS, RESET, SEND_ENCRYPTED, SUBMIT, WELCOMES, anonymous_direct_space,
+    device_key_id, drained, eventually, key_signup, keys, login_proof, open_registration, relays,
+    sign_up, sign_up_with_card, statement, user_id, verify_item,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1047,19 +1047,7 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
         )
         .await;
     // relayInfo answers without a session.
-    let anonymous: Value = reqwest::Client::new()
-        .post(format!("{}/api", a.origin))
-        .json(&json!({ "query": RELAY_INFO }))
-        .send()
-        .await
-        .expect("send")
-        .json()
-        .await
-        .expect("json");
-    let direct = anonymous["data"]["relayInfo"]["directSpaceId"]
-        .as_str()
-        .expect("direct space")
-        .to_string();
+    let direct = anonymous_direct_space(&a).await;
 
     // A signed-in relayInfo is a first use of the direct space: Alice is a guest there before
     // any DM, sees only herself, sees no owner, and lists an empty inbox.
