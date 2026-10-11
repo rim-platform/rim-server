@@ -10,7 +10,8 @@ use crate::user::model::UserId;
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait PipelineRepository: Send + Sync {
-    async fn create(&self, pipeline: &Pipeline) -> RepoResult<()>;
+    /// Insert `pipeline` and return the row as stored.
+    async fn create(&self, pipeline: &Pipeline) -> RepoResult<Pipeline>;
 
     async fn get_by_id(&self, id: PipelineId) -> RepoResult<Option<Pipeline>>;
 
@@ -18,13 +19,15 @@ pub trait PipelineRepository: Send + Sync {
 
     async fn list_enabled_for_server(&self, server_id: ServerId) -> RepoResult<Vec<Pipeline>>;
 
-    async fn update(&self, pipeline: &Pipeline) -> RepoResult<()>;
+    /// Overwrite the definition of `pipeline` and return the row as stored.
+    async fn update(&self, pipeline: &Pipeline) -> RepoResult<Pipeline>;
 
     async fn delete(&self, id: PipelineId) -> RepoResult<()>;
 
     async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
 
-    async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<()>;
+    /// Switch the pipeline on or off and return the row as stored.
+    async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<Pipeline>;
 
     async fn set_last_fired_at(
         &self,

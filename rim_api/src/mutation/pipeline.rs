@@ -50,6 +50,8 @@ impl PipelineMutations {
         Ok(pipeline.into())
     }
 
+    /// Replace a pipeline's definition. Allowed for its creator and for an Owner or Moderator
+    /// of its workspace; anyone else gets `FORBIDDEN`.
     async fn update_pipeline(
         &self,
         ctx: &Context<'_>,
@@ -91,6 +93,8 @@ impl PipelineMutations {
         Ok(pipeline.into())
     }
 
+    /// Delete a pipeline. Allowed for its creator and for an Owner or Moderator of its
+    /// workspace; anyone else gets `FORBIDDEN`.
     async fn delete_pipeline(
         &self,
         ctx: &Context<'_>,
@@ -111,6 +115,8 @@ impl PipelineMutations {
         Ok(true)
     }
 
+    /// Switch a pipeline on or off. Allowed for its creator and for an Owner or Moderator of
+    /// its workspace; anyone else gets `FORBIDDEN`.
     async fn toggle_pipeline(
         &self,
         ctx: &Context<'_>,
@@ -149,6 +155,11 @@ fn build_pipeline_trigger_dto(
     })
 }
 
+/// A filter condition the resolver cannot build, as a `VALIDATION` error.
+fn invalid_filter(message: String) -> async_graphql::Error {
+    map_service_error(rim_services::ServiceError::Validation(message))
+}
+
 fn build_pipeline_filter_dto(
     input: crate::types::PipelineFilterInput,
 ) -> async_graphql::Result<rim_services::pipeline::dto::PipelineFilterDto> {
@@ -157,27 +168,27 @@ fn build_pipeline_filter_dto(
         let cond = match c.condition_type.as_str() {
             "MessageContains" => {
                 let pattern = c.pattern.ok_or_else(|| {
-                    async_graphql::Error::new("MessageContains requires a pattern")
+                    invalid_filter("MessageContains requires a pattern".to_string())
                 })?;
                 rim_services::pipeline::dto::FilterConditionDto::MessageContains { pattern }
             }
             "MessageFromUser" => {
                 let uid_str = c.user_id.ok_or_else(|| {
-                    async_graphql::Error::new("MessageFromUser requires a user_id")
+                    invalid_filter("MessageFromUser requires a user_id".to_string())
                 })?;
                 let user_id = parse_uuid_id::<rim_core::user::model::UserId>(&uid_str)?;
                 rim_services::pipeline::dto::FilterConditionDto::MessageFromUser { user_id }
             }
             "ConversationIs" => {
                 let conv_str = c.conversation_id.ok_or_else(|| {
-                    async_graphql::Error::new("ConversationIs requires a conversation_id")
+                    invalid_filter("ConversationIs requires a conversation_id".to_string())
                 })?;
                 let conversation_id =
                     parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conv_str)?;
                 rim_services::pipeline::dto::FilterConditionDto::ConversationIs { conversation_id }
             }
             other => {
-                return Err(async_graphql::Error::new(format!(
+                return Err(invalid_filter(format!(
                     "unknown filter condition type: {other}"
                 )));
             }

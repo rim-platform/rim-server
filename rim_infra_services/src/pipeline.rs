@@ -67,6 +67,22 @@ impl DefaultPipelineService {
         .await
     }
 
+    /// The pipeline's creator, or an Owner or Moderator of its workspace, may change it; any
+    /// other member or a non-member gets `PermissionDenied`.
+    async fn ensure_can_manage(&self, pipeline: &Pipeline, user_id: UserId) -> ServiceResult<()> {
+        let standing = crate::util::member_standing(
+            self.repos.server_member_repo.as_ref(),
+            pipeline.server_id,
+            user_id,
+        )
+        .await?;
+        if pipeline.created_by == user_id || standing.role.is_moderator() {
+            Ok(())
+        } else {
+            Err(ServiceError::PermissionDenied)
+        }
+    }
+
     fn validate_name(name: &str) -> ServiceResult<()> {
         if name.is_empty() {
             return Err(ServiceError::Validation(
@@ -303,9 +319,9 @@ impl PipelineService for DefaultPipelineService {
             updated_at: now,
         };
 
-        self.repos.pipeline_repo.create(&pipeline).await?;
+        let stored = self.repos.pipeline_repo.create(&pipeline).await?;
 
-        Ok(pipeline.into())
+        Ok(stored.into())
     }
 
     async fn list(&self, cmd: ListPipelinesCmd) -> ServiceResult<Vec<PipelineDto>> {
@@ -346,8 +362,7 @@ impl PipelineService for DefaultPipelineService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        self.ensure_member(existing.server_id, cmd.actor.user_id)
-            .await?;
+        self.ensure_can_manage(&existing, cmd.actor.user_id).await?;
         Self::validate_name(&cmd.name)?;
         Self::validate_trigger(&cmd.trigger)?;
         Self::validate_cooldown(cmd.cooldown_secs)?;
@@ -373,9 +388,9 @@ impl PipelineService for DefaultPipelineService {
             updated_at: chrono::Utc::now(),
         };
 
-        self.repos.pipeline_repo.update(&updated).await?;
+        let stored = self.repos.pipeline_repo.update(&updated).await?;
 
-        Ok(updated.into())
+        Ok(stored.into())
     }
 
     async fn delete(&self, cmd: DeletePipelineCmd) -> ServiceResult<()> {
@@ -386,8 +401,7 @@ impl PipelineService for DefaultPipelineService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        self.ensure_member(existing.server_id, cmd.actor.user_id)
-            .await?;
+        self.ensure_can_manage(&existing, cmd.actor.user_id).await?;
 
         self.repos.pipeline_repo.delete(cmd.pipeline_id).await?;
 
@@ -406,21 +420,15 @@ impl PipelineService for DefaultPipelineService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        self.ensure_member(existing.server_id, cmd.actor.user_id)
-            .await?;
+        self.ensure_can_manage(&existing, cmd.actor.user_id).await?;
 
-        self.repos
+        let stored = self
+            .repos
             .pipeline_repo
             .set_enabled(cmd.pipeline_id, cmd.enabled)
             .await?;
 
-        let updated = Pipeline {
-            enabled: cmd.enabled,
-            updated_at: chrono::Utc::now(),
-            ..existing
-        };
-
-        Ok(updated.into())
+        Ok(stored.into())
     }
 
     async fn evaluate_event(
@@ -633,7 +641,7 @@ mod tests {
     use super::*;
     use rim_core::pipeline::model::{PipelineAction, PipelineTrigger, PipelineTriggerKind};
     use rim_core::repository::error::RepoResult;
-    use rim_core::server_member::model::{ServerMember, ServerMemberRole};
+    use rim_core::server_member::model::{MemberStanding, ServerMember, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
     use rim_services::Actor;
     use rim_services::events::MessageEventData;
@@ -645,14 +653,14 @@ mod tests {
         PipelineRepository {}
         #[async_trait::async_trait]
         impl PipelineRepository for PipelineRepository {
-            async fn create(&self, pipeline: &Pipeline) -> RepoResult<()>;
+            async fn create(&self, pipeline: &Pipeline) -> RepoResult<Pipeline>;
             async fn get_by_id(&self, id: PipelineId) -> RepoResult<Option<Pipeline>>;
             async fn list_for_server(&self, server_id: ServerId) -> RepoResult<Vec<Pipeline>>;
             async fn list_enabled_for_server(&self, server_id: ServerId) -> RepoResult<Vec<Pipeline>>;
-            async fn update(&self, pipeline: &Pipeline) -> RepoResult<()>;
+            async fn update(&self, pipeline: &Pipeline) -> RepoResult<Pipeline>;
             async fn delete(&self, id: PipelineId) -> RepoResult<()>;
             async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
-            async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<()>;
+            async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<Pipeline>;
             async fn set_last_fired_at(&self, id: PipelineId, fired_at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
         }
     }
@@ -760,7 +768,7 @@ mod tests {
 
         let mut repo = MockPipelineRepository::new();
         repo.expect_count_for_user().returning(|_, _| Ok(0));
-        repo.expect_create().returning(|_| Ok(()));
+        repo.expect_create().returning(|p| Ok(p.clone()));
 
         let svc = make_service(repo, make_member_repo());
         let result = svc
@@ -887,7 +895,6 @@ mod tests {
         let mut repo = MockPipelineRepository::new();
         repo.expect_list_enabled_for_server()
             .returning(move |_| Ok(vec![pipeline_clone.clone()]));
-        repo.expect_set_enabled().returning(|_, _| Ok(()));
         repo.expect_set_last_fired_at().returning(|_, _| Ok(()));
 
         let mut cmd_svc = rim_services::command::service::MockCommandService::new();
@@ -934,7 +941,6 @@ mod tests {
         let mut repo = MockPipelineRepository::new();
         repo.expect_list_enabled_for_server()
             .returning(move |_| Ok(vec![pipeline_clone.clone()]));
-        repo.expect_set_enabled().returning(|_, _| Ok(()));
         repo.expect_set_last_fired_at().returning(|_, _| Ok(()));
 
         let mut cmd_svc = rim_services::command::service::MockCommandService::new();
@@ -970,5 +976,100 @@ mod tests {
         let results = svc.evaluate_event(event).await.unwrap();
         assert_eq!(results[0].actions_executed, 0);
         assert!(results[0].skipped_reason.as_deref() == Some("cooldown active"));
+    }
+
+    /// What an actor holding `role` in the workspace (`None`: not a member) gets back from
+    /// update, toggle and delete, in that order, on a pipeline they did or did not create.
+    async fn manage_outcomes(
+        role: Option<ServerMemberRole>,
+        actor_is_creator: bool,
+    ) -> Vec<ServiceResult<()>> {
+        let actor = UserId::new();
+        let creator = if actor_is_creator {
+            actor
+        } else {
+            UserId::new()
+        };
+        let pipeline = make_pipeline(ServerId::new(), creator);
+
+        let mut repo = MockPipelineRepository::new();
+        let stored = pipeline.clone();
+        repo.expect_get_by_id()
+            .returning(move |_| Ok(Some(stored.clone())));
+        repo.expect_update().returning(|p| Ok(p.clone()));
+        let stored = pipeline.clone();
+        repo.expect_set_enabled()
+            .returning(move |_, _| Ok(stored.clone()));
+        repo.expect_delete().returning(|_| Ok(()));
+        let mut members = MockServerMemberRepository::new();
+        members
+            .expect_get_member_standing()
+            .returning(move |_, _| Ok(role.map(MemberStanding::new)));
+
+        let svc = make_service(repo, members);
+        let actor = Actor::new(actor);
+        vec![
+            svc.update(UpdatePipelineCmd {
+                actor,
+                pipeline_id: pipeline.id,
+                name: "Renamed".to_string(),
+                description: None,
+                trigger: PipelineTriggerDto {
+                    kind: PipelineTriggerKindDto::NewMessage,
+                    conversation_id: None,
+                },
+                filter: None,
+                actions: vec![],
+                cooldown_secs: None,
+            })
+            .await
+            .map(drop),
+            svc.toggle(TogglePipelineCmd {
+                actor,
+                pipeline_id: pipeline.id,
+                enabled: false,
+            })
+            .await
+            .map(drop),
+            svc.delete(DeletePipelineCmd {
+                actor,
+                pipeline_id: pipeline.id,
+            })
+            .await,
+        ]
+    }
+
+    fn all_denied(outcomes: &[ServiceResult<()>]) -> bool {
+        outcomes
+            .iter()
+            .all(|o| matches!(o, Err(ServiceError::PermissionDenied)))
+    }
+
+    #[tokio::test]
+    async fn the_creator_may_update_toggle_and_delete_their_pipeline() {
+        let outcomes = manage_outcomes(Some(ServerMemberRole::Member), true).await;
+        assert!(outcomes.iter().all(Result::is_ok), "{outcomes:?}");
+    }
+
+    #[tokio::test]
+    async fn an_owner_or_moderator_may_update_toggle_and_delete_any_pipeline() {
+        for role in [ServerMemberRole::Owner, ServerMemberRole::Moderator] {
+            let outcomes = manage_outcomes(Some(role), false).await;
+            assert!(outcomes.iter().all(Result::is_ok), "{role}: {outcomes:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn another_member_or_guest_may_not_change_a_pipeline() {
+        for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+            let outcomes = manage_outcomes(Some(role), false).await;
+            assert!(all_denied(&outcomes), "{role}: {outcomes:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_creator_who_left_the_workspace_may_not_change_their_pipeline() {
+        let outcomes = manage_outcomes(None, true).await;
+        assert!(all_denied(&outcomes), "{outcomes:?}");
     }
 }

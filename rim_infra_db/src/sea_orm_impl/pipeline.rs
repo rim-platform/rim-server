@@ -29,7 +29,7 @@ impl SeaOrmPipelineRepository {
 
 #[async_trait]
 impl PipelineRepository for SeaOrmPipelineRepository {
-    async fn create(&self, pipeline: &Pipeline) -> RepoResult<()> {
+    async fn create(&self, pipeline: &Pipeline) -> RepoResult<Pipeline> {
         let trigger_data = serde_json::to_value(&pipeline.trigger)
             .map_err(|e| RepoError::with_message(RepoErrorKind::InvalidData, e.to_string()))?;
         let filter_data = pipeline
@@ -58,8 +58,8 @@ impl PipelineRepository for SeaOrmPipelineRepository {
             updated_at: Set(pipeline.updated_at.into()),
         };
 
-        model.insert(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+        let stored = model.insert(&self.db).await.map_err(map_db_err)?;
+        Self::model_to_pipeline(stored)
     }
 
     async fn get_by_id(&self, id: PipelineId) -> RepoResult<Option<Pipeline>> {
@@ -89,7 +89,7 @@ impl PipelineRepository for SeaOrmPipelineRepository {
         models.into_iter().map(Self::model_to_pipeline).collect()
     }
 
-    async fn update(&self, pipeline: &Pipeline) -> RepoResult<()> {
+    async fn update(&self, pipeline: &Pipeline) -> RepoResult<Pipeline> {
         let model = pipeline::Entity::find_by_id(pipeline.id)
             .one(&self.db)
             .await
@@ -119,8 +119,8 @@ impl PipelineRepository for SeaOrmPipelineRepository {
         active.last_fired_at = Set(pipeline.last_fired_at.map(|dt| dt.into()));
         active.updated_at = Set(chrono::Utc::now().into());
 
-        active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+        let stored = active.update(&self.db).await.map_err(map_db_err)?;
+        Self::model_to_pipeline(stored)
     }
 
     async fn delete(&self, id: PipelineId) -> RepoResult<()> {
@@ -144,7 +144,7 @@ impl PipelineRepository for SeaOrmPipelineRepository {
         Ok(count)
     }
 
-    async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<()> {
+    async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<Pipeline> {
         let model = pipeline::Entity::find_by_id(id)
             .one(&self.db)
             .await
@@ -153,8 +153,8 @@ impl PipelineRepository for SeaOrmPipelineRepository {
         let mut active: pipeline::ActiveModel = model.into();
         active.enabled = Set(enabled);
         active.updated_at = Set(chrono::Utc::now().into());
-        active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+        let stored = active.update(&self.db).await.map_err(map_db_err)?;
+        Self::model_to_pipeline(stored)
     }
 
     async fn set_last_fired_at(
