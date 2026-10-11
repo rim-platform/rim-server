@@ -29,9 +29,13 @@ use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+    merged,
+};
 use support::roles::create_channel;
+use support::roots::{ATTACHMENT_ROOTS, CONVERSATION_MESSAGE_ROOTS, MESSAGE_ROOTS, Targets};
+use support::{TestCtx, unknown_id};
 
 const MESSAGE_FIELDS: &str = r#"
 fragment MessageFields on Message {
@@ -920,19 +924,6 @@ async fn non_members_cannot_page_messages() {
     );
     assert_eq!(exec_err_code(&f.schema, req).await, "FORBIDDEN");
 
-    // No session at all.
-    let req = anonymous_request(
-        &Fixture::with_fragments(MESSAGES_QUERY),
-        json!({
-            "serverId": f.server_id,
-            "conversationId": f.channel_id,
-            "dir": "AFTER",
-            "limit": 3,
-            "includeDeleted": false,
-        }),
-    );
-    assert_eq!(exec_err_code(&f.schema, req).await, "UNAUTHENTICATED");
-
     // A DM between alice and bob: carol is in the workspace but not in the DM.
     let data = exec_ok(
         &f.schema,
@@ -1269,8 +1260,6 @@ async fn change_feed_reads_several_conversations_and_enforces_access() {
     assert!(feed[1].changes.is_empty(), "nothing from the DM leaks");
     assert_eq!(feed[1].cursor, channel_cursor, "the cursor is echoed");
     assert!(!feed[1].has_more);
-    let req = f.changes_request(&f.outsider, &[(&f.channel_id, None)], 10);
-    assert_eq!(exec_err_code(&f.schema, req).await, "FORBIDDEN");
 
     // A stored cursor ahead of the server (its counters were reset) restarts from the beginning.
     let feed = f.changes(&[(&dm_id, Some("999999"))], 10).await;
@@ -1285,15 +1274,6 @@ async fn change_feed_reads_several_conversations_and_enforces_access() {
         let req = f.changes_request(&f.alice, &[(&f.channel_id, Some(bad))], 10);
         assert_eq!(exec_err_code(&f.schema, req).await, "VALIDATION", "{bad}");
     }
-
-    let req = anonymous_request(
-        &Fixture::with_fragments(CHANGES_QUERY),
-        json!({ "input": {
-            "serverId": f.server_id,
-            "conversations": [{ "conversationId": f.channel_id }],
-        } }),
-    );
-    assert_eq!(exec_err_code(&f.schema, req).await, "UNAUTHENTICATED");
 }
 
 // ── Nested message fields ─────────────────────────────────────────────────
@@ -1322,6 +1302,9 @@ mutation React($input: ToggleReactionInput!) { toggleReaction(input: $input) { e
 "#;
 
 const PIN_MESSAGE: &str = "mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }";
+
+const UNPIN_MESSAGE: &str =
+    "mutation Unpin($input: UnpinMessageInput!) { unpinMessage(input: $input) }";
 
 const FORWARD_MESSAGE: &str = r#"
 mutation Forward($input: ForwardMessageInput!) { msg: forwardMessage(input: $input) { id } }
@@ -1482,6 +1465,19 @@ async fn messages_resolve_their_nested_fields_for_the_viewer() {
         .map(|g| g["reactedByMe"].clone())
         .collect();
     assert_eq!(marks, [json!(true), json!(false)], "marked for the viewer");
+
+    f.on_message(
+        &f.alice,
+        UNPIN_MESSAGE,
+        &f.channel_id,
+        &mentioning,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        f.nested(&f.bob).await[&mentioning.id]["isPinned"],
+        json!(false)
+    );
 }
 
 /// A forwarded message names its source to everyone who reads it, but `forwardedFrom` resolves
@@ -1504,4 +1500,283 @@ async fn forwarded_from_resolves_only_for_readers_of_the_source() {
         json!(secret.id)
     );
     assert_eq!(as_bob[&forwarded]["forwardedFrom"], Value::Null);
+}
+
+// ── Every messaging root ──────────────────────────────────────────────────
+
+const CHANGES_ROOTS: &[&str] = &["query($s: ID!, $c: ID!) { messageChanges(input: { \
+     serverId: $s, conversations: [{ conversationId: $c }] }) { status } }"];
+
+impl Fixture {
+    /// Alice's message "the root" in the channel, bob's reply to it and alice's attachment on it.
+    async fn targets(&self) -> Targets {
+        let (alice, bob) = (&self.alice, &self.bob);
+        let (server, channel) = (&self.server_id, &self.channel_id);
+        Targets::seed(
+            &self.schema,
+            server,
+            channel,
+            alice,
+            bob,
+            &self.carol,
+            "the root",
+        )
+        .await
+    }
+}
+
+/// Every root that reads or writes messages refuses a caller without a session and one outside
+/// the workspace, and hides the channel from a guest nobody added to it. None of them changes
+/// anything.
+#[tokio::test]
+async fn every_messaging_root_refuses_callers_outside_the_channel() {
+    let f = setup().await;
+    let t = f.targets().await;
+    let roots = [CONVERSATION_MESSAGE_ROOTS, MESSAGE_ROOTS, ATTACHMENT_ROOTS];
+    let calls = t.calls(&[&roots[..], &[CHANGES_ROOTS]].concat());
+    assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
+    assert_each_refused_as(&f.schema, &f.outsider, &calls, "FORBIDDEN").await;
+    let gina = f
+        .ctx
+        .newcomer(&f.server_id, "gina", ServerMemberRole::Guest)
+        .await;
+    assert_each_refused_as(&f.schema, &gina, &t.calls(&roots), "NOT_FOUND").await;
+
+    let seen = f.nested(&f.alice).await;
+    assert_eq!(seen.len(), 1);
+    let root = &seen[&t.message];
+    assert_eq!(root["text"], "the root");
+    assert_eq!(root["isPinned"], false);
+    assert_eq!(root["reactions"], json!([]));
+}
+
+/// An id that names nothing is `NOT_FOUND`, at the conversation and at the message, thread or
+/// attachment under a real conversation; a malformed id is `VALIDATION`.
+#[tokio::test]
+async fn every_messaging_root_answers_unknown_and_malformed_ids() {
+    let f = setup().await;
+    let t = f.targets().await;
+    let roots = [CONVERSATION_MESSAGE_ROOTS, MESSAGE_ROOTS, ATTACHMENT_ROOTS];
+    let nowhere = t.elsewhere(&unknown_id());
+    assert_each_refused_as(&f.schema, &f.alice, &nowhere.calls(&roots), "NOT_FOUND").await;
+    let missing = Targets {
+        conversation: t.conversation.clone(),
+        ..nowhere
+    };
+    let below = missing.calls(&[MESSAGE_ROOTS, ATTACHMENT_ROOTS]);
+    assert_each_refused_as(&f.schema, &f.alice, &below, "NOT_FOUND").await;
+
+    let malformed = t
+        .elsewhere("not-an-id")
+        .calls(&[&roots[..], &[CHANGES_ROOTS]].concat());
+    assert_each_refused_as(&f.schema, &f.alice, &malformed, "VALIDATION").await;
+}
+
+const TEXT_ROOTS: [&str; 3] = [
+    "mutation($s: ID!, $c: ID!, $text: String!) { sendMessage(input: { serverId: $s, \
+     conversationId: $c, text: $text }) { id } }",
+    "mutation($s: ID!, $c: ID!, $m: ID!, $text: String!) { replyToMessage(input: { \
+     serverId: $s, conversationId: $c, rootMessageId: $m, text: $text }) { id } }",
+    "mutation($s: ID!, $c: ID!, $m: ID!, $text: String!) { editMessage(input: { serverId: $s, \
+     conversationId: $c, messageId: $m, text: $text }) { id } }",
+];
+
+const REACT: &str = "mutation($s: ID!, $c: ID!, $m: ID!, $emoji: String!) { \
+     toggleReaction(input: { serverId: $s, conversationId: $c, messageId: $m, emoji: $emoji }) \
+     { emoji } }";
+
+/// Message text holds at most 10,000 characters. A reply and an edit need text; a new message
+/// may have none, since its attachments are added after it. An emoji is 1 to 32 characters.
+#[tokio::test]
+async fn message_text_and_emoji_are_bounded() {
+    let f = setup().await;
+    let t = f.targets().await;
+    let with = |doc: &'static str, extra: Value| (doc, merged(t.vars(), extra));
+
+    let longest = f.send(&f.alice, &f.channel_id, &"a".repeat(10_000)).await;
+    assert_eq!(longest.text.map(|text| text.len()), Some(10_000));
+    let over = json!({ "text": "a".repeat(10_001) });
+    let calls: Vec<_> = TEXT_ROOTS
+        .iter()
+        .map(|doc| with(doc, over.clone()))
+        .collect();
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+
+    let blank = json!({ "text": "  " });
+    let calls: Vec<_> = TEXT_ROOTS[1..]
+        .iter()
+        .map(|doc| with(doc, blank.clone()))
+        .collect();
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+    let textless = f.send(&f.alice, &f.channel_id, "  ").await;
+    assert_eq!(textless.text, None);
+
+    let emojis = [json!({ "emoji": " " }), json!({ "emoji": "x".repeat(33) })];
+    let calls: Vec<_> = emojis.into_iter().map(|emoji| with(REACT, emoji)).collect();
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+}
+
+/// A page size of zero or less reads one item on every message list instead of failing.
+#[tokio::test]
+async fn message_lists_read_one_item_for_a_page_size_below_one() {
+    let f = setup().await;
+    let sent = f.send_many(2, "clamped needle").await;
+    let r = f.reply(&f.bob, &sent[0], "first").await;
+    f.reply(&f.bob, &sent[0], "second").await;
+    let conversation_id = f.channel_id.clone();
+    let lists = [
+        Target::Timeline {
+            conversation_id: conversation_id.clone(),
+        },
+        Target::Thread {
+            conversation_id: conversation_id.clone(),
+            thread_id: r.thread_id.expect("thread"),
+        },
+        Target::Search {
+            conversation_id,
+            query: "needle".to_string(),
+        },
+    ];
+    for limit in [0, -5] {
+        for list in &lists {
+            let page = f.page(list, Dir::After, &Value::Null, limit, false).await;
+            assert_eq!(page.items.len(), 1, "{list:?} limit {limit}");
+        }
+        let feed = f.changes(&[(&f.channel_id, None)], limit).await;
+        assert_eq!(feed[0].changes.len(), 1, "messageChanges limit {limit}");
+    }
+}
+
+const THREAD_ROOTS: [&str; 2] = [
+    "query($s: ID!, $c: ID!, $t: ID!) { thread(serverId: $s, conversationId: $c, threadId: $t) \
+     { id conversationId rootMessageId rootAuthorId rootText } }",
+    "query($s: ID!, $c: ID!, $m: ID!) { thread: threadByRootMessage(serverId: $s, \
+     conversationId: $c, rootMessageId: $m) { id conversationId rootMessageId rootAuthorId \
+     rootText } }",
+];
+
+/// `thread` and `threadByRootMessage` resolve the thread under a root message. A root without
+/// replies has no thread, a reply is not a root, and a deleted root shows no text.
+#[tokio::test]
+async fn thread_roots_resolve_the_thread_under_a_root_message() {
+    let f = setup().await;
+    let t = f.targets().await;
+    let (schema, alice, vars) = (&f.schema, &f.alice, t.vars());
+    let thread = |doc: &'static str, extra: Value| {
+        let request = alice.request(doc, merged(vars.clone(), extra));
+        async move { exec_ok(schema, request).await["thread"].clone() }
+    };
+    let mut expected = json!({
+        "id": t.thread, "conversationId": t.conversation, "rootMessageId": t.message,
+        "rootAuthorId": f.alice.user_id.to_string(), "rootText": "the root",
+    });
+    for doc in THREAD_ROOTS {
+        assert_eq!(thread(doc, json!({})).await, expected, "{doc}");
+    }
+
+    let lonely = f.send(&f.bob, &f.channel_id, "no replies").await;
+    assert_eq!(
+        thread(THREAD_ROOTS[1], json!({ "m": lonely.id })).await,
+        Value::Null
+    );
+    let reply = f.reply(&f.bob, &lonely, "a reply").await;
+    let vars = merged(t.vars(), json!({ "m": reply.id }));
+    let code = exec_err_code(&f.schema, f.alice.request(THREAD_ROOTS[1], vars)).await;
+    assert_eq!(code, "NOT_FOUND", "a reply is not a root");
+
+    let delete = json!({ "input": {
+        "serverId": f.server_id, "conversationId": f.channel_id, "messageId": t.message,
+    } });
+    exec_ok(&f.schema, f.alice.request(DELETE_MUTATION, delete)).await;
+    expected["rootText"] = Value::Null;
+    for doc in THREAD_ROOTS {
+        assert_eq!(thread(doc, json!({})).await, expected, "{doc}");
+    }
+}
+
+const CREATE_ATTACHMENT: &str = "mutation($s: ID!, $c: ID!, $m: ID!) { createAttachment(input: { \
+     serverId: $s, conversationId: $c, messageId: $m, filename: \"report.txt\", \
+     contentType: \"text/plain\", sizeBytes: 5 }) { attachmentId uploadToken maxSizeBytes } }";
+
+const ATTACHMENT_CHANGES: [&str; 2] = [
+    "mutation($s: ID!, $a: ID!) { change: finalizeAttachment(input: { serverId: $s, \
+     attachmentId: $a }) { id status filename contentType sizeBytes } }",
+    "mutation($s: ID!, $a: ID!) { change: deleteAttachment(input: { serverId: $s, \
+     attachmentId: $a }) }",
+];
+
+const MESSAGE_ATTACHMENTS: &str = "query($s: ID!, $c: ID!, $m: ID!) { message(serverId: $s, \
+     conversationId: $c, messageId: $m) { hasAttachments attachments { id status } } }";
+
+/// Only a message's author attaches files to it and finalizes or deletes them. Finalizing waits
+/// for the upload; deleting the last attachment clears `hasAttachments`.
+#[tokio::test]
+async fn only_the_author_manages_a_messages_attachments() {
+    let f = setup().await;
+    let t = f.targets().await;
+    assert_each_refused_as(
+        &f.schema,
+        &f.bob,
+        &t.calls(&[ATTACHMENT_ROOTS]),
+        "FORBIDDEN",
+    )
+    .await;
+
+    let ticket = exec_ok(&f.schema, f.alice.request(CREATE_ATTACHMENT, t.vars())).await;
+    let ticket = &ticket["createAttachment"];
+    assert_eq!(ticket["maxSizeBytes"], 5);
+    let uploaded = merged(t.vars(), json!({ "a": ticket["attachmentId"] }));
+    let finalize = (ATTACHMENT_CHANGES[0], uploaded.clone());
+    assert_eq!(
+        exec_err_code(&f.schema, f.alice.call(finalize.clone())).await,
+        "VALIDATION",
+        "nothing uploaded yet"
+    );
+    let attachment_id: Uuid = ticket["attachmentId"]
+        .as_str()
+        .expect("id")
+        .parse()
+        .expect("uuid");
+    f.ctx
+        .build_provider()
+        .message_attachment_service()
+        .complete_upload(
+            rim_services::message_attachment::command::CompleteUploadCmd {
+                actor_user_id: f.alice.user_id,
+                attachment_id: attachment_id.into(),
+                upload_token: ticket["uploadToken"].as_str().expect("token").to_string(),
+                uploaded_filename: "report.txt".to_string(),
+                content_type: "text/plain".to_string(),
+                data: b"hello".to_vec(),
+            },
+        )
+        .await
+        .expect("upload");
+    let ready = exec_ok(&f.schema, f.alice.call(finalize)).await;
+    assert_eq!(
+        ready["change"],
+        json!({
+            "id": uploaded["a"], "status": "READY", "filename": "report.txt",
+            "contentType": "text/plain", "sizeBytes": 5,
+        })
+    );
+
+    let message = exec_ok(&f.schema, f.alice.request(MESSAGE_ATTACHMENTS, t.vars())).await;
+    assert_eq!(message["message"]["hasAttachments"], true);
+    assert_eq!(
+        message["message"]["attachments"]
+            .as_array()
+            .expect("list")
+            .len(),
+        2
+    );
+    for vars in [t.vars(), uploaded] {
+        let deleted = exec_ok(&f.schema, f.alice.request(ATTACHMENT_CHANGES[1], vars)).await;
+        assert_eq!(deleted["change"], true);
+    }
+    let message = exec_ok(&f.schema, f.alice.request(MESSAGE_ATTACHMENTS, t.vars())).await;
+    assert_eq!(
+        message["message"],
+        json!({ "hasAttachments": false, "attachments": [] })
+    );
 }

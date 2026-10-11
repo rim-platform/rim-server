@@ -20,6 +20,8 @@ pub mod registration;
 pub mod relay;
 #[allow(dead_code)] // Only some test binaries seed the shared role cast.
 pub mod roles;
+#[allow(dead_code)] // Only the messaging suites send every messaging root.
+pub mod roots;
 
 use std::env;
 use std::path::PathBuf;

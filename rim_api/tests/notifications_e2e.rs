@@ -20,9 +20,12 @@ use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, exec_err_code, exec_ok};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+};
 use support::roles::create_channel;
+use support::roots::{CONVERSATION_NOTIFICATION_ROOTS, Targets};
+use support::{TestCtx, unknown_id};
 
 const CREATE_CONVERSATION: &str = r#"
 mutation Create($input: CreateConversationInput!) {
@@ -63,6 +66,14 @@ mutation Delete($input: DeleteMessageInput!) { deleteMessage(input: $input) }
 
 const MARK_AS_READ: &str = r#"
 mutation MarkRead($input: MarkAsReadInput!) { markAsRead(input: $input) }
+"#;
+
+const MARK_ALL_AS_READ: &str = r#"
+mutation MarkAllRead($workspaceId: ID!) { markAllAsRead(input: { workspaceId: $workspaceId }) }
+"#;
+
+const UNREAD_COUNTS: &str = r#"
+query Unread($workspaceId: ID!) { unreadCounts(workspaceId: $workspaceId) { conversationId count } }
 "#;
 
 const MUTE: &str = r#"
@@ -710,6 +721,29 @@ async fn reading_the_conversation_clears_its_notifications() {
         1,
         "only #random stays unread"
     );
+
+    // markAllAsRead reads every joined conversation and the rest of the notifications.
+    let workspace = json!({ "workspaceId": f.server_id });
+    let unread = || async {
+        let data = exec_ok(&f.schema, f.alice.request(UNREAD_COUNTS, workspace.clone())).await;
+        let counts = data["unreadCounts"].as_array().expect("counts").clone();
+        counts
+            .into_iter()
+            .filter(|c| c["count"] != 0)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        unread().await,
+        [json!({ "conversationId": other, "count": 1 })]
+    );
+    let data = exec_ok(
+        &f.schema,
+        f.alice.request(MARK_ALL_AS_READ, workspace.clone()),
+    )
+    .await;
+    assert_eq!(data["markAllAsRead"], true);
+    assert_eq!(unread().await, Vec::<Value>::new());
+    assert_eq!(f.unread_count(&f.alice).await, 0);
 }
 
 /// A private channel never notifies a workspace member outside it, not even for `@channel`
@@ -889,23 +923,85 @@ async fn notification_commands_dispatch_to_the_service() {
     assert_eq!(f.unread_count(&f.carol).await, 0);
 }
 
-/// Workspace membership gates every query; a level for a conversation the caller cannot read
-/// is refused without revealing it.
-#[tokio::test]
-async fn membership_gates() {
-    let f = setup().await;
-    let outsider_user = f.ctx.create_user("nt-outsider").await;
-    let outsider = f.ctx.caller(&outsider_user).await;
-    let code = exec_err_code(
-        &f.schema,
-        outsider.request(UNREAD_COUNT, json!({ "serverId": f.server_id })),
-    )
-    .await;
-    assert_eq!(code, "FORBIDDEN");
+/// Roots over the caller's notifications in workspace `$s`.
+const NOTIFICATION_ROOTS: &[&str] = &[
+    "query($s: ID!) { myNotificationSettings(serverId: $s) { defaultLevel } }",
+    "query($s: ID!) { myNotifications(serverId: $s) { items { id } } }",
+    "query($s: ID!) { myUnreadNotificationCount(serverId: $s) }",
+    "query($s: ID!) { mutedConversations(serverId: $s) { conversationId } }",
+    "mutation($s: ID!) { markNotificationsRead(serverId: $s, \
+     allBefore: \"2026-01-01T00:00:00Z\") }",
+    "mutation($s: ID!) { setDoNotDisturb(serverId: $s, paused: true) { dndPaused } }",
+    "mutation($s: ID!) { updateNotificationSettings(serverId: $s, input: { defaultLevel: NONE, \
+     keywords: [], digest: OFF }) { defaultLevel } }",
+];
 
-    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
-    let mut vars = f.ids(&secret);
-    vars["level"] = json!("ALL");
-    let code = exec_err_code(&f.schema, f.carol.request(SET_LEVEL, vars)).await;
-    assert_eq!(code, "NOT_FOUND");
+/// Every notification root refuses a caller without a session and one outside the workspace,
+/// and a guest nobody added to a channel sets no rule for it. None of them changes anything.
+#[tokio::test]
+async fn every_notification_root_refuses_callers_outside_the_workspace() {
+    let f = setup().await;
+    let t = Targets::conversation(&f.server_id, &f.general, &f.bob);
+    let calls = t.calls(&[NOTIFICATION_ROOTS, CONVERSATION_NOTIFICATION_ROOTS]);
+    assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
+    let olive = f.ctx.outsider("nt-olive").await;
+    assert_each_refused_as(&f.schema, &olive, &calls, "FORBIDDEN").await;
+    let gina = f
+        .ctx
+        .newcomer(&f.server_id, "nt-gina", ServerMemberRole::Guest)
+        .await;
+    let rules = t.calls(&[CONVERSATION_NOTIFICATION_ROOTS]);
+    assert_each_refused_as(&f.schema, &gina, &rules, "NOT_FOUND").await;
+
+    let conv = f.conversation_level(&f.alice, &f.general).await;
+    assert_eq!(
+        (&conv["isMuted"], &conv["notificationLevel"]),
+        (&json!(false), &Value::Null)
+    );
+}
+
+/// An id that names nothing is `NOT_FOUND`; a malformed one is `VALIDATION`.
+#[tokio::test]
+async fn every_notification_root_answers_unknown_and_malformed_ids() {
+    let f = setup().await;
+    let nowhere = Targets::conversation(&f.server_id, &unknown_id(), &f.bob);
+    let calls = nowhere.calls(&[CONVERSATION_NOTIFICATION_ROOTS]);
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "NOT_FOUND").await;
+
+    let mut malformed = Targets::conversation(&f.server_id, "not-an-id", &f.bob);
+    let mut calls = malformed.calls(&[CONVERSATION_NOTIFICATION_ROOTS]);
+    malformed.server = "not-an-id".to_string();
+    calls.extend(malformed.calls(&[NOTIFICATION_ROOTS]));
+    let ids = json!({ "serverId": f.server_id, "ids": ["not-an-id"] });
+    calls.push((MARK_NOTIFICATIONS_READ, ids));
+    assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+}
+
+const MUTED: &str =
+    "query($s: ID!) { muted: mutedConversations(serverId: $s) { conversationId mutedUntil } }";
+
+/// `mutedConversations` lists the caller's mutes in the workspace asked about only, and a mute
+/// names a conversation of the workspace it is set in.
+#[tokio::test]
+async fn muted_conversations_stay_in_their_workspace() {
+    let f = setup().await;
+    let other = f.ctx.create_server("nt-other").await.id.to_string();
+    f.ctx.join(&other, &f.alice, ServerMemberRole::Owner).await;
+    let elsewhere = create_channel(&f.schema, &f.alice, &other, "elsewhere", false).await;
+    let mute = |server_id: &str, conversation_id: &str| {
+        let input = json!({ "serverId": server_id, "conversationId": conversation_id });
+        f.alice.request(MUTE, json!({ "input": input }))
+    };
+    exec_ok(&f.schema, mute(&f.server_id, &f.general)).await;
+    exec_ok(&f.schema, mute(&other, &elsewhere)).await;
+    let code = exec_err_code(&f.schema, mute(&f.server_id, &elsewhere)).await;
+    assert_eq!(code, "NOT_FOUND", "a conversation of another workspace");
+
+    for (server_id, muted) in [(&f.server_id, &f.general), (&other, &elsewhere)] {
+        let data = exec_ok(&f.schema, f.alice.request(MUTED, json!({ "s": server_id }))).await;
+        assert_eq!(
+            data["muted"],
+            json!([{ "conversationId": muted, "mutedUntil": null }])
+        );
+    }
 }
