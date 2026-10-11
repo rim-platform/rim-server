@@ -28,10 +28,10 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::ConversationRepos;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_access, ensure_conversation_access_as,
-    ensure_conversation_in_server, ensure_conversation_member_access, ensure_conversation_writable,
-    ensure_not_archived, ensure_not_timed_out, ensure_server_member,
-    ensure_server_owner_or_moderator, ensure_workspace_writable, member_standing,
+    ConversationAccessRepos, ensure_conversation_access_as, ensure_conversation_in_server,
+    ensure_conversation_member_access, ensure_conversation_writable, ensure_not_archived,
+    ensure_not_timed_out, ensure_server_member, ensure_server_owner_or_moderator,
+    ensure_workspace_writable, member_standing,
 };
 
 /// The refusal of a member who cannot read an encrypted conversation.
@@ -205,24 +205,6 @@ impl DefaultConversationService {
             &self.repos.conversation_repo,
             &self.repos.conversation_member_repo,
         )
-    }
-
-    async fn is_owner_or_moderator(
-        &self,
-        server_id: rim_core::server::model::ServerId,
-        user_id: UserId,
-    ) -> ServiceResult<bool> {
-        let member = self
-            .repos
-            .server_member_repo
-            .get_member(server_id, user_id)
-            .await?;
-        Ok(member.is_some_and(|m| {
-            matches!(
-                m.member_role,
-                ServerMemberRole::Owner | ServerMemberRole::Moderator
-            )
-        }))
     }
 
     /// Adds `user_id` unless already a member. Returns whether a row was inserted; a concurrent
@@ -785,7 +767,7 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: RemoveConversationMemberCmd,
     ) -> ServiceResult<()> {
-        ensure_server_member(
+        let standing = member_standing(
             self.repos.server_member_repo.as_ref(),
             cmd.server_id,
             cmd.actor.user_id,
@@ -801,14 +783,12 @@ impl ConversationService for DefaultConversationService {
         // Owner/Moderator may remove anyone, even from a private channel they are not in (the
         // same rule as archiving an orphaned private channel by id). Everyone else must be able
         // to see the conversation and may only remove themselves.
-        if !self
-            .is_owner_or_moderator(cmd.server_id, cmd.actor.user_id)
-            .await?
-        {
-            ensure_conversation_access(
+        if !standing.role.is_moderator() {
+            ensure_conversation_access_as(
                 self.repos.conversation_member_repo.as_ref(),
                 &conversation,
                 cmd.actor.user_id,
+                standing.role,
             )
             .await?;
             if cmd.user_id != cmd.actor.user_id {
