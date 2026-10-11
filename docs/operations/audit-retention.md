@@ -9,6 +9,9 @@ rim-server keeps two audit records, and retention treats them differently:
 
 Unset, nothing changes: the table keeps every row forever.
 
+The admin audit view shows the retention in force. It reads `serverInfo.auditRetentionDays`,
+readable without a session: the configured days, or null when rows are kept forever.
+
 ## Turning it on
 
 | Variable | Meaning |

@@ -735,6 +735,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         observers_for_schema,
         rim_api::RegistrationContext {
             registration_mode: Arc::new(registration_mode),
+            audit_retention_days,
         },
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,

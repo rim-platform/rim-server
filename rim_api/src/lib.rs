@@ -34,6 +34,8 @@ mod tests;
 pub struct RegistrationContext {
     /// The registration mode (invite-only, open or proof-of-work).
     pub registration_mode: Arc<rim_services::auth::dto::RegistrationMode>,
+    /// Days a command audit row is kept; `None` keeps rows forever.
+    pub audit_retention_days: Option<u32>,
 }
 
 /// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
@@ -117,6 +119,9 @@ pub fn build_schema(
         .data(pin_loader)
         .data(link_preview_loader)
         .data(registration.registration_mode)
+        .data(crate::types::AuditRetention(
+            registration.audit_retention_days,
+        ))
         .limit_depth(10)
         .limit_complexity(200);
     match federation {

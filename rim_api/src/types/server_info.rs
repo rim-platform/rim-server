@@ -17,11 +17,20 @@ pub struct ServerInfo {
     pub api_version: i32,
     /// Every optional feature with its state on this instance.
     pub features: Vec<ServerFeatureInfo>,
+    /// Days a command audit row is kept before it is exported and deleted; null keeps rows
+    /// forever.
+    pub audit_retention_days: Option<u32>,
 }
 
+/// The configured command audit retention in days, held in the schema data; `None` keeps rows
+/// forever.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuditRetention(pub Option<u32>);
+
 impl ServerInfo {
-    /// This build's version and API version, with the features `gate` reports.
-    pub fn current(gate: &dyn FeatureGate) -> Self {
+    /// This build's version and API version, with the features `gate` reports and the audit
+    /// `retention`.
+    pub fn current(gate: &dyn FeatureGate, retention: AuditRetention) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             api_version: API_VERSION,
@@ -30,6 +39,7 @@ impl ServerInfo {
                 .into_iter()
                 .map(|(feature, state)| ServerFeatureInfo::new(feature, &state))
                 .collect(),
+            audit_retention_days: retention.0,
         }
     }
 }
