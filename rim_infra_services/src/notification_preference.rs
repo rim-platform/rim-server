@@ -1,8 +1,11 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing::instrument;
 
+use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::notification_preference::command::{
@@ -12,12 +15,16 @@ use rim_services::notification_preference::dto::MutedConversationDto;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::{ServiceError, ServiceResult};
 
-use crate::util::ensure_server_member;
+use crate::util::{
+    ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
+};
 
 #[derive(Clone)]
 pub struct NotificationPreferenceRepos {
     pub notification_preference_repo: Arc<dyn NotificationPreferenceRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
 }
 
 pub struct DefaultNotificationPreferenceService {
@@ -28,18 +35,35 @@ impl DefaultNotificationPreferenceService {
     pub fn new(repos: NotificationPreferenceRepos) -> Self {
         Self { repos }
     }
+
+    /// The read gate of the conversation a mute names.
+    async fn ensure_readable(
+        &self,
+        actor: rim_core::user::model::UserId,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> ServiceResult<()> {
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            actor,
+            server_id,
+            conversation_id,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl NotificationPreferenceService for DefaultNotificationPreferenceService {
     #[instrument(name = "notification.mute_conversation", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id))]
     async fn mute_conversation(&self, cmd: MuteConversationCmd) -> ServiceResult<bool> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
+        self.ensure_readable(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
+            .await?;
 
         self.repos
             .notification_preference_repo
@@ -51,12 +75,8 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
 
     #[instrument(name = "notification.unmute_conversation", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id))]
     async fn unmute_conversation(&self, cmd: UnmuteConversationCmd) -> ServiceResult<bool> {
-        ensure_server_member(
-            self.repos.server_member_repo.as_ref(),
-            cmd.server_id,
-            cmd.actor.user_id,
-        )
-        .await?;
+        self.ensure_readable(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
+            .await?;
 
         self.repos
             .notification_preference_repo
@@ -91,9 +111,20 @@ impl NotificationPreferenceService for DefaultNotificationPreferenceService {
             .notification_preference_repo
             .get_muted_conversations(query.actor.user_id)
             .await?;
+        let ids: Vec<_> = prefs.iter().map(|p| p.conversation_id).collect();
+        let in_workspace: HashSet<_> = self
+            .repos
+            .conversation_repo
+            .get_by_ids(&ids)
+            .await?
+            .into_iter()
+            .filter(|c| c.server_id == query.server_id)
+            .map(|c| c.id)
+            .collect();
 
         Ok(prefs
             .into_iter()
+            .filter(|p| in_workspace.contains(&p.conversation_id))
             .map(|p| MutedConversationDto {
                 conversation_id: p.conversation_id,
                 muted_until: p.muted_until,
