@@ -18,6 +18,8 @@ pub mod nodes;
 pub mod registration;
 #[allow(dead_code)] // Only the relay tests sign people up on two servers.
 pub mod relay;
+#[allow(dead_code)] // Only some test binaries seed the shared role cast.
+pub mod roles;
 
 use std::env;
 use std::path::PathBuf;

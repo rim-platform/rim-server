@@ -69,3 +69,16 @@ pub async fn exec_err_message(schema: &AppSchema, request: Request) -> String {
         .message
         .clone()
 }
+
+/// Assert that each `(query, variables)` call, sent through `request`, fails with `code`.
+pub async fn assert_each_refused(
+    schema: &AppSchema,
+    calls: &[(&str, Value)],
+    code: &str,
+    request: impl Fn(&str, Value) -> Request,
+) {
+    for (query, variables) in calls {
+        let got = exec_err_code(schema, request(query, variables.clone())).await;
+        assert_eq!(got, code, "{query}");
+    }
+}
