@@ -85,6 +85,8 @@ pub struct WorkspaceInvitePreviewDto {
     pub server_id: ServerId,
     pub server_name: String,
     pub invited_by_display_name: String,
+    /// The owner's display name, else username; `None` when the workspace has no owner.
+    pub owner_display_name: Option<String>,
 }
 
 /// Read-only preview of a registration token.

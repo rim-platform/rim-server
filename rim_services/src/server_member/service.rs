@@ -6,7 +6,9 @@ use mockall::automock;
 use rim_core::user::model::UserId;
 
 use crate::ServiceResult;
-use crate::server_member::command::{GetServerMemberQuery, ListServerMembersQuery};
+use crate::server_member::command::{
+    GetServerMemberQuery, GetServerOwnerQuery, ListServerMembersQuery,
+};
 use crate::server_member::dto::ServerMemberDto;
 
 #[async_trait]
@@ -26,4 +28,8 @@ pub trait ServerMemberService: Send + Sync {
         &self,
         query: ListServerMembersQuery,
     ) -> ServiceResult<Option<HashSet<UserId>>>;
+
+    /// The id of the workspace's owner, `None` when it has none. Any member may ask, guests
+    /// included. `PermissionDenied` for a non-member.
+    async fn get_owner(&self, query: GetServerOwnerQuery) -> ServiceResult<Option<UserId>>;
 }

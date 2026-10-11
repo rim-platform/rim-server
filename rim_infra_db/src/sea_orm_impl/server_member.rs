@@ -8,7 +8,9 @@ use rim_core::server_member::model::{
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -110,6 +112,23 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
 
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool> {
         Ok(self.get_member(server_id, user_id).await?.is_some())
+    }
+
+    async fn get_owner_id(&self, server_id: ServerId) -> RepoResult<Option<UserId>> {
+        let owner: Option<Uuid> = server_member::Entity::find()
+            .select_only()
+            .column(server_member::Column::UserId)
+            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(server_member::Column::MemberRole.eq(
+                entity::sea_orm_active_enums::ServerMemberRole::from(ServerMemberRole::Owner),
+            ))
+            .order_by_asc(server_member::Column::JoinedAt)
+            .into_tuple()
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(owner.map(Into::into))
     }
 
     async fn get_member_standing(

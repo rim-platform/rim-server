@@ -10,7 +10,7 @@ mod tests {
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_core::user::repository::MockUserRepository;
-    use rim_services::server_member::command::GetServerMemberQuery;
+    use rim_services::server_member::command::{GetServerMemberQuery, GetServerOwnerQuery};
     use rim_services::server_member::service::ServerMemberService;
     use rim_services::{Actor, ServiceError};
 
@@ -27,8 +27,9 @@ mod tests {
         }
     }
 
+    /// A non-member reads neither a member nor the owner.
     #[tokio::test]
-    async fn get_member_requires_server_membership() {
+    async fn get_member_and_get_owner_require_server_membership() {
         let server_id = ServerId::new();
         let actor_id = UserId::new();
 
@@ -68,6 +69,18 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(err, ServiceError::PermissionDenied | ServiceError::NotFound),
+            "got: {err:?}"
+        );
+
+        let err = svc
+            .get_owner(GetServerOwnerQuery {
+                actor: Actor::new(actor_id),
+                server_id,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::PermissionDenied),
             "got: {err:?}"
         );
     }

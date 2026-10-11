@@ -1192,7 +1192,8 @@ mod tests {
     }
 
     /// `previewInviteToken` for a valid workspace invite returns `WORKSPACE` type
-    /// with server name and inviter display name; underlying row is NOT mutated.
+    /// with server name and inviter display name, and no owner name for a workspace without an
+    /// owner; underlying row is NOT mutated.
     #[tokio::test]
     async fn preview_invite_token_workspace_returns_workspace_payload() {
         let server_id = ServerId::new();
@@ -1242,7 +1243,8 @@ mod tests {
             Ok(Some(u))
         });
 
-        let (_, _, smr, sess_r, _, cr) = repos();
+        let (_, _, mut smr, sess_r, _, cr) = repos();
+        smr.expect_get_owner_id().returning(|_| Ok(None));
         let svc = svc_with_registration(
             user_repo,
             server_repo,
@@ -1267,6 +1269,7 @@ mod tests {
         let ws = res.workspace.unwrap();
         assert_eq!(ws.server_name, "Acme");
         assert_eq!(ws.invited_by_display_name, "Dave Smith");
+        assert_eq!(ws.owner_display_name, None);
     }
 
     /// `previewInviteToken` for a valid instance invite returns `INSTANCE` type

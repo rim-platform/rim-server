@@ -777,7 +777,7 @@ const WORKSPACE_ROOTS: &[&str] = &[
 const MODERATOR_ROOTS: &[&str] = &["mutation($s: ID!, $c: ID!) { setConversationArchived(\
      serverId: $s, conversationId: $c, archived: true) { id } }"];
 
-const MY_SERVERS: &str = "query { myServers { id name } }";
+const MY_SERVERS: &str = "query { myServers { id name owner { username } } }";
 
 impl Fixture {
     /// Channel `conversation_id` of the workspace, with `user` as the member the roots remove
@@ -788,7 +788,8 @@ impl Fixture {
 }
 
 /// Every conversation and workspace root refuses a caller without a session and one outside
-/// the workspace, who changes nothing; `myServers` lists only the caller's own workspaces.
+/// the workspace, who changes nothing; `myServers` lists only the caller's own workspaces, each
+/// with its owner.
 #[tokio::test]
 async fn every_conversation_root_refuses_callers_outside_the_workspace() {
     let f = setup().await;
@@ -815,12 +816,15 @@ async fn every_conversation_root_refuses_callers_outside_the_workspace() {
     assert_eq!(servers(&olive).await["myServers"], json!([]));
     assert_eq!(
         servers(&f.carol).await["myServers"],
-        json!([{ "id": f.server_id, "name": "private-channels-e2e" }])
+        json!([{
+            "id": f.server_id, "name": "private-channels-e2e", "owner": { "username": "pc-alice" },
+        }])
     );
 }
 
 /// A guest nobody added to a public channel gets `NOT_FOUND` from every root that needs to see
-/// it, removing someone else included. A guest opens direct messages but not groups.
+/// it, removing someone else included. A guest opens direct messages but not groups. A guest
+/// sees the workspace's owner without sharing a conversation with them.
 #[tokio::test]
 async fn a_guest_does_not_see_a_public_channel_nobody_added_them_to() {
     let f = setup().await;
@@ -831,6 +835,11 @@ async fn a_guest_does_not_see_a_public_channel_nobody_added_them_to() {
         .await;
     let calls = f.targets(&id, &f.alice).calls(&[CONVERSATION_ROOTS]);
     assert_each_refused_as(&f.schema, &gina, &calls, "NOT_FOUND").await;
+    let servers = exec_ok(&f.schema, gina.request(MY_SERVERS, json!({}))).await;
+    assert_eq!(
+        servers["myServers"][0]["owner"],
+        json!({ "username": "pc-alice" })
+    );
 
     let with = |participants: Value| {
         let input = json!({ "serverId": f.server_id });
