@@ -30,7 +30,7 @@ pub trait CommandService: Send + Sync {
     -> ServiceResult<UserCommandDto>;
     async fn delete_user_command(&self, cmd: DeleteUserCommandCmd) -> ServiceResult<()>;
 
-    /// P5-A7 — AI Agent command-discovery meta-tool (v2 §5 R1 #3, M6).
+    /// The AI agent's command-discovery meta-tool.
     ///
     /// Returns the actor's accessible AI-callable command surface, optionally
     /// ranked by relevance to an `intent_phrase`, truncated to `limit`, and
@@ -44,8 +44,7 @@ pub trait CommandService: Send + Sync {
     ///   3. Macro inclusion — when `workspace_id` is `Some`, synthesized macro
     ///      definitions are merged before the capability gate runs.
     ///
-    /// **Intent ranking** (R2 — literal substring + token-overlap; embeddings
-    /// deferred per ROADMAP §5 R2):
+    /// **Intent ranking** (literal substring + token overlap):
     ///   - When `intent_phrase` is `Some`, commands are ranked descending by a
     ///     score computed from substring + token-overlap matches against
     ///     `intent_samples`, `title`, and `nl_description`.
@@ -55,15 +54,9 @@ pub trait CommandService: Send + Sync {
     ///
     /// **Result cap:** truncated to `limit.unwrap_or(50).min(100)`.
     ///
-    /// **Rate limit (M6 mitigation):** 5 invocations per 60-second sliding
-    /// window per actor. Returns `ServiceError::RateLimited` on overage.
-    /// The design spec says "per session"; the implementation approximates this
-    /// with the same per-minute sliding window used by `execute_command` rate
-    /// limits (single-node). Per-session tracking requires session-aware
-    /// infrastructure and is deferred to Phase 6.
-    ///
-    /// Plugin consent gating: plugins are desktop-local at Phase 5; no backend
-    /// consent store exists. Deferred to Phase 6 per ROADMAP.
+    /// **Rate limit:** 5 invocations per 60-second sliding window per actor, on
+    /// the same single-node limiter as `execute_command`. Returns
+    /// `ServiceError::RateLimited` on overage.
     async fn command_discover(
         &self,
         actor: &Actor,

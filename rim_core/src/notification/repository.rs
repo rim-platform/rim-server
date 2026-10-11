@@ -33,7 +33,7 @@ pub struct ListUserNotificationsParams {
     pub cursor: Option<UserNotificationCursor>,
 }
 
-/// Notification settings and the notification inbox (Track 1.3). Authorization lives in the
+/// Notification settings and the notification inbox. Authorization lives in the
 /// service layer: every method trusts the ids it is given.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
@@ -67,7 +67,7 @@ pub trait NotificationRepository: Send + Sync {
     ) -> RepoResult<Vec<UserNotification>>;
 
     /// A user's notifications in one workspace, ordered `created_at DESC, id DESC`, with the
-    /// standard cursor semantics (`docs/pagination.md`, DESC endpoint).
+    /// standard cursor semantics (DESC endpoint).
     async fn list_notifications(
         &self,
         params: ListUserNotificationsParams,

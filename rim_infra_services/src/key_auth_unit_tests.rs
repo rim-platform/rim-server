@@ -1336,7 +1336,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finding_14_revocation_is_disclosed_only_after_the_challenge_and_audience() {
+    async fn revocation_is_disclosed_only_after_the_challenge_and_audience() {
         let h = harness();
         let e = h.enroll(1).await;
         let revocation = e.id.revoke_device(&e.state, e.device_id);

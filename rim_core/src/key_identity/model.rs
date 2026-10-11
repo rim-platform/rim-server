@@ -1,4 +1,4 @@
-//! Stored key identity records (Stage 3, `docs/specs/key-identity-v1.md`).
+//! Stored key identity records.
 //!
 //! Signed statements are kept exactly as received (`payload` plus `signature`), so anyone who
 //! reads them back can verify them again. Verification itself lives in `rim_identity`.

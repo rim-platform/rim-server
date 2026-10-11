@@ -19,7 +19,7 @@ use crate::moderation::dto::{
 };
 use crate::server_member::dto::ServerMemberDto;
 
-/// Roles and moderation (Track 1.2, `docs/specs/track-1-2-roles-and-moderation.md`). Every
+/// Roles and moderation. Every
 /// mutating method writes a `command_audit_log` row under a stable pseudo command id
 /// (`admin.kick`, `admin.ban`, ...), whether it was called from GraphQL or a command.
 ///

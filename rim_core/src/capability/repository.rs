@@ -5,9 +5,8 @@ use mockall::automock;
 use crate::capability::model::RegisteredCapability;
 use crate::repository::error::RepoResult;
 
-/// Persistence surface for the `capability_registry` table — Phase 1 §3.3
-/// (closes Black Widow C1). The runtime gate calls `get` on every capability
-/// the actor's required capability list mentions; an unknown or retired key
+/// Persistence surface for the `capability_registry` table. The runtime gate calls `get` on
+/// every capability the actor's required capability list mentions; an unknown or retired key
 /// denies by default.
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
@@ -17,7 +16,7 @@ pub trait CapabilityRegistryRepository: Send + Sync {
     /// deploy cannot un-retire an operator-disabled builtin: an operator who
     /// soft-retires `audit.read` expects that policy to survive every redeploy.
     ///
-    /// `is_self_scoped` — P6-FU5: stored alongside the key so
+    /// `is_self_scoped` is stored alongside the key so
     /// `CapabilityService::check()` can enforce workspace-context requirements
     /// from the DB rather than a hardcoded static set, using the value from
     /// [`BuiltinCapabilitySpec`].

@@ -33,7 +33,7 @@ pub trait MessageService: Send + Sync {
         query: ListThreadMessagesQuery,
     ) -> ServiceResult<Page<MessageDto, MessagePageCursor>>;
 
-    /// Full-text search, cursor-paginated by `(sent_at, id)` (see `docs/pagination.md`) and
+    /// Full-text search, cursor-paginated by `(sent_at, id)` and
     /// ranked via `rank`/`headline` on each hit. Visibility-scoped: never returns a message in a
     /// conversation the actor cannot see.
     async fn search_messages(
@@ -41,7 +41,7 @@ pub trait MessageService: Send + Sync {
         query: SearchMessagesQuery,
     ) -> ServiceResult<Page<MessageSearchHitDto, MessagePageCursor>>;
 
-    /// The message change feed (`docs/message-change-feed.md`): for each requested
+    /// The message change feed: for each requested
     /// conversation, the messages created, edited or deleted after its cursor, in version order.
     /// A conversation the actor cannot read, or whose cursor is ahead of its counter, is reported
     /// on its own entry (`ConversationChangesStatus`); only a non-member of the workspace fails.

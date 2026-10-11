@@ -89,7 +89,7 @@ pub(super) fn command_matches_surface(
                     .all(|key| context_has_key(context, key))
         }
         CommandSurfaceDto::KeybindPicker => definition.keybind_capable,
-        // P2-A2: the Ai surface is filtered async in
+        // The Ai surface is filtered async in
         // `DefaultCommandService::filter_ai_surface` (needs
         // `CapabilityService::check_many`); this sync predicate is bypassed
         // for that variant. False is a safe default if a caller ever reaches here.

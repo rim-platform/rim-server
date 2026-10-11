@@ -6,8 +6,8 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Nullable `ADD COLUMN`s — non-rewriting on PG11+, no backfill needed: existing
-        // incidents were never escalated/acked, so `NULL` is the correct historical value (§8).
+        // Nullable `ADD COLUMN`s, non-rewriting on PG11+. No backfill: existing incidents were
+        // never escalated or acknowledged, so `NULL` is correct for them.
         manager
             .alter_table(
                 Table::alter()

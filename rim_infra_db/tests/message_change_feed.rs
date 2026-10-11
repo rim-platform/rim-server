@@ -1,6 +1,6 @@
 #![cfg(feature = "db-tests")]
 
-//! Message change feed (`docs/message-change-feed.md`): the `add_message_change_feed`
+//! Message change feed: the `add_message_change_feed`
 //! migration's trigger assigns per-conversation versions on every write path, and
 //! `MessageRepository::list_message_changes` reads them back in order.
 //!

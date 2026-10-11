@@ -47,9 +47,8 @@ const MAX_ALGORITHM_NAME_LEN: usize = 32;
 
 /// A signature algorithm named by a tagged key or signature (`<name>:<base64url>`).
 ///
-/// Ed25519 is the only algorithm implemented today. The hybrid Ed25519 + ML-DSA-44 scheme
-/// (`docs/decisions/post-quantum-hybrid-2026-10-09.md`) arrives as a new variant; until then
-/// its name is refused like any other unknown name.
+/// Ed25519 is the only algorithm implemented. Any other name, including the hybrid
+/// Ed25519 + ML-DSA-44 scheme, is refused like an unknown name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Algorithm {

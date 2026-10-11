@@ -1,5 +1,4 @@
-//! SeaORM-backed implementation of the capability registry repository
-//! introduced in Phase 1 §3.3 (closes Black Widow C1).
+//! SeaORM-backed implementation of the capability registry repository.
 //!
 //! The registry is the source of truth for "does this capability key exist
 //! at all?" — `get` is the runtime gate's hot path (a row with `retired_at` set
@@ -34,8 +33,8 @@ impl CapabilityRegistryRepository for SeaOrmCapabilityRegistryRepository {
         is_self_scoped: bool,
     ) -> RepoResult<()> {
         // Boot-path seed: insert when missing, leave existing rows entirely
-        // untouched (Gate 4 M3 — operator soft-retire on a builtin must
-        // survive redeploy). NEVER touches `retired_at` on an existing row.
+        // untouched (an operator soft-retire on a builtin must survive a
+        // redeploy). NEVER touches `retired_at` on an existing row.
         let existing = capability_registry::Entity::find_by_id(capability_key.to_string())
             .one(&self.db)
             .await

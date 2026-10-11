@@ -1,6 +1,6 @@
 #![cfg(feature = "db-tests")]
 
-//! Track 1.3: notification settings, the notification inbox (paging, unique `(user, message)`,
+//! Notification settings, the notification inbox (paging, unique `(user, message)`,
 //! mark-read paths), the digest candidate query, retention, level overrides and the permanent
 //! mute data step against a live Postgres. Destructive for the shared test database: run
 //! single-threaded.
@@ -708,7 +708,7 @@ async fn level_overrides_and_mutes_share_one_row() {
     assert_eq!(prefs[0].user_id, bob);
 }
 
-/// The migration's data step turns a pre-Track-1.3 permanent mute into level NONE.
+/// The migration's data step turns a permanent mute (`muted_until IS NULL`) into level NONE.
 #[tokio::test]
 async fn permanent_mute_data_step_sets_level_none() {
     let ctx = support::TestCtx::new().await;

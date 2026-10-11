@@ -2,8 +2,8 @@ use crate::m20251012_135522_create_user::User;
 use crate::m20251029_222439_create_server::Server;
 use sea_orm_migration::{prelude::*, schema::*};
 
-/// Creates `workspace_feature` — per-workspace on/off flags for optional modules (Track 0.4,
-/// `docs/specs/track-0-4-optional-incident-module.md`). A missing row means the feature's
+/// Creates `workspace_feature` — per-workspace on/off flags for optional modules. A missing row
+/// means the feature's
 /// default (`WorkspaceFeature::default_enabled` in `rim_core`), which for `incidents` is off.
 ///
 /// **Data step:** every server that exists when this migration runs gets an explicit

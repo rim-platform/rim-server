@@ -26,7 +26,7 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::Unauthenticated => Error::new("unauthenticated").extend_with(|_, e| {
             e.set("code", Value::from("UNAUTHENTICATED"));
         }),
-        // H1: distinct codes so the frontend can decide whether to retry
+        // Distinct codes so the frontend can decide whether to retry
         // with a fresh challenge (`CONFIRMATION_STALE`) or surface a
         // generic "confirmation failed" message (`CONFIRMATION_FAILED`).
         ServiceError::ConfirmationStale => Error::new("confirmation expired or was already used")
@@ -48,7 +48,7 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::ExpiredToken => Error::new("token has expired").extend_with(|_, e| {
             e.set("code", Value::from("EXPIRED_TOKEN"));
         }),
-        // Distinct from generic CONFLICT so the frontend can highlight the email field (§13.5).
+        // Distinct from generic CONFLICT so the frontend can highlight the email field.
         ServiceError::EmailTaken => Error::new("email already in use").extend_with(|_, e| {
             e.set("code", Value::from("EMAIL_TAKEN"));
         }),
@@ -71,13 +71,13 @@ pub fn map_service_error(err: ServiceError) -> Error {
                 e.set("origin", Value::from(origin));
             }
         }),
-        // Track 1.1: writes into an archived (read-only) conversation.
+        // Writes into an archived (read-only) conversation.
         ServiceError::ConversationArchived => {
             Error::new("conversation is archived").extend_with(|_, e| {
                 e.set("code", Value::from("CONVERSATION_ARCHIVED"));
             })
         }
-        // Track 1.2: the actor is timed out in this workspace. `until` (RFC 3339) lets the
+        // The actor is timed out in this workspace. `until` (RFC 3339) lets the
         // client show when writing becomes possible again.
         ServiceError::TimedOut { until } => {
             Error::new(format!("timed out until {}", until.to_rfc3339())).extend_with(|_, e| {

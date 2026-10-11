@@ -38,7 +38,7 @@ async fn server_query_returns_server() {
     assert_eq!(json["server"]["name"], serde_json::json!("My Server"));
 }
 
-// ── Server.viewerRole (docs/specs/server-viewer-role.md) ──────────────
+// ── Server.viewerRole ─────────────────────────────────────────────────
 
 /// Builds a schema + query for the `viewerRole` sub-field test cases below, differing only
 /// in what `get_member` returns for the requesting actor.

@@ -6,7 +6,7 @@ use crate::user::model::UserId;
 
 /// A user's notification preference for one conversation.
 ///
-/// - `level`: the per-conversation override (Track 1.3); `None` inherits the workspace default.
+/// - `level`: the per-conversation override; `None` inherits the workspace default.
 /// - `muted_until`: a timed mute (an explicit `NONE` that expires). A permanent mute is stored as
 ///   `level = Some(None)` without `muted_until`.
 #[derive(Debug, Clone, PartialEq, Eq)]

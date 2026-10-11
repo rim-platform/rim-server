@@ -141,7 +141,6 @@ pub struct MessageChangeCursor {
 }
 
 /// The message change feed: what changed in these conversations since each one's cursor.
-/// See `docs/message-change-feed.md`.
 #[derive(Debug, Clone)]
 pub struct ListMessageChangesQuery {
     pub actor: Actor,

@@ -132,7 +132,7 @@ pub async fn member_standing(
         .ok_or(ServiceError::PermissionDenied)
 }
 
-/// `Err(TimedOut { until })` while the member's timeout is in force (Track 1.2).
+/// `Err(TimedOut { until })` while the member's timeout is in force.
 pub fn ensure_not_timed_out(standing: &MemberStanding) -> ServiceResult<()> {
     match standing.timed_out_until {
         Some(until) if until > chrono::Utc::now() => Err(ServiceError::TimedOut { until }),
@@ -153,7 +153,7 @@ pub async fn ensure_workspace_writable(
     Ok(standing)
 }
 
-/// `Err(PermissionDenied)` while `user_id` has an active ban in `server_id` (Track 1.2). Called
+/// `Err(PermissionDenied)` while `user_id` has an active ban in `server_id`. Called
 /// by every workspace join path except workspace creation, where no ban can exist.
 pub async fn ensure_not_banned(
     moderation_repo: &dyn ModerationRepository,
@@ -193,10 +193,10 @@ pub async fn ensure_server_member(
 }
 
 /// The one way a user becomes a workspace member: inserts the `server_member` row, then joins
-/// the user to every public, unarchived channel of the workspace (Track 1.1), skipping channels
+/// the user to every public, unarchived channel of the workspace, skipping channels
 /// they are already in, so a member who arrives after the channel back-fill does not start with
 /// an empty joined-channel list. Private channels still need an invitation. A `Guest` joins no
-/// channel: guests only see conversations they are explicitly added to (Track 1.2).
+/// channel: guests only see conversations they are explicitly added to.
 ///
 /// Ban checks ([`ensure_not_banned`]) are the caller's job, before calling this.
 ///
@@ -323,7 +323,7 @@ pub async fn ensure_conversation_access(
 /// Check that a workspace member with `role` can read the conversation (archived or not).
 /// - Public channels: server membership is sufficient — no conversation_member check needed —
 ///   except for a `Guest`, who must be a conversation member like in a private channel
-///   (`NotFound` otherwise, Track 1.2).
+///   (`NotFound` otherwise).
 /// - Private channels: the user must be a conversation member; a non-member gets `NotFound`, so
 ///   the response does not reveal that the channel exists.
 /// - DMs and groups: the user must be a conversation member (`PermissionDenied` otherwise).
@@ -902,7 +902,7 @@ mod tests {
         );
     }
 
-    // ── Track 1.1 access-gate matrix ──
+    // ── Access-gate matrix ──
     //
     // (public channel | private channel | group | DM) × (member | non-member) × archived, for
     // the read gate (`ensure_conversation_member_access`) and the write gate
@@ -1024,7 +1024,7 @@ mod tests {
         ));
     }
 
-    // ── Track 1.2: guest and timeout gates ──
+    // ── Guest and timeout gates ──
 
     fn guest_repo() -> FakeServerMemberRepo {
         FakeServerMemberRepo {
@@ -1177,7 +1177,7 @@ mod tests {
         );
     }
 
-    /// A guest joins no channel on arrival (Track 1.2).
+    /// A guest joins no channel on arrival.
     #[tokio::test]
     async fn add_workspace_member_skips_auto_join_for_guests() {
         use rim_core::conversation::repository::MockConversationRepository;
@@ -1214,7 +1214,7 @@ mod tests {
         assert_eq!(member.member_role, ServerMemberRole::Guest);
     }
 
-    // ── add_workspace_member: Track 1.1 auto-join ──
+    // ── add_workspace_member: auto-join ──
 
     #[tokio::test]
     async fn add_workspace_member_joins_public_channels_skipping_existing() {

@@ -125,7 +125,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
 
     /// Atomically consume one use slot.
     ///
-    /// Increments `use_count` only when all of the following hold (M4 hardening):
+    /// Increments `use_count` only when all of the following hold:
     /// - `use_count < max_uses` (capacity available)
     /// - `revoked_at IS NULL` (not revoked — guards against concurrent admin revoke)
     /// - `expires_at > now()` (not expired)
@@ -155,9 +155,9 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
                         .lt(Expr::col(instance_invite::Column::MaxUses)),
                 ),
             )
-            // M4: must not be revoked (guards concurrent admin revoke)
+            // must not be revoked (guards concurrent admin revoke)
             .filter(instance_invite::Column::RevokedAt.is_null())
-            // M4: must not be expired
+            // must not be expired
             .filter(instance_invite::Column::ExpiresAt.gt(Value::ChronoDateTimeUtc(Some(now))))
             .col_expr(
                 instance_invite::Column::UseCount,
@@ -176,8 +176,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     /// `UPDATE instance_invite SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`
     /// statement, eliminating the read-then-update race where two concurrent
     /// admin revokes could each see `revoked_at IS NULL`, both write, and the
-    /// second silently overwrites the first revoker's timestamp (C1-class
-    /// hardening).
+    /// second silently overwrites the first revoker's timestamp.
     ///
     /// Idempotent: a no-op when the row is already revoked or does not exist.
     /// Both outcomes are folded into `Ok(())` to keep the trait contract stable

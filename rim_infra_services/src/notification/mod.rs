@@ -1,4 +1,4 @@
-//! Server-side notification rules (Track 1.3): the pure decision engine, the
+//! Server-side notification rules: the pure decision engine, the
 //! `NotificationService` implementation and the digest/retention jobs.
 
 pub(crate) mod decide;

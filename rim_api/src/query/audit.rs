@@ -25,11 +25,9 @@ impl AuditLogQueries {
         let filter = filter.unwrap_or_default();
         let pagination = pagination.unwrap_or_default();
 
-        // P6-H2: pass actor_user_id as None when the filter doesn't specify it.
-        // The service layer now enforces the full access-control matrix on
-        // (actor_user_id, server_id) — defaulting to caller_id here would
-        // hide the unscoped-workspace cases and prevent workspace-audit reads
-        // (actor_user_id=None, server_id=Some(W)) from reaching the service.
+        // `actor_user_id` stays `None` when the filter omits it: the service applies the
+        // access rules to (actor_user_id, server_id), and defaulting to the caller here would
+        // turn a workspace-wide read into a read of the caller's own entries.
         let actor_user_id = filter
             .actor_user_id
             .as_ref()

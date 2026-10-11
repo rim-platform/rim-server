@@ -163,9 +163,8 @@ impl MessagePage {
     }
 }
 
-/// Cursor-paginated `searchMessages` result. Mirrors [`MessagePage`] — same `(sentAt, messageId)`
-/// cursor contract — because search results are paginated by recency, not relevance; see the
-/// `rank` field on [`SearchResultMessage`] and `docs/search.md` for why.
+/// Cursor-paginated `searchMessages` result. Same `(sentAt, messageId)` cursors as
+/// `MessagePage`: search results are paginated by recency, not by relevance.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SearchResultPage {
     pub items: Vec<SearchResultMessage>,

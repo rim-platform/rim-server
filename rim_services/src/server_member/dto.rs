@@ -13,7 +13,7 @@ pub struct ServerMemberDto {
     pub bio: Option<String>,
     pub member_role: ServerMemberRole,
     pub joined_at: chrono::DateTime<chrono::Utc>,
-    /// End of the member's timeout while one is in force (Track 1.2), else `None`.
+    /// End of the member's timeout while one is in force, else `None`.
     pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
     /// The member's key identity, once enrolled; `None` for a password-only account.
     pub principal_id: Option<String>,

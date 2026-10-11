@@ -1,7 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-/// Key identity algorithm agility (Stage 3; `docs/specs/key-identity-v1.md`, "Algorithms and
-/// statement versions"; `docs/decisions/post-quantum-hybrid-2026-10-09.md`).
+/// Key identity algorithm agility: stored keys carry their algorithm.
 ///
 /// - `device_key.public_key` and `user.identity_key` move to the tagged text form
 ///   (`ed25519:<base64url>`), so a column that will hold keys of several algorithms says which

@@ -52,7 +52,7 @@ pub struct DefaultAuthService {
     login_known_sources: KnownLoginSources,
     email_sender: std::sync::Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
-    /// invite emails fall back to the bare token (dev-only — see `docs/email.md`).
+    /// invite emails fall back to the bare token (dev-only).
     public_base_url: Option<String>,
 }
 
@@ -90,8 +90,8 @@ impl DefaultAuthService {
     }
 
     /// Build the invite link as a path segment: `{public_base_url}/join/{token}` — never a
-    /// `?token=` query string (see `docs/email.md`). Falls back to the bare token (with a
-    /// warning) if `public_base_url` is unset.
+    /// `?token=` query string, which would leak the token via `Referer`. Falls back to the bare
+    /// token (with a warning) if `public_base_url` is unset.
     fn build_invite_link(&self, raw_token: &str) -> String {
         let encoded = percent_encode_path_segment(raw_token);
         match &self.public_base_url {
@@ -175,8 +175,8 @@ impl DefaultAuthService {
 
     /// Validate and normalise an email address.
     ///
-    /// Trims outer whitespace, lowercases, checks the pragmatic regex from spec
-    /// §13.3, and enforces a 1–254 character length. Returns the normalised
+    /// Trims outer whitespace, lowercases, checks a pragmatic `local@domain.tld`
+    /// regex, and enforces a 1–254 character length. Returns the normalised
     /// (trimmed + lowercased) email on success so callers can use the returned
     /// value directly for both the uniqueness check and the insert.
     ///
@@ -237,7 +237,7 @@ impl DefaultAuthService {
             // Pay the same Argon2 cost as a wrong password, so response time doesn't reveal
             // whether the username exists.
             verify_dummy_password(password).map_err(ServiceError::internal)?;
-            // H4 audit: log failed login (user not found).
+            // Audit: failed login (user not found).
             tracing::info!(
                 target: "audit",
                 event = "login_failure",
@@ -264,7 +264,7 @@ impl DefaultAuthService {
         };
         let ok = verify_password(password, password_hash).map_err(ServiceError::internal)?;
         if !ok {
-            // H4 audit: wrong password.
+            // Audit: wrong password.
             tracing::info!(
                 target: "audit",
                 event = "login_failure",
@@ -276,9 +276,8 @@ impl DefaultAuthService {
             return Err(ServiceError::Unauthenticated);
         }
 
-        // An account that enrolled a key signs in with a device key only (key-identity spec,
-        // "Password sign-in"). Checked after the password so the answer and its timing are the
-        // same as for a wrong password.
+        // An account that enrolled a key signs in with a device key only. Checked after the
+        // password so the answer and its timing are the same as for a wrong password.
         if user.principal_id.is_some() {
             tracing::info!(
                 target: "audit",
@@ -293,7 +292,7 @@ impl DefaultAuthService {
 
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
 
-        // H4 audit: successful login.
+        // Audit: successful login.
         tracing::info!(
             target: "audit",
             event = "login_success",
@@ -535,7 +534,7 @@ impl AuthService for DefaultAuthService {
             ));
         }
 
-        // Validate before persisting, per docs/email.md — a malformed address should surface
+        // Validate before persisting: a malformed address should surface
         // as a validation error, not a silently-dropped invite email.
         let recipient_email = recipient_email
             .map(|email| Self::validate_email(&email))
@@ -619,9 +618,8 @@ impl AuthService for DefaultAuthService {
             ));
         }
 
-        // `accept_invite` predates the email requirement (Q2 scope decision: email
-        // is added only to signupWithInvite, not acceptInvite). Supply a synthetic
-        // placeholder. The user must update their email via profile-edit.
+        // `accept_invite` takes no email (only signupWithInvite does), so supply a
+        // synthetic placeholder. The user can set their email via profile-edit.
         let user = repos
             .user_repo
             .create_user(rim_core::user::model::NewUser {
@@ -701,7 +699,7 @@ impl AuthService for DefaultAuthService {
                 "already a member of this server".to_string(),
             ));
         }
-        // Banned users cannot re-join (Track 1.2). Checked before the invite is consumed.
+        // Banned users cannot re-join. Checked before the invite is consumed.
         ensure_not_banned(
             self.repos.moderation_repo.as_ref(),
             inv.server_id,
@@ -851,7 +849,7 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
-        // Rate limit check (§4.4).
+        // Rate limit check.
         signup::check_open_signup_rate(&self.signup_rate_limiter, &remote_ip)?;
 
         signup::validate_username(username)?;
@@ -891,7 +889,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        // H4 audit: log successful open-mode signup.
+        // Audit: successful open-mode signup.
         tracing::info!(
             target: "audit",
             event = "signup_open_success",

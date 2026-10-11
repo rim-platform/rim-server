@@ -242,7 +242,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
         // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in the
         // endpoint order, so fetch them nearest-first (reversed order) and flip the page back
         // below; fetching in endpoint order would return the far end of the range and skip
-        // everything between it and the cursor (finding A-H1).
+        // everything between it and the cursor.
         let fetch_reversed = has_cursor && dir == PageDir::Before;
         q = if fetch_reversed {
             q.order_by_asc(conversation::Column::LastActivityAt)
@@ -350,7 +350,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
         // A page holds the rows adjacent to the cursor. `Before` rows precede the cursor in the
         // endpoint order, so fetch them nearest-first (reversed order) and flip the page back
         // below; fetching in endpoint order would return the far end of the range and skip
-        // everything between it and the cursor (finding A-H1).
+        // everything between it and the cursor.
         let fetch_reversed = has_cursor && dir == PageDir::Before;
         q = if fetch_reversed {
             q.order_by_desc(conversation::Column::CreatedAt)

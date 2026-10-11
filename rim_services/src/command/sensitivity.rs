@@ -1,18 +1,11 @@
 //! Command argument sensitivity classification and sensitive-data detection.
 //!
-//! This module is the **single source of truth** for what counts as "sensitive"
-//! data in command arguments — both for:
+//! This module is the server's **single source of truth** for what counts as "sensitive"
+//! data in command arguments: the audit redaction for the `audit` tracing line and the
+//! database audit log goes through it.
 //!
-//! 1. **UI-side modal masking** (Phase 4 `ConfirmCommandModal` renders
-//!    masked-by-default with optional reveal).
-//! 2. **Backend audit-log redaction** (Phase 4 `tracing::info!(target: "audit", …)`
-//!    line and Phase 5 DB-backed `AuditLogService`).
-//!
-//! Both call sites import from here. Eliminates regex-drift risk (Widow N4)
-//! that would produce "value masked in UI but logged plain" failure modes.
-//!
-//! Per Fury v2 §3.1 + Scott F3 / Widow N4 in §0.5 addendum of
-//! `docs/design/ai-agent-reframe-design-2026-04-22-v2.md`.
+//! The client's confirm-modal masking keeps a copy of [`SENSITIVE_ARG_NAME_RE`]; the two must
+//! match, or a value masked in the modal could be logged in plain text.
 
 use std::sync::LazyLock;
 
@@ -20,9 +13,8 @@ use regex::Regex;
 
 /// Argument-name regex matching sensitive keys.
 ///
-/// MUST be the only definition anywhere in the workspace. Modal masking
-/// and audit redaction both import this constant. Changing the regex here
-/// changes both call sites atomically.
+/// MUST be the only definition in the server. The client's modal masking mirrors it, so a
+/// change here needs the same change there.
 ///
 /// Matches case-insensitively on substring — `apiKey`, `user_token`, and
 /// `AUTHORIZATION` all hit.
@@ -62,12 +54,10 @@ const B64_LIKE_MIN_CHARS: usize = 40;
 /// Orthogonal to `CommandDefinitionDto::dangerous` — `dangerous: true`
 /// forces a confirm regardless of tier, but tier drives:
 ///
-/// - Audit-log verbosity (higher = more context captured)
-/// - Mutating-call caps in the agent runtime (see §3.7)
-/// - Default modal vs inline confirm placement in the UX (Ant-Man r2.1)
-///
-/// Unchanged from v1 per Fury v2 §3.1 ("`Safe, Sensitive, Mutating, Restricted`,
-/// unchanged from v1").
+/// - The confirmation policy: `Restricted` always needs a proof, `Mutating` needs one from an
+///   agentic initiator
+/// - The client agent's per-turn mutating-call cap
+/// - The `sensitivity` recorded on every audit line
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CommandSensitivityDto {
     /// Read-only, no side effects observable to other users.
@@ -77,14 +67,14 @@ pub enum CommandSensitivityDto {
     /// but is not high-blast-radius. E.g. `mark_read`, `set_presence`.
     Sensitive,
     /// Mutates durable state other users will see. E.g. `send_message`,
-    /// `create_thread`. Counted against agent's
-    /// mutating-call cap (3/turn per §3.7).
+    /// `create_thread`. Counted against the client agent's
+    /// per-turn mutating-call cap.
     Mutating,
     /// Elevated-risk surface that should not be invoked casually — admin
     /// operations, cross-workspace writes, destructive operations.
     /// E.g. `delete_conversation`, `revoke_session`, `uninstall_plugin`.
-    /// Typically paired with `dangerous: true` and requires a confirmation
-    /// proof (§3.5 `ConfirmationProof`).
+    /// Typically paired with `dangerous: true`; always requires a
+    /// `ConfirmationProof`.
     Restricted,
 }
 
@@ -99,40 +89,24 @@ impl CommandSensitivityDto {
         }
     }
 
-    /// Whether this tier counts against the agent's per-turn mutating-call cap.
+    /// Whether this tier mutates state (`Mutating` or `Restricted`): it counts against the
+    /// client agent's per-turn mutating-call cap, and a macro containing such a step is treated
+    /// as dangerous.
     pub fn is_mutating(self) -> bool {
         matches!(self, Self::Mutating | Self::Restricted)
     }
 
-    /// Whether this tier requires an explicit confirmation proof before
-    /// execution on the AI surface (absent `dangerous: true`).
+    /// Whether this tier alone requires a confirmation proof, whoever the initiator is.
     ///
-    /// Restricted always requires; Mutating requires when combined with
-    /// other signals (same-turn tool_result, cross-channel write, etc. —
-    /// see §3.5 escalation rules). The base predicate here is just
-    /// "tier alone warrants confirm."
+    /// Only `Restricted` does; `Mutating` requires one only from an agentic initiator (see
+    /// `CommandDefinitionDto::requires_confirmation_for_initiator`).
     pub fn requires_confirmation_by_tier(self) -> bool {
         matches!(self, Self::Restricted)
     }
 
-    /// Single-source-of-truth mapping from the legacy `dangerous: bool` flag
-    /// to a sensitivity tier. Used by every command-registration code path
-    /// that has not yet been audited per-command (Phase 1 default policy):
-    /// `dangerous: true` → `Restricted`, `dangerous: false` → `Safe`.
-    ///
-    /// Two call sites depend on this mapping:
-    ///
-    /// 1. `UserCommandDto::as_command_definition_with_metadata` (user macro path)
-    /// 2. Built-in `registry.rs` literals (still hand-written so Phase 4 can
-    ///    diverge per-command without touching this helper)
-    ///
-    /// (Plugin manifests are mapped client-side by the plugin host in
-    /// `rim-ui/src-tauri/src/plugin_host/`.)
-    ///
-    /// Per Hawkeye Gate 2 strong WARN — drift between copies of the
-    /// same if/else is exactly the failure mode this helper exists to prevent.
-    /// Phase 4 will tune per-command tiers and the call sites here will start
-    /// to override; that override happens at the call site, not in this helper.
+    /// The single mapping from the `dangerous: bool` flag to a sensitivity tier, for commands
+    /// without a tier of their own: `dangerous: true` → `Restricted`, `dangerous: false` →
+    /// `Safe`. User commands use it; builtins set their tier in the registry.
     pub fn from_dangerous_flag(dangerous: bool) -> Self {
         if dangerous {
             Self::Restricted
@@ -192,7 +166,7 @@ pub fn value_looks_secret(value: &str) -> bool {
     // Layer 1: vendor prefixes. Ordered roughly by how common they are in
     // the wild and how unambiguous the prefix is.
     const VENDOR_PREFIXES: &[&str] = &[
-        "sk-",    // OpenAI, Anthropic (legacy), others
+        "sk-",    // OpenAI, Anthropic, others
         "xoxb-",  // Slack bot tokens
         "xoxp-",  // Slack user tokens
         "xoxa-",  // Slack workspace tokens
@@ -263,7 +237,7 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 /// matches a sensitive key OR whose *value shape* looks secret with
 /// `REDACTED_PLACEHOLDER`.
 ///
-/// Used by the Phase 4 audit log writer to make sure nothing sensitive
+/// Used by the audit log writer to make sure nothing sensitive
 /// lands in durable logs. Safe to call on any JSON shape; arrays and nested
 /// objects are walked.
 ///
@@ -273,21 +247,12 @@ pub fn redact_for_audit(args: &serde_json::Value) -> serde_json::Value {
 }
 
 /// Audit-side entry point for redacting `ExecuteCommandCmd::args` immediately
-/// before it is emitted on the `target: "audit"` tracing line in
-/// `command.rs::execute_command`.
+/// before it is emitted on the `target: "audit"` tracing line and written to the database
+/// audit log by `execute_command`.
 ///
-/// Today this is a thin alias over [`redact_for_audit`] (same key/value
-/// regex policy, same propagation rules). It exists as a separately-named
-/// entry point because the audit-write boundary may diverge from the
-/// generic `redact_for_audit` policy in later phases — Phase 5's DB-backed
-/// `AuditLogService` may want structured field-level metadata (which keys
-/// were redacted, by which rule) attached to each row, which would change
-/// the return type. Pinning the name now keeps the call site at
-/// `command.rs::execute_command` stable across that refactor.
-///
-/// Per Hawkeye Gate 1 strong WARN — three copies of the same redaction
-/// policy is exactly the failure mode this single source of truth exists
-/// to prevent. Do NOT inline this; route every audit emit through here.
+/// Delegates to [`redact_for_audit`] (same key/value regex policy, same propagation rules).
+/// It is the named entry point for the audit-write boundary: route every audit emit through
+/// it rather than copying the redaction policy.
 pub fn sanitize_args_for_audit(args: &serde_json::Value) -> serde_json::Value {
     redact_for_audit(args)
 }
@@ -541,7 +506,7 @@ mod tests {
 
     #[test]
     fn redacts_array_items_under_sensitive_key_even_if_short() {
-        // Hawkeye's BLOCK: without key-context propagation into arrays,
+        // Without key-context propagation into arrays,
         // short-but-harmless-looking strings inside `tokens: [...]` would
         // survive unredacted. We preserve array shape and redact every
         // item by inheritance from the parent key.
@@ -609,9 +574,7 @@ mod tests {
 
     #[test]
     fn sanitize_args_for_audit_delegates_to_redact() {
-        // Alias-parity guard for the audit-side entry point. If Phase 5's structured
-        // metadata work diverges this from `redact_for_audit`, the test
-        // updates intentionally.
+        // The audit-side entry point redacts exactly like `redact_for_audit`.
         let args = json!({
             "password": "hunter2",
             "data": "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",

@@ -1,7 +1,7 @@
 use crate::m20251012_135522_create_user::User;
 use sea_orm_migration::prelude::*;
 
-/// Private channels and archiving (Track 1.1, `docs/specs/track-1-1-private-channels.md`).
+/// Private channels and archiving.
 ///
 /// - `conversation.is_private` — only meaningful for channels; private channels are visible to
 ///   their `conversation_member` rows alone. Fixed at creation.

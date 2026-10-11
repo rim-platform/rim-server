@@ -1,7 +1,7 @@
-//! The per-message notification decision (Track 1.3): a pure function, no I/O. The async
+//! The per-message notification decision: a pure function, no I/O. The async
 //! wrapper in `service.rs` loads its inputs and stores what it returns.
 //!
-//! Rules, per member except the author (`docs/messaging.md`, "Notification rules"):
+//! Rules, per member except the author:
 //! 1. Only conversation members are candidates (the caller passes the member list; banned,
 //!    removed and non-members are not in it). A timeout does not matter for receiving.
 //! 2. A timed mute in effect (`muted_until > now`) yields nothing.

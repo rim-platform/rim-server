@@ -11,8 +11,8 @@ type RateLimitStore = DashMap<(UserId, String), VecDeque<DateTime<Utc>>>;
 
 /// Shared, thread-safe per-(UserId, command_id) sliding-window rate limiter.
 ///
-/// Single-node only — multi-node coordination is deferred post-Phase-5.
-/// The store is `Clone` so `DefaultCommandService` can hold an `Arc<RateLimiter>`.
+/// Single-node only: each process keeps its own windows. Cloning shares the
+/// underlying store, so every clone of `DefaultCommandService` counts against the same limits.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct RateLimiter {
     store: std::sync::Arc<RateLimitStore>,

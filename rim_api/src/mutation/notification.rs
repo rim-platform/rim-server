@@ -31,7 +31,7 @@ fn validation(message: &str) -> Error {
 
 #[Object]
 impl NotificationMutations {
-    // ── Notification rules (Track 1.3) ────────────────────────────────
+    // ── Notification rules ────────────────────────────────────────────
 
     /// Replace the viewer's notification settings in the workspace (default level, keywords,
     /// daily do-not-disturb window, digest). Keywords: at most 20, each 2 to 40 characters.

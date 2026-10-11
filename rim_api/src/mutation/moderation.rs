@@ -36,7 +36,7 @@ fn moderation(ctx: &Context<'_>) -> Result<std::sync::Arc<dyn ModerationService>
 
 #[Object]
 impl ModerationMutations {
-    // ── Roles and moderation (Track 1.2) ──────────────────────────────
+    // ── Roles and moderation ──────────────────────────────────────────
 
     /// Change a member's role. Owner: any role but `OWNER`, never their own. Moderator:
     /// `MEMBER` <-> `GUEST` only. Audited (`admin.set_member_role`).

@@ -15,14 +15,11 @@ use rim_services::command::sanitize::sanitize_command_ai_fields;
 
 pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     let mut defs = builtin_commands_raw();
-    // Sanitize AI-facing metadata at registration time. Phase 1 builtins
-    // never populate `nl_description` or `intent_samples`, so this is a
-    // defensive no-op. Wired now so Phase 2 generator + Phase 5 plugin
-    // install land into a path that's already proven by Hawkeye Gate 2.
+    // Sanitize AI-facing metadata (`nl_description`, `intent_samples`) at
+    // registration time.
     //
     // `expect` is appropriate here: built-ins are developer-authored and
     // any sanitize failure is a CI-caught bug, not a runtime input error.
-    // Plugin/user paths handle SanitizeError as a regular Result.
     for def in &mut defs {
         sanitize_command_ai_fields(def)
             .expect("built-in command AI metadata must pass sanitization (developer error)");
@@ -30,7 +27,7 @@ pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     defs
 }
 
-/// **F1 closure.** Returns the IDs of every command flagged `ai_callable: true`,
+/// Returns the IDs of every command flagged `ai_callable: true`,
 /// in registration order. Pure helper so the audit emission can be tested
 /// without capturing a tracing subscriber.
 pub(super) fn collect_ai_callable_inventory(commands: &[CommandDefinitionDto]) -> Vec<&str> {
@@ -41,7 +38,7 @@ pub(super) fn collect_ai_callable_inventory(commands: &[CommandDefinitionDto]) -
         .collect()
 }
 
-/// **F1 closure — startup audit emission.** Walks the current builtin
+/// Startup audit emission. Walks the current builtin
 /// command registry, computes the AI-callable inventory, and emits a
 /// `target: "audit"` tracing line so operators can confirm at boot which
 /// commands the LLM surface can reach.
@@ -56,7 +53,7 @@ pub fn emit_ai_callable_inventory_audit() {
         event = "ai_callable_inventory",
         count = ai_callable_ids.len(),
         commands = ?ai_callable_ids,
-        "AI-callable command inventory emitted at startup (Phase 1 §3.4 / F1)"
+        "AI-callable command inventory emitted at startup"
     );
 }
 
@@ -107,13 +104,13 @@ mod tests {
     ///    `builtin_commands_ids_are_unique` to incidentally exercise the
     ///    wrapper's panic path.
     ///
-    /// Per Hawkeye Gate 2 BLOCK + WARN. Do not fold into another test.
+    /// Kept as its own test so a failure names the sanitization step.
     #[test]
     fn builtin_commands_sanitize_cleanly() {
         let _ = builtin_commands();
     }
 
-    // ── F1 inventory ──
+    // ── AI-callable inventory ──
 
     #[test]
     fn collect_ai_callable_inventory_returns_only_ai_callable_ids() {

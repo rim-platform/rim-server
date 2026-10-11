@@ -4,10 +4,10 @@ use async_graphql::{Enum, InputObject, SimpleObject};
 pub enum CommandResultStatus {
     Success,
     Error,
-    /// Command is `dangerous: true` and the caller did not submit a
-    /// matching [`ConfirmationProofInput`]. The accompanying
-    /// `confirmationRequired` field on the result carries the
-    /// server-issued challenge — present the modal, then re-submit with
+    /// The command needs a confirmation and the call carried no matching proof. That is the
+    /// case for a `dangerous` or `RESTRICTED` command, and for a `MUTATING` one an `AGENT` or
+    /// `PLUGIN` initiator runs. `confirmationRequired` on the result carries the challenge:
+    /// show it to the user, then re-submit with
     /// `confirmation: { inBandToken: { token, argsHash } }`.
     ConfirmationRequired,
 }
@@ -73,10 +73,9 @@ impl From<rim_services::command::dto::CommandResultDto> for CommandResult {
     }
 }
 
-/// GraphQL projection of a server-issued
-/// [`rim_services::command::confirmation::ConfirmationChallengeDto`]. The
-/// frontend opens its confirm-modal with these fields, then submits a
-/// matching [`ConfirmationProofInput`].
+/// A confirmation challenge the server issued for one command call. The client asks the user to
+/// confirm, then re-submits the call with `token` and `argsHash` as its confirmation proof
+/// before `expiresAt`.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ConfirmationChallenge {
     pub token: String,
@@ -94,8 +93,7 @@ impl From<rim_services::command::confirmation::ConfirmationChallengeDto> for Con
     }
 }
 
-/// GraphQL input for submitting a confirmation proof: the token and args
-/// hash of the challenge a previous call returned.
+/// A confirmation proof: the token and args hash of the challenge a previous call returned.
 #[derive(InputObject, Clone, Debug)]
 pub struct ConfirmationProofInput {
     pub in_band_token: InBandTokenInput,

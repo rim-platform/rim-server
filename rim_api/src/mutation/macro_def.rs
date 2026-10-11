@@ -110,12 +110,8 @@ impl MacroMutations {
                 macro_id: parse_uuid_id(&input.macro_id)?,
                 command_context: input.command_context.map(TryInto::try_into).transpose()?,
                 confirmation: input.confirmation.map(|c| c.into_proof()),
-                // Same back-compat default rule as `executeCommand` — `Macro`
-                // here means "the macro execution itself"; nested
-                // `ExecuteCommandCmd` calls produced by macro expansion will
-                // override to whatever the macro service decides per
-                // step (Phase 1: same value as the outer initiator,
-                // Phase 4: see propagation rule in CommandInitiator docs).
+                // A missing initiator counts as `Palette`, as in `executeCommand`. The macro
+                // service runs every step with this same initiator.
                 initiator: input
                     .initiator
                     .map(CommandInitiatorDto::from)
@@ -170,14 +166,10 @@ struct MacroStepInput {
 struct ExecuteMacroInput {
     macro_id: ID,
     command_context: Option<CommandContextInput>,
-    /// Server-issued confirmation proof. Same shape and semantics as
-    /// `ExecuteCommandInput.confirmation`. Phase 1 note: macros are an
-    /// "all-or-nothing" confirmation surface — a single proof issued
-    /// at macro-execute time covers the whole expansion. Phase 4 may
-    /// add per-step proofs once the modal can render a step list.
+    /// Confirmation proof, as in `ExecuteCommandInput.confirmation`. One proof issued for the
+    /// macro covers every step of it.
     confirmation: Option<crate::types::ConfirmationProofInput>,
-    /// Who triggered this macro. Same back-compat semantics as
-    /// `ExecuteCommandInput.initiator`: optional, server-defaults to
-    /// `PALETTE`.
+    /// Who triggered this macro, as in `ExecuteCommandInput.initiator`: `PALETTE` when omitted.
+    /// Every step runs with this initiator.
     initiator: Option<CommandInitiator>,
 }

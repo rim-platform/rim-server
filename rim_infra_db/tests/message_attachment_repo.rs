@@ -265,9 +265,9 @@ async fn usage_for_server_counts_stored_and_live_pending_only() {
     expired.id = id_from_minutes_ago(16);
     repo.add_attachment(expired).await.unwrap();
     // A stored file older than the window still counts, clamped to the per-file maximum.
-    let mut legacy = attachment_for(msg.id, "uploads/legacy", i64::MAX, "ready");
-    legacy.id = id_from_minutes_ago(60 * 24);
-    repo.add_attachment(legacy).await.unwrap();
+    let mut old = attachment_for(msg.id, "uploads/old", i64::MAX, "ready");
+    old.id = id_from_minutes_ago(60 * 24);
+    repo.add_attachment(old).await.unwrap();
     repo.add_attachment(attachment_for(other_msg.id, "uploads/b", 7, "ready"))
         .await
         .unwrap();

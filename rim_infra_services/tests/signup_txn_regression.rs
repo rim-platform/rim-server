@@ -277,7 +277,7 @@ async fn signup_open_commits_user_and_session_atomically() {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrent-revoke regression — C1-class race on the revoke path
+// Concurrent-revoke regression — race on the revoke path
 // ---------------------------------------------------------------------------
 
 /// Two concurrent revokes of the same instance invite: exactly one caller must

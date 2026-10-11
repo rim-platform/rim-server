@@ -1,37 +1,25 @@
-//! Confirmation-proof primitives for dangerous-command execution (H1).
+//! Confirmation-proof primitives for dangerous-command execution.
 //!
-//! Phase 1 / §3.5 of the AI Agent reframe.
-//!
-//! ## Why this exists (the H1 closure)
-//!
-//! Pre-reframe, the only gate on a `dangerous: true` command was a single
-//! `confirmed_dangerous: bool` flag carried over the wire. Any caller —
-//! agent, plugin, malicious frontend, replayed request — could set it to
-//! `true` and bypass the modal entirely. That is a TOCTOU bug in disguise:
-//! the user OK'd one set of arguments in the modal, but the eventual
-//! execution can run a different set, and the server has no way to tell.
-//!
-//! This module replaces the boolean with a server-issued, server-verified
-//! proof bound to:
+//! A dangerous command runs only with a server-issued, server-verified proof bound to:
 //!
 //! 1. The **command id** the user actually saw in the modal,
 //! 2. The **canonical hash of the arguments** the user actually saw, and
-//! 3. The **context fingerprint** (workspace / conversation / thread) so a
+//! 3. The **context fingerprint** (workspace / conversation / thread / selected messages) so a
 //!    proof minted for "delete in DM with Alice" cannot be replayed against
 //!    "delete in #engineering".
+//!
+//! A client-side "confirmed" flag would let any caller skip the modal, and the arguments the
+//! user approved could differ from the ones executed; binding the proof to all three closes
+//! that gap.
 //!
 //! Each token is single-use, has a short TTL (5 s by default), and is
 //! evicted from the in-memory store on use or on lazy sweep.
 //!
-//! ### What this module DOES NOT yet do
-//!
-//! - **Multi-node deployments.** The store is in-memory; a second backend
-//!   replica won't see tokens issued on the first. Phase 1 ships single-node
-//!   only — Fury §5 risk #3. Phase 5+ will swap the store for a Redis-backed
-//!   impl behind the same trait without changing call sites.
-//! - **Audit emission.** Issue/verify success+failure are surfaced via
-//!   structured `tracing` events at this layer, but the dedicated
-//!   `target: "audit"` sink does not yet exist (N3 / Phase 4).
+//! The store is in-memory, so a second backend replica does not see tokens issued on the
+//! first: confirmation works on a single node. This module logs nothing itself; the command
+//! service records each call's outcome (a challenge issued, a proof refused) and the kind of
+//! proof supplied on its audit line, written to both the `audit` tracing target and the
+//! database audit log.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -42,7 +30,7 @@ use sha2::{Digest, Sha256};
 use crate::Actor;
 use crate::command::dto::CommandContextDto;
 
-/// Default token lifetime (§3.5 — "5 s").
+/// Default token lifetime, 5 s.
 ///
 /// Short by design: the token only needs to survive the round-trip from
 /// challenge → modal click → second mutation. A user staring at the modal
@@ -132,9 +120,8 @@ struct IssuedClaims {
 // Store trait + in-memory impl
 // ---------------------------------------------------------------------------
 
-/// Trait for the confirmation token store. Phase 1 ships
-/// [`InMemoryConfirmationStore`]; Phase 5+ may add a Redis-backed impl
-/// without touching call sites.
+/// Trait for the confirmation token store. [`InMemoryConfirmationStore`] is the only
+/// implementation; a shared store for several nodes would implement this trait.
 ///
 /// Implementations MUST be `Send + Sync` (shared across request handlers).
 pub trait ConfirmationStore: Send + Sync + std::fmt::Debug {
@@ -170,8 +157,8 @@ impl InMemoryConfirmationStore {
     }
 
     /// Lazy-eviction helper: drops every claim with `expires_at <= now`.
-    /// Called by `take` on every access; an explicit background sweep is
-    /// not needed for Phase 1 (token volume is tiny).
+    /// Called by `take` on every access; token volume is tiny, so there is no
+    /// background sweep.
     fn sweep_expired_locked(map: &mut HashMap<String, IssuedClaims>, now: DateTime<Utc>) {
         map.retain(|_, claims| claims.expires_at > now);
     }
@@ -266,7 +253,7 @@ fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// Number normalization (Widow §B2 closure).
+/// Number normalization.
 ///
 /// `serde_json::Number` is internally tagged `PosInt | NegInt | Float`;
 /// `1` and `1.0` are distinct variants and serialize to distinct strings.
@@ -310,14 +297,13 @@ fn canonicalize_number(n: &serde_json::Number) -> serde_json::Value {
 
 /// Deterministic fingerprint of the execution context.
 ///
-/// **v2 (Widow §B1 closure):** includes `selected_message_id` and
+/// Includes `selected_message_id` and
 /// `selected_message_ids` because dangerous built-ins like
 /// `chat.delete_message` and `chat.edit_message` consume the target
 /// message id from `context.selected_message_id` (NOT from `args`). If
 /// these were excluded from the fingerprint, an attacker who held the
 /// issued token could swap `selected_message_id` between issue and
-/// verify and delete a different message than the one the user OK'd —
-/// the worked example from the design doc.
+/// verify and delete a different message than the one the user OK'd.
 ///
 /// `selected_text`, `focused_surface`, and `active_panel` remain
 /// excluded: they're presentation-layer state that no dispatchable
@@ -471,7 +457,7 @@ pub fn verify_in_band(
     }
 
     // Recompute args_hash from the *actual* args being executed. This is
-    // the TOCTOU closure: a caller can lie about `claimed_args_hash` all
+    // what prevents time-of-check/time-of-use swaps: a caller can lie about `claimed_args_hash` all
     // day, but it must match what we recompute.
     let actual_args_hash = canonical_args_hash(args);
     if actual_args_hash != claims.args_hash || claimed_args_hash != &claims.args_hash {
@@ -612,7 +598,7 @@ mod tests {
 
     #[test]
     fn args_mismatch_rejects_toctou_attempt() {
-        // The core H1 closure: a caller mints a token for args A but
+        // The core binding: a caller mints a token for args A but
         // submits args B at execution time. Verify must reject.
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
@@ -646,11 +632,11 @@ mod tests {
         assert_eq!(h4, h5);
     }
 
-    /// **N2 — mandatory cross-command-replay test (Widow §7.5).**
+    /// Cross-command replay.
     /// A token issued for `chat.delete_message` must NOT verify against
     /// `chat.send_message`, even with identical args + context + actor.
     #[test]
-    fn n2_token_for_one_command_cannot_replay_against_another() {
+    fn token_for_one_command_cannot_replay_against_another() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
         // Identical args — the only thing that should distinguish the two
@@ -769,13 +755,13 @@ mod tests {
         assert!(challenge.expires_at <= max_expected);
     }
 
-    /// **Widow §B1 closure** — context_fingerprint must include
+    /// `context_fingerprint` must include
     /// `selected_message_id`. `chat.delete_message` and
     /// `chat.edit_message` consume this from context, NOT args. Without
     /// this binding, an attacker holding a token could swap the target
     /// message between issue and verify.
     #[test]
-    fn b1_selected_message_id_swap_rejected() {
+    fn selected_message_id_swap_rejected() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
         let workspace_id = ServerId::new();
@@ -813,11 +799,11 @@ mod tests {
         );
     }
 
-    /// **Widow §B1 closure (multi-select)** — same defense for
+    /// Multi-select: the same defense for
     /// `selected_message_ids` (used by bulk operations like
     /// `chat.delete_messages`).
     #[test]
-    fn b1_selected_message_ids_swap_rejected() {
+    fn selected_message_ids_swap_rejected() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
         let workspace_id = ServerId::new();
@@ -859,12 +845,12 @@ mod tests {
         assert_eq!(err, ConfirmationError::ContextMismatch);
     }
 
-    /// **Widow §B1 closure (order-stable)** — re-issuing with the same
+    /// Order-stable: re-issuing with the same
     /// set of selected_message_ids in different order MUST verify
     /// (legitimate UX: drag-reorder a multi-select). Otherwise the
     /// fingerprint would reject benign client-side reordering.
     #[test]
-    fn b1_selected_message_ids_order_stable() {
+    fn selected_message_ids_order_stable() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
         let id_a = rim_core::message::model::MessageId::new();
@@ -900,13 +886,13 @@ mod tests {
         );
     }
 
-    /// **Widow §B2 closure** — `{"limit": 100}` and `{"limit": 100.0}`
+    /// `{"limit": 100}` and `{"limit": 100.0}`
     /// must hash identically. Without integer-equivalent normalization
     /// a downstream `as_i64()` coercion silently lets the attacker
     /// downgrade a user-confirmed `100.0` to a runtime `100` (or vice
     /// versa) without the gate noticing.
     #[test]
-    fn b2_int_and_int_valued_float_normalize_identically() {
+    fn int_and_int_valued_float_normalize_identically() {
         let int_args = Some(json!({"limit": 100}));
         let float_args = Some(json!({"limit": 100.0}));
         let h1 = canonical_args_hash(&int_args);
@@ -917,11 +903,11 @@ mod tests {
         );
     }
 
-    /// **Widow §B2 closure (negative case)** — actual fractional floats
+    /// Actual fractional floats
     /// must NOT collapse onto integers (would erase legitimate
     /// precision). 100.5 stays distinct from 100.
     #[test]
-    fn b2_fractional_float_does_not_collapse_to_int() {
+    fn fractional_float_does_not_collapse_to_int() {
         let int_args = Some(json!({"limit": 100}));
         let float_args = Some(json!({"limit": 100.5}));
         assert_ne!(
@@ -931,11 +917,11 @@ mod tests {
         );
     }
 
-    /// **Widow §B2 closure (TOCTOU integration)** — issue with int args,
+    /// Issue with int args,
     /// verify with int-valued-float args. The downstream coercion would
     /// otherwise silently apply the wrong value.
     #[test]
-    fn b2_toctou_int_vs_int_valued_float_verify_succeeds() {
+    fn toctou_int_vs_int_valued_float_verify_succeeds() {
         let store = InMemoryConfirmationStore::new();
         let actor = actor();
         let int_args = Some(json!({"limit": 100, "id": 1}));
@@ -955,11 +941,11 @@ mod tests {
         );
     }
 
-    /// **Widow §B2 closure (very-large i64)** — preserved exactly even
+    /// Very large i64 values are preserved exactly even
     /// when serde_json parses identical-looking literals as distinct
     /// internal variants.
     #[test]
-    fn b2_large_integers_preserved() {
+    fn large_integers_preserved() {
         let h_pos = canonical_args_hash(&Some(json!({"n": i64::MAX})));
         let h_neg = canonical_args_hash(&Some(json!({"n": i64::MIN})));
         assert_ne!(h_pos, h_neg);

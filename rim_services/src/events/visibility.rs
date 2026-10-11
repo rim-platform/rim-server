@@ -26,7 +26,7 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 
 /// Check whether a subscriber should see a given workspace event.
 ///
-/// - Public channel events are visible to all workspace members, except guests (Track 1.2),
+/// - Public channel events are visible to all workspace members, except guests,
 ///   who see a public channel's events only as its conversation members, as for a private
 ///   channel.
 /// - Private channel, DM and group events are only visible to conversation members.
@@ -149,7 +149,7 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             .iter()
             .any(|id| id.to_string() == user_id),
 
-        // NotificationDue (Track 1.3) is for its one recipient: both the serialized `user_id`
+        // NotificationDue is for its one recipient: both the serialized `user_id`
         // and the scoping list (`[user_id]`) must name the subscriber, guest or not.
         WorkspaceEvent::NotificationDue {
             user_id: event_user_id,
@@ -219,12 +219,9 @@ mod tests {
     use rim_core::message_thread::model::MessageThreadId;
     use rim_core::server::model::ServerId;
 
-    /// Regression guard for the channel-pin visibility bug
-    /// (`docs/specs/fix-channel-pin-event-visibility.md`): a channel-scoped pin has no
-    /// `conversation_member` rows, so `member_user_ids` is always empty — before the fix, this
-    /// meant `MessagePinned`/`MessageUnpinned` never reached any subscriber for a channel. This
-    /// test fails on the pre-fix filter (bare `member_user_ids.iter().any(...)` over an empty
-    /// vec is always `false`).
+    /// A channel-scoped pin has no `conversation_member` rows, so `member_user_ids` is empty;
+    /// `MessagePinned`/`MessageUnpinned` must still reach the channel's subscribers through the
+    /// workspace-wide channel rule, not a membership lookup over that empty list.
     #[test]
     fn channel_pin_visible_despite_empty_member_user_ids() {
         let event = WorkspaceEvent::MessagePinned {
@@ -275,7 +272,7 @@ mod tests {
         assert!(!user_can_see_event(&event, &non_member_id.to_string()));
     }
 
-    // ── Track 1.1 visibility matrix ──
+    // ── Visibility matrix by conversation type ──
     //
     // Every variant that carries `conversation_type`: a public channel's event reaches every
     // workspace member; a private channel's only its members; DM/Group events only members.
@@ -488,7 +485,7 @@ mod tests {
         assert_eq!(keys, ["conversation_id", "type", "workspace_id"]);
     }
 
-    // ── Track 1.2: guests and the new directory events ──
+    // ── Guests and the directory events ──
 
     fn directory_events(workspace_id: ServerId, about: UserId) -> Vec<WorkspaceEvent> {
         vec![
@@ -552,7 +549,7 @@ mod tests {
         }
     }
 
-    /// The wire shape of the new variants (documented in `docs/messaging.md`).
+    /// The wire shape of the directory event variants.
     #[test]
     fn new_directory_variants_wire_shape() {
         let keys = |event: &WorkspaceEvent| {
@@ -587,7 +584,7 @@ mod tests {
         );
     }
 
-    // ── Track 1.3: NotificationDue ──
+    // ── NotificationDue ──
 
     fn notification_due(recipient: UserId) -> WorkspaceEvent {
         WorkspaceEvent::NotificationDue {
@@ -636,7 +633,7 @@ mod tests {
         assert!(!user_can_see_event(&event, &recipient.to_string()));
     }
 
-    /// The wire shape documented in `docs/messaging.md`; the scoping list never reaches it.
+    /// The wire shape of `NotificationDue`; the scoping list never reaches it.
     #[test]
     fn notification_due_wire_shape() {
         let recipient = UserId::new();

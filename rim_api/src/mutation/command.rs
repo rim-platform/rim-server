@@ -35,9 +35,7 @@ impl CommandMutations {
                 context: input.command_context.map(TryInto::try_into).transpose()?,
                 confirmation: input.confirmation.map(|c| c.into_proof()),
                 is_pipe: input.is_pipe.unwrap_or(false),
-                // Default to Palette per Fury v2 §3.11 conservative-default
-                // rule. Until Phase 4's IPC proxy stamps the initiator from
-                // the webview origin, this is the only safe default.
+                // A missing initiator counts as a human palette call, never as an agent.
                 initiator: input
                     .initiator
                     .map(CommandInitiatorDto::from)
@@ -132,21 +130,15 @@ pub struct ExecuteCommandInput {
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
     pub command_context: Option<CommandContextInput>,
-    /// Server-issued, server-verified confirmation proof. Required when
-    /// re-submitting after a previous `executeCommand` returned
-    /// `status: CONFIRMATION_REQUIRED`. Closes H1 (TOCTOU) by binding the
-    /// proof to `(actor, commandId, args, context)` server-side.
+    /// Confirmation proof from a previous `executeCommand` that returned
+    /// `status: CONFIRMATION_REQUIRED`. Required when re-submitting that call. The server
+    /// binds the proof to the actor, command id, arguments and context, so it cannot confirm a
+    /// different call.
     pub confirmation: Option<crate::types::ConfirmationProofInput>,
     pub is_pipe: Option<bool>,
-    /// Who issued this command. Optional for back-compat — when omitted, the
-    /// backend defaults to `PALETTE` (the conservative human default). Phase
-    /// 4 frontend dispatcher will start sending the explicit value from every
-    /// call site (palette / agent / keybind / context-menu / macro). Until
-    /// then this field is opt-in.
-    ///
-    /// Per Fury v2 §3.11. The default is enforced server-side
-    /// (`CommandInitiator::default() == Palette`) so a client that submits
-    /// `null` is treated as a human action — never as agent action.
+    /// Who issued this command. When omitted, the server treats the call as `PALETTE`, a
+    /// human action, never as an agent action. `AGENT` fails with `FEATURE_DISABLED` while the
+    /// instance has the AI command surface off.
     pub initiator: Option<CommandInitiator>,
 }
 
