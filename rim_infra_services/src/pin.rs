@@ -37,6 +37,24 @@ impl DefaultPinService {
             message_service,
         }
     }
+
+    /// `NotFound` unless `message_id` names a message of `conversation_id`.
+    async fn ensure_message_in_conversation(
+        &self,
+        message_id: MessageId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> ServiceResult<()> {
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(message_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if message.conversation_id != conversation_id {
+            return Err(ServiceError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -59,19 +77,8 @@ impl PinService for DefaultPinService {
         )
         .await?;
 
-        // Check message exists and belongs to this conversation
-        let message = self
-            .repos
-            .message_repo
-            .get_by_id(cmd.message_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-
-        if message.conversation_id != cmd.conversation_id {
-            return Err(ServiceError::Validation(
-                "message does not belong to this conversation".to_string(),
-            ));
-        }
+        self.ensure_message_in_conversation(cmd.message_id, cmd.conversation_id)
+            .await?;
 
         // Check already pinned
         let already = self
@@ -145,6 +152,8 @@ impl PinService for DefaultPinService {
             cmd.conversation_id,
         )
         .await?;
+        self.ensure_message_in_conversation(cmd.message_id, cmd.conversation_id)
+            .await?;
 
         self.repos.message_pin_repo.unpin(cmd.message_id).await?;
 
