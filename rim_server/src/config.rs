@@ -1211,6 +1211,18 @@ mod tests {
     }
 
     #[test]
+    fn relay_queue_cap_defaults_to_256_mib_with_a_1_mib_floor() {
+        let mib = 1024 * 1024;
+        assert_eq!(RIMConfig::default().relay_queue_bytes_per_user(), 256 * mib);
+        let cap = |bytes| RIMConfig {
+            relay_queue_bytes_per_user: Some(bytes),
+            ..Default::default()
+        };
+        assert_eq!(cap(8 * mib).relay_queue_bytes_per_user(), 8 * mib);
+        assert_eq!(cap(1).relay_queue_bytes_per_user(), mib);
+    }
+
+    #[test]
     fn audit_retention_is_off_when_unset_and_refuses_values_outside_the_range() {
         assert_eq!(RIMConfig::default().audit_retention_days(), Ok(None));
         for days in [1, 90, 3650] {

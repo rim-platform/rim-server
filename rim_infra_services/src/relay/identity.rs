@@ -410,17 +410,20 @@ pub(crate) fn device_key(public_key: &str) -> ServiceResult<PublicKey> {
         .map_err(|e| ServiceError::internal(anyhow::anyhow!("stored device key: {e}")))
 }
 
+/// Signed identity documents for tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod testing {
     use rim_identity::testing::{TestIdentity, signing_key};
     use uuid::Uuid;
 
-    fn signed(s: &SignedStatement) -> SignedJson {
+    use super::*;
+
+    pub(crate) fn signed(s: &SignedStatement) -> SignedJson {
         json(&s.payload, &s.signature)
     }
 
-    fn document(id: &TestIdentity, state: &KeyState) -> IdentityDocument {
+    /// The identity of `id` at `state` with one device and a profile card, all verifying.
+    pub(crate) fn document(id: &TestIdentity, state: &KeyState) -> IdentityDocument {
         let cert = id.device_cert(state, Uuid::from_u128(1), &signing_key(20), "Laptop");
         let card = id.profile_card(
             state,
@@ -441,6 +444,15 @@ mod tests {
             card: Some(signed(&card)),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use rim_identity::testing::{TestIdentity, signing_key};
+    use uuid::Uuid;
+
+    use super::testing::{document, signed};
+    use super::*;
 
     #[test]
     fn a_document_verifies_with_its_device_and_card() {
