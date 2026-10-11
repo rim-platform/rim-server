@@ -1067,7 +1067,7 @@ mod tests {
             }
         }
 
-        fn from_author(&self) -> FilterCondition {
+        fn by_author(&self) -> FilterCondition {
             FilterCondition::MessageFromUser {
                 user_id: self.author_id,
             }
@@ -1116,8 +1116,8 @@ mod tests {
     fn message_from_user_and_conversation_is_match_only_their_own_value() {
         let scene = Scene::new();
         let other = Scene::new();
-        assert!(passes(vec![scene.from_author()], &scene.message()));
-        assert!(!passes(vec![other.from_author()], &scene.message()));
+        assert!(passes(vec![scene.by_author()], &scene.message()));
+        assert!(!passes(vec![other.by_author()], &scene.message()));
         assert!(passes(vec![scene.in_conversation()], &scene.message()));
         assert!(!passes(vec![other.in_conversation()], &scene.message()));
     }
@@ -1130,19 +1130,19 @@ mod tests {
         assert!(passes(
             vec![
                 Scene::contains("hello"),
-                scene.from_author(),
+                scene.by_author(),
                 scene.in_conversation()
             ],
             &event
         ));
         for failing in [
             Scene::contains("bye"),
-            other.from_author(),
+            other.by_author(),
             other.in_conversation(),
         ] {
             let conditions = vec![
                 Scene::contains("hello"),
-                scene.from_author(),
+                scene.by_author(),
                 scene.in_conversation(),
                 failing.clone(),
             ];
@@ -1178,7 +1178,7 @@ mod tests {
         ];
         for event in &without_message {
             assert!(!passes(vec![Scene::contains("hello")], event), "{event:?}");
-            assert!(!passes(vec![scene.from_author()], event), "{event:?}");
+            assert!(!passes(vec![scene.by_author()], event), "{event:?}");
         }
         assert!(!passes(
             vec![scene.in_conversation()],
@@ -1206,10 +1206,7 @@ mod tests {
         ];
         for (kind, event) in cases {
             let matches = |scope| {
-                DefaultPipelineService::matches_trigger(
-                    &scene.pipeline(kind.clone(), scope),
-                    &event,
-                )
+                DefaultPipelineService::matches_trigger(&scene.pipeline(kind, scope), &event)
             };
             assert!(matches(None), "{kind:?}");
             assert!(matches(here), "{kind:?}");
