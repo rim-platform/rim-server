@@ -12,7 +12,9 @@ pub trait AuditLogService: Send + Sync {
     /// Persist an audit log entry. Server-internal — no capability check.
     async fn write_entry(&self, entry: AuditLogEntryDto) -> ServiceResult<()>;
 
-    /// Query audit log entries. Requires `audit.read` on the CALLER.
+    /// Query audit log entries. A workspace or cross-user read requires `audit.read` in the
+    /// workspace (its Owners and Moderators); a read of the caller's own rows requires
+    /// `audit.read.self`.
     /// `query.actor_user_id` is a row-filter predicate, not the auth principal.
     async fn list_entries(
         &self,
