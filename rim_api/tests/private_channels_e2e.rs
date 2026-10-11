@@ -23,7 +23,6 @@ use serde_json::{Value, json};
 
 use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
@@ -159,13 +158,6 @@ struct Fixture {
     carol: Caller,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
     let server = ctx.create_server("private-channels-e2e").await;
@@ -180,9 +172,9 @@ async fn setup() -> Fixture {
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     Fixture {
-        alice: caller(&ctx, &alice_user).await,
-        bob: caller(&ctx, &bob_user).await,
-        carol: caller(&ctx, &carol_user).await,
+        alice: ctx.caller(&alice_user).await,
+        bob: ctx.caller(&bob_user).await,
+        carol: ctx.caller(&carol_user).await,
         server_id: server.id.to_string(),
         schema,
         ctx,
@@ -757,7 +749,7 @@ async fn new_workspace_member_auto_joins_public_channels() {
         .expect("invite token");
 
     let dave_user = f.ctx.create_user("pc-dave").await;
-    let dave = caller(&f.ctx, &dave_user).await;
+    let dave = f.ctx.caller(&dave_user).await;
     exec_ok(
         &f.schema,
         dave.request(JOIN_BY_INVITE, json!({ "input": { "inviteToken": token } })),

@@ -16,11 +16,11 @@ use serde_json::{Value, json};
 
 use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
 use support::graphql::{Caller, exec_err_code, exec_ok};
+use support::roles::create_channel;
 
 const CREATE_CHANNEL: &str = r#"
 mutation Create($input: CreateConversationInput!) {
@@ -187,13 +187,6 @@ struct Fixture {
     channel_id: String,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
 /// alice (Owner), mona (Moderator), bob and carol (Member), gina (Guest) and a public channel
 /// alice created.
 async fn setup() -> Fixture {
@@ -215,26 +208,15 @@ async fn setup() -> Fixture {
         .await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let alice = caller(&ctx, &alice_user).await;
+    let alice = ctx.caller(&alice_user).await;
     let server_id = server.id.to_string();
-    let created = exec_ok(
-        &schema,
-        alice.request(
-            CREATE_CHANNEL,
-            json!({ "input": { "serverId": server_id, "isChannel": true, "title": "general" } }),
-        ),
-    )
-    .await;
-    let channel_id = created["conversation"]["id"]
-        .as_str()
-        .expect("channel id")
-        .to_string();
+    let channel_id = create_channel(&schema, &alice, &server_id, "general", false).await;
 
     Fixture {
-        mona: caller(&ctx, &mona_user).await,
-        bob: caller(&ctx, &bob_user).await,
-        carol: caller(&ctx, &carol_user).await,
-        gina: caller(&ctx, &gina_user).await,
+        mona: ctx.caller(&mona_user).await,
+        bob: ctx.caller(&bob_user).await,
+        carol: ctx.caller(&carol_user).await,
+        gina: ctx.caller(&gina_user).await,
         alice,
         server,
         server_id,
@@ -675,19 +657,7 @@ async fn report_list_and_resolve() {
     assert_eq!(code, "CONFLICT", "one report per message and reporter");
 
     // A private channel the moderator is not in: listed, but without the message body.
-    let private = exec_ok(
-        &f.schema,
-        f.bob.request(
-            CREATE_CHANNEL,
-            json!({ "input": { "serverId": f.server_id, "isChannel": true, "title": "secret",
-                               "isPrivate": true } }),
-        ),
-    )
-    .await;
-    let private_id = private["conversation"]["id"]
-        .as_str()
-        .expect("id")
-        .to_string();
+    let private_id = create_channel(&f.schema, &f.bob, &f.server_id, "secret", true).await;
     exec_ok(
         &f.schema,
         f.bob.request(

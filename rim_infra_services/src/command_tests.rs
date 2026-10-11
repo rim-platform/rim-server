@@ -218,25 +218,7 @@ mod tests {
             .return_once(move |cmd| {
                 assert_eq!(cmd.actor.user_id, actor_user_id);
                 assert_eq!(cmd.text.as_deref(), Some("hello"));
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
+                Box::pin(async move { Ok(sent_message(cmd)) })
             });
         let mut capability_service =
             rim_services::capability::service::MockCapabilityService::new();
@@ -821,27 +803,7 @@ mod tests {
         let mut message_service = MockMessageService::new();
         message_service
             .expect_send_message()
-            .return_once(move |cmd| {
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
-            });
+            .return_once(move |cmd| Box::pin(async move { Ok(sent_message(cmd)) }));
 
         let mut repo = MockUserCommandRepository::new();
         repo.expect_list_for_user().returning(|_| Ok(vec![]));
@@ -959,27 +921,7 @@ mod tests {
         let mut message_service = MockMessageService::new();
         message_service
             .expect_send_message()
-            .return_once(move |cmd| {
-                Box::pin(async move {
-                    Ok(MessageDto {
-                        id: rim_core::message::model::MessageId::new(),
-                        server_id: cmd.server_id,
-                        conversation_id: cmd.conversation_id,
-                        thread_id: None,
-                        root_thread_id: None,
-                        author_id: cmd.actor.user_id,
-                        text: cmd.text,
-                        has_attachments: false,
-                        attachments: vec![],
-                        parent_message_id: None,
-                        forwarded_from_message_id: None,
-                        thread_root_message_id: None,
-                        is_deleted: false,
-                        sent_at: chrono::Utc::now(),
-                        encryption: None,
-                    })
-                })
-            });
+            .return_once(move |cmd| Box::pin(async move { Ok(sent_message(cmd)) }));
 
         let mut repo = MockUserCommandRepository::new();
         repo.expect_list_for_user().returning(|_| Ok(vec![]));
@@ -2779,6 +2721,621 @@ mod tests {
                 .update_user_command(update_cmd(actor, &last_level, &["user.extra"]))
                 .await;
             assert_depth_outcome(above, accepted);
+        }
+    }
+
+    // ── Moderation and selected-message commands ──
+
+    const ADMIN_TARGET_COMMANDS: [&str; 5] = [
+        "admin.kick",
+        "admin.ban",
+        "admin.unban",
+        "admin.timeout",
+        "admin.set_role",
+    ];
+
+    /// A command service whose moderation mock reports no timeouts and carries the
+    /// expectations `expect` sets; every capability is granted.
+    fn moderating(
+        expect: impl FnOnce(&mut rim_services::moderation::service::MockModerationService),
+    ) -> DefaultCommandService {
+        let mut moderation =
+            rim_services::moderation::service::MockModerationService::no_timeouts();
+        expect(&mut moderation);
+        service_with_moderation(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            MockMessageService::new(),
+            allow_all_caps(),
+            moderation,
+        )
+    }
+
+    /// A command service over `message_service`; every capability is granted.
+    fn messaging(message_service: MockMessageService) -> DefaultCommandService {
+        service_with_capability(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            message_service,
+            allow_all_caps(),
+        )
+    }
+
+    /// Runs `command_id` from the palette as a fresh actor and, when the command asks for
+    /// confirmation, re-submits it with the issued token as the user confirming would.
+    async fn run_confirmed(
+        svc: &DefaultCommandService,
+        command_id: &str,
+        args: serde_json::Value,
+        context: Option<CommandContextDto>,
+    ) -> Result<rim_services::command::dto::CommandResultDto, ServiceError> {
+        let cmd = ExecuteCommandCmd {
+            actor: new_actor(),
+            command_id: command_id.to_string(),
+            args: Some(args),
+            context,
+            confirmation: None,
+            is_pipe: false,
+            initiator: CommandInitiator::Palette,
+        };
+        let first = svc.execute_command(cmd.clone()).await?;
+        let Some(challenge) = first.confirmation_required else {
+            return Ok(first);
+        };
+        svc.execute_command(ExecuteCommandCmd {
+            confirmation: Some(
+                rim_services::command::confirmation::ConfirmationProof::InBandToken {
+                    token: challenge.token,
+                    args_hash: challenge.args_hash,
+                },
+            ),
+            ..cmd
+        })
+        .await
+    }
+
+    /// A context with a workspace, a focused conversation and a selected message.
+    fn selected_message_context(
+        workspace: rim_core::server::model::ServerId,
+        conversation: rim_core::conversation::model::ConversationId,
+        message: rim_core::message::model::MessageId,
+    ) -> CommandContextDto {
+        CommandContextDto {
+            conversation_id: Some(conversation),
+            selected_message_id: Some(message),
+            ..workspace_context(workspace)
+        }
+    }
+
+    /// A live text message in `conversation_id` with fresh message and author ids.
+    fn message_in(
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: rim_core::conversation::model::ConversationId,
+    ) -> MessageDto {
+        MessageDto {
+            id: rim_core::message::model::MessageId::new(),
+            server_id,
+            conversation_id,
+            thread_id: None,
+            root_thread_id: None,
+            author_id: rim_core::user::model::UserId::new(),
+            text: Some("hello".to_string()),
+            has_attachments: false,
+            attachments: vec![],
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            thread_root_message_id: None,
+            is_deleted: false,
+            sent_at: chrono::Utc::now(),
+            encryption: None,
+        }
+    }
+
+    /// The message `send_message` stores for `cmd`.
+    fn sent_message(cmd: rim_services::message::command::SendMessageCmd) -> MessageDto {
+        MessageDto {
+            author_id: cmd.actor.user_id,
+            text: cmd.text,
+            parent_message_id: cmd.parent_message_id,
+            ..message_in(cmd.server_id, cmd.conversation_id)
+        }
+    }
+
+    /// Kick, ban and set-role stop at a confirmation challenge before reaching the
+    /// moderation service.
+    #[tokio::test]
+    async fn kick_ban_and_set_role_commands_ask_for_confirmation_first() {
+        let svc = moderating(|_| {});
+        for command_id in ["admin.kick", "admin.ban", "admin.set_role"] {
+            let result = svc
+                .execute_command(ExecuteCommandCmd {
+                    args: Some(serde_json::json!({
+                        "user_id": rim_core::user::model::UserId::new().to_string(),
+                        "role": "member",
+                    })),
+                    ..palette_cmd(new_actor(), command_id)
+                })
+                .await
+                .expect(command_id);
+            assert_eq!(
+                result.status,
+                CommandResultStatusDto::ConfirmationRequired,
+                "{command_id}"
+            );
+        }
+    }
+
+    /// The workspace comes from the context, the target from `user_id`, and the
+    /// optional reason is passed through.
+    #[tokio::test]
+    async fn kick_command_kicks_the_user_arg_from_the_context_workspace() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        let svc = moderating(|moderation| {
+            moderation
+                .expect_kick()
+                .withf(move |cmd| {
+                    cmd.server_id == workspace
+                        && cmd.user_id == target
+                        && cmd.reason.as_deref() == Some("spam")
+                })
+                .times(1)
+                .returning(|_| Box::pin(async { Ok(()) }));
+        });
+
+        let result = run_confirmed(
+            &svc,
+            "admin.kick",
+            serde_json::json!({ "user_id": target.to_string(), "reason": "spam" }),
+            Some(workspace_context(workspace)),
+        )
+        .await
+        .expect("kick");
+
+        assert_eq!(result.message, "member kicked");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({ "user_id": target.to_string() }))
+        );
+    }
+
+    /// `expires_at` is parsed as RFC 3339 and normalised to UTC; an absent reason stays
+    /// absent; the payload echoes the expiry the service stored.
+    #[tokio::test]
+    async fn ban_command_passes_the_expiry_in_utc_and_returns_it() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        let expires_at = chrono::DateTime::parse_from_rfc3339("2026-12-01T10:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&chrono::Utc);
+        let svc = moderating(|moderation| {
+            moderation
+                .expect_ban()
+                .withf(move |cmd| {
+                    cmd.server_id == workspace
+                        && cmd.user_id == target
+                        && cmd.reason.is_none()
+                        && cmd.expires_at == Some(expires_at)
+                })
+                .times(1)
+                .returning(|cmd| {
+                    Box::pin(async move {
+                        Ok(rim_services::moderation::dto::ServerBanDto {
+                            server_id: cmd.server_id,
+                            user_id: cmd.user_id,
+                            reason: cmd.reason,
+                            banned_by: Some(cmd.actor.user_id),
+                            created_at: chrono::Utc::now(),
+                            expires_at: cmd.expires_at,
+                        })
+                    })
+                });
+        });
+
+        let result = run_confirmed(
+            &svc,
+            "admin.ban",
+            serde_json::json!({
+                "user_id": target.to_string(),
+                "expires_at": "2026-12-01T12:00:00+02:00",
+            }),
+            Some(workspace_context(workspace)),
+        )
+        .await
+        .expect("ban");
+
+        assert_eq!(result.message, "member banned");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "user_id": target.to_string(),
+                "expires_at": expires_at.to_rfc3339(),
+            }))
+        );
+    }
+
+    /// The message and `was_banned` say whether a ban was lifted.
+    #[tokio::test]
+    async fn unban_command_reports_whether_a_ban_existed() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        for (existed, message) in [(true, "ban lifted"), (false, "user was not banned")] {
+            let svc = moderating(|moderation| {
+                moderation
+                    .expect_unban()
+                    .withf(move |cmd| cmd.server_id == workspace && cmd.user_id == target)
+                    .times(1)
+                    .returning(move |_| Box::pin(async move { Ok(existed) }));
+            });
+
+            let result = run_confirmed(
+                &svc,
+                "admin.unban",
+                serde_json::json!({ "user_id": target.to_string() }),
+                Some(workspace_context(workspace)),
+            )
+            .await
+            .expect("unban");
+
+            assert_eq!(result.message, message);
+            assert_eq!(
+                result.payload,
+                Some(serde_json::json!({
+                    "user_id": target.to_string(),
+                    "was_banned": existed,
+                }))
+            );
+        }
+    }
+
+    /// The reason is passed through and the payload carries the end the service stored.
+    #[tokio::test]
+    async fn timeout_command_passes_the_reason_and_returns_the_stored_end() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        let stored_until = chrono::Utc::now() + chrono::Duration::hours(3);
+        let svc = moderating(|moderation| {
+            moderation
+                .expect_timeout()
+                .withf(move |cmd| {
+                    cmd.server_id == workspace
+                        && cmd.user_id == target
+                        && cmd.reason.as_deref() == Some("flooding")
+                })
+                .times(1)
+                .returning(move |cmd| {
+                    Box::pin(async move {
+                        Ok(rim_services::moderation::dto::MemberTimeoutDto {
+                            server_id: cmd.server_id,
+                            user_id: cmd.user_id,
+                            until: stored_until,
+                            reason: cmd.reason,
+                            set_by: Some(cmd.actor.user_id),
+                            created_at: chrono::Utc::now(),
+                        })
+                    })
+                });
+        });
+
+        let result = run_confirmed(
+            &svc,
+            "admin.timeout",
+            serde_json::json!({
+                "user_id": target.to_string(),
+                "minutes": 10,
+                "reason": "flooding",
+            }),
+            Some(workspace_context(workspace)),
+        )
+        .await
+        .expect("timeout");
+
+        assert_eq!(result.message, "member timed out");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "user_id": target.to_string(),
+                "until": stored_until.to_rfc3339(),
+            }))
+        );
+    }
+
+    /// The role arg is trimmed and matched case-insensitively, and the payload names the
+    /// role the service stored.
+    #[tokio::test]
+    async fn set_role_command_accepts_any_case_and_returns_the_stored_role() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        let svc = moderating(|moderation| {
+            moderation
+                .expect_set_member_role()
+                .withf(move |cmd| {
+                    cmd.server_id == workspace
+                        && cmd.user_id == target
+                        && cmd.role == ServerMemberRole::Moderator
+                })
+                .times(1)
+                .returning(|cmd| {
+                    Box::pin(async move {
+                        Ok(rim_services::server_member::dto::ServerMemberDto {
+                            server_id: cmd.server_id,
+                            user_id: cmd.user_id,
+                            username: "sam".to_string(),
+                            display_name: None,
+                            avatar_url: None,
+                            status_text: None,
+                            bio: None,
+                            member_role: cmd.role,
+                            joined_at: chrono::Utc::now(),
+                            timeout_until: None,
+                            principal_id: None,
+                        })
+                    })
+                });
+        });
+
+        let result = run_confirmed(
+            &svc,
+            "admin.set_role",
+            serde_json::json!({ "user_id": target.to_string(), "role": " Moderator " }),
+            Some(workspace_context(workspace)),
+        )
+        .await
+        .expect("set role");
+
+        assert_eq!(result.message, "role changed");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({ "user_id": target.to_string(), "role": "moderator" }))
+        );
+    }
+
+    /// Missing or malformed arguments are refused with a message naming the argument,
+    /// before the moderation service is called.
+    #[tokio::test]
+    async fn admin_commands_refuse_bad_arguments_before_reaching_the_service() {
+        let svc = moderating(|_| {});
+        let workspace = Some(workspace_context(rim_core::server::model::ServerId::new()));
+        let user_id = rim_core::user::model::UserId::new().to_string();
+        let mut cases: Vec<(&str, serde_json::Value, Option<CommandContextDto>, &str)> =
+            ADMIN_TARGET_COMMANDS
+                .iter()
+                .map(|command_id| {
+                    (
+                        *command_id,
+                        serde_json::json!({ "minutes": 10, "role": "member" }),
+                        workspace.clone(),
+                        "missing string arg `user_id`",
+                    )
+                })
+                .collect();
+        cases.extend([
+            (
+                "admin.kick",
+                serde_json::json!({ "user_id": "not-a-uuid" }),
+                workspace.clone(),
+                "invalid uuid arg `user_id`",
+            ),
+            (
+                "admin.kick",
+                serde_json::json!({ "user_id": user_id }),
+                None,
+                "missing workspace id: provide `server_id` arg or `context.workspace_id`",
+            ),
+            (
+                "admin.ban",
+                serde_json::json!({ "user_id": user_id, "expires_at": "next week" }),
+                workspace.clone(),
+                "invalid RFC 3339 timestamp arg `expires_at`",
+            ),
+            (
+                "admin.timeout",
+                serde_json::json!({ "user_id": user_id }),
+                workspace.clone(),
+                "arg `minutes` must be an integer from 1 to 43200",
+            ),
+        ]);
+
+        for (command_id, args, context, expected) in cases {
+            let err = run_confirmed(&svc, command_id, args, context)
+                .await
+                .expect_err(command_id);
+            assert_eq!(validation_message(err), expected, "{command_id}");
+        }
+    }
+
+    /// A refusal from the moderation service reaches the caller as the same error.
+    #[tokio::test]
+    async fn admin_commands_surface_a_moderation_refusal_unchanged() {
+        let svc = moderating(|moderation| {
+            moderation
+                .expect_kick()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+            moderation
+                .expect_ban()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+            moderation
+                .expect_unban()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+            moderation
+                .expect_timeout()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+            moderation
+                .expect_set_member_role()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+        });
+        let args = serde_json::json!({
+            "user_id": rim_core::user::model::UserId::new().to_string(),
+            "minutes": 10,
+            "role": "member",
+        });
+
+        for command_id in ADMIN_TARGET_COMMANDS {
+            let err = run_confirmed(
+                &svc,
+                command_id,
+                args.clone(),
+                Some(workspace_context(rim_core::server::model::ServerId::new())),
+            )
+            .await
+            .expect_err(command_id);
+            assert!(
+                matches!(err, ServiceError::PermissionDenied),
+                "{command_id}: {err:?}"
+            );
+        }
+    }
+
+    /// The reply goes to the context's conversation with the selected message as parent.
+    #[tokio::test]
+    async fn reply_to_selected_message_command_replies_to_the_selected_message() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let conversation = rim_core::conversation::model::ConversationId::new();
+        let selected = rim_core::message::model::MessageId::new();
+        let reply = rim_core::message::model::MessageId::new();
+        let mut message_service = MockMessageService::new();
+        message_service
+            .expect_send_message()
+            .withf(move |cmd| {
+                cmd.server_id == workspace
+                    && cmd.conversation_id == conversation
+                    && cmd.parent_message_id == Some(selected)
+                    && cmd.forwarded_from_message_id.is_none()
+                    && cmd.text.as_deref() == Some("on it")
+            })
+            .times(1)
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    Ok(MessageDto {
+                        id: reply,
+                        ..sent_message(cmd)
+                    })
+                })
+            });
+
+        let result = run_confirmed(
+            &messaging(message_service),
+            "chat.reply_to_selected_message",
+            serde_json::json!({ "text": "on it" }),
+            Some(selected_message_context(workspace, conversation, selected)),
+        )
+        .await
+        .expect("reply");
+
+        assert_eq!(result.message, "reply posted");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "message_id": reply.to_string(),
+                "parent_message_id": selected.to_string(),
+            }))
+        );
+    }
+
+    /// The edit targets the selected message in the context's conversation.
+    #[tokio::test]
+    async fn edit_message_command_edits_the_selected_message() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let conversation = rim_core::conversation::model::ConversationId::new();
+        let selected = rim_core::message::model::MessageId::new();
+        let mut message_service = MockMessageService::new();
+        message_service
+            .expect_edit_message()
+            .withf(move |cmd| {
+                cmd.server_id == workspace
+                    && cmd.conversation_id == conversation
+                    && cmd.message_id == selected
+                    && cmd.text == "fixed typo"
+            })
+            .times(1)
+            .returning(|cmd| {
+                Box::pin(async move {
+                    Ok(MessageDto {
+                        id: cmd.message_id,
+                        text: Some(cmd.text),
+                        ..message_in(cmd.server_id, cmd.conversation_id)
+                    })
+                })
+            });
+
+        let result = run_confirmed(
+            &messaging(message_service),
+            "chat.edit_message",
+            serde_json::json!({ "text": "fixed typo" }),
+            Some(selected_message_context(workspace, conversation, selected)),
+        )
+        .await
+        .expect("edit");
+
+        assert_eq!(result.message, "message edited");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "message_id": selected.to_string(),
+                "conversation_id": conversation.to_string(),
+            }))
+        );
+    }
+
+    /// Reply and edit need a context with a workspace, a conversation and a selected
+    /// message, and a non-blank `text`; each gap is refused by name without calling the
+    /// message service.
+    #[tokio::test]
+    async fn selected_message_commands_refuse_an_incomplete_context_or_blank_text() {
+        let full = selected_message_context(
+            rim_core::server::model::ServerId::new(),
+            rim_core::conversation::model::ConversationId::new(),
+            rim_core::message::model::MessageId::new(),
+        );
+        let text = serde_json::json!({ "text": "hi" });
+        let cases = [
+            (None, text.clone(), "command requires context"),
+            (
+                Some(CommandContextDto {
+                    workspace_id: None,
+                    ..full.clone()
+                }),
+                text.clone(),
+                "command requires workspace context",
+            ),
+            (
+                Some(CommandContextDto {
+                    conversation_id: None,
+                    ..full.clone()
+                }),
+                text.clone(),
+                "command requires conversation context",
+            ),
+            (
+                Some(CommandContextDto {
+                    selected_message_id: None,
+                    ..full.clone()
+                }),
+                text,
+                "command requires selected message context",
+            ),
+            (
+                Some(full.clone()),
+                serde_json::json!({}),
+                "missing string arg `text`",
+            ),
+            (
+                Some(full),
+                serde_json::json!({ "text": "  " }),
+                "missing string arg `text`",
+            ),
+        ];
+        let svc = messaging(MockMessageService::new());
+
+        for command_id in ["chat.reply_to_selected_message", "chat.edit_message"] {
+            for (context, args, expected) in cases.clone() {
+                let err = run_confirmed(&svc, command_id, args, context)
+                    .await
+                    .expect_err(command_id);
+                assert_eq!(validation_message(err), expected, "{command_id}");
+            }
         }
     }
 

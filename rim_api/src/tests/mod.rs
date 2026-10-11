@@ -55,6 +55,7 @@ mod command_execution;
 mod conversation;
 mod features;
 mod keybind;
+mod loaders;
 mod message;
 mod presence;
 mod profile;

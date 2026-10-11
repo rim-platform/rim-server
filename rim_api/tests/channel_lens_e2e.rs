@@ -15,48 +15,50 @@ use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
-use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{
+    Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
+    exec_ok,
+};
+use support::roles::{Roles, create_channel};
+use support::{TestCtx, unknown_id};
 
-const LENS_FIELDS: &str = "id serverId conversationId createdBy name \
-     filterSpec { conditions { field op value } logic } isShared createdAt updatedAt";
-
-fn create_mutation() -> String {
-    format!(
-        "mutation Create($input: CreateChannelLensInput!) {{ lens: createChannelLens(input: $input) {{ {LENS_FIELDS} }} }}"
-    )
+macro_rules! lens_fields {
+    () => {
+        "id serverId conversationId createdBy name \
+         filterSpec { conditions { field op value } logic } isShared createdAt updatedAt"
+    };
 }
 
-fn update_mutation() -> String {
-    format!(
-        "mutation Update($input: UpdateChannelLensInput!) {{ lens: updateChannelLens(input: $input) {{ {LENS_FIELDS} }} }}"
-    )
-}
+const CREATE_LENS: &str = concat!(
+    "mutation Create($input: CreateChannelLensInput!) { lens: createChannelLens(input: $input) { ",
+    lens_fields!(),
+    " } }"
+);
 
-const DELETE_MUTATION: &str = r#"
+const UPDATE_LENS: &str = concat!(
+    "mutation Update($input: UpdateChannelLensInput!) { lens: updateChannelLens(input: $input) { ",
+    lens_fields!(),
+    " } }"
+);
+
+const DELETE_LENS: &str = r#"
 mutation Delete($serverId: ID!, $lensId: ID!) {
   deleted: deleteChannelLens(serverId: $serverId, lensId: $lensId)
 }
 "#;
 
-const LIST_QUERY: &str = r#"
+const LIST_LENSES: &str = r#"
 query List($serverId: ID!, $conversationId: ID!) {
   lenses: channelLenses(serverId: $serverId, conversationId: $conversationId) { id name isShared }
 }
 "#;
 
-const APPLY_QUERY: &str = r#"
+const APPLY_LENS: &str = r#"
 query Apply($serverId: ID!, $conversationId: ID!, $lensId: ID!, $limit: Int! = 50) {
   messages: applyChannelLens(serverId: $serverId, conversationId: $conversationId,
                              lensId: $lensId, limit: $limit) {
     id serverId conversationId authorId text hasAttachments isDeleted sentAt
   }
-}
-"#;
-
-const CREATE_CHANNEL: &str = r#"
-mutation Create($input: CreateConversationInput!) {
-  conversation: createConversation(input: $input) { id }
 }
 "#;
 
@@ -81,120 +83,127 @@ mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }
 
 struct Fixture {
     schema: AppSchema,
-    server_id: String,
-    /// A second workspace alice and bob both belong to.
-    other_server_id: String,
-    /// Owner; created every channel.
-    alice: Caller,
-    /// Member.
-    bob: Caller,
-    /// Guest; in no channel.
-    gina: Caller,
-    /// Not a member of the workspace.
-    olive: Caller,
+    /// alice also belongs to the other workspace, as a member.
+    ws: Roles,
     /// Public channel.
     general: String,
     /// Second public channel.
     random: String,
     /// Private channel only alice is in.
     secret: String,
-    /// Public channel of the second workspace.
+    /// Public channel of the other workspace.
     elsewhere: String,
+    _ctx: TestCtx,
 }
 
-/// alice (Owner), bob (Member), gina (Guest) in a workspace with two public channels and a
-/// private one; alice and bob also share a second workspace; olive belongs to neither.
+/// The shared role cast; alice created two public channels and a private one, and olive a
+/// channel in the other workspace, which alice also joined.
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
-    let server = ctx.create_server("lens-e2e").await;
-    let other = ctx.create_server("lens-e2e-other").await;
-    let alice_user = ctx.create_user("lens-alice").await;
-    let bob_user = ctx.create_user("lens-bob").await;
-    let gina_user = ctx.create_user("lens-gina").await;
-    let olive_user = ctx.create_user("lens-olive").await;
-    ctx.add_owner(&server, &alice_user).await;
-    ctx.add_member(&server, &bob_user, ServerMemberRole::Member)
+    let ws = ctx.roles("lens").await;
+    ctx.join(&ws.other_server_id, &ws.alice, ServerMemberRole::Member)
         .await;
-    ctx.add_member(&server, &gina_user, ServerMemberRole::Guest)
-        .await;
-    ctx.add_owner(&other, &alice_user).await;
-    ctx.add_member(&other, &bob_user, ServerMemberRole::Member)
-        .await;
-
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let alice = ctx.caller(&alice_user).await;
-    let server_id = server.id.to_string();
-    let other_server_id = other.id.to_string();
-    let general = create_channel(&schema, &alice, &server_id, "general", false).await;
-    let random = create_channel(&schema, &alice, &server_id, "random", false).await;
-    let secret = create_channel(&schema, &alice, &server_id, "secret", true).await;
-    let elsewhere = create_channel(&schema, &alice, &other_server_id, "elsewhere", false).await;
-
+    let channel = |title: &'static str, is_private| {
+        create_channel(&schema, &ws.alice, &ws.server_id, title, is_private)
+    };
+    let general = channel("general", false).await;
+    let random = channel("random", false).await;
+    let secret = channel("secret", true).await;
+    let elsewhere =
+        create_channel(&schema, &ws.olive, &ws.other_server_id, "elsewhere", false).await;
     Fixture {
-        bob: ctx.caller(&bob_user).await,
-        gina: ctx.caller(&gina_user).await,
-        olive: ctx.caller(&olive_user).await,
-        alice,
         schema,
-        server_id,
-        other_server_id,
+        ws,
         general,
         random,
         secret,
         elsewhere,
+        _ctx: ctx,
     }
 }
 
-async fn create_channel(
-    schema: &AppSchema,
-    who: &Caller,
-    server_id: &str,
-    title: &str,
-    is_private: bool,
-) -> String {
-    let data = exec_ok(
-        schema,
-        who.request(
-            CREATE_CHANNEL,
-            json!({ "input": {
-                "serverId": server_id,
-                "isChannel": true,
-                "title": title,
-                "isPrivate": is_private,
-            } }),
-        ),
-    )
-    .await;
-    data["conversation"]["id"]
-        .as_str()
-        .expect("channel id")
-        .to_string()
+/// The filter condition `field op value`.
+fn condition(field: &str, op: &str, value: Value) -> Value {
+    json!({ "field": field, "op": op, "value": value })
+}
+
+/// A filter spec with the single condition `field op value`.
+fn one_condition(field: &str, op: &str, value: Value) -> Value {
+    json!({ "conditions": [condition(field, op, value)], "logic": "AND" })
 }
 
 fn text_contains(pattern: &str) -> Value {
-    json!({ "conditions": [{ "field": "TEXT_CONTAINS", "op": "CONTAINS", "value": pattern }],
-            "logic": "AND" })
+    one_condition("TEXT_CONTAINS", "CONTAINS", json!(pattern))
+}
+
+fn id_of(lens: &Value) -> String {
+    lens["id"].as_str().expect("lens id").to_string()
 }
 
 impl Fixture {
-    fn create_request(
+    fn create_call(
         &self,
-        who: &Caller,
         conversation_id: &str,
         name: &str,
         filter_spec: Value,
         is_shared: Option<bool>,
-    ) -> async_graphql::Request {
-        who.request(
-            &create_mutation(),
+    ) -> Call {
+        (
+            CREATE_LENS,
             json!({ "input": {
-                "serverId": self.server_id,
+                "serverId": self.ws.server_id,
                 "conversationId": conversation_id,
                 "name": name,
                 "filterSpec": filter_spec,
                 "isShared": is_shared,
             } }),
         )
+    }
+
+    fn update_call(&self, server_id: &str, lens_id: &str, changes: Value) -> Call {
+        let mut input = json!({ "serverId": server_id, "lensId": lens_id });
+        for (k, v) in changes.as_object().expect("changes").iter() {
+            input[k] = v.clone();
+        }
+        (UPDATE_LENS, json!({ "input": input }))
+    }
+
+    fn delete_call(&self, server_id: &str, lens_id: &str) -> Call {
+        (
+            DELETE_LENS,
+            json!({ "serverId": server_id, "lensId": lens_id }),
+        )
+    }
+
+    fn list_call(&self, conversation_id: &str) -> Call {
+        (
+            LIST_LENSES,
+            json!({ "serverId": self.ws.server_id, "conversationId": conversation_id }),
+        )
+    }
+
+    fn apply_call(&self, conversation_id: &str, lens_id: &str, limit: Option<i32>) -> Call {
+        let mut vars = json!({
+            "serverId": self.ws.server_id,
+            "conversationId": conversation_id,
+            "lensId": lens_id,
+        });
+        if let Some(limit) = limit {
+            vars["limit"] = json!(limit);
+        }
+        (APPLY_LENS, vars)
+    }
+
+    /// One call to every lens root, against `lens` in the public channel.
+    fn every_root(&self, lens: &str) -> Vec<Call> {
+        vec![
+            self.list_call(&self.general),
+            self.apply_call(&self.general, lens, None),
+            self.create_call(&self.general, "n", text_contains("x"), None),
+            self.update_call(&self.ws.server_id, lens, json!({ "name": "n" })),
+            self.delete_call(&self.ws.server_id, lens),
+        ]
     }
 
     async fn create(
@@ -205,63 +214,25 @@ impl Fixture {
         filter_spec: Value,
         is_shared: bool,
     ) -> Value {
-        let data = exec_ok(
-            &self.schema,
-            self.create_request(who, conversation_id, name, filter_spec, Some(is_shared)),
-        )
-        .await;
-        data["lens"].clone()
+        let call = self.create_call(conversation_id, name, filter_spec, Some(is_shared));
+        exec_ok(&self.schema, who.call(call)).await["lens"].clone()
     }
 
-    async fn create_err(
-        &self,
-        who: &Caller,
-        conversation_id: &str,
-        name: &str,
-        spec: Value,
-    ) -> String {
-        exec_err_code(
-            &self.schema,
-            self.create_request(who, conversation_id, name, spec, None),
-        )
-        .await
-    }
-
-    fn update_request(
-        &self,
-        who: &Caller,
-        server_id: &str,
-        lens_id: &str,
-        changes: Value,
-    ) -> async_graphql::Request {
-        let mut input = json!({ "serverId": server_id, "lensId": lens_id });
-        for (k, v) in changes.as_object().expect("changes").iter() {
-            input[k] = v.clone();
-        }
-        who.request(&update_mutation(), json!({ "input": input }))
-    }
-
-    fn delete_request(
-        &self,
-        who: &Caller,
-        server_id: &str,
-        lens_id: &str,
-    ) -> async_graphql::Request {
-        who.request(
-            DELETE_MUTATION,
-            json!({ "serverId": server_id, "lensId": lens_id }),
+    /// Create a lens as alice in the public channel and return its id.
+    async fn lens(&self, name: &str, filter_spec: Value, is_shared: bool) -> String {
+        id_of(
+            &self
+                .create(&self.ws.alice, &self.general, name, filter_spec, is_shared)
+                .await,
         )
     }
 
-    fn list_request(&self, who: &Caller, conversation_id: &str) -> async_graphql::Request {
-        who.request(
-            LIST_QUERY,
-            json!({ "serverId": self.server_id, "conversationId": conversation_id }),
-        )
+    async fn code(&self, who: &Caller, call: Call) -> String {
+        exec_err_code(&self.schema, who.call(call)).await
     }
 
     async fn list_names(&self, who: &Caller, conversation_id: &str) -> Vec<String> {
-        let data = exec_ok(&self.schema, self.list_request(who, conversation_id)).await;
+        let data = exec_ok(&self.schema, who.call(self.list_call(conversation_id))).await;
         let mut names: Vec<String> = data["lenses"]
             .as_array()
             .expect("lenses")
@@ -272,30 +243,9 @@ impl Fixture {
         names
     }
 
-    fn apply_request(
-        &self,
-        who: &Caller,
-        conversation_id: &str,
-        lens_id: &str,
-        limit: Option<i32>,
-    ) -> async_graphql::Request {
-        let mut vars = json!({
-            "serverId": self.server_id,
-            "conversationId": conversation_id,
-            "lensId": lens_id,
-        });
-        if let Some(limit) = limit {
-            vars["limit"] = json!(limit);
-        }
-        who.request(APPLY_QUERY, vars)
-    }
-
     async fn apply(&self, who: &Caller, lens_id: &str, limit: Option<i32>) -> Vec<Value> {
-        let data = exec_ok(
-            &self.schema,
-            self.apply_request(who, &self.general, lens_id, limit),
-        )
-        .await;
+        let call = self.apply_call(&self.general, lens_id, limit);
+        let data = exec_ok(&self.schema, who.call(call)).await;
         data["messages"].as_array().expect("messages").clone()
     }
 
@@ -313,7 +263,7 @@ impl Fixture {
             who.request(
                 SEND_MESSAGE,
                 json!({ "input": {
-                    "serverId": self.server_id,
+                    "serverId": self.ws.server_id,
                     "conversationId": self.general,
                     "text": text,
                 } }),
@@ -326,10 +276,10 @@ impl Fixture {
     async fn message_op(&self, mutation: &str, message_id: &str) {
         exec_ok(
             &self.schema,
-            self.alice.request(
+            self.ws.alice.request(
                 mutation,
                 json!({ "input": {
-                    "serverId": self.server_id,
+                    "serverId": self.ws.server_id,
                     "conversationId": self.general,
                     "messageId": message_id,
                 } }),
@@ -339,116 +289,65 @@ impl Fixture {
     }
 }
 
-fn id_of(lens: &Value) -> String {
-    lens["id"].as_str().expect("lens id").to_string()
-}
-
 // ── Authentication and membership ─────────────────────────────────────────
 
 #[tokio::test]
 async fn every_channel_lens_root_refuses_an_anonymous_caller() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "links", text_contains("x"), true)
-            .await,
-    );
-    let requests = [
-        anonymous_request(
-            LIST_QUERY,
-            json!({ "serverId": f.server_id, "conversationId": f.general }),
-        ),
-        anonymous_request(
-            APPLY_QUERY,
-            json!({ "serverId": f.server_id, "conversationId": f.general, "lensId": lens }),
-        ),
-        anonymous_request(
-            &create_mutation(),
-            json!({ "input": { "serverId": f.server_id, "conversationId": f.general,
-                               "name": "n", "filterSpec": text_contains("x") } }),
-        ),
-        anonymous_request(
-            &update_mutation(),
-            json!({ "input": { "serverId": f.server_id, "lensId": lens, "name": "n" } }),
-        ),
-        anonymous_request(
-            DELETE_MUTATION,
-            json!({ "serverId": f.server_id, "lensId": lens }),
-        ),
-    ];
-    for request in requests {
-        assert_eq!(exec_err_code(&f.schema, request).await, "UNAUTHENTICATED");
-    }
+    let lens = f.lens("links", text_contains("x"), true).await;
+    assert_each_refused(
+        &f.schema,
+        &f.every_root(&lens),
+        "UNAUTHENTICATED",
+        anonymous_request,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn every_channel_lens_root_refuses_a_non_member() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "links", text_contains("x"), true)
-            .await,
-    );
-    let requests = [
-        f.list_request(&f.olive, &f.general),
-        f.apply_request(&f.olive, &f.general, &lens, None),
-        f.create_request(&f.olive, &f.general, "n", text_contains("x"), None),
-        f.update_request(&f.olive, &f.server_id, &lens, json!({ "name": "n" })),
-        f.delete_request(&f.olive, &f.server_id, &lens),
-    ];
-    for request in requests {
-        assert_eq!(exec_err_code(&f.schema, request).await, "FORBIDDEN");
-    }
+    let lens = f.lens("links", text_contains("x"), true).await;
+    assert_each_refused_as(&f.schema, &f.ws.olive, &f.every_root(&lens), "FORBIDDEN").await;
 }
 
 #[tokio::test]
 async fn a_guest_uses_lenses_only_in_channels_they_were_added_to() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "shared", text_contains("x"), true)
-            .await,
-    );
+    let lens = f.lens("shared", text_contains("x"), true).await;
+    let gina = &f.ws.gina;
 
-    assert_eq!(
-        f.create_err(&f.gina, &f.general, "mine", text_contains("x"))
-            .await,
-        "NOT_FOUND"
-    );
-    assert_eq!(
-        exec_err_code(&f.schema, f.list_request(&f.gina, &f.general)).await,
-        "NOT_FOUND"
-    );
-    assert_eq!(
-        exec_err_code(&f.schema, f.apply_request(&f.gina, &f.general, &lens, None)).await,
-        "NOT_FOUND"
-    );
+    let calls = [
+        f.create_call(&f.general, "mine", text_contains("x"), None),
+        f.list_call(&f.general),
+        f.apply_call(&f.general, &lens, None),
+    ];
+    assert_each_refused_as(&f.schema, gina, &calls, "NOT_FOUND").await;
 
     exec_ok(
         &f.schema,
-        f.alice.request(
+        f.ws.alice.request(
             ADD_MEMBERS,
-            json!({ "serverId": f.server_id, "conversationId": f.general,
-                    "userIds": [f.gina.user_id.to_string()] }),
+            json!({ "serverId": f.ws.server_id, "conversationId": f.general,
+                    "userIds": [gina.user_id.to_string()] }),
         ),
     )
     .await;
-    f.create(&f.gina, &f.general, "mine", text_contains("x"), false)
+    f.create(gina, &f.general, "mine", text_contains("x"), false)
         .await;
-    assert_eq!(f.list_names(&f.gina, &f.general).await, ["mine", "shared"]);
-    assert!(f.apply(&f.gina, &lens, None).await.is_empty());
+    assert_eq!(f.list_names(gina, &f.general).await, ["mine", "shared"]);
+    assert!(f.apply(gina, &lens, None).await.is_empty());
 }
 
 #[tokio::test]
 async fn a_member_outside_a_private_channel_gets_not_found_for_its_lenses() {
     let f = setup().await;
-    assert_eq!(
-        f.create_err(&f.bob, &f.secret, "mine", text_contains("x"))
-            .await,
-        "NOT_FOUND"
-    );
-    assert_eq!(
-        exec_err_code(&f.schema, f.list_request(&f.bob, &f.secret)).await,
-        "NOT_FOUND"
-    );
-    f.create(&f.alice, &f.secret, "inside", text_contains("x"), false)
+    let calls = [
+        f.create_call(&f.secret, "mine", text_contains("x"), None),
+        f.list_call(&f.secret),
+    ];
+    assert_each_refused_as(&f.schema, &f.ws.bob, &calls, "NOT_FOUND").await;
+    f.create(&f.ws.alice, &f.secret, "inside", text_contains("x"), false)
         .await;
 }
 
@@ -459,25 +358,22 @@ async fn create_channel_lens_returns_the_lens_with_its_filter_spec() {
     let f = setup().await;
     let spec = json!({
         "conditions": [
-            { "field": "HAS_LINKS", "op": "EQ", "value": true },
-            { "field": "AUTHOR_ID", "op": "IN", "value": [f.bob.user_id.to_string()] },
-            { "field": "HAS_ATTACHMENTS", "op": "EQ", "value": false },
-            { "field": "TEXT_CONTAINS", "op": "CONTAINS", "value": "release" },
-            { "field": "IS_PINNED", "op": "EQ", "value": true },
+            condition("HAS_LINKS", "EQ", json!(true)),
+            condition("AUTHOR_ID", "IN", json!([f.ws.bob.user_id.to_string()])),
+            condition("HAS_ATTACHMENTS", "EQ", json!(false)),
+            condition("TEXT_CONTAINS", "CONTAINS", json!("release")),
+            condition("IS_PINNED", "EQ", json!(true)),
         ],
         "logic": "OR",
     });
-    let data = exec_ok(
-        &f.schema,
-        f.create_request(&f.alice, &f.general, "Release notes", spec.clone(), None),
-    )
-    .await;
+    let call = f.create_call(&f.general, "Release notes", spec.clone(), None);
+    let data = exec_ok(&f.schema, f.ws.alice.call(call)).await;
     let lens = &data["lens"];
 
     assert!(lens["id"].as_str().is_some_and(|id| !id.is_empty()));
-    assert_eq!(lens["serverId"], f.server_id.as_str());
+    assert_eq!(lens["serverId"], f.ws.server_id.as_str());
     assert_eq!(lens["conversationId"], f.general.as_str());
-    assert_eq!(lens["createdBy"], f.alice.user_id.to_string().as_str());
+    assert_eq!(lens["createdBy"], f.ws.alice.user_id.to_string().as_str());
     assert_eq!(lens["name"], "Release notes");
     assert_eq!(lens["filterSpec"], spec);
     assert_eq!(
@@ -491,11 +387,13 @@ async fn create_channel_lens_returns_the_lens_with_its_filter_spec() {
 #[tokio::test]
 async fn create_channel_lens_refuses_a_conversation_outside_the_workspace() {
     let f = setup().await;
-    let unknown = uuid::Uuid::now_v7().to_string();
-    for conversation in [unknown.as_str(), f.elsewhere.as_str()] {
+    for conversation in [unknown_id().as_str(), f.elsewhere.as_str()] {
         assert_eq!(
-            f.create_err(&f.alice, conversation, "n", text_contains("x"))
-                .await,
+            f.code(
+                &f.ws.alice,
+                f.create_call(conversation, "n", text_contains("x"), None)
+            )
+            .await,
             "NOT_FOUND"
         );
     }
@@ -506,21 +404,17 @@ async fn create_channel_lens_takes_a_name_of_one_to_a_hundred_characters() {
     let f = setup().await;
     for name in [String::new(), "é".repeat(101)] {
         assert_eq!(
-            f.create_err(&f.alice, &f.general, &name, text_contains("x"))
-                .await,
+            f.code(
+                &f.ws.alice,
+                f.create_call(&f.general, &name, text_contains("x"), None)
+            )
+            .await,
             "VALIDATION",
             "name of {} characters",
             name.chars().count()
         );
     }
-    f.create(
-        &f.alice,
-        &f.general,
-        &"é".repeat(100),
-        text_contains("x"),
-        false,
-    )
-    .await;
+    f.lens(&"é".repeat(100), text_contains("x"), false).await;
 }
 
 #[tokio::test]
@@ -528,43 +422,38 @@ async fn create_channel_lens_takes_one_to_twenty_conditions() {
     let f = setup().await;
     let spec = |n: usize| {
         let conditions: Vec<Value> = (0..n)
-            .map(
-                |i| json!({ "field": "TEXT_CONTAINS", "op": "CONTAINS", "value": format!("w{i}") }),
-            )
+            .map(|i| condition("TEXT_CONTAINS", "CONTAINS", json!(format!("w{i}"))))
             .collect();
         json!({ "conditions": conditions, "logic": "OR" })
     };
     for n in [0, 21] {
         assert_eq!(
-            f.create_err(&f.alice, &f.general, "n", spec(n)).await,
+            f.code(&f.ws.alice, f.create_call(&f.general, "n", spec(n), None))
+                .await,
             "VALIDATION",
             "{n} conditions"
         );
     }
-    f.create(&f.alice, &f.general, "twenty", spec(20), false)
-        .await;
+    f.lens("twenty", spec(20), false).await;
 }
 
 #[tokio::test]
 async fn a_member_owns_at_most_ten_lenses_per_conversation() {
     let f = setup().await;
     for i in 0..10 {
-        f.create(
-            &f.alice,
-            &f.general,
-            &format!("lens {i}"),
-            text_contains("x"),
-            false,
-        )
-        .await;
+        f.lens(&format!("lens {i}"), text_contains("x"), false)
+            .await;
     }
     assert_eq!(
-        f.create_err(&f.alice, &f.general, "lens 10", text_contains("x"))
-            .await,
+        f.code(
+            &f.ws.alice,
+            f.create_call(&f.general, "lens 10", text_contains("x"), None)
+        )
+        .await,
         "VALIDATION"
     );
     f.create(
-        &f.alice,
+        &f.ws.alice,
         &f.random,
         "other channel",
         text_contains("x"),
@@ -572,7 +461,7 @@ async fn a_member_owns_at_most_ten_lenses_per_conversation() {
     )
     .await;
     f.create(
-        &f.bob,
+        &f.ws.bob,
         &f.general,
         "other member",
         text_contains("x"),
@@ -586,26 +475,18 @@ async fn a_member_owns_at_most_ten_lenses_per_conversation() {
 #[tokio::test]
 async fn channel_lenses_lists_your_own_lenses_and_the_shared_ones_of_the_conversation() {
     let f = setup().await;
+    f.lens("alice private", text_contains("x"), false).await;
+    f.lens("alice shared", text_contains("x"), true).await;
     f.create(
-        &f.alice,
+        &f.ws.bob,
         &f.general,
-        "alice private",
+        "bob private",
         text_contains("x"),
         false,
     )
     .await;
     f.create(
-        &f.alice,
-        &f.general,
-        "alice shared",
-        text_contains("x"),
-        true,
-    )
-    .await;
-    f.create(&f.bob, &f.general, "bob private", text_contains("x"), false)
-        .await;
-    f.create(
-        &f.alice,
+        &f.ws.alice,
         &f.random,
         "alice random",
         text_contains("x"),
@@ -614,11 +495,11 @@ async fn channel_lenses_lists_your_own_lenses_and_the_shared_ones_of_the_convers
     .await;
 
     assert_eq!(
-        f.list_names(&f.bob, &f.general).await,
+        f.list_names(&f.ws.bob, &f.general).await,
         ["alice shared", "bob private"]
     );
     assert_eq!(
-        f.list_names(&f.alice, &f.general).await,
+        f.list_names(&f.ws.alice, &f.general).await,
         ["alice private", "alice shared"]
     );
 }
@@ -629,15 +510,12 @@ async fn channel_lenses_lists_your_own_lenses_and_the_shared_ones_of_the_convers
 async fn update_channel_lens_changes_only_the_fields_given() {
     let f = setup().await;
     let created = f
-        .create(&f.alice, &f.general, "before", text_contains("x"), false)
+        .create(&f.ws.alice, &f.general, "before", text_contains("x"), false)
         .await;
     let lens = id_of(&created);
 
-    let data = exec_ok(
-        &f.schema,
-        f.update_request(&f.alice, &f.server_id, &lens, json!({ "name": "after" })),
-    )
-    .await;
+    let call = f.update_call(&f.ws.server_id, &lens, json!({ "name": "after" }));
+    let data = exec_ok(&f.schema, f.ws.alice.call(call)).await;
     let renamed = &data["lens"];
     assert_eq!(renamed["id"], created["id"]);
     assert_eq!(renamed["name"], "after");
@@ -646,81 +524,51 @@ async fn update_channel_lens_changes_only_the_fields_given() {
     assert_eq!(renamed["createdAt"], created["createdAt"]);
     assert_ne!(renamed["updatedAt"], created["updatedAt"]);
 
-    let new_spec = json!({ "conditions": [{ "field": "HAS_LINKS", "op": "EQ", "value": true }],
-                           "logic": "AND" });
-    let data = exec_ok(
-        &f.schema,
-        f.update_request(
-            &f.alice,
-            &f.server_id,
-            &lens,
-            json!({ "filterSpec": new_spec, "isShared": true }),
-        ),
-    )
-    .await;
+    let new_spec = one_condition("HAS_LINKS", "EQ", json!(true));
+    let call = f.update_call(
+        &f.ws.server_id,
+        &lens,
+        json!({ "filterSpec": new_spec, "isShared": true }),
+    );
+    let data = exec_ok(&f.schema, f.ws.alice.call(call)).await;
     assert_eq!(data["lens"]["name"], "after");
     assert_eq!(data["lens"]["filterSpec"], new_spec);
     assert_eq!(data["lens"]["isShared"], true);
-    assert_eq!(f.list_names(&f.bob, &f.general).await, ["after"]);
+    assert_eq!(f.list_names(&f.ws.bob, &f.general).await, ["after"]);
 }
 
 #[tokio::test]
 async fn update_channel_lens_refuses_anyone_but_its_creator() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "mine", text_contains("x"), true)
-            .await,
-    );
-    let code = exec_err_code(
-        &f.schema,
-        f.update_request(&f.bob, &f.server_id, &lens, json!({ "name": "taken" })),
-    )
-    .await;
-    assert_eq!(code, "FORBIDDEN");
-    assert_eq!(f.list_names(&f.alice, &f.general).await, ["mine"]);
+    let lens = f.lens("mine", text_contains("x"), true).await;
+    let call = f.update_call(&f.ws.server_id, &lens, json!({ "name": "taken" }));
+    assert_eq!(f.code(&f.ws.bob, call).await, "FORBIDDEN");
+    assert_eq!(f.list_names(&f.ws.alice, &f.general).await, ["mine"]);
 }
 
 #[tokio::test]
 async fn update_channel_lens_gets_not_found_for_an_unknown_lens_or_another_workspace() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "mine", text_contains("x"), false)
-            .await,
-    );
-    let unknown = uuid::Uuid::now_v7().to_string();
-    let requests = [
-        f.update_request(&f.alice, &f.server_id, &unknown, json!({ "name": "n" })),
-        f.update_request(&f.alice, &f.other_server_id, &lens, json!({ "name": "n" })),
+    let lens = f.lens("mine", text_contains("x"), false).await;
+    let calls = [
+        f.update_call(&f.ws.server_id, &unknown_id(), json!({ "name": "n" })),
+        f.update_call(&f.ws.other_server_id, &lens, json!({ "name": "n" })),
     ];
-    for request in requests {
-        assert_eq!(exec_err_code(&f.schema, request).await, "NOT_FOUND");
-    }
+    assert_each_refused_as(&f.schema, &f.ws.alice, &calls, "NOT_FOUND").await;
 }
 
 #[tokio::test]
 async fn update_channel_lens_validates_the_new_name_and_filter() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "mine", text_contains("x"), false)
-            .await,
-    );
-    let changes = [
+    let lens = f.lens("mine", text_contains("x"), false).await;
+    let calls = [
         json!({ "name": "" }),
         json!({ "name": "n".repeat(101) }),
         json!({ "filterSpec": { "conditions": [], "logic": "AND" } }),
-    ];
-    for change in changes {
-        assert_eq!(
-            exec_err_code(
-                &f.schema,
-                f.update_request(&f.alice, &f.server_id, &lens, change.clone())
-            )
-            .await,
-            "VALIDATION",
-            "{change}"
-        );
-    }
-    assert_eq!(f.list_names(&f.alice, &f.general).await, ["mine"]);
+    ]
+    .map(|change| f.update_call(&f.ws.server_id, &lens, change));
+    assert_each_refused_as(&f.schema, &f.ws.alice, &calls, "VALIDATION").await;
+    assert_eq!(f.list_names(&f.ws.alice, &f.general).await, ["mine"]);
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────
@@ -728,29 +576,26 @@ async fn update_channel_lens_validates_the_new_name_and_filter() {
 #[tokio::test]
 async fn delete_channel_lens_removes_the_creators_lens() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "mine", text_contains("x"), true)
-            .await,
-    );
+    let lens = f.lens("mine", text_contains("x"), true).await;
 
     assert_eq!(
-        exec_err_code(&f.schema, f.delete_request(&f.bob, &f.server_id, &lens)).await,
+        f.code(&f.ws.bob, f.delete_call(&f.ws.server_id, &lens))
+            .await,
         "FORBIDDEN"
     );
     assert_eq!(
-        exec_err_code(
-            &f.schema,
-            f.delete_request(&f.alice, &f.other_server_id, &lens)
-        )
-        .await,
+        f.code(&f.ws.alice, f.delete_call(&f.ws.other_server_id, &lens))
+            .await,
         "NOT_FOUND"
     );
 
-    let data = exec_ok(&f.schema, f.delete_request(&f.alice, &f.server_id, &lens)).await;
+    let call = f.delete_call(&f.ws.server_id, &lens);
+    let data = exec_ok(&f.schema, f.ws.alice.call(call)).await;
     assert_eq!(data["deleted"], true);
-    assert!(f.list_names(&f.alice, &f.general).await.is_empty());
+    assert!(f.list_names(&f.ws.alice, &f.general).await.is_empty());
     assert_eq!(
-        exec_err_code(&f.schema, f.delete_request(&f.alice, &f.server_id, &lens)).await,
+        f.code(&f.ws.alice, f.delete_call(&f.ws.server_id, &lens))
+            .await,
         "NOT_FOUND"
     );
 }
@@ -760,21 +605,12 @@ async fn delete_channel_lens_removes_the_creators_lens() {
 #[tokio::test]
 async fn apply_channel_lens_returns_matching_messages_newest_first() {
     let f = setup().await;
-    let first = f.send(&f.alice, "Release v1 is out").await;
-    f.send(&f.bob, "lunch?").await;
-    f.send(&f.bob, "the RELEASE notes are long").await;
-    let lens = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
-            "release",
-            text_contains("release"),
-            false,
-        )
-        .await,
-    );
+    let first = f.send(&f.ws.alice, "Release v1 is out").await;
+    f.send(&f.ws.bob, "lunch?").await;
+    f.send(&f.ws.bob, "the RELEASE notes are long").await;
+    let lens = f.lens("release", text_contains("release"), false).await;
 
-    let messages = f.apply(&f.alice, &lens, None).await;
+    let messages = f.apply(&f.ws.alice, &lens, None).await;
     let texts: Vec<&str> = messages
         .iter()
         .map(|m| m["text"].as_str().expect("text"))
@@ -783,9 +619,9 @@ async fn apply_channel_lens_returns_matching_messages_newest_first() {
 
     let oldest = &messages[1];
     assert_eq!(oldest["id"], first.as_str());
-    assert_eq!(oldest["serverId"], f.server_id.as_str());
+    assert_eq!(oldest["serverId"], f.ws.server_id.as_str());
     assert_eq!(oldest["conversationId"], f.general.as_str());
-    assert_eq!(oldest["authorId"], f.alice.user_id.to_string().as_str());
+    assert_eq!(oldest["authorId"], f.ws.alice.user_id.to_string().as_str());
     assert_eq!(oldest["hasAttachments"], false);
     assert_eq!(oldest["isDeleted"], false);
     assert!(oldest["sentAt"].is_string());
@@ -794,42 +630,35 @@ async fn apply_channel_lens_returns_matching_messages_newest_first() {
 #[tokio::test]
 async fn apply_channel_lens_combines_conditions_with_and_or_or() {
     let f = setup().await;
-    f.send(&f.alice, "see https://example.com").await;
-    f.send(&f.bob, "see http://example.org").await;
-    f.send(&f.bob, "no link here").await;
-    let bob_id = f.bob.user_id.to_string();
+    f.send(&f.ws.alice, "see https://example.com").await;
+    f.send(&f.ws.bob, "see http://example.org").await;
+    f.send(&f.ws.bob, "no link here").await;
     let conditions = json!([
-        { "field": "HAS_LINKS", "op": "EQ", "value": true },
-        { "field": "AUTHOR_ID", "op": "EQ", "value": bob_id },
+        condition("HAS_LINKS", "EQ", json!(true)),
+        condition("AUTHOR_ID", "EQ", json!(f.ws.bob.user_id.to_string())),
     ]);
 
-    let and = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
+    let and = f
+        .lens(
             "and",
             json!({ "conditions": conditions, "logic": "AND" }),
             false,
         )
-        .await,
-    );
+        .await;
     assert_eq!(
-        f.apply_texts(&f.alice, &and).await,
+        f.apply_texts(&f.ws.alice, &and).await,
         ["see http://example.org"]
     );
 
-    let or = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
+    let or = f
+        .lens(
             "or",
             json!({ "conditions": conditions, "logic": "OR" }),
             false,
         )
-        .await,
-    );
+        .await;
     assert_eq!(
-        f.apply_texts(&f.alice, &or).await,
+        f.apply_texts(&f.ws.alice, &or).await,
         [
             "no link here",
             "see http://example.org",
@@ -837,33 +666,28 @@ async fn apply_channel_lens_combines_conditions_with_and_or_or() {
         ]
     );
 
-    let no_links = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
+    let no_links = f
+        .lens(
             "no links",
-            json!({ "conditions": [{ "field": "HAS_LINKS", "op": "EQ", "value": false }],
-                    "logic": "AND" }),
+            one_condition("HAS_LINKS", "EQ", json!(false)),
             false,
         )
-        .await,
-    );
-    assert_eq!(f.apply_texts(&f.alice, &no_links).await, ["no link here"]);
-
-    let authors = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
-            "authors",
-            json!({ "conditions": [{ "field": "AUTHOR_ID", "op": "IN",
-                                     "value": [f.alice.user_id.to_string()] }],
-                    "logic": "AND" }),
-            false,
-        )
-        .await,
-    );
+        .await;
     assert_eq!(
-        f.apply_texts(&f.alice, &authors).await,
+        f.apply_texts(&f.ws.alice, &no_links).await,
+        ["no link here"]
+    );
+
+    let alice_id = f.ws.alice.user_id.to_string();
+    let authors = f
+        .lens(
+            "authors",
+            one_condition("AUTHOR_ID", "IN", json!([alice_id])),
+            false,
+        )
+        .await;
+    assert_eq!(
+        f.apply_texts(&f.ws.alice, &authors).await,
         ["see https://example.com"]
     );
 }
@@ -871,31 +695,20 @@ async fn apply_channel_lens_combines_conditions_with_and_or_or() {
 #[tokio::test]
 async fn apply_channel_lens_matches_pinned_messages_and_skips_deleted_ones() {
     let f = setup().await;
-    let pinned = f.send(&f.alice, "pinned one").await;
-    f.send(&f.alice, "plain one").await;
-    let deleted = f.send(&f.alice, "deleted one").await;
+    let pinned = f.send(&f.ws.alice, "pinned one").await;
+    f.send(&f.ws.alice, "plain one").await;
+    let deleted = f.send(&f.ws.alice, "deleted one").await;
     f.message_op(PIN_MESSAGE, &pinned).await;
     f.message_op(DELETE_MESSAGE, &deleted).await;
 
-    let pins = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
-            "pins",
-            json!({ "conditions": [{ "field": "IS_PINNED", "op": "EQ", "value": true }],
-                    "logic": "AND" }),
-            false,
-        )
-        .await,
-    );
-    assert_eq!(f.apply_texts(&f.alice, &pins).await, ["pinned one"]);
+    let pins = f
+        .lens("pins", one_condition("IS_PINNED", "EQ", json!(true)), false)
+        .await;
+    assert_eq!(f.apply_texts(&f.ws.alice, &pins).await, ["pinned one"]);
 
-    let all = id_of(
-        &f.create(&f.alice, &f.general, "all", text_contains("one"), false)
-            .await,
-    );
+    let all = f.lens("all", text_contains("one"), false).await;
     assert_eq!(
-        f.apply_texts(&f.alice, &all).await,
+        f.apply_texts(&f.ws.alice, &all).await,
         ["plain one", "pinned one"]
     );
 }
@@ -904,17 +717,14 @@ async fn apply_channel_lens_matches_pinned_messages_and_skips_deleted_ones() {
 async fn apply_channel_lens_returns_between_one_and_fifty_messages() {
     let f = setup().await;
     for i in 0..51 {
-        f.send(&f.bob, &format!("match {i}")).await;
+        f.send(&f.ws.bob, &format!("match {i}")).await;
     }
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "all", text_contains("match"), false)
-            .await,
-    );
+    let lens = f.lens("all", text_contains("match"), false).await;
 
-    assert_eq!(f.apply(&f.alice, &lens, None).await.len(), 50);
-    assert_eq!(f.apply(&f.alice, &lens, Some(500)).await.len(), 50);
-    assert_eq!(f.apply(&f.alice, &lens, Some(3)).await.len(), 3);
-    let one = f.apply(&f.alice, &lens, Some(0)).await;
+    assert_eq!(f.apply(&f.ws.alice, &lens, None).await.len(), 50);
+    assert_eq!(f.apply(&f.ws.alice, &lens, Some(500)).await.len(), 50);
+    assert_eq!(f.apply(&f.ws.alice, &lens, Some(3)).await.len(), 3);
+    let one = f.apply(&f.ws.alice, &lens, Some(0)).await;
     assert_eq!(one.len(), 1);
     assert_eq!(one[0]["text"], "match 50");
 }
@@ -922,46 +732,25 @@ async fn apply_channel_lens_returns_between_one_and_fifty_messages() {
 #[tokio::test]
 async fn apply_channel_lens_runs_another_members_lens_only_when_shared() {
     let f = setup().await;
-    f.send(&f.alice, "hello").await;
-    let private = id_of(
-        &f.create(
-            &f.alice,
-            &f.general,
-            "private",
-            text_contains("hello"),
-            false,
-        )
-        .await,
-    );
-    let shared = id_of(
-        &f.create(&f.alice, &f.general, "shared", text_contains("hello"), true)
-            .await,
-    );
+    f.send(&f.ws.alice, "hello").await;
+    let private = f.lens("private", text_contains("hello"), false).await;
+    let shared = f.lens("shared", text_contains("hello"), true).await;
 
     assert_eq!(
-        exec_err_code(
-            &f.schema,
-            f.apply_request(&f.bob, &f.general, &private, None)
-        )
-        .await,
+        f.code(&f.ws.bob, f.apply_call(&f.general, &private, None))
+            .await,
         "FORBIDDEN"
     );
-    assert_eq!(f.apply_texts(&f.bob, &shared).await, ["hello"]);
+    assert_eq!(f.apply_texts(&f.ws.bob, &shared).await, ["hello"]);
 }
 
 #[tokio::test]
 async fn apply_channel_lens_gets_not_found_for_an_unknown_lens_or_another_conversation() {
     let f = setup().await;
-    let lens = id_of(
-        &f.create(&f.alice, &f.general, "mine", text_contains("x"), false)
-            .await,
-    );
-    let unknown = uuid::Uuid::now_v7().to_string();
-    let requests = [
-        f.apply_request(&f.alice, &f.general, &unknown, None),
-        f.apply_request(&f.alice, &f.random, &lens, None),
+    let lens = f.lens("mine", text_contains("x"), false).await;
+    let calls = [
+        f.apply_call(&f.general, &unknown_id(), None),
+        f.apply_call(&f.random, &lens, None),
     ];
-    for request in requests {
-        assert_eq!(exec_err_code(&f.schema, request).await, "NOT_FOUND");
-    }
+    assert_each_refused_as(&f.schema, &f.ws.alice, &calls, "NOT_FOUND").await;
 }

@@ -27,11 +27,11 @@ use uuid::Uuid;
 
 use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::roles::create_channel;
 
 const MESSAGE_FIELDS: &str = r#"
 fragment MessageFields on Message {
@@ -254,13 +254,6 @@ struct Fixture {
     outsider: Caller,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
 /// A workspace with three members (alice owns it), one non-member, and a channel.
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
@@ -276,24 +269,13 @@ async fn setup() -> Fixture {
         .await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let alice = caller(&ctx, &alice_user).await;
-    let bob = caller(&ctx, &bob_user).await;
-    let carol = caller(&ctx, &carol_user).await;
-    let outsider = caller(&ctx, &outsider_user).await;
+    let alice = ctx.caller(&alice_user).await;
+    let bob = ctx.caller(&bob_user).await;
+    let carol = ctx.caller(&carol_user).await;
+    let outsider = ctx.caller(&outsider_user).await;
     let server_id = server.id.to_string();
 
-    let data = exec_ok(
-        &schema,
-        alice.request(
-            CREATE_CONVERSATION_MUTATION,
-            json!({ "input": { "serverId": server_id, "isChannel": true, "title": "general" } }),
-        ),
-    )
-    .await;
-    let channel_id = data["conversation"]["id"]
-        .as_str()
-        .expect("channel id")
-        .to_string();
+    let channel_id = create_channel(&schema, &alice, &server_id, "general", false).await;
 
     Fixture {
         _ctx: ctx,

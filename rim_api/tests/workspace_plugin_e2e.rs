@@ -21,7 +21,6 @@ use sha2::{Digest, Sha256};
 use rim_api::AppSchema;
 use rim_core::server::model::Server;
 use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_identity::StatementVersion;
 use rim_identity::testing::{
     KNOWN_PLUGIN_BUNDLE, KNOWN_PLUGIN_MANIFEST_PAYLOAD, KNOWN_PLUGIN_MANIFEST_SIGNATURE,
@@ -94,13 +93,6 @@ struct World {
     outsider: Caller,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
 async fn world(ctx: &TestCtx) -> World {
     let (schema, provider, events) = ctx.build_recording(RegistrationMode::InviteOnly);
     let server = ctx.create_server("acme").await;
@@ -117,10 +109,10 @@ async fn world(ctx: &TestCtx) -> World {
         schema,
         provider,
         events,
-        owner: caller(ctx, &owner).await,
-        member: caller(ctx, &member).await,
-        guest: caller(ctx, &guest).await,
-        outsider: caller(ctx, &outsider).await,
+        owner: ctx.caller(&owner).await,
+        member: ctx.caller(&member).await,
+        guest: ctx.caller(&guest).await,
+        outsider: ctx.caller(&outsider).await,
         server,
     }
 }
