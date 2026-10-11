@@ -6,26 +6,23 @@ use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto,
     CommandResultStatusDto, UserCommandDto, UserCommandStepDto,
 };
-use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::{Actor, ServiceError, ServiceResult};
-
-/// Bundles the per-call execution context that is threaded unchanged through
-/// recursive dispatch. Eliminates the 7-argument smell on
-/// `execute_resolved_command_recursive`.
-#[derive(Clone)]
-pub(super) struct ExecutionContext {
-    pub actor: Actor,
-    pub context: Option<CommandContextDto>,
-    pub confirmed_dangerous: bool,
-    pub initiator: CommandInitiator,
-    pub depth: usize,
-}
 
 use super::DefaultCommandService;
 use super::executor;
 use super::pipe_parser;
 use super::user_commands;
+
+/// The caller, context and user-command nesting depth of one dispatch.
+#[derive(Clone)]
+pub(super) struct ExecutionContext {
+    pub actor: Actor,
+    pub context: Option<CommandContextDto>,
+    pub depth: usize,
+}
+
+const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
 
 impl DefaultCommandService {
     pub(super) fn builtin_definition(command_id: &str) -> Option<CommandDefinitionDto> {
@@ -54,7 +51,7 @@ impl DefaultCommandService {
 
         for step in &user_command.steps {
             let definition = self
-                .resolve_command_definition(actor, &step.command_id)
+                .resolve_command_definition_within(actor, &step.command_id, seen)
                 .await?
                 .ok_or_else(|| {
                     ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
@@ -88,6 +85,7 @@ impl DefaultCommandService {
         &self,
         actor: Actor,
         command_id: &str,
+        seen: &mut std::collections::BTreeSet<String>,
     ) -> ServiceResult<Option<CommandDefinitionDto>> {
         let user_command = self
             .repos
@@ -104,16 +102,32 @@ impl DefaultCommandService {
         }
 
         Ok(Some(
-            self.derive_user_command_definition(actor, dto, &mut std::collections::BTreeSet::new())
+            self.derive_user_command_definition(actor, dto, seen)
                 .await?,
         ))
     }
 
-    #[async_recursion]
     pub(super) async fn resolve_command_definition(
         &self,
         actor: Actor,
         command_id: &str,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        self.resolve_command_definition_within(
+            actor,
+            command_id,
+            &mut std::collections::BTreeSet::new(),
+        )
+        .await
+    }
+
+    /// Resolves `command_id` while the user commands in `seen` are being resolved above it;
+    /// reaching one of them again is a cycle.
+    #[async_recursion]
+    async fn resolve_command_definition_within(
+        &self,
+        actor: Actor,
+        command_id: &str,
+        seen: &mut std::collections::BTreeSet<String>,
     ) -> ServiceResult<Option<CommandDefinitionDto>> {
         #[cfg(test)]
         if let Some(definition) = self
@@ -129,7 +143,8 @@ impl DefaultCommandService {
             return Ok(Some(definition));
         }
 
-        self.get_user_command_definition(actor, command_id).await
+        self.get_user_command_definition(actor, command_id, seen)
+            .await
     }
 
     #[async_recursion]
@@ -190,6 +205,32 @@ impl DefaultCommandService {
         Ok(())
     }
 
+    /// Refuses `steps` for `command_key` when, with the actor's stored user commands, they
+    /// would form a chain of user commands deeper than the executor runs.
+    pub(super) async fn ensure_user_command_chain_within_depth(
+        &self,
+        actor: Actor,
+        command_key: &str,
+        steps: &[UserCommandStepDto],
+    ) -> ServiceResult<()> {
+        let stored = self
+            .repos
+            .user_command_repo
+            .list_for_user(actor.user_id)
+            .await?
+            .into_iter()
+            .map(Self::parse_user_command)
+            .collect::<ServiceResult<Vec<_>>>()?;
+        if user_commands::longest_chain_through(&stored, command_key, steps)
+            > Self::MAX_RECURSION_DEPTH
+        {
+            return Err(ServiceError::Validation(
+                RECURSION_DEPTH_EXCEEDED.to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn execute_builtin(
         &self,
         actor: Actor,
@@ -208,7 +249,7 @@ impl DefaultCommandService {
     ) -> ServiceResult<CommandResultDto> {
         if ctx.depth >= Self::MAX_RECURSION_DEPTH {
             return Err(ServiceError::Validation(
-                "user command recursion depth exceeded".to_string(),
+                RECURSION_DEPTH_EXCEEDED.to_string(),
             ));
         }
 
@@ -244,15 +285,10 @@ impl DefaultCommandService {
         actor: Actor,
         pipe_expression: &str,
         context: Option<CommandContextDto>,
-        confirmed_dangerous: bool,
-        initiator: CommandInitiator,
     ) -> ServiceResult<CommandResultDto> {
         use rim_services::command::dto::PipeStageResultDto;
 
         let segments = pipe_parser::parse_pipe_expression(pipe_expression)?;
-
-        let mut definitions = Vec::with_capacity(segments.len());
-        let mut dangerous_stages: Vec<(usize, String)> = Vec::new();
 
         for (i, segment) in segments.iter().enumerate() {
             let definition = self
@@ -274,23 +310,6 @@ impl DefaultCommandService {
                     segment.command_id,
                 )));
             }
-
-            if definition.requires_confirmation_for_initiator(initiator) {
-                dangerous_stages.push((i + 1, segment.command_id.clone()));
-            }
-
-            definitions.push(definition);
-        }
-
-        if !dangerous_stages.is_empty() && !confirmed_dangerous {
-            let stage_list: Vec<String> = dangerous_stages
-                .iter()
-                .map(|(idx, cmd)| format!("stage {} ('{}')", idx, cmd))
-                .collect();
-            return Err(ServiceError::Validation(format!(
-                "dangerous command requires confirmation — dangerous stages: {}",
-                stage_list.join(", "),
-            )));
         }
 
         let mut previous_payload: Option<serde_json::Value> = None;
@@ -314,8 +333,6 @@ impl DefaultCommandService {
                     ExecutionContext {
                         actor,
                         context: context.clone(),
-                        confirmed_dangerous,
-                        initiator,
                         depth: 0,
                     },
                 )
@@ -428,13 +445,6 @@ impl DefaultCommandService {
             // builtins here without passing the top-level gate in `execute_command_inner`.
             self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
                 .await?;
-            if definition.requires_confirmation_for_initiator(ctx.initiator)
-                && !ctx.confirmed_dangerous
-            {
-                return Err(ServiceError::Validation(
-                    "dangerous command requires confirmation".to_string(),
-                ));
-            }
             return self
                 .execute_builtin(ctx.actor, command_id, args, ctx.context)
                 .await;
@@ -562,7 +572,7 @@ impl DefaultCommandService {
 
         if cmd.is_pipe {
             return self
-                .execute_piped(cmd.actor, &cmd.command_id, cmd.context, true, cmd.initiator)
+                .execute_piped(cmd.actor, &cmd.command_id, cmd.context)
                 .await;
         }
 
@@ -572,8 +582,6 @@ impl DefaultCommandService {
             ExecutionContext {
                 actor: cmd.actor,
                 context: cmd.context,
-                confirmed_dangerous: true,
-                initiator: cmd.initiator,
                 depth: 0,
             },
         )

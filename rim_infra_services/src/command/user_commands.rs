@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use rim_core::command::model::UserCommand;
@@ -59,6 +61,69 @@ pub(super) fn validate_user_command_steps(
     }
 
     Ok(())
+}
+
+/// Number of user commands in the longest chain through `command_key` once it has `steps`:
+/// the commands calling it, itself, and the commands it calls.
+pub(super) fn longest_chain_through(
+    stored: &[UserCommandDto],
+    command_key: &str,
+    steps: &[UserCommandStepDto],
+) -> usize {
+    let mut calls: HashMap<&str, Vec<&str>> = stored
+        .iter()
+        .filter(|command| command.command_key != command_key)
+        .map(|command| {
+            (
+                command.command_key.as_str(),
+                user_command_steps(&command.steps),
+            )
+        })
+        .collect();
+    calls.insert(command_key, user_command_steps(steps));
+
+    let mut callers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (&caller, callees) in &calls {
+        for &callee in callees {
+            callers.entry(callee).or_default().push(caller);
+        }
+    }
+
+    longest_path(&calls, command_key, &mut HashMap::new())
+        + longest_path(&callers, command_key, &mut HashMap::new())
+        - 1
+}
+
+fn user_command_steps(steps: &[UserCommandStepDto]) -> Vec<&str> {
+    steps
+        .iter()
+        .map(|step| step.command_id.as_str())
+        .filter(|command_id| user_command_exists_locally(command_id))
+        .collect()
+}
+
+/// Nodes on the longest path from `node` along `edges`, `node` included. A node reached again
+/// while its own path is open counts as zero, so a cycle in stored data ends the walk.
+fn longest_path<'a>(
+    edges: &HashMap<&'a str, Vec<&'a str>>,
+    node: &'a str,
+    memo: &mut HashMap<&'a str, Option<usize>>,
+) -> usize {
+    match memo.get(node) {
+        Some(Some(length)) => return *length,
+        Some(None) => return 0,
+        None => {}
+    }
+    memo.insert(node, None);
+    let longest = edges
+        .get(node)
+        .into_iter()
+        .flatten()
+        .map(|&next| longest_path(edges, next, memo))
+        .max()
+        .unwrap_or(0);
+    memo.insert(node, Some(longest + 1));
+    longest + 1
 }
 
 pub(super) fn parse_user_command(user_command: UserCommand) -> ServiceResult<UserCommandDto> {
