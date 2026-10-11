@@ -547,3 +547,132 @@ async fn mutation_signup_with_invite_missing_email_rejected_by_schema() {
         "schema error must not carry EMAIL_TAKEN or VALIDATION code (was not a resolver error): {error_text}"
     );
 }
+
+/// A `signupWithInvite` request for `username` presenting `raw` in the token field `field`.
+fn signup_request(field: &str, raw: &str, username: &str, email: &str) -> Request {
+    let vars = serde_json::json!({ "input": {
+        "username": username, "email": email, "password": "ValidPass123!", field: raw,
+    } });
+    Request::new(
+        "mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId serverId } }",
+    )
+    .variables(async_graphql::Variables::from_json(vars))
+}
+
+/// Set `column` of the invite in `table` whose token is `raw` to a minute ago: `revoked_at`
+/// revokes it, `expires_at` expires it.
+async fn age_invite(ctx: &TestCtx, table: &str, column: &str, raw: &str) {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let sql =
+        format!("UPDATE {table} SET {column} = now() - interval '1 minute' WHERE token_hash = $1");
+    ctx.conn
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            sql,
+            [rim_auth::session_token::hash_token(raw).into()],
+        ))
+        .await
+        .expect("age invite");
+}
+
+/// Both kinds of invite answer an unusable token alike: unknown, revoked or used up is
+/// `INVALID_TOKEN`, expired is `EXPIRED_TOKEN`, before the username or email is looked at.
+#[tokio::test]
+async fn signup_with_invite_answers_an_unusable_token_alike_for_both_kinds() {
+    use support::graphql::{exec_err_code, exec_ok};
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let owner = ctx.create_user("token_owner").await;
+    let server = ctx.create_server("token_ws").await;
+    ctx.add_owner(&server, &owner).await;
+
+    for (field, table) in [
+        ("instanceInviteToken", "instance_invite"),
+        ("workspaceInviteToken", "invite"),
+    ] {
+        for state in ["spent", "revoked", "expired"] {
+            let raw = format!("rim_{table}_{state}_token");
+            if table == "invite" {
+                seed_workspace_invite(&ctx.db, owner.id, server.id, &raw).await;
+            } else {
+                let opts = SeedInstanceInviteOpts::default();
+                seed_instance_invite(&ctx.db, owner.id, &raw, opts).await;
+            }
+        }
+        let spent = format!("rim_{table}_spent_token");
+        let first = format!("{table}_first");
+        let email = format!("{first}@example.com");
+        exec_ok(&schema, signup_request(field, &spent, &first, &email)).await;
+        age_invite(
+            &ctx,
+            table,
+            "revoked_at",
+            &format!("rim_{table}_revoked_token"),
+        )
+        .await;
+        age_invite(
+            &ctx,
+            table,
+            "expires_at",
+            &format!("rim_{table}_expired_token"),
+        )
+        .await;
+
+        for (state, code) in [
+            ("unknown", "INVALID_TOKEN"),
+            ("spent", "INVALID_TOKEN"),
+            ("revoked", "INVALID_TOKEN"),
+            ("expired", "EXPIRED_TOKEN"),
+        ] {
+            let raw = format!("rim_{table}_{state}_token");
+            let request = signup_request(field, &raw, &first, &email);
+            assert_eq!(
+                exec_err_code(&schema, request).await,
+                code,
+                "{field} {state}"
+            );
+        }
+    }
+}
+
+/// A workspace invite signs up with `<username>@local.invalid` and drops the email it was given,
+/// however malformed: that path takes no email.
+#[tokio::test]
+async fn signup_with_a_workspace_invite_keeps_a_placeholder_email() {
+    use rim_core::user::repository::UserRepository;
+    use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+    use support::graphql::exec_ok;
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let owner = ctx.create_user("placeholder_owner").await;
+    let server = ctx.create_server("placeholder_ws").await;
+    ctx.add_owner(&server, &owner).await;
+    seed_workspace_invite(&ctx.db, owner.id, server.id, "rim_placeholder_token").await;
+
+    let data = exec_ok(
+        &schema,
+        signup_request(
+            "workspaceInviteToken",
+            "rim_placeholder_token",
+            "Placeholder_User",
+            "not an email",
+        ),
+    )
+    .await;
+    assert_eq!(
+        data["signupWithInvite"]["serverId"],
+        serde_json::json!(server.id.to_string())
+    );
+    let user = SeaOrmUserRepository::new(ctx.db.clone())
+        .find_by_username("Placeholder_User")
+        .await
+        .expect("lookup")
+        .expect("user");
+    assert_eq!(
+        user.email.as_deref(),
+        Some("placeholder_user@local.invalid")
+    );
+}
