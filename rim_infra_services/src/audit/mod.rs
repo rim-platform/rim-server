@@ -55,24 +55,25 @@ impl AuditLogService for DefaultAuditLogService {
 
     /// Gate logic for `list_entries`.
     ///
-    /// A cross-user read must be scoped to a workspace the caller is a member
-    /// of and holds `audit.read` in; supplying another user's `actor_user_id`
-    /// never widens access.
+    /// A cross-user read must be scoped to a workspace where the caller holds
+    /// `audit.read`, which only its Owners and Moderators do; supplying another
+    /// user's `actor_user_id` never widens access.
     ///
     /// Branching on `(actor_user_id, server_id)`:
     ///
     /// | actor_user_id     | server_id  | Allowed?                                          |
     /// |-------------------|------------|---------------------------------------------------|
     /// | Some(caller)      | _          | Self-read; requires `audit.read.self` (no ws req) |
-    /// | Some(other)       | Some(W)    | Cross-user read; requires `audit.read` in W AND   |
-    /// |                   |            | caller must be a member of W (checked by cap svc).|
-    /// |                   |            | The actor_user_id filter is STRIPPED from         |
-    /// |                   |            | the repo query — returns full workspace dump.     |
+    /// | Some(other)       | Some(W)    | Cross-user read; requires `audit.read` in W, i.e. |
+    /// |                   |            | caller is Owner or Moderator of W (checked by the |
+    /// |                   |            | cap svc). The actor_user_id filter is STRIPPED    |
+    /// |                   |            | from the repo query — returns full workspace dump.|
     /// |                   |            | Prevents targeted enumeration ("did Alice act     |
     /// |                   |            | in W?") while preserving the authorised read.     |
     /// | Some(other)       | None       | **Forbidden** — cross-user, unscoped              |
     /// | None              | Some(W)    | Workspace read; requires `audit.read` in W        |
-    /// | None              | None       | **Forbidden** — too broad                        |
+    /// |                   |            | (Owner or Moderator of W)                         |
+    /// | None              | None       | **Forbidden** — too broad                         |
     async fn list_entries(
         &self,
         caller: Actor,
@@ -104,8 +105,8 @@ impl AuditLogService for DefaultAuditLogService {
             }
 
             // Cross-user read scoped to a workspace: requires audit.read in W.
-            // The membership check is handled inside CapabilityService.check
-            // (workspace_id is Some → membership_holds is evaluated).
+            // CapabilityService.check requires the caller to be an Owner or
+            // Moderator of W for this cap.
             //
             // Strip the targeted actor_user_id from the repo
             // query to prevent enumeration ("did Alice ever act in W?"). The caller
@@ -133,7 +134,8 @@ impl AuditLogService for DefaultAuditLogService {
                 return Err(ServiceError::PermissionDenied);
             }
 
-            // Workspace-scoped read (no specific user filter): requires audit.read in W.
+            // Workspace-scoped read (no specific user filter): requires audit.read in W
+            // (Owner or Moderator of W).
             (None, Some(ws)) => {
                 self.capability_service
                     .check(&caller, Some(ws), "audit.read")
@@ -368,9 +370,9 @@ mod tests {
         );
     }
 
-    /// actor_user_id=None, server_id=W1 (member) → Ok with audit.read in W1.
+    /// actor_user_id=None, server_id=W1 (caller holds audit.read in W1) → Ok.
     #[tokio::test]
-    async fn workspace_read_member_ok() {
+    async fn workspace_read_with_audit_read_ok() {
         let mut cap_svc = MockCapabilityService::new();
         cap_svc
             .expect_check()
@@ -399,7 +401,7 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "workspace read by member must succeed: {result:?}"
+            "workspace read with audit.read must succeed: {result:?}"
         );
     }
 
@@ -678,7 +680,7 @@ mod tests {
         );
     }
 
-    /// Happy path — cross-user read by a workspace member must succeed.
+    /// Happy path — cross-user read by a caller holding `audit.read` in W1 must succeed.
     ///
     /// Mallory has `audit.read` in W1. She queries `actor_user_id=Alice,
     /// server_id=W1`. The cap check passes and the service returns Ok.
@@ -805,5 +807,133 @@ mod tests {
 
         assert!(result.is_ok(), "authorized caller must succeed: {result:?}");
         assert!(result.unwrap().items.is_empty());
+    }
+    // ── Role matrix through the real capability gate ──────────────────────────
+
+    /// Audit service over the real `DefaultCapabilityService`: the registry knows
+    /// `audit.read` and `audit.read.self`, and Mallory holds `role` in W1 (`None`:
+    /// not a member). The repo answers any `list` with an empty page.
+    fn svc_with_role(
+        role: Option<rim_core::server_member::model::ServerMemberRole>,
+    ) -> DefaultAuditLogService {
+        use rim_core::capability::model::RegisteredCapability;
+        use rim_core::capability::repository::MockCapabilityRegistryRepository;
+        use rim_core::server_member::model::{ServerMember, ServerMemberId};
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        use crate::capability::{CapabilityRepos, DefaultCapabilityService};
+
+        let mut registry = MockCapabilityRegistryRepository::new();
+        registry.expect_get().returning(|key| {
+            Ok(
+                matches!(key, "audit.read" | "audit.read.self").then(|| RegisteredCapability {
+                    capability_key: key.to_string(),
+                    registered_at: chrono::Utc::now(),
+                    retired_at: None,
+                    is_self_scoped: key == "audit.read.self",
+                }),
+            )
+        });
+        let mut members = MockServerMemberRepository::new();
+        members
+            .expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(role
+                    .filter(|_| uuid::Uuid::from(server_id) == workspace1_id())
+                    .map(|member_role| ServerMember {
+                        id: ServerMemberId::new(),
+                        server_id,
+                        user_id,
+                        member_role,
+                        joined_at: chrono::Utc::now(),
+                    }))
+            });
+        let cap_svc = DefaultCapabilityService::new(CapabilityRepos {
+            capability_registry_repo: Arc::new(registry),
+            server_member_repo: Arc::new(members),
+        });
+        DefaultAuditLogService::new(Arc::new(ok_repo()), Arc::new(cap_svc))
+    }
+
+    /// Mallory's `list_entries` result for `(actor_user_id, server_id)` while holding `role` in W1.
+    async fn list_as_mallory(
+        role: Option<rim_core::server_member::model::ServerMemberRole>,
+        actor_user_id: Option<uuid::Uuid>,
+        server_id: Option<uuid::Uuid>,
+    ) -> Result<(), ServiceError> {
+        svc_with_role(role)
+            .list_entries(
+                Actor::new(UserId::from(mallory_id())),
+                ListAuditLogQuery {
+                    actor_user_id,
+                    server_id,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+    }
+
+    /// The workspace arm `(None, Some(W1))` and the cross-user arm `(Some(other), Some(W1))`
+    /// succeed for Owners and Moderators of W1 and are denied for Members, Guests and
+    /// non-members.
+    #[tokio::test]
+    async fn workspace_and_cross_user_arms_require_owner_or_moderator() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        for (role, allowed) in [
+            (Some(ServerMemberRole::Owner), true),
+            (Some(ServerMemberRole::Moderator), true),
+            (Some(ServerMemberRole::Member), false),
+            (Some(ServerMemberRole::Guest), false),
+            (None, false),
+        ] {
+            for actor_user_id in [None, Some(alice_id())] {
+                let result = list_as_mallory(role, actor_user_id, Some(workspace1_id())).await;
+                if allowed {
+                    assert!(result.is_ok(), "{role:?} {actor_user_id:?}: {result:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(ServiceError::PermissionDenied)),
+                        "{role:?} {actor_user_id:?}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The self-read arm passes for every role, inside W1 and without a workspace, and for a
+    /// caller who is no member at all.
+    #[tokio::test]
+    async fn self_read_arm_unaffected_by_role() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        for role in [
+            Some(ServerMemberRole::Owner),
+            Some(ServerMemberRole::Moderator),
+            Some(ServerMemberRole::Member),
+            Some(ServerMemberRole::Guest),
+            None,
+        ] {
+            for server_id in [None, Some(workspace1_id())] {
+                let result = list_as_mallory(role, Some(mallory_id()), server_id).await;
+                assert!(result.is_ok(), "{role:?} {server_id:?}: {result:?}");
+            }
+        }
+    }
+
+    /// The unscoped arms stay forbidden even for an Owner.
+    #[tokio::test]
+    async fn unscoped_arms_forbidden_for_owner() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        let owner = Some(ServerMemberRole::Owner);
+        for actor_user_id in [None, Some(alice_id())] {
+            let result = list_as_mallory(owner, actor_user_id, None).await;
+            assert!(
+                matches!(result, Err(ServiceError::PermissionDenied)),
+                "{actor_user_id:?}: {result:?}"
+            );
+        }
     }
 }
