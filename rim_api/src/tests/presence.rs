@@ -29,8 +29,14 @@ async fn workspace_presence_rejects_non_member() {
         .execute(workspace_presence_request(actor, server_id))
         .await;
 
-    assert!(
-        !res.errors.is_empty(),
+    let code = res
+        .errors
+        .first()
+        .and_then(|e| e.extensions.as_ref())
+        .and_then(|ext| ext.get("code").cloned());
+    assert_eq!(
+        code,
+        Some(Value::from("FORBIDDEN")),
         "a non-member must not read workspace presence"
     );
 }
