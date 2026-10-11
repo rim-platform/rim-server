@@ -17,9 +17,7 @@ use rim_api::AppSchema;
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::events::WorkspaceEvent;
 
-use support::graphql::{
-    Caller, anonymous_request, assert_each_refused, exec_err_code, exec_err_message, exec_ok,
-};
+use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_err_code, exec_ok};
 use support::roles::{Roles, create_channel};
 use support::{RecordingBroadcaster, TestCtx};
 
@@ -27,6 +25,19 @@ const SET_ARCHIVED: &str = r#"
 mutation Archive($serverId: ID!, $conversationId: ID!) {
   conversation: setConversationArchived(serverId: $serverId, conversationId: $conversationId,
                                         archived: true) { id }
+}
+"#;
+
+const ADD_MEMBERS: &str = r#"
+mutation Add($serverId: ID!, $conversationId: ID!, $userIds: [ID!]!) {
+  addConversationMembers(serverId: $serverId, conversationId: $conversationId,
+                         userIds: $userIds) { id }
+}
+"#;
+
+const TIMEOUT: &str = r#"
+mutation Timeout($serverId: ID!, $userId: ID!, $until: DateTime!) {
+  timeoutMember(serverId: $serverId, userId: $userId, until: $until) { userId }
 }
 "#;
 
@@ -209,6 +220,51 @@ async fn heartbeat_shows_the_status_to_other_members() {
     );
 }
 
+/// A guest sees the presence of members they share a conversation with and of nobody else;
+/// owners and members see everyone.
+#[tokio::test]
+async fn guest_sees_presence_only_of_members_sharing_a_conversation() {
+    let f = setup().await;
+    let shared = create_channel(&f.schema, &f.ws.alice, &f.ws.server_id, "guests", true).await;
+    exec_ok(
+        &f.schema,
+        f.ws.alice.request(
+            ADD_MEMBERS,
+            json!({
+                "serverId": f.ws.server_id,
+                "conversationId": shared,
+                "userIds": [f.ws.gina.user_id.to_string()],
+            }),
+        ),
+    )
+    .await;
+    for who in [&f.ws.alice, &f.ws.bob, &f.ws.gina] {
+        f.heartbeat(who, "ONLINE").await;
+    }
+
+    let users = |entries: Vec<Value>| {
+        let mut ids: Vec<String> = entries
+            .iter()
+            .map(|e| e["userId"].as_str().unwrap_or_default().to_string())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let ids = |callers: &[&Caller]| {
+        let mut ids: Vec<String> = callers.iter().map(|c| c.user_id.to_string()).collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(
+        users(f.presence(&f.ws.gina, &f.ws.server_id).await),
+        ids(&[&f.ws.alice, &f.ws.gina])
+    );
+    let everyone = ids(&[&f.ws.alice, &f.ws.bob, &f.ws.gina]);
+    for who in [&f.ws.alice, &f.ws.bob] {
+        assert_eq!(users(f.presence(who, &f.ws.server_id).await), everyone);
+    }
+}
+
 /// Presence is per workspace: a heartbeat into one workspace does not show the member in
 /// another workspace's presence list.
 #[tokio::test]
@@ -222,16 +278,16 @@ async fn presence_is_scoped_to_the_workspace_heartbeated_into() {
     );
 }
 
-/// Clients cannot report themselves `OFFLINE`; the refusal changes nothing.
+/// Clients cannot report themselves `OFFLINE` (`VALIDATION`); the refusal changes nothing.
 #[tokio::test]
 async fn heartbeat_refuses_offline_status() {
     let f = setup().await;
-    let message = exec_err_message(
+    let code = exec_err_code(
         &f.schema,
         f.ws.bob.request(HEARTBEAT, f.heartbeat_vars("OFFLINE")),
     )
     .await;
-    assert_eq!(message, "Clients cannot set OFFLINE status");
+    assert_eq!(code, "VALIDATION");
     assert!(f.presence(&f.ws.alice, &f.ws.server_id).await.is_empty());
     assert!(f.presence_changes().is_empty());
 }
@@ -288,10 +344,26 @@ async fn start_typing_refuses_conversations_the_caller_cannot_see() {
     assert!(f.typing_events().is_empty());
 }
 
-/// Typing into an archived channel answers `CONVERSATION_ARCHIVED`.
+/// Typing needs write access: a timed-out member gets `TIMED_OUT` and an archived channel
+/// `CONVERSATION_ARCHIVED`, and neither emits an event.
 #[tokio::test]
-async fn start_typing_refuses_an_archived_channel() {
+async fn start_typing_refuses_where_the_caller_may_not_write() {
     let f = setup().await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    exec_ok(
+        &f.schema,
+        f.ws.mona.request(
+            TIMEOUT,
+            json!({
+                "serverId": f.ws.server_id,
+                "userId": f.ws.carol.user_id.to_string(),
+                "until": until.to_rfc3339(),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(f.typing_code(&f.ws.carol, &f.channel_id).await, "TIMED_OUT");
+
     exec_ok(
         &f.schema,
         f.ws.alice

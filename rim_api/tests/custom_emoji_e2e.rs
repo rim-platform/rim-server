@@ -18,9 +18,7 @@ use rim_api::AppSchema;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{
-    Caller, anonymous_request, assert_each_refused, exec_err_code, exec_err_message, exec_ok,
-};
+use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_err_code, exec_ok};
 use support::roles::Roles;
 
 const CREATE_EMOJI: &str = r#"
@@ -224,7 +222,7 @@ async fn create_custom_emoji_validates_the_name() {
     assert_eq!(f.list(&f.ws.bob).await.len(), 2);
 }
 
-/// The image must be valid base64 of one byte up to 256 KiB.
+/// The image must be valid base64 of one byte up to 256 KiB; anything else answers `VALIDATION`.
 #[tokio::test]
 async fn create_custom_emoji_validates_the_image() {
     let f = setup().await;
@@ -234,12 +232,8 @@ async fn create_custom_emoji_validates_the_image() {
     assert_eq!(code, "VALIDATION");
     let code = f.create_code(&f.ws.bob, "empty", "").await;
     assert_eq!(code, "VALIDATION");
-    let message = exec_err_message(
-        &f.schema,
-        f.create_request(&f.ws.bob, "garbled", "not base64!"),
-    )
-    .await;
-    assert!(message.starts_with("invalid base64"), "{message}");
+    let code = f.create_code(&f.ws.bob, "garbled", "not base64!").await;
+    assert_eq!(code, "VALIDATION");
     assert!(f.list(&f.ws.bob).await.is_empty());
 
     let data = exec_ok(
@@ -250,7 +244,8 @@ async fn create_custom_emoji_validates_the_image() {
     assert_eq!(data["emoji"]["name"], json!("largest"));
 }
 
-/// A name is unique within a workspace (`CONFLICT`) but may repeat in another workspace.
+/// A name is unique within a workspace (`CONFLICT`, storing no image) but may repeat in another
+/// workspace.
 #[tokio::test]
 async fn create_custom_emoji_refuses_a_duplicate_name() {
     let f = setup().await;
@@ -258,6 +253,14 @@ async fn create_custom_emoji_refuses_a_duplicate_name() {
     let code = f.create_code(&f.ws.carol, "party", &image(16)).await;
     assert_eq!(code, "CONFLICT");
     assert_eq!(f.list(&f.ws.bob).await.len(), 1);
+    let stored = std::fs::read_dir(
+        PathBuf::from(STORAGE_ROOT)
+            .join(&f.ws.server_id)
+            .join("emoji"),
+    )
+    .expect("emoji dir")
+    .count();
+    assert_eq!(stored, 1, "the refused upload leaves no file");
 
     exec_ok(
         &f.schema,

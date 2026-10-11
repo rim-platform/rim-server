@@ -12,6 +12,7 @@ pub(crate) struct MacroQueries;
 impl MacroQueries {
     // ── Macros ──────────────────────────────────────────────────────────
 
+    /// The caller's own macros in the workspace. `FORBIDDEN` for a non-member.
     async fn my_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
         let actor = require_actor(ctx)?;
         let svc =
