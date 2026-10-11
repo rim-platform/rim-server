@@ -21,6 +21,7 @@ mod tests {
     use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
     use rim_services::message::service::MockMessageService;
+    use rim_services::workspace_state::service::MockWorkspaceStateService;
     use rim_services::{Actor, ServiceError};
 
     use crate::CommandRepos;
@@ -88,6 +89,24 @@ mod tests {
         capability_service: rim_services::capability::service::MockCapabilityService,
         moderation_service: rim_services::moderation::service::MockModerationService,
     ) -> DefaultCommandService {
+        service_with_workspace_state(
+            repo,
+            conversation_service,
+            message_service,
+            capability_service,
+            moderation_service,
+            MockWorkspaceStateService::new(),
+        )
+    }
+
+    fn service_with_workspace_state(
+        repo: MockUserCommandRepository,
+        conversation_service: MockConversationService,
+        message_service: MockMessageService,
+        capability_service: rim_services::capability::service::MockCapabilityService,
+        moderation_service: rim_services::moderation::service::MockModerationService,
+        workspace_state_service: MockWorkspaceStateService,
+    ) -> DefaultCommandService {
         DefaultCommandService::new(
             CommandRepos {
                 user_command_repo: Arc::new(repo),
@@ -109,9 +128,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(workspace_state_service),
                 audit_log_service: None,
                 moderation_service: Arc::new(moderation_service),
                 notification_service: Arc::new(
@@ -1058,9 +1075,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: audit_svc,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -1073,24 +1088,16 @@ mod tests {
         )
     }
 
-    fn rate_limit_execute_cmd(actor: Actor, command_id: &str) -> ExecuteCommandCmd {
+    /// A palette command with no args in a fresh workspace context.
+    fn palette_cmd(actor: Actor, command_id: &str) -> ExecuteCommandCmd {
         ExecuteCommandCmd {
             actor,
             command_id: command_id.to_string(),
             args: None,
-            context: Some(CommandContextDto {
-                workspace_id: Some(rim_core::server::model::ServerId::new()),
-                conversation_id: None,
-                thread_id: None,
-                selected_text: None,
-                selected_message_id: None,
-                selected_message_ids: vec![],
-                focused_surface: None,
-                active_panel: None,
-            }),
+            context: Some(workspace_context(rim_core::server::model::ServerId::new())),
             confirmation: None,
             is_pipe: false,
-            initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            initiator: CommandInitiator::Palette,
         }
     }
 
@@ -1117,19 +1124,13 @@ mod tests {
 
         let svc = service_with_rate_limited_cmd(cmd_def, Some(Arc::new(audit_svc)));
 
-        let r1 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r1 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(r1.is_ok(), "call 1 should be allowed, got: {r1:?}");
 
-        let r2 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r2 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(r2.is_ok(), "call 2 should be allowed, got: {r2:?}");
 
-        let r3 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r3 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(
             matches!(
                 r3,
@@ -1161,14 +1162,10 @@ mod tests {
 
         let svc = service_with_rate_limited_cmd(cmd_def, Some(Arc::new(audit_svc)));
 
-        let ra = svc
-            .execute_command(rate_limit_execute_cmd(actor_a, cmd_id))
-            .await;
+        let ra = svc.execute_command(palette_cmd(actor_a, cmd_id)).await;
         assert!(ra.is_ok(), "actor A call should be allowed, got: {ra:?}");
 
-        let rb = svc
-            .execute_command(rate_limit_execute_cmd(actor_b, cmd_id))
-            .await;
+        let rb = svc.execute_command(palette_cmd(actor_b, cmd_id)).await;
         assert!(
             rb.is_ok(),
             "actor B call should be allowed (independent quota), got: {rb:?}"
@@ -1203,9 +1200,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -1574,9 +1569,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -2015,5 +2008,657 @@ mod tests {
             .await
             .expect("read-only command runs");
         assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    // ── User commands and pipes ──
+
+    fn new_actor() -> Actor {
+        Actor::new(rim_core::user::model::UserId::new())
+    }
+
+    fn step(command_id: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "command_id": command_id, "args": args })
+    }
+
+    /// An enabled user command of `owner` with the given steps.
+    fn stored_user_command(
+        owner_user_id: rim_core::user::model::UserId,
+        command_key: &str,
+        steps: Vec<serde_json::Value>,
+    ) -> UserCommand {
+        UserCommand {
+            id: UserCommandId::new(),
+            owner_user_id,
+            command_key: command_key.to_string(),
+            title: command_key.to_string(),
+            description: String::new(),
+            steps_json: serde_json::Value::Array(steps),
+            is_enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// A user command of `owner` that increments the state key `k`.
+    fn bump_command(owner: rim_core::user::model::UserId, command_key: &str) -> UserCommand {
+        stored_user_command(
+            owner,
+            command_key,
+            vec![step("state.incr", serde_json::json!({ "key": "k" }))],
+        )
+    }
+
+    /// A user command of `owner` whose single step is `target`.
+    fn calling_command(
+        owner: rim_core::user::model::UserId,
+        command_key: &str,
+        target: &str,
+    ) -> UserCommand {
+        stored_user_command(
+            owner,
+            command_key,
+            vec![step(target, serde_json::Value::Null)],
+        )
+    }
+
+    /// `user.level0` .. `user.level{levels - 1}`, each calling the next, the last one
+    /// incrementing state.
+    fn user_command_chain(owner: rim_core::user::model::UserId, levels: usize) -> Vec<UserCommand> {
+        (0..levels)
+            .map(|level| {
+                let key = format!("user.level{level}");
+                if level + 1 == levels {
+                    bump_command(owner, &key)
+                } else {
+                    calling_command(owner, &key, &format!("user.level{}", level + 1))
+                }
+            })
+            .collect()
+    }
+
+    /// A repository that answers lookups by `(owner, key)` from `commands`.
+    fn repo_with(commands: Vec<UserCommand>) -> MockUserCommandRepository {
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user()
+            .returning(move |owner_user_id, command_key| {
+                Ok(commands
+                    .iter()
+                    .find(|c| c.owner_user_id == owner_user_id && c.command_key == command_key)
+                    .cloned())
+            });
+        repo
+    }
+
+    fn state_service(
+        repo: MockUserCommandRepository,
+        workspace_state: MockWorkspaceStateService,
+    ) -> DefaultCommandService {
+        service_with_workspace_state(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+            rim_services::capability::service::MockCapabilityService::new(),
+            rim_services::moderation::service::MockModerationService::no_timeouts(),
+            workspace_state,
+        )
+    }
+
+    /// A service for create and update, where no step runs.
+    fn validating_service(repo: MockUserCommandRepository) -> DefaultCommandService {
+        state_service(repo, MockWorkspaceStateService::new())
+    }
+
+    fn state_entry(
+        server_id: rim_core::server::model::ServerId,
+        key: &str,
+        value: serde_json::Value,
+    ) -> rim_services::workspace_state::dto::WorkspaceStateDto {
+        rim_services::workspace_state::dto::WorkspaceStateDto {
+            id: rim_core::workspace_state::model::WorkspaceStateId::new(),
+            server_id,
+            key: key.to_string(),
+            value,
+            scope: rim_services::workspace_state::dto::WorkspaceStateScopeDto::Server,
+            user_id: None,
+            version: 3,
+            expires_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Expects exactly one `state.incr`, answered with `value` for the requested key.
+    fn expect_one_increment(workspace_state: &mut MockWorkspaceStateService, value: i64) {
+        workspace_state
+            .expect_increment()
+            .times(1)
+            .returning(move |cmd| {
+                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, value.into())) })
+            });
+    }
+
+    /// Expects exactly one `state.list`, answered with no entries.
+    fn expect_one_empty_list(workspace_state: &mut MockWorkspaceStateService) {
+        workspace_state
+            .expect_list()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+    }
+
+    fn pipe_cmd(actor: Actor, expression: &str) -> ExecuteCommandCmd {
+        ExecuteCommandCmd {
+            is_pipe: true,
+            ..palette_cmd(actor, expression)
+        }
+    }
+
+    fn create_cmd(actor: Actor, key: &str, step_ids: &[&str]) -> CreateUserCommandCmd {
+        CreateUserCommandCmd {
+            actor,
+            command_key: key.to_string(),
+            title: "Composite".to_string(),
+            description: String::new(),
+            steps: step_ids
+                .iter()
+                .map(|id| UserCommandStepDto {
+                    command_id: id.to_string(),
+                    args: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn validation_message(err: ServiceError) -> String {
+        match err {
+            ServiceError::Validation(msg) => msg,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    /// Steps run in declaration order and the result payload maps each step's command
+    /// id to its payload; a step without a payload adds no key.
+    #[tokio::test]
+    async fn user_command_steps_run_in_order_and_merge_payloads_by_step_id() {
+        let actor = new_actor();
+        let repo = repo_with(vec![stored_user_command(
+            actor.user_id,
+            "user.combo",
+            vec![
+                step("state.incr", serde_json::json!({ "key": "visits" })),
+                step("state.list", serde_json::Value::Null),
+                step("state.get", serde_json::json!({ "key": "absent" })),
+            ],
+        )]);
+        let mut seq = mockall::Sequence::new();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state
+            .expect_increment()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|cmd| {
+                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 1.into())) })
+            });
+        workspace_state
+            .expect_list()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|q| {
+                Box::pin(async move { Ok(vec![state_entry(q.server_id, "visits", 1.into())]) })
+            });
+        workspace_state
+            .expect_get()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        let svc = state_service(repo, workspace_state);
+
+        let result = svc
+            .execute_command(palette_cmd(actor, "user.combo"))
+            .await
+            .expect("user command runs");
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        assert_eq!(result.message, "user command `user.combo` executed");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "state.incr": { "key": "visits", "value": 1, "version": 3 },
+                "state.list": { "entries": [{ "key": "visits", "value": 1, "version": 3 }] },
+            }))
+        );
+    }
+
+    /// A step of a nested user command runs as the outer caller, in the outer call's
+    /// workspace context, and its payload nests under the inner command's id.
+    #[tokio::test]
+    async fn nested_user_command_steps_run_as_the_caller_in_the_callers_context() {
+        let actor = new_actor();
+        let workspace = rim_core::server::model::ServerId::new();
+        let repo = repo_with(vec![
+            calling_command(actor.user_id, "user.outer", "user.inner"),
+            bump_command(actor.user_id, "user.inner"),
+        ]);
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state
+            .expect_increment()
+            .withf(move |cmd| cmd.actor.user_id == actor.user_id && cmd.server_id == workspace)
+            .times(1)
+            .returning(|cmd| {
+                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 7.into())) })
+            });
+        let svc = state_service(repo, workspace_state);
+
+        let result = svc
+            .execute_command(ExecuteCommandCmd {
+                context: Some(workspace_context(workspace)),
+                ..palette_cmd(actor, "user.outer")
+            })
+            .await
+            .expect("nested user command runs");
+
+        assert_eq!(result.message, "user command `user.outer` executed");
+        assert_eq!(
+            result.payload,
+            Some(serde_json::json!({
+                "user.inner": { "state.incr": { "key": "k", "value": 7, "version": 3 } },
+            }))
+        );
+    }
+
+    /// Eight nested user commands are the deepest chain that still runs its final step.
+    #[tokio::test]
+    async fn user_command_chain_of_eight_levels_runs() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 1);
+        let svc = state_service(
+            repo_with(user_command_chain(actor.user_id, 8)),
+            workspace_state,
+        );
+
+        let result = svc
+            .execute_command(palette_cmd(actor, "user.level0"))
+            .await
+            .expect("an eight-level chain runs");
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// A ninth nested user command is refused with the depth message and no step runs.
+    #[tokio::test]
+    async fn user_command_chain_deeper_than_eight_levels_is_refused() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_increment().never();
+        let svc = state_service(
+            repo_with(user_command_chain(actor.user_id, 9)),
+            workspace_state,
+        );
+
+        let err = svc
+            .execute_command(palette_cmd(actor, "user.level0"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            validation_message(err),
+            "user command recursion depth exceeded"
+        );
+    }
+
+    /// A Mutating step inside a user command is refused for a timed-out caller.
+    #[tokio::test]
+    async fn timed_out_actor_cannot_run_a_mutating_step_through_a_user_command() {
+        let actor = new_actor();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_increment().never();
+        let svc = service_with_workspace_state(
+            repo_with(vec![bump_command(actor.user_id, "user.bump")]),
+            MockConversationService::new(),
+            MockMessageService::new(),
+            rim_services::capability::service::MockCapabilityService::new(),
+            timed_out_moderation(until),
+            workspace_state,
+        );
+
+        let err = svc
+            .execute_command(palette_cmd(actor, "user.bump"))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ServiceError::TimedOut { until: u } if u == until),
+            "{err:?}"
+        );
+    }
+
+    /// An id that is neither builtin nor one of the caller's user commands is NotFound,
+    /// including a user command another user owns.
+    #[tokio::test]
+    async fn command_that_is_not_the_callers_user_command_is_not_found() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_increment().never();
+        let svc = state_service(
+            repo_with(vec![bump_command(
+                rim_core::user::model::UserId::new(),
+                "user.theirs",
+            )]),
+            workspace_state,
+        );
+
+        for command_id in ["user.theirs", "user.missing", "nope.missing"] {
+            let err = svc
+                .execute_command(palette_cmd(actor, command_id))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ServiceError::NotFound),
+                "{command_id}: {err:?}"
+            );
+        }
+    }
+
+    /// A user command may compose another of the caller's user commands.
+    #[tokio::test]
+    async fn user_command_may_reference_another_user_command() {
+        let actor = new_actor();
+        let mut repo = repo_with(vec![bump_command(actor.user_id, "user.inner")]);
+        repo.expect_create_user_command()
+            .times(1)
+            .returning(|new_command| {
+                Ok(UserCommand {
+                    steps_json: new_command.steps_json,
+                    ..stored_user_command(
+                        new_command.owner_user_id,
+                        &new_command.command_key,
+                        vec![],
+                    )
+                })
+            });
+        let svc = validating_service(repo);
+
+        let created = svc
+            .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
+            .await
+            .expect("a reference to an existing user command is accepted");
+
+        assert_eq!(created.command_key, "user.outer");
+        assert_eq!(created.steps[0].command_id, "user.inner");
+    }
+
+    /// A step naming a user command the caller does not have, or has disabled, is
+    /// refused with the step named, and nothing is stored.
+    #[tokio::test]
+    async fn user_command_step_referencing_missing_or_disabled_command_is_refused() {
+        let actor = new_actor();
+        let mut repo = repo_with(vec![UserCommand {
+            is_enabled: false,
+            ..bump_command(actor.user_id, "user.off")
+        }]);
+        repo.expect_create_user_command().never();
+        let svc = validating_service(repo);
+
+        for step in ["user.ghost", "user.off"] {
+            let err = svc
+                .create_user_command(create_cmd(actor, "user.outer", &["state.list", step]))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                validation_message(err),
+                format!("unknown command step `{step}`")
+            );
+        }
+    }
+
+    /// A referenced user command that disappears between its definition lookup and its
+    /// step validation is refused as unknown.
+    #[tokio::test]
+    async fn user_command_step_deleted_during_validation_is_refused() {
+        let actor = new_actor();
+        let inner = calling_command(actor.user_id, "user.inner", "state.list");
+        let lookups = std::sync::atomic::AtomicUsize::new(0);
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user()
+            .returning(move |_, command_key| {
+                if command_key != "user.inner" {
+                    return Ok(None);
+                }
+                let n = lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok((n == 0).then(|| inner.clone()))
+            });
+        repo.expect_create_user_command().never();
+        let svc = validating_service(repo);
+
+        let err = svc
+            .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(validation_message(err), "unknown command step `user.inner`");
+    }
+
+    /// Updating a user command so that it closes a loop through other user commands
+    /// is refused as a cycle, and nothing is stored.
+    #[tokio::test]
+    async fn user_command_update_closing_a_cycle_is_refused() {
+        let actor = new_actor();
+        let mut repo = repo_with(vec![
+            calling_command(actor.user_id, "user.a", "user.b"),
+            calling_command(actor.user_id, "user.b", "user.c"),
+            calling_command(actor.user_id, "user.c", "state.list"),
+        ]);
+        repo.expect_update_user_command().never();
+        let svc = validating_service(repo);
+
+        let err = svc
+            .update_user_command(UpdateUserCommandCmd {
+                actor,
+                command_id: "user.c".to_string(),
+                title: "C".to_string(),
+                description: String::new(),
+                steps: vec![UserCommandStepDto {
+                    command_id: "user.a".to_string(),
+                    args: None,
+                }],
+                is_enabled: true,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            validation_message(err),
+            "user command recursion cycle detected"
+        );
+    }
+
+    /// User commands compose backend commands only: a desktop-local step is refused,
+    /// directly or inside a referenced user command.
+    #[tokio::test]
+    async fn user_command_with_a_desktop_local_step_is_refused() {
+        let actor = new_actor();
+        let mut repo = repo_with(vec![calling_command(
+            actor.user_id,
+            "user.scroll",
+            "chat.scroll_to_bottom",
+        )]);
+        repo.expect_create_user_command().never();
+        let svc = validating_service(repo);
+
+        for step in ["chat.scroll_to_bottom", "user.scroll"] {
+            let err = svc
+                .create_user_command(create_cmd(actor, "user.outer", &[step]))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                validation_message(err),
+                "user commands may only compose backend commands in v1",
+                "{step}"
+            );
+        }
+    }
+
+    /// A failing pipe stage ends the pipe with an Error result: the earlier stages and
+    /// the failed one are reported, later stages never run, and a missing-arg message
+    /// lists the keys the previous stage produced.
+    #[tokio::test]
+    async fn pipe_stage_missing_arg_reports_keys_of_previous_stage() {
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 2);
+        expect_one_empty_list(&mut workspace_state);
+        workspace_state.expect_get().never();
+        workspace_state.expect_delete().never();
+        let svc = state_service(repo_with(vec![]), workspace_state);
+
+        let result = svc
+            .execute_command(pipe_cmd(
+                new_actor(),
+                "state.incr key=visits | state.list | state.get | state.delete key=visits",
+            ))
+            .await
+            .expect("a failing stage is reported in the result");
+
+        let expected = "pipe stage 3 ('state.get') missing string arg `key` \
+                        — the previous stage ('state.list') produced: {entries}";
+        assert_eq!(result.status, CommandResultStatusDto::Error);
+        assert_eq!(result.message, expected);
+        let stages = result.pipeline_stages.expect("stages are reported");
+        let summary: Vec<_> = stages
+            .iter()
+            .map(|s| (s.stage_index, s.command_id.as_str(), s.status))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (0, "state.incr", CommandResultStatusDto::Success),
+                (1, "state.list", CommandResultStatusDto::Success),
+                (2, "state.get", CommandResultStatusDto::Error),
+            ]
+        );
+        assert_eq!(
+            stages[1].payload,
+            Some(serde_json::json!({ "entries": [] }))
+        );
+        assert_eq!(stages[2].message, expected);
+        assert_eq!(stages[2].payload, None);
+        let payload = result.payload.expect("successful stages are kept");
+        let steps: Vec<_> = payload.as_object().expect("object").keys().collect();
+        assert_eq!(steps, vec!["step_1", "step_2"]);
+    }
+
+    /// A missing arg in the first stage, or after a stage that produced no payload,
+    /// lists "(none)" as the previous stage's keys.
+    #[tokio::test]
+    async fn pipe_stage_missing_arg_without_previous_payload_reports_none() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state
+            .expect_get()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(None) }));
+        workspace_state.expect_increment().never();
+        workspace_state.expect_list().never();
+        let svc = state_service(repo_with(vec![]), workspace_state);
+
+        let first = svc
+            .execute_command(pipe_cmd(actor, "state.get | state.list"))
+            .await
+            .expect("a failing stage is reported in the result");
+        assert_eq!(first.status, CommandResultStatusDto::Error);
+        assert_eq!(
+            first.message,
+            "pipe stage 1 ('state.get') missing string arg `key` \
+             — the previous stage produced: {(none)}"
+        );
+        assert_eq!(first.pipeline_stages.map(|s| s.len()), Some(1));
+
+        let after_empty = svc
+            .execute_command(pipe_cmd(actor, "state.get key=absent | state.incr"))
+            .await
+            .expect("a failing stage is reported in the result");
+        assert_eq!(after_empty.status, CommandResultStatusDto::Error);
+        assert_eq!(
+            after_empty.message,
+            "pipe stage 2 ('state.incr') missing string arg `key` \
+             — the previous stage ('state.get') produced: {(none)}"
+        );
+    }
+
+    /// A service error in a pipe stage is reported with the stage index and command id.
+    #[tokio::test]
+    async fn pipe_stage_service_error_names_the_stage() {
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_empty_list(&mut workspace_state);
+        workspace_state.expect_increment().times(1).returning(|_| {
+            Box::pin(async { Err(ServiceError::Conflict("version mismatch".to_string())) })
+        });
+        let svc = state_service(repo_with(vec![]), workspace_state);
+
+        let result = svc
+            .execute_command(pipe_cmd(new_actor(), "state.list | state.incr key=k"))
+            .await
+            .expect("a failing stage is reported in the result");
+
+        assert_eq!(result.status, CommandResultStatusDto::Error);
+        assert_eq!(
+            result.message,
+            "pipe stage 2 ('state.incr') failed: version mismatch"
+        );
+        assert_eq!(result.pipeline_stages.map(|s| s.len()), Some(2));
+    }
+
+    /// A pipe naming an unknown or desktop-local stage is refused before any stage runs.
+    #[tokio::test]
+    async fn pipe_with_unknown_or_desktop_local_stage_runs_nothing() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_list().never();
+        let svc = state_service(repo_with(vec![]), workspace_state);
+
+        let unknown = svc
+            .execute_command(pipe_cmd(actor, "state.list | user.ghost"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            validation_message(unknown),
+            "pipe stage 2 ('user.ghost') refers to an unknown command"
+        );
+
+        let desktop = svc
+            .execute_command(pipe_cmd(actor, "state.list | chat.scroll_to_bottom"))
+            .await
+            .unwrap_err();
+        assert!(
+            validation_message(desktop)
+                .ends_with("stage 2 ('chat.scroll_to_bottom') is desktop-local"),
+        );
+    }
+
+    /// A user command can be a pipe stage; its merged payload feeds the next stage.
+    #[tokio::test]
+    async fn pipe_stage_may_be_a_user_command() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 1);
+        workspace_state.expect_get().never();
+        let svc = state_service(
+            repo_with(vec![bump_command(actor.user_id, "user.bump")]),
+            workspace_state,
+        );
+
+        let result = svc
+            .execute_command(pipe_cmd(actor, "user.bump | state.get"))
+            .await
+            .expect("a failing stage is reported in the result");
+
+        assert_eq!(
+            result.message,
+            "pipe stage 2 ('state.get') missing string arg `key` \
+             — the previous stage ('user.bump') produced: {state.incr}"
+        );
+        let stages = result.pipeline_stages.expect("stages are reported");
+        assert_eq!(stages[0].status, CommandResultStatusDto::Success);
+        assert_eq!(stages[0].message, "user command `user.bump` executed");
     }
 }
