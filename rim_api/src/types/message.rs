@@ -128,6 +128,7 @@ impl Message {
         &self.forwarded_from_message_id
     }
 
+    /// The forwarded message; null when the viewer cannot read its conversation or it is gone.
     #[graphql(complexity = 5)]
     async fn forwarded_from(&self, ctx: &Context<'_>) -> Result<Option<Message>> {
         let Some(ref fwd_id) = self.forwarded_from_message_id else {
@@ -140,7 +141,13 @@ impl Message {
             .get_messages_by_ids(&[message_id])
             .await
             .map_err(crate::errors::map_service_error)?;
-        Ok(messages.into_iter().next().map(Into::into))
+        let Some(source) = messages.into_iter().next().map(Message::from) else {
+            return Ok(None);
+        };
+        let readable = ctx
+            .load_readable_conversation(&source.server_id, &source.conversation_id)
+            .await?;
+        Ok(readable.map(|_| source))
     }
 
     async fn is_deleted(&self) -> bool {

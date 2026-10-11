@@ -19,7 +19,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, exec_err_code, exec_ok};
+use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
 use support::roles::create_channel;
 
 const CREATE_CHANNEL: &str = r#"
@@ -157,10 +157,10 @@ mutation Resolve($serverId: ID!, $reportId: ID!, $outcome: ReportOutcome!) {
 }
 "#;
 
-const EXECUTE_POST: &str = r#"
-mutation Exec($serverId: ID!, $args: JSON!) {
+const EXECUTE: &str = r#"
+mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_message") {
   executeCommand(input: {
-    commandId: "chat.post_message"
+    commandId: $commandId
     args: $args
     commandContext: { workspaceId: $serverId }
   }) { status message }
@@ -168,8 +168,16 @@ mutation Exec($serverId: ID!, $args: JSON!) {
 "#;
 
 const AUDIT_LOG: &str = r#"
-query Audit($filter: AuditLogFilterInput) {
-  listAuditLog(filter: $filter) { items { actorUserId serverId commandId } }
+query Audit($filter: AuditLogFilterInput, $pagination: AuditLogPaginationInput) {
+  listAuditLog(filter: $filter, pagination: $pagination) {
+    items {
+      id actorUserId serverId commandId initiator argsRedacted sensitivity dangerous
+      confirmationKind typedVerb outcome errorKind capabilityCheckOutcome confirmationOutcome
+      createdAt
+    }
+    nextCursor
+    pageInfo { hasNextPage hasPrevPage }
+  }
 }
 "#;
 
@@ -287,6 +295,12 @@ impl Fixture {
             .collect();
         ids.sort();
         ids
+    }
+
+    /// The audit log page alice reads with `filter` and `pagination`.
+    async fn audit_page(&self, filter: Value, pagination: Value) -> Value {
+        let vars = json!({ "filter": filter, "pagination": pagination });
+        exec_ok(&self.schema, self.alice.request(AUDIT_LOG, vars)).await["listAuditLog"].clone()
     }
 
     async fn audit_rows(&self, command_id: &str) -> Vec<entity::command_audit_log::Model> {
@@ -421,7 +435,7 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
         "serverId": f.server_id,
         "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": "via palette" },
     });
-    let code = exec_err_code(&f.schema, f.carol.request(EXECUTE_POST, exec_vars.clone())).await;
+    let code = exec_err_code(&f.schema, f.carol.request(EXECUTE, exec_vars.clone())).await;
     assert_eq!(code, "TIMED_OUT");
 
     // Reads continue, and the directory shows the timeout.
@@ -456,7 +470,7 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     .await;
     assert_eq!(data["clearTimeout"], json!(true));
     f.send(&f.carol, &f.channel_id, "back").await;
-    let ok = exec_ok(&f.schema, f.carol.request(EXECUTE_POST, exec_vars)).await;
+    let ok = exec_ok(&f.schema, f.carol.request(EXECUTE, exec_vars)).await;
     assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
     assert_eq!(f.audit_rows("admin.timeout").await.len(), 1);
     assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
@@ -790,7 +804,8 @@ async fn set_member_role_matrix() {
 }
 
 /// Owners and moderators read the workspace audit log, with or without another user's id in
-/// the filter; members and guests are refused both and still read their own rows.
+/// the filter; members, guests and outsiders are refused both and members and guests still read
+/// their own rows. Without a session the log answers `UNAUTHENTICATED`.
 #[tokio::test]
 async fn audit_log_workspace_reads_need_owner_or_moderator() {
     let f = setup().await;
@@ -799,7 +814,7 @@ async fn audit_log_workspace_reads_need_owner_or_moderator() {
         "serverId": f.server_id,
         "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": "logged" },
     });
-    let ok = exec_ok(&f.schema, f.bob.request(EXECUTE_POST, exec_vars)).await;
+    let ok = exec_ok(&f.schema, f.bob.request(EXECUTE, exec_vars)).await;
     assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
 
     let bob_id = f.bob.user_id.to_string();
@@ -821,7 +836,13 @@ async fn audit_log_workspace_reads_need_owner_or_moderator() {
         }
     }
 
-    for (who, name) in [(&f.carol, "member"), (&f.gina, "guest")] {
+    let olive = f.ctx.create_user("mod-olive").await;
+    let olive = f.ctx.caller(&olive).await;
+    for (who, name) in [
+        (&f.carol, "member"),
+        (&f.gina, "guest"),
+        (&olive, "outsider"),
+    ] {
         for vars in [&workspace, &cross_user] {
             let code = exec_err_code(&f.schema, who.request(AUDIT_LOG, vars.clone())).await;
             assert_eq!(code, "FORBIDDEN", "{name} cannot read the workspace log");
@@ -847,6 +868,159 @@ async fn audit_log_workspace_reads_need_owner_or_moderator() {
     );
     let gina_own = json!({ "filter": { "actorUserId": f.gina.user_id.to_string() } });
     exec_ok(&f.schema, f.gina.request(AUDIT_LOG, gina_own)).await;
+
+    let code = exec_err_code(&f.schema, anonymous_request(AUDIT_LOG, workspace)).await;
+    assert_eq!(code, "UNAUTHENTICATED");
+}
+
+/// The audit log lists the newest entry first with every field of the row, pages through
+/// `after` with `nextCursor` until `hasNextPage` turns false, and narrows by `typedVerb`,
+/// `commandId`, `since` and `until`. A malformed cursor or date is `VALIDATION`.
+#[tokio::test]
+async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let post = |text: &str| {
+        json!({
+            "serverId": f.server_id,
+            "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": text },
+        })
+    };
+    let list = json!({
+        "serverId": f.server_id,
+        "commandId": "chat.list_channels",
+        "args": { "server_id": f.server_id },
+    });
+    for vars in [post("first"), list, post("second")] {
+        let ok = exec_ok(&f.schema, f.bob.request(EXECUTE, vars)).await;
+        assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+    }
+    let workspace = json!({ "serverId": f.server_id });
+    let commands = |page: &Value| -> Vec<String> {
+        page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|row| row["commandId"].as_str().expect("command id").to_string())
+            .collect()
+    };
+
+    let all = f.audit_page(workspace.clone(), Value::Null).await;
+    assert_eq!(
+        commands(&all),
+        [
+            "chat.post_message",
+            "chat.list_channels",
+            "chat.post_message"
+        ]
+    );
+    let newest = &all["items"][0];
+    assert!(uuid::Uuid::parse_str(newest["id"].as_str().expect("id")).is_ok());
+    let created_at: chrono::DateTime<chrono::Utc> = newest["createdAt"]
+        .as_str()
+        .expect("createdAt")
+        .parse()
+        .expect("RFC 3339");
+    assert!(created_at <= chrono::Utc::now());
+    assert_eq!(
+        without(newest, &["id", "createdAt"]),
+        json!({
+            "actorUserId": f.bob.user_id.to_string(),
+            "serverId": f.server_id,
+            "commandId": "chat.post_message",
+            "initiator": "palette",
+            "argsRedacted": {
+                "server_id": f.server_id, "conversation_id": f.channel_id, "text": "second",
+            },
+            "sensitivity": "mutating",
+            "dangerous": false,
+            "confirmationKind": "none",
+            "typedVerb": "SEND",
+            "outcome": "SUCCESS",
+            "errorKind": null,
+            "capabilityCheckOutcome": null,
+            "confirmationOutcome": null,
+        })
+    );
+    assert_eq!(
+        all["pageInfo"],
+        json!({ "hasNextPage": false, "hasPrevPage": false })
+    );
+    assert_eq!(all["nextCursor"], Value::Null);
+
+    let mut seen = Vec::new();
+    let mut after = Value::Null;
+    loop {
+        let page = f
+            .audit_page(workspace.clone(), json!({ "after": after, "limit": 1 }))
+            .await;
+        assert_eq!(page["items"].as_array().expect("items").len(), 1);
+        assert_eq!(page["pageInfo"]["hasPrevPage"], json!(!after.is_null()));
+        seen.push(page["items"][0]["id"].clone());
+        after = page["nextCursor"].clone();
+        assert_eq!(page["pageInfo"]["hasNextPage"], json!(!after.is_null()));
+        if after.is_null() {
+            break;
+        }
+    }
+    let all_ids: Vec<Value> = all["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|row| row["id"].clone())
+        .collect();
+    assert_eq!(seen, all_ids, "each row once, in the same order");
+
+    let reads = f
+        .audit_page(
+            json!({ "serverId": f.server_id, "typedVerb": "READ" }),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(commands(&reads), ["chat.list_channels"]);
+    assert_eq!(reads["items"][0]["typedVerb"], json!("READ"));
+    let sends = f
+        .audit_page(
+            json!({ "serverId": f.server_id, "commandId": "chat.post_message" }),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(commands(&sends), ["chat.post_message", "chat.post_message"]);
+    let none = f
+        .audit_page(
+            json!({ "serverId": f.server_id, "typedVerb": "DELETE" }),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(commands(&none), Vec::<String>::new());
+
+    let hour = chrono::Duration::hours(1);
+    for (bound, at) in [("since", created_at + hour), ("until", created_at - hour)] {
+        let filter = json!({ "serverId": f.server_id, bound: at.to_rfc3339() });
+        let page = f.audit_page(filter, Value::Null).await;
+        assert_eq!(commands(&page), Vec::<String>::new(), "{bound}");
+    }
+    for (filter, pagination) in [
+        (json!({ "since": "yesterday" }), Value::Null),
+        (json!({ "until": "2026-13-01" }), Value::Null),
+        (json!({}), json!({ "after": "not-a-cursor" })),
+    ] {
+        let filter = merged(json!({ "serverId": f.server_id }), filter);
+        let vars = json!({ "filter": filter, "pagination": pagination });
+        let code = exec_err_code(&f.schema, f.alice.request(AUDIT_LOG, vars)).await;
+        assert_eq!(code, "VALIDATION", "{filter} {pagination}");
+    }
+}
+
+/// `row` without the fields named in `drop`.
+fn without(row: &Value, drop: &[&str]) -> Value {
+    let mut row = row.clone();
+    if let Some(fields) = row.as_object_mut() {
+        for name in drop {
+            fields.remove(*name);
+        }
+    }
+    row
 }
 
 #[tokio::test]

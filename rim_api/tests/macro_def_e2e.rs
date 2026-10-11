@@ -17,6 +17,7 @@ use rim_services::auth::dto::RegistrationMode;
 
 use support::graphql::{
     Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+    merged,
 };
 use support::roles::{Roles, create_channel};
 use support::{TestCtx, unknown_id};
@@ -91,14 +92,6 @@ async fn setup() -> Fixture {
         ws,
         channel_id,
     }
-}
-
-/// `base` with every field of the object `extra` added or replaced.
-fn merged(mut base: Value, extra: Value) -> Value {
-    if let (Some(base), Value::Object(extra)) = (base.as_object_mut(), extra) {
-        base.extend(extra);
-    }
-    base
 }
 
 /// `executeMacro` input fields marking the run as started by an AI agent.

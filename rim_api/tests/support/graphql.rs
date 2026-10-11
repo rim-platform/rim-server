@@ -96,3 +96,11 @@ pub async fn assert_each_refused_as(
 ) {
     assert_each_refused(schema, calls, code, |q, v| who.request(q, v)).await;
 }
+
+/// `base` with every field of the object `extra` added or replaced.
+pub fn merged(mut base: Value, extra: Value) -> Value {
+    if let (Some(base), Value::Object(extra)) = (base.as_object_mut(), extra) {
+        base.extend(extra);
+    }
+    base
+}
