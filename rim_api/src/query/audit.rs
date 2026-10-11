@@ -46,8 +46,9 @@ impl AuditLogQueries {
 
         let cursor = pagination
             .after
-            .as_ref()
-            .and_then(|s| decode_audit_cursor(s));
+            .as_deref()
+            .map(|s| decode_audit_cursor(s).ok_or_else(|| invalid("after", s)))
+            .transpose()?;
 
         let limit = pagination.limit.unwrap_or(50).clamp(1, 200) as u32;
 
@@ -60,8 +61,16 @@ impl AuditLogQueries {
                     .as_str()
                     .to_string()
             }),
-            since: filter.since.as_deref().and_then(parse_datetime),
-            until: filter.until.as_deref().and_then(parse_datetime),
+            since: filter
+                .since
+                .as_deref()
+                .map(|s| parse_bound("since", s))
+                .transpose()?,
+            until: filter
+                .until
+                .as_deref()
+                .map(|s| parse_bound("until", s))
+                .transpose()?,
             cursor,
             limit,
         };
@@ -101,8 +110,16 @@ fn decode_audit_cursor(s: &str) -> Option<(chrono::DateTime<chrono::Utc>, uuid::
     Some((dt, id))
 }
 
-fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+/// Parses the RFC 3339 time bound `field`; `VALIDATION` when it is malformed.
+fn parse_bound(field: &str, s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|_| invalid(field, s))
+}
+
+/// The `VALIDATION` error for a malformed `field` value.
+fn invalid(field: &str, value: &str) -> Error {
+    crate::errors::map_service_error(rim_services::ServiceError::Validation(format!(
+        "malformed {field}: {value}"
+    )))
 }
