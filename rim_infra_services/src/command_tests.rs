@@ -21,6 +21,7 @@ mod tests {
     use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
     use rim_services::message::service::MockMessageService;
+    use rim_services::workspace_state::service::MockWorkspaceStateService;
     use rim_services::{Actor, ServiceError};
 
     use crate::CommandRepos;
@@ -94,7 +95,7 @@ mod tests {
             message_service,
             capability_service,
             moderation_service,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
+            MockWorkspaceStateService::new(),
         )
     }
 
@@ -104,7 +105,7 @@ mod tests {
         message_service: MockMessageService,
         capability_service: rim_services::capability::service::MockCapabilityService,
         moderation_service: rim_services::moderation::service::MockModerationService,
-        workspace_state_service: rim_services::workspace_state::service::MockWorkspaceStateService,
+        workspace_state_service: MockWorkspaceStateService,
     ) -> DefaultCommandService {
         DefaultCommandService::new(
             CommandRepos {
@@ -1074,9 +1075,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: audit_svc,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -1089,24 +1088,16 @@ mod tests {
         )
     }
 
-    fn rate_limit_execute_cmd(actor: Actor, command_id: &str) -> ExecuteCommandCmd {
+    /// A palette command with no args in a fresh workspace context.
+    fn palette_cmd(actor: Actor, command_id: &str) -> ExecuteCommandCmd {
         ExecuteCommandCmd {
             actor,
             command_id: command_id.to_string(),
             args: None,
-            context: Some(CommandContextDto {
-                workspace_id: Some(rim_core::server::model::ServerId::new()),
-                conversation_id: None,
-                thread_id: None,
-                selected_text: None,
-                selected_message_id: None,
-                selected_message_ids: vec![],
-                focused_surface: None,
-                active_panel: None,
-            }),
+            context: Some(workspace_context(rim_core::server::model::ServerId::new())),
             confirmation: None,
             is_pipe: false,
-            initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            initiator: CommandInitiator::Palette,
         }
     }
 
@@ -1133,19 +1124,13 @@ mod tests {
 
         let svc = service_with_rate_limited_cmd(cmd_def, Some(Arc::new(audit_svc)));
 
-        let r1 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r1 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(r1.is_ok(), "call 1 should be allowed, got: {r1:?}");
 
-        let r2 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r2 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(r2.is_ok(), "call 2 should be allowed, got: {r2:?}");
 
-        let r3 = svc
-            .execute_command(rate_limit_execute_cmd(actor, cmd_id))
-            .await;
+        let r3 = svc.execute_command(palette_cmd(actor, cmd_id)).await;
         assert!(
             matches!(
                 r3,
@@ -1177,14 +1162,10 @@ mod tests {
 
         let svc = service_with_rate_limited_cmd(cmd_def, Some(Arc::new(audit_svc)));
 
-        let ra = svc
-            .execute_command(rate_limit_execute_cmd(actor_a, cmd_id))
-            .await;
+        let ra = svc.execute_command(palette_cmd(actor_a, cmd_id)).await;
         assert!(ra.is_ok(), "actor A call should be allowed, got: {ra:?}");
 
-        let rb = svc
-            .execute_command(rate_limit_execute_cmd(actor_b, cmd_id))
-            .await;
+        let rb = svc.execute_command(palette_cmd(actor_b, cmd_id)).await;
         assert!(
             rb.is_ok(),
             "actor B call should be allowed (independent quota), got: {rb:?}"
@@ -1219,9 +1200,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -1590,9 +1569,7 @@ mod tests {
                     rim_services::server_member::service::MockServerMemberService::new(),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
-                workspace_state_service: Arc::new(
-                    rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-                ),
+                workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -2035,11 +2012,19 @@ mod tests {
 
     // ── User commands and pipes ──
 
+    fn new_actor() -> Actor {
+        Actor::new(rim_core::user::model::UserId::new())
+    }
+
+    fn step(command_id: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "command_id": command_id, "args": args })
+    }
+
+    /// An enabled user command of `owner` with the given steps.
     fn stored_user_command(
         owner_user_id: rim_core::user::model::UserId,
         command_key: &str,
-        steps_json: serde_json::Value,
-        is_enabled: bool,
+        steps: Vec<serde_json::Value>,
     ) -> UserCommand {
         UserCommand {
             id: UserCommandId::new(),
@@ -2047,11 +2032,48 @@ mod tests {
             command_key: command_key.to_string(),
             title: command_key.to_string(),
             description: String::new(),
-            steps_json,
-            is_enabled,
+            steps_json: serde_json::Value::Array(steps),
+            is_enabled: true,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
+    }
+
+    /// A user command of `owner` that increments the state key `k`.
+    fn bump_command(owner: rim_core::user::model::UserId, command_key: &str) -> UserCommand {
+        stored_user_command(
+            owner,
+            command_key,
+            vec![step("state.incr", serde_json::json!({ "key": "k" }))],
+        )
+    }
+
+    /// A user command of `owner` whose single step is `target`.
+    fn calling_command(
+        owner: rim_core::user::model::UserId,
+        command_key: &str,
+        target: &str,
+    ) -> UserCommand {
+        stored_user_command(
+            owner,
+            command_key,
+            vec![step(target, serde_json::Value::Null)],
+        )
+    }
+
+    /// `user.level0` .. `user.level{levels - 1}`, each calling the next, the last one
+    /// incrementing state.
+    fn user_command_chain(owner: rim_core::user::model::UserId, levels: usize) -> Vec<UserCommand> {
+        (0..levels)
+            .map(|level| {
+                let key = format!("user.level{level}");
+                if level + 1 == levels {
+                    bump_command(owner, &key)
+                } else {
+                    calling_command(owner, &key, &format!("user.level{}", level + 1))
+                }
+            })
+            .collect()
     }
 
     /// A repository that answers lookups by `(owner, key)` from `commands`.
@@ -2069,7 +2091,7 @@ mod tests {
 
     fn state_service(
         repo: MockUserCommandRepository,
-        workspace_state: rim_services::workspace_state::service::MockWorkspaceStateService,
+        workspace_state: MockWorkspaceStateService,
     ) -> DefaultCommandService {
         service_with_workspace_state(
             repo,
@@ -2079,6 +2101,11 @@ mod tests {
             rim_services::moderation::service::MockModerationService::no_timeouts(),
             workspace_state,
         )
+    }
+
+    /// A service for create and update, where no step runs.
+    fn validating_service(repo: MockUserCommandRepository) -> DefaultCommandService {
+        state_service(repo, MockWorkspaceStateService::new())
     }
 
     fn state_entry(
@@ -2100,36 +2127,29 @@ mod tests {
         }
     }
 
-    fn run_cmd(
-        actor: Actor,
-        command_id: &str,
-        context: Option<CommandContextDto>,
-        is_pipe: bool,
-    ) -> ExecuteCommandCmd {
-        ExecuteCommandCmd {
-            actor,
-            command_id: command_id.to_string(),
-            args: None,
-            context,
-            confirmation: None,
-            is_pipe,
-            initiator: CommandInitiator::Palette,
-        }
+    /// Expects exactly one `state.incr`, answered with `value` for the requested key.
+    fn expect_one_increment(workspace_state: &mut MockWorkspaceStateService, value: i64) {
+        workspace_state
+            .expect_increment()
+            .times(1)
+            .returning(move |cmd| {
+                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, value.into())) })
+            });
     }
 
-    /// Stores `user.level0` .. `user.level{levels - 1}`, each calling the next, the last
-    /// one calling `state.incr`.
-    fn user_command_chain(owner: rim_core::user::model::UserId, levels: usize) -> Vec<UserCommand> {
-        (0..levels)
-            .map(|level| {
-                let step = if level + 1 == levels {
-                    serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }])
-                } else {
-                    serde_json::json!([{ "command_id": format!("user.level{}", level + 1), "args": null }])
-                };
-                stored_user_command(owner, &format!("user.level{level}"), step, true)
-            })
-            .collect()
+    /// Expects exactly one `state.list`, answered with no entries.
+    fn expect_one_empty_list(workspace_state: &mut MockWorkspaceStateService) {
+        workspace_state
+            .expect_list()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+    }
+
+    fn pipe_cmd(actor: Actor, expression: &str) -> ExecuteCommandCmd {
+        ExecuteCommandCmd {
+            is_pipe: true,
+            ..palette_cmd(actor, expression)
+        }
     }
 
     fn create_cmd(actor: Actor, key: &str, step_ids: &[&str]) -> CreateUserCommandCmd {
@@ -2159,41 +2179,31 @@ mod tests {
     /// id to its payload; a step without a payload adds no key.
     #[tokio::test]
     async fn user_command_steps_run_in_order_and_merge_payloads_by_step_id() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let workspace = rim_core::server::model::ServerId::new();
+        let actor = new_actor();
         let repo = repo_with(vec![stored_user_command(
             actor.user_id,
             "user.combo",
-            serde_json::json!([
-                { "command_id": "state.incr", "args": { "key": "visits" } },
-                { "command_id": "state.list", "args": null },
-                { "command_id": "state.get", "args": { "key": "absent" } },
-            ]),
-            true,
+            vec![
+                step("state.incr", serde_json::json!({ "key": "visits" })),
+                step("state.list", serde_json::Value::Null),
+                step("state.get", serde_json::json!({ "key": "absent" })),
+            ],
         )]);
-
         let mut seq = mockall::Sequence::new();
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state
             .expect_increment()
             .times(1)
             .in_sequence(&mut seq)
-            .returning(move |cmd| {
+            .returning(|cmd| {
                 Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 1.into())) })
             });
         workspace_state
             .expect_list()
             .times(1)
             .in_sequence(&mut seq)
-            .returning(move |q| {
-                Box::pin(async move {
-                    Ok(vec![state_entry(
-                        q.server_id,
-                        "visits",
-                        serde_json::json!(1),
-                    )])
-                })
+            .returning(|q| {
+                Box::pin(async move { Ok(vec![state_entry(q.server_id, "visits", 1.into())]) })
             });
         workspace_state
             .expect_get()
@@ -2203,12 +2213,7 @@ mod tests {
         let svc = state_service(repo, workspace_state);
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.combo",
-                Some(workspace_context(workspace)),
-                false,
-            ))
+            .execute_command(palette_cmd(actor, "user.combo"))
             .await
             .expect("user command runs");
 
@@ -2227,24 +2232,13 @@ mod tests {
     /// workspace context, and its payload nests under the inner command's id.
     #[tokio::test]
     async fn nested_user_command_steps_run_as_the_caller_in_the_callers_context() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor = new_actor();
         let workspace = rim_core::server::model::ServerId::new();
         let repo = repo_with(vec![
-            stored_user_command(
-                actor.user_id,
-                "user.outer",
-                serde_json::json!([{ "command_id": "user.inner", "args": null }]),
-                true,
-            ),
-            stored_user_command(
-                actor.user_id,
-                "user.inner",
-                serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-                true,
-            ),
+            calling_command(actor.user_id, "user.outer", "user.inner"),
+            bump_command(actor.user_id, "user.inner"),
         ]);
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state
             .expect_increment()
             .withf(move |cmd| cmd.actor.user_id == actor.user_id && cmd.server_id == workspace)
@@ -2255,12 +2249,10 @@ mod tests {
         let svc = state_service(repo, workspace_state);
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.outer",
-                Some(workspace_context(workspace)),
-                false,
-            ))
+            .execute_command(ExecuteCommandCmd {
+                context: Some(workspace_context(workspace)),
+                ..palette_cmd(actor, "user.outer")
+            })
             .await
             .expect("nested user command runs");
 
@@ -2276,27 +2268,16 @@ mod tests {
     /// Eight nested user commands are the deepest chain that still runs its final step.
     #[tokio::test]
     async fn user_command_chain_of_eight_levels_runs() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
-        workspace_state
-            .expect_increment()
-            .times(1)
-            .returning(|cmd| {
-                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 1.into())) })
-            });
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 1);
         let svc = state_service(
             repo_with(user_command_chain(actor.user_id, 8)),
             workspace_state,
         );
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.level0",
-                Some(workspace_context(rim_core::server::model::ServerId::new())),
-                false,
-            ))
+            .execute_command(palette_cmd(actor, "user.level0"))
             .await
             .expect("an eight-level chain runs");
 
@@ -2306,9 +2287,8 @@ mod tests {
     /// A ninth nested user command is refused with the depth message and no step runs.
     #[tokio::test]
     async fn user_command_chain_deeper_than_eight_levels_is_refused() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state.expect_increment().never();
         let svc = state_service(
             repo_with(user_command_chain(actor.user_id, 9)),
@@ -2316,12 +2296,7 @@ mod tests {
         );
 
         let err = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.level0",
-                Some(workspace_context(rim_core::server::model::ServerId::new())),
-                false,
-            ))
+            .execute_command(palette_cmd(actor, "user.level0"))
             .await
             .unwrap_err();
 
@@ -2334,19 +2309,12 @@ mod tests {
     /// A Mutating step inside a user command is refused for a timed-out caller.
     #[tokio::test]
     async fn timed_out_actor_cannot_run_a_mutating_step_through_a_user_command() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let workspace = rim_core::server::model::ServerId::new();
+        let actor = new_actor();
         let until = chrono::Utc::now() + chrono::Duration::minutes(10);
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state.expect_increment().never();
         let svc = service_with_workspace_state(
-            repo_with(vec![stored_user_command(
-                actor.user_id,
-                "user.bump",
-                serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-                true,
-            )]),
+            repo_with(vec![bump_command(actor.user_id, "user.bump")]),
             MockConversationService::new(),
             MockMessageService::new(),
             rim_services::capability::service::MockCapabilityService::new(),
@@ -2355,12 +2323,7 @@ mod tests {
         );
 
         let err = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.bump",
-                Some(workspace_context(workspace)),
-                false,
-            ))
+            .execute_command(palette_cmd(actor, "user.bump"))
             .await
             .unwrap_err();
 
@@ -2374,24 +2337,20 @@ mod tests {
     /// including a user command another user owns.
     #[tokio::test]
     async fn command_that_is_not_the_callers_user_command_is_not_found() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let other_owner = rim_core::user::model::UserId::new();
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state.expect_increment().never();
         let svc = state_service(
-            repo_with(vec![stored_user_command(
-                other_owner,
+            repo_with(vec![bump_command(
+                rim_core::user::model::UserId::new(),
                 "user.theirs",
-                serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-                true,
             )]),
             workspace_state,
         );
 
         for command_id in ["user.theirs", "user.missing", "nope.missing"] {
             let err = svc
-                .execute_command(run_cmd(actor, command_id, None, false))
+                .execute_command(palette_cmd(actor, command_id))
                 .await
                 .unwrap_err();
             assert!(
@@ -2404,29 +2363,21 @@ mod tests {
     /// A user command may compose another of the caller's user commands.
     #[tokio::test]
     async fn user_command_may_reference_another_user_command() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut repo = repo_with(vec![stored_user_command(
-            actor.user_id,
-            "user.inner",
-            serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-            true,
-        )]);
+        let actor = new_actor();
+        let mut repo = repo_with(vec![bump_command(actor.user_id, "user.inner")]);
         repo.expect_create_user_command()
             .times(1)
             .returning(|new_command| {
-                let mut created = stored_user_command(
-                    new_command.owner_user_id,
-                    &new_command.command_key,
-                    new_command.steps_json,
-                    true,
-                );
-                created.title = new_command.title;
-                Ok(created)
+                Ok(UserCommand {
+                    steps_json: new_command.steps_json,
+                    ..stored_user_command(
+                        new_command.owner_user_id,
+                        &new_command.command_key,
+                        vec![],
+                    )
+                })
             });
-        let svc = state_service(
-            repo,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-        );
+        let svc = validating_service(repo);
 
         let created = svc
             .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
@@ -2441,18 +2392,13 @@ mod tests {
     /// refused with the step named, and nothing is stored.
     #[tokio::test]
     async fn user_command_step_referencing_missing_or_disabled_command_is_refused() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut repo = repo_with(vec![stored_user_command(
-            actor.user_id,
-            "user.off",
-            serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-            false,
-        )]);
+        let actor = new_actor();
+        let mut repo = repo_with(vec![UserCommand {
+            is_enabled: false,
+            ..bump_command(actor.user_id, "user.off")
+        }]);
         repo.expect_create_user_command().never();
-        let svc = state_service(
-            repo,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-        );
+        let svc = validating_service(repo);
 
         for step in ["user.ghost", "user.off"] {
             let err = svc
@@ -2470,13 +2416,8 @@ mod tests {
     /// step validation is refused as unknown.
     #[tokio::test]
     async fn user_command_step_deleted_during_validation_is_refused() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let inner = stored_user_command(
-            actor.user_id,
-            "user.inner",
-            serde_json::json!([{ "command_id": "state.list", "args": null }]),
-            true,
-        );
+        let actor = new_actor();
+        let inner = calling_command(actor.user_id, "user.inner", "state.list");
         let lookups = std::sync::atomic::AtomicUsize::new(0);
         let mut repo = MockUserCommandRepository::new();
         repo.expect_get_by_key_for_user()
@@ -2488,10 +2429,7 @@ mod tests {
                 Ok((n == 0).then(|| inner.clone()))
             });
         repo.expect_create_user_command().never();
-        let svc = state_service(
-            repo,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-        );
+        let svc = validating_service(repo);
 
         let err = svc
             .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
@@ -2505,32 +2443,14 @@ mod tests {
     /// is refused as a cycle, and nothing is stored.
     #[tokio::test]
     async fn user_command_update_closing_a_cycle_is_refused() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor = new_actor();
         let mut repo = repo_with(vec![
-            stored_user_command(
-                actor.user_id,
-                "user.a",
-                serde_json::json!([{ "command_id": "user.b", "args": null }]),
-                true,
-            ),
-            stored_user_command(
-                actor.user_id,
-                "user.b",
-                serde_json::json!([{ "command_id": "user.c", "args": null }]),
-                true,
-            ),
-            stored_user_command(
-                actor.user_id,
-                "user.c",
-                serde_json::json!([{ "command_id": "state.list", "args": null }]),
-                true,
-            ),
+            calling_command(actor.user_id, "user.a", "user.b"),
+            calling_command(actor.user_id, "user.b", "user.c"),
+            calling_command(actor.user_id, "user.c", "state.list"),
         ]);
         repo.expect_update_user_command().never();
-        let svc = state_service(
-            repo,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-        );
+        let svc = validating_service(repo);
 
         let err = svc
             .update_user_command(UpdateUserCommandCmd {
@@ -2557,18 +2477,14 @@ mod tests {
     /// directly or inside a referenced user command.
     #[tokio::test]
     async fn user_command_with_a_desktop_local_step_is_refused() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut repo = repo_with(vec![stored_user_command(
+        let actor = new_actor();
+        let mut repo = repo_with(vec![calling_command(
             actor.user_id,
             "user.scroll",
-            serde_json::json!([{ "command_id": "chat.scroll_to_bottom", "args": null }]),
-            true,
+            "chat.scroll_to_bottom",
         )]);
         repo.expect_create_user_command().never();
-        let svc = state_service(
-            repo,
-            rim_services::workspace_state::service::MockWorkspaceStateService::new(),
-        );
+        let svc = validating_service(repo);
 
         for step in ["chat.scroll_to_bottom", "user.scroll"] {
             let err = svc
@@ -2588,29 +2504,17 @@ mod tests {
     /// lists the keys the previous stage produced.
     #[tokio::test]
     async fn pipe_stage_missing_arg_reports_keys_of_previous_stage() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
-        workspace_state
-            .expect_increment()
-            .times(1)
-            .returning(|cmd| {
-                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 2.into())) })
-            });
-        workspace_state
-            .expect_list()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 2);
+        expect_one_empty_list(&mut workspace_state);
         workspace_state.expect_get().never();
         workspace_state.expect_delete().never();
         let svc = state_service(repo_with(vec![]), workspace_state);
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
+            .execute_command(pipe_cmd(
+                new_actor(),
                 "state.incr key=visits | state.list | state.get | state.delete key=visits",
-                Some(workspace_context(rim_core::server::model::ServerId::new())),
-                true,
             ))
             .await
             .expect("a failing stage is reported in the result");
@@ -2647,10 +2551,8 @@ mod tests {
     /// lists "(none)" as the previous stage's keys.
     #[tokio::test]
     async fn pipe_stage_missing_arg_without_previous_payload_reports_none() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let context = Some(workspace_context(rim_core::server::model::ServerId::new()));
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state
             .expect_get()
             .times(1)
@@ -2660,12 +2562,7 @@ mod tests {
         let svc = state_service(repo_with(vec![]), workspace_state);
 
         let first = svc
-            .execute_command(run_cmd(
-                actor,
-                "state.get | state.list",
-                context.clone(),
-                true,
-            ))
+            .execute_command(pipe_cmd(actor, "state.get | state.list"))
             .await
             .expect("a failing stage is reported in the result");
         assert_eq!(first.status, CommandResultStatusDto::Error);
@@ -2677,12 +2574,7 @@ mod tests {
         assert_eq!(first.pipeline_stages.map(|s| s.len()), Some(1));
 
         let after_empty = svc
-            .execute_command(run_cmd(
-                actor,
-                "state.get key=absent | state.incr",
-                context,
-                true,
-            ))
+            .execute_command(pipe_cmd(actor, "state.get key=absent | state.incr"))
             .await
             .expect("a failing stage is reported in the result");
         assert_eq!(after_empty.status, CommandResultStatusDto::Error);
@@ -2696,25 +2588,15 @@ mod tests {
     /// A service error in a pipe stage is reported with the stage index and command id.
     #[tokio::test]
     async fn pipe_stage_service_error_names_the_stage() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
-        workspace_state
-            .expect_list()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_empty_list(&mut workspace_state);
         workspace_state.expect_increment().times(1).returning(|_| {
             Box::pin(async { Err(ServiceError::Conflict("version mismatch".to_string())) })
         });
         let svc = state_service(repo_with(vec![]), workspace_state);
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
-                "state.list | state.incr key=k",
-                Some(workspace_context(rim_core::server::model::ServerId::new())),
-                true,
-            ))
+            .execute_command(pipe_cmd(new_actor(), "state.list | state.incr key=k"))
             .await
             .expect("a failing stage is reported in the result");
 
@@ -2729,14 +2611,13 @@ mod tests {
     /// A pipe naming an unknown or desktop-local stage is refused before any stage runs.
     #[tokio::test]
     async fn pipe_with_unknown_or_desktop_local_stage_runs_nothing() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
         workspace_state.expect_list().never();
         let svc = state_service(repo_with(vec![]), workspace_state);
 
         let unknown = svc
-            .execute_command(run_cmd(actor, "state.list | user.ghost", None, true))
+            .execute_command(pipe_cmd(actor, "state.list | user.ghost"))
             .await
             .unwrap_err();
         assert_eq!(
@@ -2745,12 +2626,7 @@ mod tests {
         );
 
         let desktop = svc
-            .execute_command(run_cmd(
-                actor,
-                "state.list | chat.scroll_to_bottom",
-                None,
-                true,
-            ))
+            .execute_command(pipe_cmd(actor, "state.list | chat.scroll_to_bottom"))
             .await
             .unwrap_err();
         assert!(
@@ -2762,31 +2638,17 @@ mod tests {
     /// A user command can be a pipe stage; its merged payload feeds the next stage.
     #[tokio::test]
     async fn pipe_stage_may_be_a_user_command() {
-        let actor = Actor::new(rim_core::user::model::UserId::new());
-        let repo = repo_with(vec![stored_user_command(
-            actor.user_id,
-            "user.bump",
-            serde_json::json!([{ "command_id": "state.incr", "args": { "key": "k" } }]),
-            true,
-        )]);
-        let mut workspace_state =
-            rim_services::workspace_state::service::MockWorkspaceStateService::new();
-        workspace_state
-            .expect_increment()
-            .times(1)
-            .returning(|cmd| {
-                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 1.into())) })
-            });
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_increment(&mut workspace_state, 1);
         workspace_state.expect_get().never();
-        let svc = state_service(repo, workspace_state);
+        let svc = state_service(
+            repo_with(vec![bump_command(actor.user_id, "user.bump")]),
+            workspace_state,
+        );
 
         let result = svc
-            .execute_command(run_cmd(
-                actor,
-                "user.bump | state.get",
-                Some(workspace_context(rim_core::server::model::ServerId::new())),
-                true,
-            ))
+            .execute_command(pipe_cmd(actor, "user.bump | state.get"))
             .await
             .expect("a failing stage is reported in the result");
 
