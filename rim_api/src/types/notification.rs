@@ -5,9 +5,9 @@ use async_graphql::{
 };
 
 use super::{Conversation, Message, PageInfo};
-use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
+use crate::resolve::ResolveExt;
 
 /// Which messages of a conversation notify the viewer.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -223,45 +223,24 @@ pub struct Notification {
     pub read_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl Notification {
-    /// The conversation, or `None` when the viewer can no longer read it (left a private
-    /// channel, removed from a group) or it is gone.
-    async fn readable_conversation(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Option<rim_services::conversation::dto::ConversationDto>> {
-        let actor = require_actor(ctx)?;
-        let svc = ctx
-            .data::<std::sync::Arc<dyn rim_services::conversation::service::ConversationService>>(
-            )?;
-        let res = svc
-            .get_conversation(rim_services::conversation::command::GetConversationQuery {
-                actor: rim_services::Actor::new(actor),
-                server_id: parse_uuid_id(&self.server_id)?,
-                conversation_id: parse_uuid_id(&self.conversation_id)?,
-            })
-            .await;
-        match res {
-            Ok(conversation) => Ok(Some(conversation)),
-            Err(
-                rim_services::ServiceError::NotFound | rim_services::ServiceError::PermissionDenied,
-            ) => Ok(None),
-            Err(e) => Err(map_service_error(e)),
-        }
-    }
-}
-
 #[ComplexObject]
 impl Notification {
     /// Null when the viewer can no longer read the conversation.
     async fn conversation(&self, ctx: &Context<'_>) -> Result<Option<Conversation>> {
-        Ok(self.readable_conversation(ctx).await?.map(Into::into))
+        let conversation = ctx
+            .load_readable_conversation(&self.server_id, &self.conversation_id)
+            .await?;
+        Ok(conversation.map(Into::into))
     }
 
     /// The message (timeline or thread reply); null when the viewer can no longer read the
     /// conversation or the message is gone.
     async fn message(&self, ctx: &Context<'_>) -> Result<Option<Message>> {
-        if self.readable_conversation(ctx).await?.is_none() {
+        if ctx
+            .load_readable_conversation(&self.server_id, &self.conversation_id)
+            .await?
+            .is_none()
+        {
             return Ok(None);
         }
         let svc =

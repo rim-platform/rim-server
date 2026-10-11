@@ -9,6 +9,10 @@ use async_graphql::{Context, Result};
 
 use rim_core::message::model::MessageId;
 use rim_core::user::model::UserId;
+use rim_services::ServiceError;
+use rim_services::conversation::command::GetConversationQuery;
+use rim_services::conversation::dto::ConversationDto;
+use rim_services::conversation::service::ConversationService;
 
 use crate::loaders::{
     LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, ReactionLoaderKey, UserLoader,
@@ -62,6 +66,14 @@ pub trait ResolveExt {
         &self,
         message_id: &async_graphql::ID,
     ) -> impl Future<Output = Result<Vec<LinkPreview>>> + Send;
+
+    /// Load a conversation the current actor can read; `None` when they cannot (not a member of
+    /// a private channel, removed from a group) or it is gone.
+    fn load_readable_conversation(
+        &self,
+        server_id: &async_graphql::ID,
+        conversation_id: &async_graphql::ID,
+    ) -> impl Future<Output = Result<Option<ConversationDto>>> + Send;
 }
 
 impl ResolveExt for Context<'_> {
@@ -137,5 +149,26 @@ impl ResolveExt for Context<'_> {
             .map_err(loader_err)?
             .unwrap_or_default();
         Ok(previews)
+    }
+
+    async fn load_readable_conversation(
+        &self,
+        server_id: &async_graphql::ID,
+        conversation_id: &async_graphql::ID,
+    ) -> Result<Option<ConversationDto>> {
+        let actor = crate::auth_context::require_actor(self)?;
+        let svc = self.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let res = svc
+            .get_conversation(GetConversationQuery {
+                actor: rim_services::Actor::new(actor),
+                server_id: crate::ids::parse_uuid_id(server_id)?,
+                conversation_id: crate::ids::parse_uuid_id(conversation_id)?,
+            })
+            .await;
+        match res {
+            Ok(conversation) => Ok(Some(conversation)),
+            Err(ServiceError::NotFound | ServiceError::PermissionDenied) => Ok(None),
+            Err(e) => Err(crate::errors::map_service_error(e)),
+        }
     }
 }

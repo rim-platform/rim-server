@@ -30,7 +30,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok, merged};
 use support::roles::create_channel;
 
 const MESSAGE_FIELDS: &str = r#"
@@ -242,7 +242,7 @@ impl Target {
 }
 
 struct Fixture {
-    _ctx: TestCtx,
+    ctx: TestCtx,
     schema: AppSchema,
     server_id: String,
     channel_id: String,
@@ -278,7 +278,7 @@ async fn setup() -> Fixture {
     let channel_id = create_channel(&schema, &alice, &server_id, "general", false).await;
 
     Fixture {
-        _ctx: ctx,
+        ctx,
         schema,
         server_id,
         channel_id,
@@ -1294,4 +1294,214 @@ async fn change_feed_reads_several_conversations_and_enforces_access() {
         } }),
     );
     assert_eq!(exec_err_code(&f.schema, req).await, "UNAUTHENTICATED");
+}
+
+// ── Nested message fields ─────────────────────────────────────────────────
+
+const NESTED_QUERY: &str = r#"
+query Nested($serverId: ID!, $conversationId: ID!) {
+  page: messages(serverId: $serverId, conversationId: $conversationId, dir: AFTER, limit: 50,
+                 includeDeleted: false) {
+    items {
+      id text
+      author { id username }
+      reactions { emoji count reactedByMe userIds }
+      isPinned
+      mentionedUserIds
+      mentions { id username }
+      linkPreviews { messageId url title description imageUrl siteName }
+      forwardedFromMessageId
+      forwardedFrom { id text conversationId authorId }
+    }
+  }
+}
+"#;
+
+const TOGGLE_REACTION: &str = r#"
+mutation React($input: ToggleReactionInput!) { toggleReaction(input: $input) { emoji } }
+"#;
+
+const PIN_MESSAGE: &str = "mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }";
+
+const FORWARD_MESSAGE: &str = r#"
+mutation Forward($input: ForwardMessageInput!) { msg: forwardMessage(input: $input) { id } }
+"#;
+
+impl Fixture {
+    /// The fixture channel's messages as `who` sees them, oldest first, keyed by id.
+    async fn nested(&self, who: &Caller) -> std::collections::HashMap<String, Value> {
+        let vars = json!({ "serverId": self.server_id, "conversationId": self.channel_id });
+        let data = exec_ok(&self.schema, who.request(NESTED_QUERY, vars)).await;
+        data["page"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|m| (m["id"].as_str().expect("id").to_string(), m.clone()))
+            .collect()
+    }
+
+    /// Run `mutation` as `who` on the message `msg` of `conversation_id`, plus `extra` input.
+    async fn on_message(
+        &self,
+        who: &Caller,
+        mutation: &str,
+        conversation_id: &str,
+        msg: &Msg,
+        extra: Value,
+    ) -> Value {
+        let input = json!({
+            "serverId": self.server_id, "conversationId": conversation_id, "messageId": msg.id,
+        });
+        let vars = json!({ "input": merged(input, extra) });
+        exec_ok(&self.schema, who.request(mutation, vars)).await
+    }
+
+    async fn react(&self, who: &Caller, msg: &Msg, emoji: &str) {
+        self.on_message(
+            who,
+            TOGGLE_REACTION,
+            &self.channel_id,
+            msg,
+            json!({ "emoji": emoji }),
+        )
+        .await;
+    }
+
+    /// Forward `msg` from `source_id` into the fixture channel as alice; returns the new id.
+    async fn forward(&self, source_id: &str, msg: &Msg) -> String {
+        let vars = json!({ "input": {
+            "serverId": self.server_id, "sourceConversationId": source_id,
+            "targetConversationId": self.channel_id, "messageId": msg.id,
+        } });
+        let data = exec_ok(&self.schema, self.alice.request(FORWARD_MESSAGE, vars)).await;
+        data["msg"]["id"].as_str().expect("id").to_string()
+    }
+
+    fn user(&self, who: &Caller, username: &str) -> Value {
+        json!({ "id": who.user_id.to_string(), "username": username })
+    }
+}
+
+/// A page of messages resolves each message's author, reaction groups (by emoji, counted, with
+/// the viewer's own reaction marked), pin state, mentions, link previews and forwarded source; a
+/// message with none of them answers empty lists, `false` and null.
+#[tokio::test]
+async fn messages_resolve_their_nested_fields_for_the_viewer() {
+    use rim_core::link_preview::model::NewLinkPreview;
+    use rim_core::link_preview::repository::LinkPreviewRepository;
+
+    let f = setup().await;
+    let (bob_id, carol_id) = (f.bob.user_id.to_string(), f.carol.user_id.to_string());
+    let mentioning = f
+        .send(
+            &f.alice,
+            &f.channel_id,
+            &format!("standup <@{bob_id}> <@{carol_id}>"),
+        )
+        .await;
+    let linking = f
+        .send(&f.bob, &f.channel_id, "see https://example.com")
+        .await;
+    let plain = f.send(&f.carol, &f.channel_id, "plain").await;
+    let forwarded = f.forward(&f.channel_id, &linking).await;
+
+    f.react(&f.bob, &mentioning, "👍").await;
+    f.react(&f.carol, &mentioning, "👍").await;
+    f.react(&f.alice, &mentioning, "🎉").await;
+    f.react(&f.carol, &linking, "👀").await;
+    f.on_message(&f.alice, PIN_MESSAGE, &f.channel_id, &mentioning, json!({}))
+        .await;
+    rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(f.ctx.db.clone())
+        .create(NewLinkPreview {
+            message_id: parse_uuid(&linking.id).into(),
+            url: "https://example.com".to_string(),
+            title: Some("Example".to_string()),
+            description: None,
+            image_url: Some("https://example.com/i.png".to_string()),
+            site_name: Some("example".to_string()),
+        })
+        .await
+        .expect("seed link preview");
+
+    let seen = f.nested(&f.bob).await;
+    let m = &seen[&mentioning.id];
+    assert_eq!(m["author"], f.user(&f.alice, "alice"));
+    assert_eq!(
+        m["reactions"],
+        json!([
+            { "emoji": "🎉", "count": 1, "reactedByMe": false,
+              "userIds": [f.alice.user_id.to_string()] },
+            { "emoji": "👍", "count": 2, "reactedByMe": true, "userIds": [bob_id, carol_id] },
+        ])
+    );
+    assert_eq!(m["isPinned"], json!(true));
+    assert_eq!(m["mentionedUserIds"], json!([bob_id, carol_id]));
+    assert_eq!(
+        m["mentions"],
+        json!([f.user(&f.bob, "bob"), f.user(&f.carol, "carol")])
+    );
+
+    let l = &seen[&linking.id];
+    assert_eq!(l["author"], f.user(&f.bob, "bob"));
+    assert_eq!(
+        l["reactions"],
+        json!([{ "emoji": "👀", "count": 1, "reactedByMe": false, "userIds": [carol_id] }])
+    );
+    assert_eq!(l["isPinned"], json!(false));
+    assert_eq!(
+        l["linkPreviews"],
+        json!([{
+            "messageId": linking.id, "url": "https://example.com", "title": "Example",
+            "description": null, "imageUrl": "https://example.com/i.png", "siteName": "example",
+        }])
+    );
+
+    let fw = &seen[&forwarded];
+    assert_eq!(fw["author"], f.user(&f.alice, "alice"));
+    assert_eq!(fw["forwardedFromMessageId"], json!(linking.id));
+    assert_eq!(
+        fw["forwardedFrom"],
+        json!({
+            "id": linking.id, "text": "see https://example.com",
+            "conversationId": f.channel_id, "authorId": bob_id,
+        })
+    );
+
+    let p = &seen[&plain.id];
+    for field in ["reactions", "mentionedUserIds", "mentions", "linkPreviews"] {
+        assert_eq!(p[field], json!([]), "{field}");
+    }
+    assert_eq!(p["isPinned"], json!(false));
+    assert_eq!(p["forwardedFrom"], Value::Null);
+
+    let as_alice = f.nested(&f.alice).await;
+    let marks: Vec<_> = as_alice[&mentioning.id]["reactions"]
+        .as_array()
+        .expect("reactions")
+        .iter()
+        .map(|g| g["reactedByMe"].clone())
+        .collect();
+    assert_eq!(marks, [json!(true), json!(false)], "marked for the viewer");
+}
+
+/// A forwarded message names its source to everyone who reads it, but `forwardedFrom` resolves
+/// only for a viewer who can read the source conversation.
+#[tokio::test]
+async fn forwarded_from_resolves_only_for_readers_of_the_source() {
+    let f = setup().await;
+    let board = create_channel(&f.schema, &f.alice, &f.server_id, "board", true).await;
+    let secret = f.send(&f.alice, &board, "the plan").await;
+    let forwarded = f.forward(&board, &secret).await;
+
+    let as_alice = f.nested(&f.alice).await;
+    assert_eq!(
+        as_alice[&forwarded]["forwardedFrom"]["text"],
+        json!("the plan")
+    );
+    let as_bob = f.nested(&f.bob).await;
+    assert_eq!(
+        as_bob[&forwarded]["forwardedFromMessageId"],
+        json!(secret.id)
+    );
+    assert_eq!(as_bob[&forwarded]["forwardedFrom"], Value::Null);
 }
