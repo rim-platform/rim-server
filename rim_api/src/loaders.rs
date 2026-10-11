@@ -15,6 +15,13 @@ use rim_services::pin::service::PinService;
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
 
+use crate::errors::map_service_error;
+
+/// A failed batch as every key of it sees the error: the same code and message as a root field.
+fn loader_error(err: rim_services::ServiceError) -> Arc<async_graphql::Error> {
+    Arc::new(map_service_error(err))
+}
+
 // ── UserLoader ─────────────────────────────────────────────────────────────
 
 pub struct UserLoader {
@@ -38,10 +45,7 @@ impl Loader<UserId> for UserLoader {
         let keys = keys.to_vec();
         let svc = Arc::clone(&self.user_service);
         async move {
-            let users = svc
-                .get_users_by_ids(&keys)
-                .await
-                .map_err(|e| Arc::new(async_graphql::Error::new(e.to_string())))?;
+            let users = svc.get_users_by_ids(&keys).await.map_err(loader_error)?;
             Ok(users.into_iter().map(|u| (u.id, u)).collect())
         }
     }
@@ -93,7 +97,7 @@ impl Loader<ReactionLoaderKey> for ReactionLoader {
                     message_ids,
                 })
                 .await
-                .map_err(|e| Arc::new(async_graphql::Error::new(e.to_string())))?;
+                .map_err(loader_error)?;
 
             Ok(keys
                 .into_iter()
@@ -133,7 +137,7 @@ impl Loader<MessageId> for MentionLoader {
             let mention_map = svc
                 .get_mentions_for_messages(&keys)
                 .await
-                .map_err(|e| Arc::new(async_graphql::Error::new(e.to_string())))?;
+                .map_err(loader_error)?;
 
             Ok(keys
                 .into_iter()
@@ -171,10 +175,7 @@ impl Loader<MessageId> for PinLoader {
         let keys = keys.to_vec();
         let svc = Arc::clone(&self.pin_service);
         async move {
-            let pinned_ids = svc
-                .is_pinned_batch(&keys)
-                .await
-                .map_err(|e| Arc::new(async_graphql::Error::new(e.to_string())))?;
+            let pinned_ids = svc.is_pinned_batch(&keys).await.map_err(loader_error)?;
 
             let pinned_set: HashSet<MessageId> = pinned_ids.into_iter().collect();
             Ok(keys
@@ -213,7 +214,7 @@ impl Loader<MessageId> for LinkPreviewLoader {
             let preview_map = svc
                 .get_previews_for_messages(&keys)
                 .await
-                .map_err(|e| Arc::new(async_graphql::Error::new(e.to_string())))?;
+                .map_err(loader_error)?;
 
             Ok(keys
                 .into_iter()
