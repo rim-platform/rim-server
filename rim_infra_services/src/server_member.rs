@@ -120,6 +120,14 @@ impl ServerMemberService for DefaultServerMemberService {
         Ok(Self::to_dto(member, &user, timeout_until))
     }
 
+    async fn visible_members(
+        &self,
+        query: ListServerMembersQuery,
+    ) -> ServiceResult<Option<std::collections::HashSet<rim_core::user::model::UserId>>> {
+        self.visible_member_ids(query.server_id, query.actor.user_id)
+            .await
+    }
+
     async fn list_members(
         &self,
         query: ListServerMembersQuery,

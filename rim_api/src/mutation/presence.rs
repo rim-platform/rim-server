@@ -32,18 +32,15 @@ impl PresenceMutations {
         if typing_tracker.should_broadcast(actor, conversation_id) {
             let conv_svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
             let conversation = conv_svc
-                .get_conversation(rim_services::conversation::command::GetConversationQuery {
-                    actor: Actor::new(actor),
-                    server_id,
-                    conversation_id,
-                })
+                .get_writable_conversation(
+                    rim_services::conversation::command::GetConversationQuery {
+                        actor: Actor::new(actor),
+                        server_id,
+                        conversation_id,
+                    },
+                )
                 .await
                 .map_err(map_service_error)?;
-            if conversation.is_archived() {
-                return Err(map_service_error(
-                    rim_services::ServiceError::ConversationArchived,
-                ));
-            }
             let conversation_type = conversation.conversation_type.as_str().to_owned();
             let is_private = conversation.is_private;
             let member_user_ids = conversation.member_ids;
@@ -66,12 +63,11 @@ impl PresenceMutations {
     async fn heartbeat(&self, ctx: &Context<'_>, input: HeartbeatInput) -> Result<bool> {
         let actor = require_actor(ctx)?;
 
-        // CSO: Reject OFFLINE status from clients.
         let status: rim_services::presence::PresenceStatus = input.status.into();
         if status == rim_services::presence::PresenceStatus::Offline {
-            return Err(async_graphql::Error::new(
-                "Clients cannot set OFFLINE status",
-            ));
+            return Err(map_service_error(rim_services::ServiceError::Validation(
+                "Clients cannot set OFFLINE status".to_string(),
+            )));
         }
 
         let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
