@@ -5,7 +5,7 @@ process. It is written for someone building a plugin from scratch, in any langua
 SDK.
 
 The machine-readable source of truth is the JSON Schema
-[`protocol/plugin-protocol-v1.schema.json`](https://github.com/dvorakj31/rim-ui/blob/master/protocol/plugin-protocol-v1.schema.json)
+[`protocol/plugin-protocol-v1.schema.json`](https://github.com/rim-platform/rim-ui/blob/master/protocol/plugin-protocol-v1.schema.json)
 in rim-ui. Every frame described here is a `$defs` entry there, with an example, and the host's
 conformance tests (`rim-ui/src-tauri/src/plugin_host/protocol/conformance.rs`) check those
 examples against the frames the host really builds. **If this document and the schema ever
