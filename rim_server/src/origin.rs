@@ -1,9 +1,18 @@
-//! Which browser origins the API accepts: the server's own and one configured extra.
+//! Which browser origins the API accepts: the server's own, the packaged desktop app's and one
+//! configured extra.
 
 use actix_web::dev::RequestHead;
 use actix_web::http::header::HeaderValue;
 
 use crate::config::RIMConfig;
+
+/// The origins the packaged desktop app runs under: the Tauri scheme on macOS and Linux, the
+/// `tauri.localhost` host on Windows. A web page cannot carry any of them.
+const DESKTOP_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
 
 /// The origins a request carrying an `Origin` header may come from.
 #[derive(Clone, Debug)]
@@ -25,9 +34,16 @@ impl AllowedOrigins {
         }
     }
 
-    /// Whether `origin` is this server's own origin as the client sees it, or the extra one.
+    /// Whether `origin` is this server's own origin as the client sees it, the desktop app's
+    /// or the extra one.
     pub(crate) fn allows(&self, origin: &HeaderValue, head: &RequestHead) -> bool {
-        let Some(origin) = origin.to_str().ok().and_then(normalize) else {
+        let Some(raw) = origin.to_str().ok() else {
+            return false;
+        };
+        if is_desktop_origin(raw) {
+            return true;
+        }
+        let Some(origin) = normalize(raw) else {
             return false;
         };
         if self.extra_origin.as_deref() == Some(origin.as_str()) {
@@ -57,12 +73,23 @@ impl AllowedOrigins {
     }
 }
 
+/// Whether `origin` is one of the packaged desktop app's origins, compared whole and without
+/// case, since the Tauri scheme has no URL origin to normalize.
+fn is_desktop_origin(origin: &str) -> bool {
+    let origin = origin.trim().to_ascii_lowercase();
+    DESKTOP_ORIGINS.contains(&origin.as_str())
+}
+
 /// The ASCII serialization of a URL's origin: lowercase, without a default port. `None` for
-/// anything without a host, such as the `null` origin.
+/// anything without a tuple origin: the `null` origin, a URL without a host, a scheme that is
+/// not http or https.
 fn normalize(url: &str) -> Option<String> {
     let url = url::Url::parse(url.trim()).ok()?;
     url.host()?;
-    Some(url.origin().ascii_serialization())
+    match url.origin() {
+        url::Origin::Tuple(..) => Some(url.origin().ascii_serialization()),
+        url::Origin::Opaque(_) => None,
+    }
 }
 
 /// The origin the client addressed: the request's scheme and `Host`, or the forwarded ones when
@@ -233,6 +260,33 @@ mod tests {
         );
     }
 
+    #[actix_web::test]
+    async fn the_desktop_app_origins_are_accepted_without_configuration() {
+        for origin in [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "HTTPS://Tauri.localhost",
+        ] {
+            let status = post(
+                origins(Some("https://rim.example.org"), None, false),
+                &[("host", "rim.example.org"), ("origin", origin)],
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{origin}");
+        }
+    }
+
+    #[actix_web::test]
+    async fn another_custom_scheme_is_not_the_desktop_app() {
+        // Two opaque origins must not compare equal through the serialized `null`.
+        let status = post(
+            origins(None, Some("tauri://localhost"), false),
+            &[("host", "rim.local:8080"), ("origin", "other://localhost")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
     #[test]
     fn origins_compare_without_case_or_default_port() {
         assert_eq!(
@@ -240,5 +294,6 @@ mod tests {
             Some("https://rim.example.org")
         );
         assert_eq!(normalize("null"), None);
+        assert_eq!(normalize("tauri://localhost"), None);
     }
 }

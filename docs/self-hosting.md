@@ -63,9 +63,11 @@ Browsers send an `Origin` header with the client's requests even on one origin. 
 accepts its own origin without configuration: that of `RIM_PUBLIC_BASE_URL` when set, else the
 scheme and `Host` the request arrived with (`X-Forwarded-Proto` and `X-Forwarded-Host` count
 only with `RIM_TRUST_FORWARDED_HEADERS=true`). Any other origin gets `400 Origin is not
-allowed`, except one extra origin named by `RIM_CORS_ALLOWED_ORIGIN`, such as a client served
-from another domain or the desktop development app at `http://localhost:1420`. The compose file
-leaves it as a commented example.
+allowed`, with two exceptions: the packaged desktop app's origins (`tauri://localhost` on macOS
+and Linux, `http://tauri.localhost` on Windows), which no web page can carry, and one extra
+origin named by `RIM_CORS_ALLOWED_ORIGIN`, such as a client served from another domain or the
+desktop development app at `http://localhost:1420`. The compose file leaves it as a commented
+example.
 
 ## First start
 

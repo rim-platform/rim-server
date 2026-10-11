@@ -92,8 +92,8 @@ cargo run -p rim_server
 A server bound to anything but a loopback address needs `RIM_PUBLIC_BASE_URL` or
 `RIM_KEY_LOGIN_AUDIENCES`, or it refuses to start (`docs/server-identity.md`). The first start
 creates the server key and the franking key file in `RIM_DATA_DIR`, and writes a server recovery
-key file there to move offline. A client served from another origin, such as the rim-ui dev server, needs
-`RIM_CORS_ALLOWED_ORIGIN`. Without `RIM_SMTP_*` email is logged (recipient and subject) instead
+key file there to move offline. The packaged desktop app is accepted from any server; a client
+served from another web origin, such as the rim-ui dev server, needs `RIM_CORS_ALLOWED_ORIGIN`. Without `RIM_SMTP_*` email is logged (recipient and subject) instead
 of sent.
 
 To deploy a server, follow `docs/self-hosting.md`: `deploy/compose.yml` runs rim-server,
