@@ -1399,9 +1399,7 @@ async fn messages_resolve_their_nested_fields_for_the_viewer() {
             &format!("standup <@{bob_id}> <@{carol_id}>"),
         )
         .await;
-    let linking = f
-        .send(&f.bob, &f.channel_id, "see https://example.com")
-        .await;
+    let linking = f.send(&f.bob, &f.channel_id, "see the docs").await;
     let plain = f.send(&f.carol, &f.channel_id, "plain").await;
     let forwarded = f.forward(&f.channel_id, &linking).await;
 
@@ -1411,6 +1409,8 @@ async fn messages_resolve_their_nested_fields_for_the_viewer() {
     f.react(&f.carol, &linking, "👀").await;
     f.on_message(&f.alice, PIN_MESSAGE, &f.channel_id, &mentioning, json!({}))
         .await;
+    // Stored directly, as the fetcher would after reaching the page; no message text has a URL,
+    // so the fetcher itself never runs.
     rim_infra_db::sea_orm_impl::link_preview::SeaOrmLinkPreviewRepository::new(f.ctx.db.clone())
         .create(NewLinkPreview {
             message_id: parse_uuid(&linking.id).into(),
@@ -1462,7 +1462,7 @@ async fn messages_resolve_their_nested_fields_for_the_viewer() {
     assert_eq!(
         fw["forwardedFrom"],
         json!({
-            "id": linking.id, "text": "see https://example.com",
+            "id": linking.id, "text": "see the docs",
             "conversationId": f.channel_id, "authorId": bob_id,
         })
     );
