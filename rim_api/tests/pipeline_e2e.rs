@@ -16,7 +16,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_err_message, exec_ok};
+use support::graphql::{Caller, anonymous_request, exec_err, exec_err_code, exec_ok};
 
 const PIPELINE_FIELDS: &str = "id serverId name description \
      trigger { kind conversationId } \
@@ -58,6 +58,8 @@ struct Fixture {
     other_server_id: String,
     /// Owner.
     alice: Caller,
+    /// Moderator.
+    mona: Caller,
     /// Member.
     bob: Caller,
     /// Guest.
@@ -66,16 +68,20 @@ struct Fixture {
     olive: Caller,
 }
 
-/// alice (Owner), bob (Member), gina (Guest) in one workspace; olive owns a second one.
+/// alice (Owner), mona (Moderator), bob (Member), gina (Guest) in one workspace; olive owns a
+/// second one.
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
     let server = ctx.create_server("pipeline-e2e").await;
     let other = ctx.create_server("pipeline-e2e-other").await;
     let alice = ctx.create_user("pipe-alice").await;
+    let mona = ctx.create_user("pipe-mona").await;
     let bob = ctx.create_user("pipe-bob").await;
     let gina = ctx.create_user("pipe-gina").await;
     let olive = ctx.create_user("pipe-olive").await;
     ctx.add_owner(&server, &alice).await;
+    ctx.add_member(&server, &mona, ServerMemberRole::Moderator)
+        .await;
     ctx.add_member(&server, &bob, ServerMemberRole::Member)
         .await;
     ctx.add_member(&server, &gina, ServerMemberRole::Guest)
@@ -87,6 +93,7 @@ async fn setup() -> Fixture {
         server_id: server.id.to_string(),
         other_server_id: other.id.to_string(),
         alice: ctx.caller(&alice).await,
+        mona: ctx.caller(&mona).await,
         bob: ctx.caller(&bob).await,
         gina: ctx.caller(&gina).await,
         olive: ctx.caller(&olive).await,
@@ -191,15 +198,6 @@ impl Fixture {
         names
     }
 
-    /// The pipeline `id` as stored, read back through the `pipelines` query.
-    async fn stored(&self, id: &str) -> Value {
-        self.list(&self.alice)
-            .await
-            .into_iter()
-            .find(|p| p["id"] == id)
-            .expect("pipeline listed")
-    }
-
     async fn list(&self, who: &Caller) -> Vec<Value> {
         let data = exec_ok(&self.schema, self.list_request(who, &self.server_id, None)).await;
         data["pipelines"].as_array().expect("pipelines").clone()
@@ -261,6 +259,34 @@ async fn a_guest_may_create_a_pipeline() {
     assert_eq!(f.list_names(&f.alice, None).await, ["guest pipeline"]);
 }
 
+#[tokio::test]
+async fn only_its_creator_or_a_moderator_may_change_a_pipeline() {
+    let f = setup().await;
+    let id = id_of(&f.create(&f.alice, minimal_body("owner's")).await);
+    for request in [
+        f.update_request(&f.bob, &id, minimal_body("taken")),
+        f.toggle_request(&f.bob, &id, false),
+        f.delete_request(&f.bob, &id),
+    ] {
+        assert_eq!(exec_err_code(&f.schema, request).await, "FORBIDDEN");
+    }
+    assert_eq!(f.list_names(&f.alice, Some(true)).await, ["owner's"]);
+
+    let data = exec_ok(
+        &f.schema,
+        f.update_request(&f.mona, &id, minimal_body("moderated")),
+    )
+    .await;
+    assert_eq!(
+        data["pipeline"]["createdBy"],
+        f.alice.user_id.to_string().as_str()
+    );
+    let data = exec_ok(&f.schema, f.toggle_request(&f.mona, &id, false)).await;
+    assert_eq!(data["pipeline"]["enabled"], false);
+    let data = exec_ok(&f.schema, f.delete_request(&f.mona, &id)).await;
+    assert_eq!(data["deleted"], true);
+}
+
 // ── Create ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -320,10 +346,11 @@ async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
     assert!(p["createdAt"].is_string());
     assert!(p["updatedAt"].is_string());
 
-    let listed = f.list(&f.bob).await;
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0]["filter"], p["filter"]);
-    assert_eq!(listed[0]["actions"], p["actions"]);
+    assert_eq!(
+        f.list(&f.bob).await,
+        [p],
+        "the create response is what a read returns"
+    );
 }
 
 #[tokio::test]
@@ -409,9 +436,8 @@ async fn create_pipeline_refuses_a_filter_condition_missing_its_operand() {
             minimal_body("p"),
             json!({ "filter": { "conditions": [condition] } }),
         );
-        let message =
-            exec_err_message(&f.schema, f.create_request(&f.alice, &f.server_id, body)).await;
-        assert_eq!(message, expected);
+        let err = exec_err(&f.schema, f.create_request(&f.alice, &f.server_id, body)).await;
+        assert_eq!(err, ("VALIDATION".to_string(), expected.to_string()));
     }
     assert!(f.list_names(&f.alice, None).await.is_empty());
 }
@@ -450,9 +476,9 @@ async fn pipelines_lists_every_members_pipelines_of_the_workspace_only() {
 #[tokio::test]
 async fn toggle_pipeline_switches_it_off_and_on_and_the_enabled_filter_follows() {
     let f = setup().await;
-    let id = id_of(&f.create(&f.alice, minimal_body("toggled")).await);
+    let created = f.create(&f.alice, minimal_body("toggled")).await;
+    let id = id_of(&created);
     f.create(&f.alice, minimal_body("steady")).await;
-    let created = f.stored(&id).await;
 
     let data = exec_ok(&f.schema, f.toggle_request(&f.alice, &id, false)).await;
     let off = &data["pipeline"];
@@ -472,12 +498,16 @@ async fn toggle_pipeline_switches_it_off_and_on_and_the_enabled_filter_follows()
 }
 
 #[tokio::test]
-async fn toggle_pipeline_gets_not_found_for_an_unknown_pipeline() {
+async fn toggle_pipeline_refuses_an_unknown_or_malformed_id() {
     let f = setup().await;
     let unknown = uuid::Uuid::now_v7().to_string();
     assert_eq!(
         exec_err_code(&f.schema, f.toggle_request(&f.alice, &unknown, false)).await,
         "NOT_FOUND"
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, f.toggle_request(&f.alice, "not-a-uuid", false)).await,
+        "VALIDATION"
     );
 }
 
@@ -499,7 +529,6 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
         )
         .await;
     let id = id_of(&created);
-    let created = f.stored(&id).await;
     exec_ok(&f.schema, f.toggle_request(&f.alice, &id, false)).await;
 
     let body = json!({
@@ -563,7 +592,7 @@ async fn update_pipeline_validates_like_create() {
             "{body}"
         );
     }
-    let message = exec_err_message(
+    let err = exec_err(
         &f.schema,
         f.update_request(
             &f.alice,
@@ -575,7 +604,13 @@ async fn update_pipeline_validates_like_create() {
         ),
     )
     .await;
-    assert_eq!(message, "MessageContains requires a pattern");
+    assert_eq!(
+        err,
+        (
+            "VALIDATION".to_string(),
+            "MessageContains requires a pattern".to_string()
+        )
+    );
     assert_eq!(f.list_names(&f.alice, None).await, ["p"]);
 }
 

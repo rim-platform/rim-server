@@ -49,23 +49,19 @@ pub async fn exec_ok(schema: &AppSchema, request: Request) -> Value {
 
 /// Execute `request`, assert it failed, and return the first error's `extensions.code`.
 pub async fn exec_err_code(schema: &AppSchema, request: Request) -> String {
+    exec_err(schema, request).await.0
+}
+
+/// Execute `request`, assert it failed, and return the first error's `extensions.code` and
+/// message.
+pub async fn exec_err(schema: &AppSchema, request: Request) -> (String, String) {
     let res = schema.execute(request).await;
     let err = res
         .errors
         .first()
         .unwrap_or_else(|| panic!("expected a GraphQL error, got data: {:?}", res.data));
     match err.extensions.as_ref().and_then(|e| e.get("code")) {
-        Some(async_graphql::Value::String(code)) => code.clone(),
+        Some(async_graphql::Value::String(code)) => (code.clone(), err.message.clone()),
         other => panic!("error {err:?} has no string `code` extension (got {other:?})"),
     }
-}
-
-/// Execute `request`, assert it failed, and return the first error's message.
-pub async fn exec_err_message(schema: &AppSchema, request: Request) -> String {
-    let res = schema.execute(request).await;
-    res.errors
-        .first()
-        .unwrap_or_else(|| panic!("expected a GraphQL error, got data: {:?}", res.data))
-        .message
-        .clone()
 }
