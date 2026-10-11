@@ -69,6 +69,20 @@ impl TestCtx {
     }
 }
 
+impl TestCtx {
+    /// Add `who` to the workspace `server_id` with `role`.
+    pub async fn join(&self, server_id: &str, who: &Caller, role: ServerMemberRole) {
+        use rim_core::server_member::repository::ServerMemberRepository;
+        let server_id: uuid::Uuid = server_id.parse().expect("server id");
+        rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository::new(
+            self.db.clone(),
+        )
+        .add_member(server_id.into(), who.user_id, role)
+        .await
+        .expect("add member");
+    }
+}
+
 /// Create a channel titled `title` in `server_id` as `who` and return its id.
 pub async fn create_channel(
     schema: &AppSchema,
