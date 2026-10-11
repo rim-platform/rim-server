@@ -1,9 +1,10 @@
 use async_graphql::*;
 use rim_services::Actor;
-use rim_services::command::dto::UserCommandStepDto;
+use rim_services::command::dto::{UserCommandDto, UserCommandStepDto};
 use rim_services::command::initiator::CommandInitiator as CommandInitiatorDto;
 use rim_services::command::request::{
-    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, UpdateUserCommandCmd,
+    CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
+    UpdateUserCommandCmd,
 };
 use rim_services::command::service::CommandService;
 
@@ -73,7 +74,7 @@ impl CommandMutations {
             .await
             .map_err(map_service_error)?;
 
-        Ok(command.as_command_definition().into())
+        resolved_definition(svc.as_ref(), Actor::new(actor), command).await
     }
 
     async fn update_user_command(
@@ -103,7 +104,7 @@ impl CommandMutations {
             .await
             .map_err(map_service_error)?;
 
-        Ok(command.as_command_definition().into())
+        resolved_definition(svc.as_ref(), Actor::new(actor), command).await
     }
 
     async fn delete_user_command(
@@ -168,4 +169,23 @@ pub struct UpdateUserCommandInput {
 #[derive(InputObject)]
 pub struct DeleteUserCommandInput {
     pub command_id: String,
+}
+
+/// `command` as the `commands` query resolves it, so the returned tier reflects its steps; a
+/// disabled command does not resolve and falls back to its stored fields.
+async fn resolved_definition(
+    svc: &dyn CommandService,
+    actor: Actor,
+    command: UserCommandDto,
+) -> Result<Command> {
+    let resolved = svc
+        .get_command(GetCommandQuery {
+            actor,
+            command_id: command.command_key.clone(),
+        })
+        .await
+        .map_err(map_service_error)?;
+    Ok(resolved
+        .unwrap_or_else(|| command.as_command_definition())
+        .into())
 }
