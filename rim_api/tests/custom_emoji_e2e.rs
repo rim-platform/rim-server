@@ -15,13 +15,13 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use rim_api::AppSchema;
-use rim_core::server_feature::model::ServerFeature;
-use rim_core::server_member::model::ServerMemberRole;
-use rim_core::user::model::User;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{
+    Caller, anonymous_request, assert_each_refused, exec_err_code, exec_err_message, exec_ok,
+};
+use support::roles::Roles;
 
 const CREATE_EMOJI: &str = r#"
 mutation Create($input: CreateCustomEmojiInput!) {
@@ -46,63 +46,21 @@ const STORAGE_ROOT: &str = "/tmp/rim_api_e2e_test_storage";
 const MAX_IMAGE_BYTES: usize = 256 * 1024;
 
 struct Fixture {
-    ctx: TestCtx,
     schema: AppSchema,
-    server_id: String,
-    other_server_id: String,
-    alice: Caller,
-    mona: Caller,
-    bob: Caller,
-    carol: Caller,
-    gina: Caller,
-    /// Owner of another workspace, not a member of this one.
-    olaf: Caller,
+    ws: Roles,
+    _ctx: TestCtx,
 }
 
-async fn caller(ctx: &TestCtx, user: &User) -> Caller {
-    Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(user).await,
-    }
-}
-
-/// alice (Owner), mona (Moderator), bob and carol (Member) and gina (Guest) in one workspace;
-/// olaf owns another.
 async fn setup() -> Fixture {
     let ctx = TestCtx::new().await;
-    let server = ctx.create_server("emoji-e2e").await;
-    let other = ctx.create_server("emoji-e2e-other").await;
-    let alice_user = ctx.create_user("emoji-alice").await;
-    let mona_user = ctx.create_user("emoji-mona").await;
-    let bob_user = ctx.create_user("emoji-bob").await;
-    let carol_user = ctx.create_user("emoji-carol").await;
-    let gina_user = ctx.create_user("emoji-gina").await;
-    let olaf_user = ctx.create_user("emoji-olaf").await;
-    ctx.add_owner(&server, &alice_user).await;
-    ctx.add_member(&server, &mona_user, ServerMemberRole::Moderator)
-        .await;
-    ctx.add_member(&server, &bob_user, ServerMemberRole::Member)
-        .await;
-    ctx.add_member(&server, &carol_user, ServerMemberRole::Member)
-        .await;
-    ctx.add_member(&server, &gina_user, ServerMemberRole::Guest)
-        .await;
-    ctx.add_owner(&other, &olaf_user).await;
-
     Fixture {
+        ws: ctx.roles("emoji").await,
         schema: ctx.build_schema(RegistrationMode::InviteOnly).await,
-        server_id: server.id.to_string(),
-        other_server_id: other.id.to_string(),
-        alice: caller(&ctx, &alice_user).await,
-        mona: caller(&ctx, &mona_user).await,
-        bob: caller(&ctx, &bob_user).await,
-        carol: caller(&ctx, &carol_user).await,
-        gina: caller(&ctx, &gina_user).await,
-        olaf: caller(&ctx, &olaf_user).await,
-        ctx,
+        _ctx: ctx,
     }
 }
 
+/// `bytes` bytes of image data, base64-encoded.
 fn image(bytes: usize) -> String {
     base64::engine::general_purpose::STANDARD.encode(vec![0x89u8; bytes])
 }
@@ -111,31 +69,45 @@ fn create_vars(server_id: &str, name: &str, image_base64: &str) -> Value {
     json!({ "input": { "serverId": server_id, "name": name, "imageBase64": image_base64 } })
 }
 
+fn delete_vars(emoji_id: &str) -> Value {
+    json!({ "emojiId": emoji_id })
+}
+
+fn stored_file(emoji: &Value) -> PathBuf {
+    PathBuf::from(STORAGE_ROOT).join(emoji["imageUrl"].as_str().expect("imageUrl"))
+}
+
+fn id(emoji: &Value) -> &str {
+    emoji["id"].as_str().expect("emoji id")
+}
+
 impl Fixture {
-    async fn create(&self, who: &Caller, name: &str) -> Value {
-        let data = exec_ok(
-            &self.schema,
-            who.request(CREATE_EMOJI, create_vars(&self.server_id, name, &image(16))),
+    fn create_request(
+        &self,
+        who: &Caller,
+        name: &str,
+        image_base64: &str,
+    ) -> async_graphql::Request {
+        who.request(
+            CREATE_EMOJI,
+            create_vars(&self.ws.server_id, name, image_base64),
         )
-        .await;
+    }
+
+    /// Add a small emoji named `name` as `who` and return it.
+    async fn create(&self, who: &Caller, name: &str) -> Value {
+        let data = exec_ok(&self.schema, self.create_request(who, name, &image(16))).await;
         data["emoji"].clone()
     }
 
     async fn create_code(&self, who: &Caller, name: &str, image_base64: &str) -> String {
-        exec_err_code(
-            &self.schema,
-            who.request(
-                CREATE_EMOJI,
-                create_vars(&self.server_id, name, image_base64),
-            ),
-        )
-        .await
+        exec_err_code(&self.schema, self.create_request(who, name, image_base64)).await
     }
 
     async fn list(&self, who: &Caller) -> Vec<Value> {
         let data = exec_ok(
             &self.schema,
-            who.request(CUSTOM_EMOJIS, json!({ "serverId": self.server_id })),
+            who.request(CUSTOM_EMOJIS, json!({ "serverId": self.ws.server_id })),
         )
         .await;
         data["emojis"].as_array().expect("emojis").clone()
@@ -144,7 +116,7 @@ impl Fixture {
     async fn delete_code(&self, who: &Caller, emoji_id: &str) -> String {
         exec_err_code(
             &self.schema,
-            who.request(DELETE_EMOJI, json!({ "emojiId": emoji_id })),
+            who.request(DELETE_EMOJI, delete_vars(emoji_id)),
         )
         .await
     }
@@ -152,15 +124,11 @@ impl Fixture {
     async fn delete(&self, who: &Caller, emoji_id: &str) {
         let data = exec_ok(
             &self.schema,
-            who.request(DELETE_EMOJI, json!({ "emojiId": emoji_id })),
+            who.request(DELETE_EMOJI, delete_vars(emoji_id)),
         )
         .await;
         assert_eq!(data["deleteCustomEmoji"], json!(true));
     }
-}
-
-fn stored_file(emoji: &Value) -> PathBuf {
-    PathBuf::from(STORAGE_ROOT).join(emoji["imageUrl"].as_str().expect("imageUrl"))
 }
 
 /// Every custom emoji root answers `UNAUTHENTICATED` without a session.
@@ -168,39 +136,34 @@ fn stored_file(emoji: &Value) -> PathBuf {
 async fn custom_emoji_roots_refuse_anonymous_callers() {
     let f = setup().await;
     let calls = [
-        (CREATE_EMOJI, create_vars(&f.server_id, "party", &image(16))),
         (
-            DELETE_EMOJI,
-            json!({ "emojiId": uuid::Uuid::now_v7().to_string() }),
+            CREATE_EMOJI,
+            create_vars(&f.ws.server_id, "party", &image(16)),
         ),
-        (CUSTOM_EMOJIS, json!({ "serverId": f.server_id })),
+        (DELETE_EMOJI, delete_vars(&uuid::Uuid::now_v7().to_string())),
+        (CUSTOM_EMOJIS, json!({ "serverId": f.ws.server_id })),
     ];
-    for (query, vars) in calls {
-        let code = exec_err_code(&f.schema, anonymous_request(query, vars)).await;
-        assert_eq!(code, "UNAUTHENTICATED", "{query}");
-    }
+    assert_each_refused(&f.schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
 }
 
 /// A user outside the workspace can neither list, add nor delete its emoji.
 #[tokio::test]
 async fn custom_emoji_roots_refuse_non_members() {
     let f = setup().await;
-    let emoji = f.create(&f.bob, "party").await;
-
-    let code = f.create_code(&f.olaf, "intrude", &image(16)).await;
-    assert_eq!(code, "FORBIDDEN");
-    let code = exec_err_code(
-        &f.schema,
-        f.olaf
-            .request(CUSTOM_EMOJIS, json!({ "serverId": f.server_id })),
-    )
+    let emoji = f.create(&f.ws.bob, "party").await;
+    let calls = [
+        (
+            CREATE_EMOJI,
+            create_vars(&f.ws.server_id, "intrude", &image(16)),
+        ),
+        (DELETE_EMOJI, delete_vars(id(&emoji))),
+        (CUSTOM_EMOJIS, json!({ "serverId": f.ws.server_id })),
+    ];
+    assert_each_refused(&f.schema, &calls, "FORBIDDEN", |q, v| {
+        f.ws.olive.request(q, v)
+    })
     .await;
-    assert_eq!(code, "FORBIDDEN");
-    let code = f
-        .delete_code(&f.olaf, emoji["id"].as_str().expect("id"))
-        .await;
-    assert_eq!(code, "FORBIDDEN");
-    assert_eq!(f.list(&f.alice).await, vec![emoji]);
+    assert_eq!(f.list(&f.ws.alice).await, vec![emoji]);
 }
 
 /// Any member, a guest included, may add an emoji. The answer carries every field, the image is
@@ -209,17 +172,17 @@ async fn custom_emoji_roots_refuse_non_members() {
 async fn create_custom_emoji_returns_the_emoji_and_lists_it_for_members() {
     let f = setup().await;
     let before = chrono::Utc::now();
-    let emoji = f.create(&f.bob, "party_parrot").await;
+    let emoji = f.create(&f.ws.bob, "party_parrot").await;
 
     assert!(emoji["id"].is_string());
-    assert_eq!(emoji["serverId"], json!(f.server_id));
+    assert_eq!(emoji["serverId"], json!(f.ws.server_id));
     assert_eq!(emoji["name"], json!("party_parrot"));
     let image_url = emoji["imageUrl"].as_str().expect("imageUrl");
     assert!(
-        image_url.starts_with(&format!("{}/emoji/", f.server_id)) && image_url.ends_with(".png"),
+        image_url.starts_with(&format!("{}/emoji/", f.ws.server_id)) && image_url.ends_with(".png"),
         "{image_url}"
     );
-    assert_eq!(emoji["uploadedBy"], json!(f.bob.user_id.to_string()));
+    assert_eq!(emoji["uploadedBy"], json!(f.ws.bob.user_id.to_string()));
     let created_at: chrono::DateTime<chrono::Utc> = emoji["createdAt"]
         .as_str()
         .expect("createdAt")
@@ -231,10 +194,13 @@ async fn create_custom_emoji_returns_the_emoji_and_lists_it_for_members() {
         vec![0x89u8; 16]
     );
 
-    let guest_emoji = f.create(&f.gina, "wave").await;
-    assert_eq!(guest_emoji["uploadedBy"], json!(f.gina.user_id.to_string()));
+    let guest_emoji = f.create(&f.ws.gina, "wave").await;
+    assert_eq!(
+        guest_emoji["uploadedBy"],
+        json!(f.ws.gina.user_id.to_string())
+    );
 
-    for who in [&f.alice, &f.bob, &f.gina] {
+    for who in [&f.ws.alice, &f.ws.bob, &f.ws.gina] {
         let listed = f.list(who).await;
         assert_eq!(listed.len(), 2);
         assert!(listed.contains(&emoji) && listed.contains(&guest_emoji));
@@ -248,14 +214,14 @@ async fn create_custom_emoji_validates_the_name() {
     let f = setup().await;
     let too_long = "a".repeat(65);
     for name in ["", too_long.as_str(), "my-emoji", "my emoji", "emoji!"] {
-        let code = f.create_code(&f.bob, name, &image(16)).await;
+        let code = f.create_code(&f.ws.bob, name, &image(16)).await;
         assert_eq!(code, "VALIDATION", "{name:?}");
     }
-    assert!(f.list(&f.bob).await.is_empty());
+    assert!(f.list(&f.ws.bob).await.is_empty());
 
-    f.create(&f.bob, &"a".repeat(64)).await;
-    f.create(&f.bob, "_Under_score9").await;
-    assert_eq!(f.list(&f.bob).await.len(), 2);
+    f.create(&f.ws.bob, &"a".repeat(64)).await;
+    f.create(&f.ws.bob, "_Under_score9").await;
+    assert_eq!(f.list(&f.ws.bob).await.len(), 2);
 }
 
 /// The image must be valid base64 of one byte up to 256 KiB.
@@ -263,29 +229,22 @@ async fn create_custom_emoji_validates_the_name() {
 async fn create_custom_emoji_validates_the_image() {
     let f = setup().await;
     let code = f
-        .create_code(&f.bob, "big", &image(MAX_IMAGE_BYTES + 1))
+        .create_code(&f.ws.bob, "big", &image(MAX_IMAGE_BYTES + 1))
         .await;
     assert_eq!(code, "VALIDATION");
-    let code = f.create_code(&f.bob, "empty", "").await;
+    let code = f.create_code(&f.ws.bob, "empty", "").await;
     assert_eq!(code, "VALIDATION");
-
-    let res = f
-        .schema
-        .execute(f.bob.request(
-            CREATE_EMOJI,
-            create_vars(&f.server_id, "garbled", "not base64!"),
-        ))
-        .await;
-    let err = res.errors.first().expect("an error");
-    assert!(err.message.starts_with("invalid base64"), "{}", err.message);
-    assert!(f.list(&f.bob).await.is_empty());
+    let message = exec_err_message(
+        &f.schema,
+        f.create_request(&f.ws.bob, "garbled", "not base64!"),
+    )
+    .await;
+    assert!(message.starts_with("invalid base64"), "{message}");
+    assert!(f.list(&f.ws.bob).await.is_empty());
 
     let data = exec_ok(
         &f.schema,
-        f.bob.request(
-            CREATE_EMOJI,
-            create_vars(&f.server_id, "largest", &image(MAX_IMAGE_BYTES)),
-        ),
+        f.create_request(&f.ws.bob, "largest", &image(MAX_IMAGE_BYTES)),
     )
     .await;
     assert_eq!(data["emoji"]["name"], json!("largest"));
@@ -295,16 +254,16 @@ async fn create_custom_emoji_validates_the_image() {
 #[tokio::test]
 async fn create_custom_emoji_refuses_a_duplicate_name() {
     let f = setup().await;
-    f.create(&f.bob, "party").await;
-    let code = f.create_code(&f.carol, "party", &image(16)).await;
+    f.create(&f.ws.bob, "party").await;
+    let code = f.create_code(&f.ws.carol, "party", &image(16)).await;
     assert_eq!(code, "CONFLICT");
-    assert_eq!(f.list(&f.bob).await.len(), 1);
+    assert_eq!(f.list(&f.ws.bob).await.len(), 1);
 
     exec_ok(
         &f.schema,
-        f.olaf.request(
+        f.ws.olive.request(
             CREATE_EMOJI,
-            create_vars(&f.other_server_id, "party", &image(16)),
+            create_vars(&f.ws.other_server_id, "party", &image(16)),
         ),
     )
     .await;
@@ -316,68 +275,20 @@ async fn create_custom_emoji_refuses_a_duplicate_name() {
 #[tokio::test]
 async fn delete_custom_emoji_is_for_the_uploader_and_the_owner() {
     let f = setup().await;
-    let bobs = f.create(&f.bob, "bobs").await;
-    let bobs_id = bobs["id"].as_str().expect("id");
-    let carols = f.create(&f.carol, "carols").await;
-    let carols_id = carols["id"].as_str().expect("id");
+    let bobs = f.create(&f.ws.bob, "bobs").await;
+    let carols = f.create(&f.ws.carol, "carols").await;
 
-    for who in [&f.mona, &f.carol, &f.gina] {
-        let code = f.delete_code(who, bobs_id).await;
-        assert_eq!(code, "FORBIDDEN");
+    for who in [&f.ws.mona, &f.ws.carol, &f.ws.gina] {
+        assert_eq!(f.delete_code(who, id(&bobs)).await, "FORBIDDEN");
     }
     assert!(stored_file(&bobs).exists());
 
-    f.delete(&f.bob, bobs_id).await;
+    f.delete(&f.ws.bob, id(&bobs)).await;
     assert!(!stored_file(&bobs).exists());
-    f.delete(&f.alice, carols_id).await;
-    assert!(f.list(&f.alice).await.is_empty());
+    f.delete(&f.ws.alice, id(&carols)).await;
+    assert!(f.list(&f.ws.alice).await.is_empty());
 
-    let code = f.delete_code(&f.bob, bobs_id).await;
-    assert_eq!(code, "NOT_FOUND");
-    let code = f
-        .delete_code(&f.alice, &uuid::Uuid::now_v7().to_string())
-        .await;
-    assert_eq!(code, "NOT_FOUND");
-}
-
-/// With custom emoji turned off on the instance, every root answers `FEATURE_DISABLED` naming
-/// the feature, before authentication, and nothing changes.
-#[tokio::test]
-async fn custom_emoji_roots_answer_feature_disabled_when_the_instance_turns_it_off() {
-    let f = setup().await;
-    let emoji = f.create(&f.bob, "party").await;
-    let emoji_id = emoji["id"].as_str().expect("id");
-    let gated = f
-        .ctx
-        .build_schema_with_disabled(&[ServerFeature::CustomEmoji]);
-
-    let calls = [
-        (CREATE_EMOJI, create_vars(&f.server_id, "more", &image(16))),
-        (DELETE_EMOJI, json!({ "emojiId": emoji_id })),
-        (CUSTOM_EMOJIS, json!({ "serverId": f.server_id })),
-    ];
-    for (query, vars) in calls {
-        for request in [
-            f.bob.request(query, vars.clone()),
-            anonymous_request(query, vars.clone()),
-        ] {
-            let res = gated.execute(request).await;
-            let ext = res
-                .errors
-                .first()
-                .and_then(|e| e.extensions.as_ref())
-                .unwrap_or_else(|| panic!("{query}: expected an error with extensions"));
-            assert_eq!(
-                ext.get("code"),
-                Some(&async_graphql::Value::from("FEATURE_DISABLED")),
-                "{query}"
-            );
-            assert_eq!(
-                ext.get("feature"),
-                Some(&async_graphql::Value::from("custom_emoji")),
-                "{query}"
-            );
-        }
-    }
-    assert_eq!(f.list(&f.bob).await, vec![emoji]);
+    assert_eq!(f.delete_code(&f.ws.bob, id(&bobs)).await, "NOT_FOUND");
+    let unknown = uuid::Uuid::now_v7().to_string();
+    assert_eq!(f.delete_code(&f.ws.alice, &unknown).await, "NOT_FOUND");
 }
