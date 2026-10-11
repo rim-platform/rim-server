@@ -29,6 +29,7 @@ use rim_core::capability::repository::MockCapabilityRegistryRepository;
 use rim_core::command::repository::MockUserCommandRepository;
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::server::model::ServerId;
+use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
 use rim_core::server_member::repository::MockServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_infra_services::CommandRepos;
@@ -82,7 +83,7 @@ fn ai_cmd(id: &str, ai_callable: bool, caps: &[&str]) -> CommandDefinitionDto {
 /// active `RegisteredCapability` row). Anything else → `Ok(None)` (strict
 /// default-deny). `is_self_scoped` is inferred from `builtin_capabilities()`
 /// so the workspace-scope enforcement uses the same classification as production.
-/// `is_member` — return value for the workspace membership lookup.
+/// `is_member` — whether the membership lookup finds the actor (as a plain `Member`).
 fn build_service(
     registered_caps: &'static [&'static str],
     is_member: bool,
@@ -111,8 +112,16 @@ fn build_service(
     });
     let mut members = MockServerMemberRepository::new();
     members
-        .expect_is_member()
-        .returning(move |_, _| Ok(is_member));
+        .expect_get_member()
+        .returning(move |server_id, user_id| {
+            Ok(is_member.then(|| ServerMember {
+                id: ServerMemberId::new(),
+                server_id,
+                user_id,
+                member_role: ServerMemberRole::Member,
+                joined_at: chrono::Utc::now(),
+            }))
+        });
 
     let capability_service = Arc::new(DefaultCapabilityService::new(CapabilityRepos {
         capability_registry_repo: Arc::new(registry),
