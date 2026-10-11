@@ -19,6 +19,9 @@ Every pull request against `master` says:
 - **Which spec or doc it changes**: a change to a contract in `docs/specs/` or to a page in
   `docs/` is part of the same pull request as the code.
 
+A change an operator, a user or a client author sees adds its line under `Unreleased` in
+`CHANGELOG.md`; the top of that file says how.
+
 Open an issue first for anything beyond a fix: a new feature, a new GraphQL root, a migration, a
 new dependency, a change to a spec. Agreeing on the shape before the code saves both sides a
 rewrite.
@@ -46,8 +49,9 @@ cargo test --workspace
 ```
 
 `cargo test --workspace` includes `cargo test -p migration`, which checks that every migration
-file is registered in `migration/src/lib.rs`. `sea migrate generate` has dropped registrations
-when it rewrites that file, so run it after generating a migration.
+file is registered in `migration/src/lib.rs` and that every migration has a `down` that undoes
+its `up`. `sea migrate generate` has dropped registrations when it rewrites that file, so run it
+after generating a migration.
 
 Three feature-gated suites need a running PostgreSQL 17 and `DATABASE_URL`. They fail loudly
 when `DATABASE_URL` is unset; leave the feature flag off to skip them.
@@ -78,9 +82,12 @@ most:
 - **Errors.** No `unwrap` or `expect` in library code; `ServiceResult` at service boundaries.
 - **Imports.** `std`, then external crates, then local modules, separated by blank lines.
 - **Visibility.** New modules are `pub(crate)` unless something outside the crate uses them.
-- **Migrations.** Generate them with `sea migrate generate <name>`, never by hand. They are
-  additive: a change that removes a column or table comes a release after the change that stops
-  using it, so an operator can roll the binary back.
+- **Migrations.** Generate them with `sea migrate generate <name>`, never by hand. A
+  migration only expands the schema (a table, a column that is nullable or has a default, an
+  index), so the previous release's server keeps working on it and an operator can roll the
+  binary back. Removing or renaming takes two releases: one stops using the column or table, the
+  next drops it, with an **Upgrade:** line in the changelog. Every `down` undoes its `up`.
+  `docs/operations/upgrade.md` is the operator's side of this.
 - **Comments** say what an item is and what it does, briefly. No history ("was", "used to",
   "now"), no references to plans, tickets, stages or pull requests, and no "see section N of the
   spec". The commit message and the pull request carry the why of a change.

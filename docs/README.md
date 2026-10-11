@@ -44,6 +44,9 @@ Normative, versioned contracts in `specs/`:
 - `self-hosting.md`: running a server with `deploy/compose.yml`: first start, updates, backups,
   monitoring.
 - `operations/relay-public.md`: the public relay's runbook: keys, backups, quotas, incidents, abuse.
+- `operations/upgrade.md`: moving a server to a new release and back, and why migrations only go
+  forward.
+- `operations/release-checklist.md`: the steps that cut a release.
 - `operations/audit-retention.md`: audit log retention, export and purge.
 - `operations/background-jobs.md`: the timers the server runs.
 - `operations/features.md`: instance feature switches (`RIM_FEATURES_DISABLED`).

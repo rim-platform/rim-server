@@ -26,7 +26,9 @@ sea migrate generate <migration_name>
 # `sea migrate generate` has repeatedly rewritten migration/src/lib.rs and silently dropped
 # adjacent Box::new(...) registrations in the process. After generating, `cargo test -p migration`
 # verifies no registration was dropped (registration_complete.rs, no DATABASE_URL needed) — it
-# fails loudly, naming the offender, if one goes missing.
+# fails loudly, naming the offender, if one goes missing. The same run checks that every
+# migration has a `down` that undoes its `up` (down_reverses_up.rs; a deliberate no-op goes in
+# its allowlist with a reason). Migrations only expand the schema; see docs/operations/upgrade.md.
 
 # Entity generation (NEVER regenerate directly into entity/src/ — it contains hand-written mappers)
 # Generate to temp dir first, then manually merge new/changed entities into entity/src/:
