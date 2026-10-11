@@ -154,6 +154,13 @@ impl MacroService for DefaultMacroService {
 
         Self::validate_steps(&cmd.steps)?;
 
+        crate::util::ensure_server_member(
+            self.repos.server_member_repo.as_ref(),
+            cmd.server_id,
+            cmd.actor.user_id,
+        )
+        .await?;
+
         let count = self
             .repos
             .macro_repo
@@ -296,6 +303,10 @@ impl MacroService for DefaultMacroService {
             .get_by_id(cmd.macro_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
+
+        if macro_def.user_id != cmd.actor.user_id {
+            return Err(ServiceError::PermissionDenied);
+        }
 
         if cmd.initiator.is_agentic() && !macro_def.ai_callable {
             return Err(ServiceError::PermissionDenied);
@@ -889,6 +900,83 @@ mod tests {
 
         assert_eq!(result.name, "My Macro");
         assert_eq!(result.steps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_macro_refuses_a_non_member() {
+        let mut member_repo = MockServerMemberRepository::new();
+        member_repo.expect_is_member().returning(|_, _| Ok(false));
+        let svc = DefaultMacroService::new(
+            MacroRepos {
+                macro_repo: Arc::new(MockMacroRepository::new()),
+                server_member_repo: Arc::new(member_repo),
+            },
+            MacroServices {
+                command_service: Arc::new(MockCommandService::new()),
+                audit_log_service: None,
+                confirmation_store: None,
+            },
+        );
+
+        let err = svc
+            .create_macro(CreateMacroCmd {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+                name: "intrude".to_string(),
+                description: None,
+                steps: vec![MacroStepDto {
+                    command_id: "chat.post_message".to_string(),
+                    args: None,
+                }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[tokio::test]
+    async fn execute_macro_refuses_anyone_but_the_author() {
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "test".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "hello" } }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+        let svc = service(repo, MockCommandService::new());
+
+        let err = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor: Actor::new(UserId::new()),
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::PermissionDenied));
     }
 
     #[tokio::test]
