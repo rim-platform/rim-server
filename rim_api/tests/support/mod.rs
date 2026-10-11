@@ -255,6 +255,14 @@ impl TestCtx {
         .id
     }
 
+    /// Create a session for `user` and return a [`graphql::Caller`] that executes as them.
+    pub async fn caller(&self, user: &User) -> graphql::Caller {
+        graphql::Caller {
+            user_id: user.id,
+            session_id: self.create_session(user).await,
+        }
+    }
+
     /// Build the real [`AppServiceProvider`] over the test database, for tests that need to
     /// reach a service the GraphQL schema does not expose (e.g. the alert-webhook path).
     pub fn build_provider(&self) -> std::sync::Arc<dyn AppServiceProvider> {
