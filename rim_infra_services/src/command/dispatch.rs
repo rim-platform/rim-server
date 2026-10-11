@@ -48,6 +48,7 @@ impl DefaultCommandService {
         let mut required_capabilities = std::collections::BTreeSet::new();
         let mut keybind_capable = true;
         let mut dangerous = false;
+        let mut step_sensitivities = Vec::with_capacity(user_command.steps.len());
 
         for step in &user_command.steps {
             let definition = self
@@ -67,6 +68,7 @@ impl DefaultCommandService {
             required_capabilities.extend(definition.required_capabilities);
             keybind_capable &= definition.keybind_capable;
             dangerous |= definition.dangerous;
+            step_sensitivities.push(definition.sensitivity);
         }
 
         seen.remove(&user_command.command_key);
@@ -77,6 +79,7 @@ impl DefaultCommandService {
             required_capabilities.into_iter().collect(),
             keybind_capable,
             dangerous,
+            &step_sensitivities,
         ))
     }
 

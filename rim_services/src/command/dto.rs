@@ -240,9 +240,12 @@ impl UserCommandDto {
             vec![],
             true,
             false,
+            &[],
         )
     }
 
+    /// The command's definition given what its steps resolve to; its sensitivity is the
+    /// highest of its steps'.
     pub fn as_command_definition_with_metadata(
         &self,
         execution_target: CommandExecutionTargetDto,
@@ -250,8 +253,12 @@ impl UserCommandDto {
         required_capabilities: Vec<String>,
         keybind_capable: bool,
         dangerous: bool,
+        step_sensitivities: &[CommandSensitivityDto],
     ) -> CommandDefinitionDto {
-        let sensitivity = CommandSensitivityDto::from_dangerous_flag(dangerous);
+        let sensitivity = CommandSensitivityDto::effective(
+            CommandSensitivityDto::from_dangerous_flag(dangerous),
+            step_sensitivities,
+        );
         CommandDefinitionDto {
             id: self.command_key.clone(),
             title: self.title.clone(),

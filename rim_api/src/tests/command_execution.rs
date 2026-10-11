@@ -117,60 +117,79 @@ async fn execute_command_omitted_initiator_defaults_to_palette() {
     assert_no_errors(&res);
 }
 
-#[tokio::test]
-async fn create_user_command_mutation_returns_command() {
-    let actor = UserId::new();
-    let user_command_id = rim_core::command::model::UserCommandId::new();
-    let mut command = MockCommandService::new();
-    command.expect_create_user_command().returning(move |_cmd| {
-        Box::pin(async move {
-            Ok(rim_services::command::dto::UserCommandDto {
-                id: user_command_id,
-                command_key: "user.quick_group".to_string(),
-                title: "Quick Group".to_string(),
-                description: "desc".to_string(),
-                steps: vec![],
-                is_enabled: true,
-            })
-        })
-    });
-
-    let schema = schema_with_command_mock(command);
-    let req = authed_request(
-        r#"mutation { createUserCommand(input: { commandId: "user.quick_group", title: "Quick Group", description: "desc", steps: [{ commandId: "chat.create_group" }] }) { id sourceKind } }"#,
-        actor,
-    );
-
-    let res = schema.execute(req).await;
-    assert_no_errors(&res);
+fn quick_group(title: &str, is_enabled: bool) -> rim_services::command::dto::UserCommandDto {
+    rim_services::command::dto::UserCommandDto {
+        id: rim_core::command::model::UserCommandId::new(),
+        command_key: "user.quick_group".to_string(),
+        title: title.to_string(),
+        description: "desc".to_string(),
+        steps: vec![],
+        is_enabled,
+    }
 }
 
+/// The created command is returned as `get_command` resolves it, carrying its steps' tier.
 #[tokio::test]
-async fn update_user_command_mutation_returns_command() {
+async fn create_user_command_mutation_returns_the_resolved_command() {
     let actor = UserId::new();
-    let user_command_id = rim_core::command::model::UserCommandId::new();
+    let stored = quick_group("Quick Group", true);
+    let resolved = stored.as_command_definition_with_metadata(
+        rim_services::command::dto::CommandExecutionTargetDto::Backend,
+        vec![],
+        vec![],
+        true,
+        false,
+        &[rim_services::command::sensitivity::CommandSensitivityDto::Mutating],
+    );
     let mut command = MockCommandService::new();
-    command.expect_update_user_command().returning(move |_cmd| {
-        Box::pin(async move {
-            Ok(rim_services::command::dto::UserCommandDto {
-                id: user_command_id,
-                command_key: "user.quick_group".to_string(),
-                title: "Quick Group Updated".to_string(),
-                description: "desc".to_string(),
-                steps: vec![],
-                is_enabled: false,
-            })
-        })
+    command.expect_create_user_command().returning(move |_cmd| {
+        let stored = stored.clone();
+        Box::pin(async move { Ok(stored) })
     });
+    command
+        .expect_get_command()
+        .withf(|query| query.command_id == "user.quick_group")
+        .returning(move |_query| {
+            let resolved = resolved.clone();
+            Box::pin(async move { Ok(Some(resolved)) })
+        });
 
     let schema = schema_with_command_mock(command);
     let req = authed_request(
-        r#"mutation { updateUserCommand(input: { commandId: "user.quick_group", title: "Quick Group Updated", description: "desc", isEnabled: false, steps: [{ commandId: "chat.create_group" }] }) { id } }"#,
+        r#"mutation { createUserCommand(input: { commandId: "user.quick_group", title: "Quick Group", description: "desc", steps: [{ commandId: "state.incr" }] }) { id sourceKind sensitivity } }"#,
         actor,
     );
 
     let res = schema.execute(req).await;
     assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(json["createUserCommand"]["id"], "user.quick_group");
+    assert_eq!(json["createUserCommand"]["sensitivity"], "MUTATING");
+}
+
+/// A disabled command does not resolve, so the update returns its stored fields.
+#[tokio::test]
+async fn update_user_command_mutation_returns_a_disabled_command_unresolved() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command
+        .expect_update_user_command()
+        .returning(|_cmd| Box::pin(async { Ok(quick_group("Quick Group Updated", false)) }));
+    command
+        .expect_get_command()
+        .returning(|_query| Box::pin(async { Ok(None) }));
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"mutation { updateUserCommand(input: { commandId: "user.quick_group", title: "Quick Group Updated", description: "desc", isEnabled: false, steps: [{ commandId: "chat.create_group" }] }) { id title sensitivity } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(json["updateUserCommand"]["title"], "Quick Group Updated");
+    assert_eq!(json["updateUserCommand"]["sensitivity"], "SAFE");
 }
 
 #[tokio::test]
