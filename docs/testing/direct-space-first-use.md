@@ -35,3 +35,19 @@ are refused as before.
 Not tested here: roots that take a conversation id (`conversation`, `messages`, `channelLenses`,
 `markAsRead`, `claimMlsKeyPackages`, `submitMlsCommit`, `mlsCommits`). A newcomer belongs to no
 conversation, so these still refuse, as they do in any workspace.
+
+## Open for Jakub
+
+1. **Reads join too.** A read such as `unreadCounts` makes the caller a guest, as a signed-in
+   `relayInfo` already does for every local user. The alternative is answering empty without
+   joining, which needs an empty-answer path in each service.
+2. **`commands` ignores membership.** It lists every command, admin ones included, for a caller
+   who is not a member of the space in `commandContext`, in every workspace. Pinned by a test.
+   The alternative is filtering by the caller's membership and role, the same question as
+   `commandDiscover` filtering by capability rather than role.
+3. **Workspace-only features in the direct space.** Custom emojis, plugins, keybinds, pipelines,
+   workspace state and channels answer empty there. The alternative is refusing them in the
+   direct space and having the client stop sending them there.
+4. **Client gaps.** The client still sends workspace-only queries for the direct space, and it
+   fetches the direct space's unread counts, notifications and events only once Direct messages
+   is opened, so DM badges are missing at sign-in.
