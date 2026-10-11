@@ -1,9 +1,11 @@
 # `.env` secret exposure — remediation runbook
 
-_Prepared 2026-07-13 (C2 session). The **safe mitigations are already done** (see below).
-The remaining step — scrubbing `.env` from published git history — rewrites `master` +
-5 branches and force-pushes to GitHub, so it is left for **Jakub to run while present**,
-not executed unattended._
+_Prepared 2026-07-13. The safe mitigations were done then (see below). **The history purge was
+run on 2026-10-11**: every branch and tag on `origin` was rewritten with `git filter-repo` from a
+mirror clone and force-pushed; no `.env` blob remains in any reachable history. Two mirror
+backups from before the rewrite were kept locally and should be deleted once nothing needs them.
+Still open: GitHub keeps the old commits reachable by SHA and through the early pull requests'
+`refs/pull/*/head` until GitHub Support removes them, so the old values stay rotated._
 
 _Update 2026-10-09: the server no longer reads `RIM_BOOTSTRAP_SECRET` at all (the deprecated
 `bootstrap` mutation was removed; the first account comes from `rim_server bootstrap-user`), so
