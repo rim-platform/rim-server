@@ -8,7 +8,9 @@ pub(crate) struct AuditLogQueries;
 
 #[Object]
 impl AuditLogQueries {
-    /// Query the command audit log. Requires `audit.read` capability.
+    /// Query the command audit log. Owners and moderators of a workspace read its whole log by
+    /// setting `filter.serverId`. Everyone reads their own rows by setting `filter.actorUserId`
+    /// to themselves. A filter with neither is rejected.
     async fn list_audit_log(
         &self,
         ctx: &Context<'_>,
