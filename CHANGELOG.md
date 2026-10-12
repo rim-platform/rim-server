@@ -60,6 +60,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** a GraphQL batch holds at most 20 requests; a larger one is answered 400 with
   `{"error":"batch_too_large"}` and none of it runs. `RIM_API_MAX_BATCH` changes the cap.
 
+- With `link_previews` in `RIM_FEATURES_DISABLED`, sending or replying to a message no longer
+  starts a link preview fetch at all, so the server makes no outbound request for the links
+  people post.
 - The packaged desktop app's origins (`tauri://localhost`, `http://tauri.localhost` and
   `https://tauri.localhost`) are accepted by every server without `RIM_CORS_ALLOWED_ORIGIN`.
 - GraphQL `commands` and `commandDiscover` list only the commands the caller may run. A command
