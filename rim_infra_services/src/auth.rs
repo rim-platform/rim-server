@@ -32,6 +32,7 @@ use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
+use crate::reserved_names::ReservedNames;
 use crate::signup;
 use crate::url_encode::percent_encode_path_segment;
 use crate::util::{add_workspace_member, ensure_not_banned, ensure_server_owner};
@@ -58,6 +59,8 @@ pub struct DefaultAuthService {
     public_base_url: Option<String>,
     /// Caps on invites and on workspace members.
     limits: InstanceLimits,
+    /// Usernames and display names signups may not take.
+    reserved_names: ReservedNames,
 }
 
 impl DefaultAuthService {
@@ -91,6 +94,7 @@ impl DefaultAuthService {
             email_sender,
             public_base_url,
             limits: InstanceLimits::default(),
+            reserved_names: ReservedNames::default(),
         }
     }
 
@@ -161,6 +165,11 @@ impl DefaultAuthService {
         Ok(())
     }
 
+    pub(crate) fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
+        self.reserved_names = reserved_names;
+        self
+    }
+
     /// Share the store of recent successful login sources, so other services (password
     /// reset) can forget an account's sources.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
@@ -195,6 +204,7 @@ impl DefaultAuthService {
             email_sender,
             public_base_url,
             limits: InstanceLimits::default(),
+            reserved_names: ReservedNames::default(),
         }
     }
 
@@ -322,6 +332,22 @@ impl DefaultAuthService {
                 "login attempt failed: account signs in with a device key"
             );
             return Err(ServiceError::Unauthenticated);
+        }
+
+        // An operator's complete ban blocks the account's address.
+        if let Some(email) = &user.email
+            && self.repos.user_repo.is_email_blocked(email).await?
+        {
+            tracing::info!(
+                target: "audit",
+                event = "blocked_email_refused",
+                action = "login",
+                user_id = %user.id,
+                "login refused: the account's email is blocked on this server"
+            );
+            return Err(ServiceError::Forbidden(
+                "this account is blocked on this server".to_string(),
+            ));
         }
 
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
@@ -624,6 +650,8 @@ impl AuthService for DefaultAuthService {
         let (invite_token, username, password) =
             (invite_token.as_str(), username.as_str(), password.as_str());
         signup::validate_username(username)?;
+        // The display name falls back to the username.
+        signup::check_reserved(&self.reserved_names, username, username)?;
         Self::validate_password(password)?;
 
         let inv =
@@ -828,6 +856,7 @@ impl AuthService for DefaultAuthService {
         let email = Self::validate_email(&email)?;
         let resolved_display_name =
             signup::normalize_display_name(display_name.as_deref(), username)?;
+        signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
 
         let token = signup::CheckedToken::InstanceInvite(
             signup::check_instance_invite(
@@ -911,6 +940,7 @@ impl AuthService for DefaultAuthService {
         let email = Self::validate_email(&email)?;
         let resolved_display_name =
             signup::normalize_display_name(display_name.as_deref(), username)?;
+        signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
 
         let password_hash = hash_password(password).map_err(ServiceError::internal)?;
 

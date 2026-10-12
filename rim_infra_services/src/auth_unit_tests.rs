@@ -947,6 +947,7 @@ mod tests {
     #[tokio::test]
     async fn instance_invite_creates_user_with_no_workspace() {
         let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
+        let chain = (uuid::Uuid::from(bt.id), bt.created_by_user_id);
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
@@ -960,6 +961,13 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        // The account records the invite it used and that invite's creator.
+        user_repo
+            .expect_record_invite_chain()
+            .withf(move |id, invite, by| *id == user_id && (*invite, *by) == chain)
+            .times(1)
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1022,6 +1030,10 @@ mod tests {
         let session_id = SessionId::new();
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1094,6 +1106,10 @@ mod tests {
         let session_id = SessionId::new();
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1212,6 +1228,9 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        // No invite, no chain.
+        user_repo.expect_record_invite_chain().never();
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1256,6 +1275,10 @@ mod tests {
     fn user_repo_recording_terms(user_id: UserId) -> MockUserRepository {
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1422,6 +1445,66 @@ mod tests {
             matches!(err, ServiceError::Validation(ref m) if m.contains("password")),
             "got: {err:?}"
         );
+    }
+
+    /// Every password signup refuses a reserved username or display name before it touches
+    /// a repository.
+    #[tokio::test]
+    async fn password_signups_refuse_reserved_names() {
+        use crate::reserved_names::{RESERVED_NAME_REFUSAL, ReservedNames};
+
+        let (ur, sr, smr, sess_r, ir, cr) = repos();
+        let svc = svc_with_registration(
+            ur,
+            sr,
+            smr,
+            sess_r,
+            ir,
+            cr,
+            MockInstanceInviteRepository::new(),
+        )
+        .with_reserved_names(ReservedNames::parse("rim,admin").unwrap());
+        let open = |username: &str, display_name: Option<&str>| SignupOpenCmd {
+            username: username.to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            remote_ip: "1.2.3.4".to_string(),
+            email: "carol@example.com".to_string(),
+            display_name: display_name.map(str::to_string),
+            terms_accepted_url: None,
+        };
+        let refusals = [
+            svc.signup_open(open("rim-team", None)).await,
+            svc.signup_open(open("carol", Some("ＡＤＭＩＮ"))).await,
+        ];
+        let invited = svc
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: Some("Rim Support".to_string()),
+                terms_accepted_url: None,
+            })
+            .await;
+        let accepted = svc
+            .accept_invite(AcceptInviteCmd {
+                invite_token: "token".to_string(),
+                username: "admin_2".to_string(),
+                password: "password123".to_string(),
+                terms_accepted_url: None,
+            })
+            .await
+            .map(|_| ());
+        for res in refusals
+            .into_iter()
+            .map(|r| r.map(|_| ()))
+            .chain([invited.map(|_| ()), accepted])
+        {
+            assert!(
+                matches!(&res, Err(ServiceError::Validation(m)) if m == RESERVED_NAME_REFUSAL),
+                "{res:?}"
+            );
+        }
     }
 
     /// `previewInviteToken` for a valid workspace invite returns `WORKSPACE` type
@@ -1719,6 +1802,10 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1794,6 +1881,10 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         // find_by_email returns Some for the duplicate.
         user_repo
             .expect_find_by_email()
@@ -1884,6 +1975,10 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -1952,6 +2047,10 @@ mod tests {
 
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
         user_repo.expect_find_by_email().returning(|_| Ok(None));
         user_repo
             .expect_create_user()
@@ -2127,6 +2226,7 @@ mod tests {
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
 
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(2)
@@ -2158,6 +2258,7 @@ mod tests {
     #[tokio::test]
     async fn login_unknown_user_is_unauthenticated() {
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo.expect_find_by_username().returning(|_| Ok(None));
 
         let svc = login_svc(
@@ -2176,6 +2277,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn login_to_an_account_whose_email_is_blocked_is_forbidden() {
+        let user_id = UserId::new();
+        let mut user = make_user(user_id, "banned");
+        user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_find_by_username()
+            .returning(move |_| Ok(Some(user.clone())));
+        user_repo
+            .expect_is_email_blocked()
+            .withf(|email| email == "banned@local.invalid")
+            .returning(|_| Ok(true));
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_create_session().never();
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 10),
+            RegistrationRateLimiter::new(900, 10),
+            RegistrationRateLimiter::new(3600, 10),
+        );
+        let err = svc
+            .login(login_cmd("banned", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn login_to_a_key_only_account_is_refused_like_a_wrong_password() {
         let user_id = UserId::new();
         let user = User {
@@ -2185,6 +2315,7 @@ mod tests {
             ..make_user(user_id, "keyonly")
         };
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(1)
@@ -2218,6 +2349,7 @@ mod tests {
         let mut user_repo = MockUserRepository::new();
         // Only allowed attempts may reach the repository (and Argon2): two from the
         // throttled IP plus one from the unaffected IP.
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(3)
@@ -2255,6 +2387,7 @@ mod tests {
     #[tokio::test]
     async fn login_account_limit_spans_source_ips_and_ignores_username_case() {
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(2)
@@ -2285,11 +2418,13 @@ mod tests {
     async fn login_repo_error_does_not_count_against_account_limit() {
         let mut user_repo = MockUserRepository::new();
         let mut seq = mockall::Sequence::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_| Err(RepoError::with_message(RepoErrorKind::Internal, "db down")));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(1)
@@ -2331,6 +2466,7 @@ mod tests {
         // Two guesses from the attacker, one attempt on another account from the same
         // address, then the owner's login; the throttled third guess never reaches the
         // repository.
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(4)
@@ -2380,6 +2516,7 @@ mod tests {
     #[tokio::test]
     async fn login_account_backstop_rejection_does_not_consume_pair_budget() {
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(1)
@@ -2412,6 +2549,7 @@ mod tests {
         let svc = login_svc(
             {
                 let mut repo = MockUserRepository::new();
+                repo.expect_is_email_blocked().returning(|_| Ok(false));
                 repo.expect_find_by_username().returning(|_| Ok(None));
                 repo
             },
@@ -2432,6 +2570,7 @@ mod tests {
     #[tokio::test]
     async fn login_pair_limited_attempt_does_not_charge_account_backstop() {
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .times(2)
@@ -2474,6 +2613,7 @@ mod tests {
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
         let mut user_repo = MockUserRepository::new();
         // Exact match, like the real repository: usernames are case-sensitive.
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .returning(move |name| Ok((name == "victim").then(|| user.clone())));
@@ -2600,6 +2740,7 @@ mod tests {
         attacker.password_hash = Some(rim_auth::password::hash_password("attacker-pass").unwrap());
 
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
             .returning(move |name| match name {

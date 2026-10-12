@@ -124,6 +124,9 @@ USER rim
 #                           instead of the normal rate (default: the normal rate)
 #   RIM_ACCOUNT_DELETION_GRACE_DAYS — days between an account's deletion request and its purge,
 #                           0-30 (default: 14); outside the range stops the server at boot
+#   RIM_RESERVED_NAMES    — comma-separated usernames and display names signups and profile
+#                           edits refuse, also followed by -, _, . or a space (default: none);
+#                           an empty entry stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

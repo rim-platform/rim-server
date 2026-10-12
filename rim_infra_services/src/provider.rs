@@ -61,6 +61,8 @@ pub struct FederationHooks {
     /// Sends a local device's revocation to every host holding its person.
     pub revocation_fanout:
         Option<Arc<dyn rim_services::remote_workspace::service::RevocationFanout>>,
+    /// Usernames and display names signups and profile edits refuse.
+    pub reserved_names: crate::reserved_names::ReservedNames,
 }
 
 #[derive(Clone)]
@@ -135,7 +137,8 @@ impl DefaultAppServiceProvider {
             )
             .with_known_login_sources(known_login_sources.clone())
             .with_signup_rate_limiter(signup_rate_limiter.clone())
-            .with_limits(limits),
+            .with_limits(limits)
+            .with_reserved_names(federation.reserved_names.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -162,7 +165,10 @@ impl DefaultAppServiceProvider {
         if let Some(server_id) = &federation.server_id {
             key_auth = key_auth.with_server_id(server_id.clone());
         }
-        key_auth = key_auth.with_quotas(federation.quotas).with_limits(limits);
+        key_auth = key_auth
+            .with_quotas(federation.quotas)
+            .with_limits(limits)
+            .with_reserved_names(federation.reserved_names.clone());
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -306,8 +312,11 @@ impl DefaultAppServiceProvider {
         );
         let thread_service: Arc<dyn ThreadService> =
             Arc::new(crate::thread::DefaultThreadService::new(repos.for_thread()));
-        let user_service: Arc<dyn UserService> =
-            Arc::new(crate::user::DefaultUserService::new(repos.for_user()).with_limits(limits));
+        let user_service: Arc<dyn UserService> = Arc::new(
+            crate::user::DefaultUserService::new(repos.for_user())
+                .with_limits(limits)
+                .with_reserved_names(federation.reserved_names.clone()),
+        );
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(
                 repos.for_workspace_state(),

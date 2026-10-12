@@ -1,16 +1,19 @@
 //! CLI subcommands for a relay's abuse tools.
 //!
 //! ```text
-//! rim_server principal block <principal-id> --reason <text>
+//! rim_server principal block <principal-id> --reason <text> [--cascade]
 //! rim_server principal unblock <principal-id>
+//! rim_server principal show <principal-id>
 //! rim_server principal list
 //! rim_server abuse-reports list [--open]
 //! rim_server abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text>
 //! rim_server abuse-reports resolve <report-id>
 //! ```
 //!
-//! A block applies at once on every node: its sessions end and the next signup, login or
-//! delivery is refused. Exit code 0 on success, 1 on any error, 2 on a usage error.
+//! A block applies at once on every node: its sessions end, its invites are revoked, its email
+//! is refused, and the next signup, login or delivery is refused. `--cascade` blocks every
+//! account its invites created too, recursively. Exit code 0 on success, 1 on any error, 2 on a
+//! usage error.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -19,15 +22,18 @@ use rim_core::relay::model::AbuseReportId;
 use rim_infra_db::DbHandle;
 use rim_infra_services::AppRepos;
 use rim_infra_services::relay::abuse::DefaultRelayAbuseService;
-use rim_services::relay::dto::{AbuseReportDto, FileAbuseReport};
+use rim_services::relay::dto::{
+    AbuseReportDto, AccountSummaryDto, FileAbuseReport, PrincipalBlockOutcome, PrincipalRecordDto,
+};
 use rim_services::relay::service::RelayAbuseService;
 use sea_orm::Database;
 use uuid::Uuid;
 
 use crate::config::RIMConfig;
 
-const USAGE: &str = "usage: rim_server principal block <principal-id> --reason <text> | \
-     principal unblock <principal-id> | principal list | abuse-reports list [--open] | \
+const USAGE: &str = "usage: rim_server principal block <principal-id> --reason <text> \
+     [--cascade] | principal unblock <principal-id> | principal show <principal-id> | \
+     principal list | abuse-reports list [--open] | \
      abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text> | \
      abuse-reports resolve <report-id>";
 
@@ -37,8 +43,12 @@ enum Command {
     Block {
         principal_id: String,
         reason: String,
+        cascade: bool,
     },
     Unblock {
+        principal_id: String,
+    },
+    Show {
         principal_id: String,
     },
     ListBlocks,
@@ -64,21 +74,29 @@ fn parse(group: &str, mut args: impl Iterator<Item = String>) -> Result<Command,
                 .next()
                 .ok_or("principal block requires a principal id")?;
             let mut reason = None;
+            let mut cascade = false;
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--reason" => reason = Some(value("--reason", &mut args)?),
+                    "--cascade" => cascade = true,
                     other => return Err(format!("unknown argument: {other}")),
                 }
             }
             return Ok(Command::Block {
                 principal_id,
                 reason: reason.ok_or("--reason <text> is required")?,
+                cascade,
             });
         }
         ("principal", "unblock") => Command::Unblock {
             principal_id: args
                 .next()
                 .ok_or("principal unblock requires a principal id")?,
+        },
+        ("principal", "show") => Command::Show {
+            principal_id: args
+                .next()
+                .ok_or("principal show requires a principal id")?,
         },
         ("principal", "list") => Command::ListBlocks,
         ("abuse-reports", "list") => {
@@ -203,45 +221,194 @@ fn describe_report(out: &mut String, report: &AbuseReportDto) {
     let _ = writeln!(out, "    reason   : {}", report.reason);
 }
 
+/// `username (principal)`, or `username (no key identity)`.
+fn account_label(account: &AccountSummaryDto) -> String {
+    format!(
+        "{} ({})",
+        account.username,
+        account.principal_id.as_deref().unwrap_or("no key identity")
+    )
+}
+
+fn describe_block(out: &mut String, outcome: &PrincipalBlockOutcome, cascade: bool) {
+    let subject = match (&outcome.account, &outcome.principal_id) {
+        (Some(account), _) => account_label(account),
+        (None, Some(principal_id)) => format!("{principal_id} (no account here)"),
+        (None, None) => "an unknown account".to_string(),
+    };
+    if outcome.newly_blocked {
+        let _ = writeln!(out, "blocked {subject}");
+    } else {
+        let _ = writeln!(out, "{subject} was blocked already; reason replaced");
+    }
+    if cascade {
+        let _ = writeln!(out, "    reason: {}", outcome.reason);
+    }
+    let _ = writeln!(
+        out,
+        "    ended {} sessions; ignored {} pending DM requests from it; revoked {} invites",
+        outcome.ended_sessions, outcome.ignored_requests, outcome.revoked_invites
+    );
+    if let Some(email) = &outcome.blocked_email {
+        let _ = writeln!(out, "    blocked email {email}");
+    }
+}
+
+fn describe_invitees(out: &mut String, outcome: &PrincipalBlockOutcome) {
+    if outcome.invitees.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "accounts its invites created:");
+    for invitee in &outcome.invitees {
+        let _ = writeln!(
+            out,
+            "    {}  {}  {}",
+            invitee.username,
+            invitee.principal_id.as_deref().unwrap_or("no key identity"),
+            invitee.created_at.to_rfc3339()
+        );
+    }
+    let _ = writeln!(
+        out,
+        "block each with `principal block <principal-id> --reason <text>`, or all with --cascade"
+    );
+}
+
+fn describe_record(out: &mut String, record: &PrincipalRecordDto) {
+    let _ = writeln!(out, "principal  : {}", record.principal_id);
+    match &record.account {
+        None => {
+            let _ = writeln!(out, "account    : none here");
+        }
+        Some(account) => {
+            let _ = writeln!(
+                out,
+                "account    : {} (user {}), created {}",
+                account.account.username,
+                account.account.user_id,
+                account.account.created_at.to_rfc3339()
+            );
+            if let Some(email) = &account.email {
+                let state = if account.email_blocked {
+                    " (blocked)"
+                } else {
+                    ""
+                };
+                let _ = writeln!(out, "email      : {email}{state}");
+            }
+            match (&account.inviter, account.invite_id) {
+                (Some(inviter), Some(invite_id)) => {
+                    let _ = writeln!(
+                        out,
+                        "invited by : {} with invite {invite_id}",
+                        account_label(inviter)
+                    );
+                }
+                (None, Some(invite_id)) => {
+                    let _ = writeln!(out, "invited by : the operator with invite {invite_id}");
+                }
+                _ => {
+                    let _ = writeln!(out, "invited by : nobody");
+                }
+            }
+            let _ = writeln!(out, "invites    : {}", account.invites.len());
+            for invite in &account.invites {
+                let kind = if invite.instance {
+                    "instance"
+                } else {
+                    "workspace"
+                };
+                let state = match invite.revoked_at {
+                    Some(at) => format!("  revoked {}", at.to_rfc3339()),
+                    None => String::new(),
+                };
+                let _ = writeln!(
+                    out,
+                    "    {}  {kind}  used {}/{}  {}{state}",
+                    invite.id,
+                    invite.use_count,
+                    invite.max_uses,
+                    invite.created_at.to_rfc3339()
+                );
+            }
+            let _ = writeln!(out, "invitees   : {}", account.invitees.len());
+            for invitee in &account.invitees {
+                let indent = "  ".repeat(invitee.depth as usize);
+                let state = if invitee.blocked { "  blocked" } else { "" };
+                let _ = writeln!(
+                    out,
+                    "  {indent}{}  {}{state}",
+                    account_label(&invitee.account),
+                    invitee.account.created_at.to_rfc3339()
+                );
+            }
+        }
+    }
+    match &record.block {
+        Some(block) => {
+            let _ = writeln!(
+                out,
+                "blocked    : since {}: {}",
+                block.created_at.to_rfc3339(),
+                block.reason
+            );
+        }
+        None => {
+            let _ = writeln!(out, "blocked    : no");
+        }
+    }
+    let _ = writeln!(out, "open reports: {}", record.open_reports.len());
+    for report in &record.open_reports {
+        describe_report(out, report);
+    }
+}
+
 async fn execute(command: Command, config: &RIMConfig) -> Result<String, String> {
     let db = Database::connect(&config.database_url)
         .await
         .map_err(|e| format!("failed to connect to database: {e}"))?;
-    let handle: DbHandle = db.into();
-    let service: Arc<dyn RelayAbuseService> = Arc::new(DefaultRelayAbuseService::new(
-        AppRepos::with_handle(&handle).for_relay_abuse(),
-    ));
+    let handle: DbHandle = db.clone().into();
+    let service: Arc<dyn RelayAbuseService> = Arc::new(
+        DefaultRelayAbuseService::new(AppRepos::with_handle(&handle).for_relay_abuse()).with_db(db),
+    );
     let mut out = String::new();
     match command {
         Command::Block {
             principal_id,
             reason,
+            cascade,
         } => {
-            let outcome = service
-                .block_principal(principal_id.clone(), reason)
+            let outcomes = service
+                .block_principal(principal_id, reason, cascade)
                 .await
                 .map_err(|e| e.to_string())?;
-            if outcome.newly_blocked {
-                let _ = writeln!(out, "blocked {principal_id}");
-            } else {
-                let _ = writeln!(out, "{principal_id} was blocked already; reason replaced");
+            for (index, outcome) in outcomes.iter().enumerate() {
+                describe_block(&mut out, outcome, index > 0);
             }
-            let _ = writeln!(
-                out,
-                "ended {} sessions; ignored {} pending DM requests from it",
-                outcome.ended_sessions, outcome.ignored_requests
-            );
+            if !cascade && let Some(first) = outcomes.first() {
+                describe_invitees(&mut out, first);
+            }
         }
         Command::Unblock { principal_id } => {
-            if service
+            let outcome = service
                 .unblock_principal(principal_id.clone())
                 .await
-                .map_err(|e| e.to_string())?
-            {
+                .map_err(|e| e.to_string())?;
+            if outcome.lifted {
                 let _ = writeln!(out, "unblocked {principal_id}");
             } else {
                 let _ = writeln!(out, "{principal_id} was not blocked");
             }
+            if outcome.email_unblocked {
+                let _ = writeln!(out, "its email may sign up and sign in again");
+            }
+        }
+        Command::Show { principal_id } => {
+            let record = service
+                .principal_record(principal_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            describe_record(&mut out, &record);
         }
         Command::ListBlocks => {
             for block in service
@@ -308,7 +475,25 @@ mod tests {
             parse("principal", args(&["block", P, "--reason", "spam"])),
             Ok(Command::Block {
                 principal_id: P.to_string(),
-                reason: "spam".to_string()
+                reason: "spam".to_string(),
+                cascade: false,
+            })
+        );
+        assert_eq!(
+            parse(
+                "principal",
+                args(&["block", P, "--cascade", "--reason", "spam ring"])
+            ),
+            Ok(Command::Block {
+                principal_id: P.to_string(),
+                reason: "spam ring".to_string(),
+                cascade: true,
+            })
+        );
+        assert_eq!(
+            parse("principal", args(&["show", P])),
+            Ok(Command::Show {
+                principal_id: P.to_string()
             })
         );
         assert_eq!(
@@ -350,6 +535,10 @@ mod tests {
         assert!(parse("principal", args(&["block", P])).is_err());
         assert!(parse("principal", args(&["block", P, "--reason"])).is_err());
         assert!(parse("principal", args(&["unblock"])).is_err());
+        assert!(parse("principal", args(&["block", P, "--cascade"])).is_err());
+        assert!(parse("principal", args(&["block", P, "--reason", "x", "--all"])).is_err());
+        assert!(parse("principal", args(&["show"])).is_err());
+        assert!(parse("principal", args(&["show", P, "--cascade"])).is_err());
         assert!(parse("principal", args(&["list", "extra"])).is_err());
         assert!(parse("abuse-reports", args(&["list", "--all"])).is_err());
         assert!(parse("abuse-reports", args(&["add", "--reason", "x"])).is_err());

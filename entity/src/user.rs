@@ -40,6 +40,10 @@ pub struct Model {
     pub deletion_scheduled_for: Option<DateTimeWithTimeZone>,
     /// When the account was purged; the row is then a tombstone.
     pub deleted_at: Option<DateTimeWithTimeZone>,
+    /// The instance or workspace invite the account signed up with.
+    pub created_by_invite_id: Option<Uuid>,
+    /// The creator of that invite.
+    pub invited_by_user_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -244,6 +244,10 @@ pub struct RIMConfig {
     /// Days between an account's deletion request and its purge, 0 to 30; default 14.
     /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
     pub account_deletion_grace_days: Option<u32>,
+    /// Comma-separated usernames and display names signups and profile edits refuse, with
+    /// each followed by `-`, `_`, `.` or a space. Controlled by `RIM_RESERVED_NAMES`; see
+    /// [`RIMConfig::reserved_names`].
+    pub reserved_names: Option<String>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -353,6 +357,7 @@ impl fmt::Debug for RIMConfig {
                 "account_deletion_grace_days",
                 &self.account_deletion_grace_days,
             )
+            .field("reserved_names", &self.reserved_names)
             .finish()
     }
 }
@@ -427,6 +432,7 @@ impl Default for RIMConfig {
             probation_hours: None,
             rate_probation_messages_per_min: None,
             account_deletion_grace_days: None,
+            reserved_names: None,
         }
     }
 }
@@ -913,6 +919,22 @@ impl RIMConfig {
             notice: self.instance_notice()?,
             terms_url: self.terms_url()?,
         })
+    }
+}
+
+impl RIMConfig {
+    /// `RIM_RESERVED_NAMES`, compared case-insensitively after NFKC normalisation; nothing is
+    /// reserved when it is unset or blank.
+    ///
+    /// # Errors
+    /// A message naming the variable when an entry is empty, as in `rim,,admin`.
+    pub fn reserved_names(
+        &self,
+    ) -> Result<rim_infra_services::reserved_names::ReservedNames, String> {
+        rim_infra_services::reserved_names::ReservedNames::parse(
+            self.reserved_names.as_deref().unwrap_or_default(),
+        )
+        .map_err(|e| format!("RIM_RESERVED_NAMES: {e}"))
     }
 }
 
@@ -1946,5 +1968,31 @@ mod tests {
                 "RIM_RATE_PROBATION_MESSAGES_PER_MIN={bad}"
             );
         }
+    }
+
+    #[test]
+    fn reserved_names_are_read_from_their_variable_and_an_empty_entry_is_refused() {
+        assert_eq!(
+            RIMConfig::default()
+                .reserved_names()
+                .map(|r| r.names().len()),
+            Ok(0)
+        );
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_RESERVED_NAMES", "rim, Admin ,moderator"),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.reserved_names().expect("names").names(),
+            ["rim", "admin", "moderator"]
+        );
+        let config = RIMConfig {
+            reserved_names: Some("rim,,admin".to_string()),
+            ..Default::default()
+        };
+        let err = config.reserved_names().unwrap_err();
+        assert!(err.contains("RIM_RESERVED_NAMES"), "{err}");
+        assert!(err.contains("entry 2 is empty"), "{err}");
     }
 }

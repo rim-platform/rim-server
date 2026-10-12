@@ -207,7 +207,7 @@ month of normal traffic shows the baseline.
 | `409` replays | log `refused a replayed server-to-server request` | **FILL** per hour |
 | `429` | logs `rate-limited a peer's server-to-server requests`, `a user's forwarded requests are over their quota`, `a user's invites to other servers are over their daily quota`; audit `signup_rate_limited` | **FILL** |
 | Proof-of-work signups | audit `relay.registration_pow` per hour; log `refused a signup's proof-of-work` | **FILL** above the weekly hourly mean |
-| Blocked principals knocking | audit `relay.blocked_principal_refused` | **FILL** |
+| Blocked principals knocking | audit `relay.blocked_principal_refused` and `blocked_email_refused` | **FILL** |
 | Open abuse reports | `rim-relay abuse-reports list --open` | any older than the response time below |
 
 ```sh
@@ -239,14 +239,28 @@ Signs: `relay.registration_pow` far above normal, many reports, DM requests from
 1. Find the senders:
    `rim-sql -c "SELECT from_principal_id, count(*) FROM relay_dm_request WHERE created_at > now() - interval '1 hour' GROUP BY 1 ORDER BY 2 DESC LIMIT 20"`
    and `rim-relay abuse-reports list --open`.
-2. Block each: `rim-relay principal block <principalId> --reason "spam wave <date>"`. Their
-   sessions end, their pending requests are ignored for everyone here, and their signups,
-   logins and deliveries are refused from then on. Resolve the reports that named them.
-3. Make the next account dearer: raise `RIM_REGISTRATION_POW_BITS` by 2 (four times the work)
+2. Look at each: `rim-relay principal show <principalId>` prints the account, who invited it,
+   the accounts its invites created and the reports naming it.
+3. Block each: `rim-relay principal block <principalId> --reason "spam wave <date>"`. Their
+   sessions end, their invites that have uses left are revoked, their email can neither sign
+   up nor sign in, their pending requests are ignored for everyone here, and their signups,
+   logins and deliveries are refused from then on. The command prints the accounts the
+   blocked one's invites created (username, principal id, created at).
+4. When those accounts are part of the wave, block them all at once:
+   `rim-relay principal block <principalId> --reason "spam wave <date>" --cascade` blocks the
+   account and every account its invites created, recursively, in one transaction, each with
+   the reason followed by "(invited by <username>)". When the wave came in through an invite,
+   cascade from the account that gave it out. Accounts without a key identity (`no key
+   identity` in the output) are reached only this way. Resolve the reports that named them.
+5. Make the next account dearer: raise `RIM_REGISTRATION_POW_BITS` by 2 (four times the work)
    and, if the spam goes to people here, lower `RIM_RELAY_DM_REQUESTS_PER_DAY`; `dc up -d`.
-4. When the senders are on another server, block that server (next section) and write to its
+6. When the senders are on another server, block that server (next section) and write to its
    operator (its discovery document names its origin: `rim-sql -c "SELECT origin FROM peer_server WHERE server_id = '<id>'"`).
-5. Lower the settings again a day after the wave ends.
+7. Lower the settings again a day after the wave ends.
+
+`rim-relay principal unblock <principalId>` lifts a block and its email block after a review.
+It does not bring back the sessions or the invites the block ended, and it lifts one account:
+unblock each account a cascade blocked.
 
 ### A hostile peer
 
@@ -287,10 +301,11 @@ or a backup of `/data` was exposed.
 
 ### A database leak
 
-What a dump holds: accounts, key logs, devices and cards (public anyway), session token hashes,
-password hashes of the few password accounts, contacts, DM requests and their senders' cards,
-queued host events (plaintext channel events are readable, DMs are MLS-encrypted), abuse
-reports. No private key: the server and franking keys are files in `/data`.
+What a dump holds: accounts and who invited them, key logs, devices and cards (public anyway),
+session token hashes, password hashes of the few password accounts, contacts, DM requests and
+their senders' cards, queued host events (plaintext channel events are readable, DMs are
+MLS-encrypted), abuse reports, blocked emails. No private key: the server and franking keys are
+files in `/data`.
 
 1. End every session: `rim-sql -c 'UPDATE session SET revoked_at = now() WHERE revoked_at IS NULL'`.
 2. Rotate `POSTGRES_PASSWORD` as above, and find and close the way out.
@@ -334,7 +349,7 @@ rim-relay abuse-reports resolve <report id>
 ```sh
 rim-relay server-key show | rotate | recover --recovery-key-file F [--new-recovery-key]
 rim-relay franking-key show | rotate
-rim-relay principal block <principalId> --reason <text> | unblock <principalId> | list
+rim-relay principal block <principalId> --reason <text> [--cascade] | unblock <principalId> | show <principalId> | list
 rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
 rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
 rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
@@ -342,7 +357,8 @@ rim-relay audit purge [--dry-run] [--older-than-days N]
 rim-relay ip block <cidr> --reason <text> [--expires-in-days D] | unblock <cidr> | list
 ```
 
-Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`),
+Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`, one per
+account a block reaches, `cascade` true for those after the first),
 `relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
 `server_key.recovered`, `instance_invite_issued`,

@@ -183,7 +183,7 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
 `server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
-`relay.registration_pow`, `relay.left`, `key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
+`blocked_email_refused` (`action` `signup` or `login`), `relay.registration_pow`, `relay.left`, `key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
 `host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
 
 ### The public relay
@@ -219,6 +219,17 @@ unblock`: its logins, signups and enrollments are refused (`FORBIDDEN`); deliver
 refused as `unknown_principal` and its invites as `blocked`; its key packages are not handed
 out, and it claims none; `GET /s2s/v1/principals/<id>` answers `404`; forwarded requests it
 signs are refused with `403`. `principal list` shows the blocks.
+
+In the same transaction the command revokes the account's instance and workspace invites that
+still have uses left, adds its email (if it has one) to `blocked_email`, which refuses that
+address at signup (`VALIDATION`, "this email cannot sign up here") and at password login
+(`FORBIDDEN`), and records the reason as an abuse report, resolved by the block. Every account
+records the invite it signed up with and that invite's creator, so the command then lists the
+accounts the blocked one's invites created; `--cascade` blocks them too, recursively, each with
+the reason followed by "(invited by <username>)". An account without a key identity is blocked
+by its email alone. `principal show <principalId>` prints the account, its inviter, the tree of
+accounts its invites created, its invites, its open reports and its block. `principal unblock`
+lifts the principal's block and its email's, not the sessions or invites that ended.
 
 **Blocking a peer.** `rim_server peer block <serverId>` sets the pinned peer's status to
 `blocked`, which the request check reads on every request: its requests get

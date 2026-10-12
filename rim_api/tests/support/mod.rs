@@ -173,12 +173,15 @@ fn close_when_the_test_ends(conn: &DatabaseConnection) {
 ///
 /// Uses `TRUNCATE … RESTART IDENTITY CASCADE` so FK-dependent rows are removed
 /// and serial sequences are reset.  Only tables that may accumulate state from
-/// registration e2e tests are listed here, and the IP deny list, whose rows would refuse every
-/// later test's requests.
+/// registration e2e tests are listed here, and the deny lists (addresses, emails, principals),
+/// whose rows would refuse later tests' requests.
 pub async fn reset_db(conn: &DatabaseConnection) {
     let sql = r#"
 TRUNCATE TABLE
   ip_block,
+  blocked_email,
+  relay_principal_block,
+  relay_abuse_report,
   session,
   key_challenge,
   instance_invite,
@@ -349,6 +352,7 @@ impl TestCtx {
             &self.conn,
             std::sync::Arc::new(NoopBroadcaster),
             rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks::default(),
         );
         let provider: std::sync::Arc<dyn AppServiceProvider> =
             std::sync::Arc::new(provider.with_account_deletion(grace, None));
@@ -358,6 +362,26 @@ impl TestCtx {
             registration_mode,
         );
         (schema, provider)
+    }
+
+    /// Build the schema on an instance that reserves the comma-separated `names`, as
+    /// `RIM_RESERVED_NAMES` does.
+    pub fn build_schema_reserving(&self, names: &str) -> rim_api::AppSchema {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks {
+                reserved_names: rim_infra_services::reserved_names::ReservedNames::parse(names)
+                    .expect("reserved names"),
+                ..Default::default()
+            },
+        );
+        schema_for(
+            std::sync::Arc::new(provider),
+            observers,
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        )
     }
 
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
@@ -462,16 +486,23 @@ pub fn build_test_provider_with_gate(
     broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
     gate: rim_infra_services::feature_gate::InstanceFeatureGate,
 ) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
-    let (provider, observers) = test_provider(conn, broadcaster, gate);
+    let (provider, observers) = test_provider(
+        conn,
+        broadcaster,
+        gate,
+        rim_infra_services::FederationHooks::default(),
+    );
     (std::sync::Arc::new(provider), observers)
 }
 
-/// The real service provider over `conn` with the instance feature gate `gate`, before it is
-/// shared, so a test can set what the composition root sets on it.
+/// The real service provider over `conn` with the instance feature gate `gate` and the
+/// instance settings in `hooks`, before it is shared, so a test can set what the composition
+/// root sets on it.
 fn test_provider(
     conn: &DatabaseConnection,
     broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
     gate: rim_infra_services::feature_gate::InstanceFeatureGate,
+    hooks: rim_infra_services::FederationHooks,
 ) -> (DefaultAppServiceProvider, Observers) {
     use std::sync::Arc;
 
@@ -641,7 +672,7 @@ fn test_provider(
             ])
             .expect("franking keys"),
         ),
-        rim_infra_services::FederationHooks::default(),
+        hooks,
         Arc::new(gate),
         rim_services::limits::InstanceLimits::default(),
     );

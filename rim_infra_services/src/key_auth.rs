@@ -50,6 +50,7 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::quota::Quotas;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
+use crate::reserved_names::ReservedNames;
 use crate::signup::{self, SignupRepos};
 
 /// How long a login challenge stays valid.
@@ -131,6 +132,8 @@ pub struct DefaultKeyAuthService {
     host_service: Option<Arc<dyn HostService>>,
     /// Sends a revoked device's revocation to every host holding its person.
     revocation_fanout: Option<Arc<dyn RevocationFanout>>,
+    /// Usernames and display names signups may not take.
+    reserved_names: ReservedNames,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -267,6 +270,7 @@ impl DefaultKeyAuthService {
             limits: InstanceLimits::default(),
             host_service: None,
             revocation_fanout: None,
+            reserved_names: ReservedNames::default(),
         }
     }
 
@@ -283,6 +287,11 @@ impl DefaultKeyAuthService {
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    pub fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
+        self.reserved_names = reserved_names;
         self
     }
 
@@ -970,6 +979,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         let username = cmd.username.as_str();
         signup::validate_username(username)?;
         let display_name = signup::normalize_display_name(cmd.display_name.as_deref(), username)?;
+        signup::check_reserved(&self.reserved_names, username, &display_name)?;
 
         let token = match &cmd.token {
             Some(token) => Some(signup::check_token(&self.repos.signup, token, None).await?),

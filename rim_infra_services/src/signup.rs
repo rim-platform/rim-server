@@ -25,6 +25,7 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::registration_rate_limiter::RegistrationRateLimiter;
+use crate::reserved_names::ReservedNames;
 use crate::util::{add_workspace_member, ensure_not_banned};
 
 /// The repositories a registration token is checked and claimed with. Inside a transaction,
@@ -38,6 +39,8 @@ pub struct SignupRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Ban checks on the workspace-invite join.
     pub moderation_repo: Arc<dyn ModerationRepository>,
+    /// Records the invite chain on the new account.
+    pub user_repo: Arc<dyn UserRepository>,
 }
 
 /// A registration token that passed its checks before the transaction, to be claimed inside it.
@@ -51,6 +54,9 @@ pub(crate) enum CheckedToken {
 /// a key-only signup, which has none.
 pub(crate) const EMAIL_BOUND_INVITE_REFUSAL: &str =
     "this invite admits only a password signup with the email address it was issued for";
+
+/// The refusal of a signup with an address an operator blocked.
+pub(crate) const BLOCKED_EMAIL_REFUSAL: &str = "this email cannot sign up here";
 
 /// Prefix reserved for people from other servers held here as remote users; local signups
 /// may not use it, in either case.
@@ -123,6 +129,19 @@ pub(crate) fn normalize_display_name(input: Option<&str>, username: &str) -> Ser
             Ok(trimmed.to_string())
         }
     }
+}
+
+/// Refuse a signup whose username or resolved display name is reserved on this instance.
+///
+/// # Errors
+/// `Validation` ("this name is reserved").
+pub(crate) fn check_reserved(
+    reserved: &ReservedNames,
+    username: &str,
+    display_name: &str,
+) -> ServiceResult<()> {
+    reserved.check(username)?;
+    reserved.check(display_name)
 }
 
 /// Count an open-mode signup against the caller's IP; `RateLimited` once over the
@@ -235,9 +254,10 @@ pub(crate) async fn check_workspace_invite(
     Ok(invite)
 }
 
-/// Claim a checked token for the new user `user_id`, inside the signup's transaction. A
-/// workspace invite also makes the user a member of its server. Returns that server, `None`
-/// for the other kinds (the account starts with no workspace).
+/// Claim a checked token for the new user `user_id`, inside the signup's transaction, and
+/// record on the account the invite and its creator. A workspace invite also makes the user a
+/// member of its server. Returns that server, `None` for the other kinds (the account starts
+/// with no workspace).
 ///
 /// # Errors
 /// - Instance invite: `InvalidToken` when it was used up since the check (the double-spend
@@ -256,6 +276,10 @@ pub(crate) async fn claim_token(
                 // Exhausted since we last checked — treat as invalid.
                 return Err(ServiceError::InvalidToken);
             }
+            repos
+                .user_repo
+                .record_invite_chain(user_id, invite.id.into(), invite.created_by_user_id)
+                .await?;
             Ok(None)
         }
         CheckedToken::WorkspaceInvite(invite) => {
@@ -276,6 +300,10 @@ pub(crate) async fn claim_token(
                 // Used up reads like unknown.
                 return Err(ServiceError::InvalidToken);
             }
+            repos
+                .user_repo
+                .record_invite_chain(user_id, invite.id.into(), Some(invite.created_by_user_id))
+                .await?;
             Ok(Some(invite.server_id))
         }
     }
@@ -325,6 +353,7 @@ pub(crate) fn announce_claimed(
 /// # Errors
 /// - `Conflict` when the username is taken, or the insert hits a unique index (a race on the
 ///   username, the email or the principal id).
+/// - `Validation` ([`BLOCKED_EMAIL_REFUSAL`]) when an operator blocked the email.
 /// - `EmailTaken` when the email is in use.
 pub(crate) async fn create_user(
     user_repo: &dyn UserRepository,
@@ -338,6 +367,18 @@ pub(crate) async fn create_user(
         return Err(ServiceError::Conflict(
             "username already exists".to_string(),
         ));
+    }
+    if let Some(email) = &new_user.email
+        && user_repo.is_email_blocked(email).await?
+    {
+        tracing::info!(
+            target: "audit",
+            event = "blocked_email_refused",
+            action = "signup",
+            username = %new_user.username,
+            "signup refused: the email is blocked on this server"
+        );
+        return Err(ServiceError::Validation(BLOCKED_EMAIL_REFUSAL.to_string()));
     }
     if let Some(email) = &new_user.email
         && user_repo.find_by_email(email).await?.is_some()
@@ -415,7 +456,7 @@ pub(crate) async fn create_session(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Mutex;
 
     use rim_core::auth::model::{InstanceInviteId, InviteId, SessionId};
@@ -450,7 +491,24 @@ mod tests {
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::new()),
+            user_repo: Arc::new(MockUserRepository::new()),
         }
+    }
+
+    /// Every invite chain a [`chain_recorder`] was asked to write: account, invite, creator.
+    pub(crate) type ChainLog = Arc<Mutex<Vec<(UserId, uuid::Uuid, Option<UserId>)>>>;
+
+    /// A user repository recording every invite chain written to it.
+    pub(crate) fn chain_recorder() -> (MockUserRepository, ChainLog) {
+        let seen: ChainLog = Arc::new(Mutex::new(Vec::new()));
+        let mut repo = MockUserRepository::new();
+        let sink = Arc::clone(&seen);
+        repo.expect_record_invite_chain()
+            .returning(move |user, invite, by| {
+                sink.lock().unwrap().push((user, invite, by));
+                Ok(())
+            });
+        (repo, seen)
     }
 
     fn instance_invite(expires_in: Duration, revoked: bool) -> InstanceInvite {
@@ -636,18 +694,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_token_instance_invite_refuses_an_exhausted_invite() {
+    async fn claim_token_instance_invite_refuses_an_exhausted_invite_and_records_the_chain() {
         for consumed in [true, false] {
             let mut repo = MockInstanceInviteRepository::new();
             repo.expect_try_consume().returning(move |_| Ok(consumed));
+            let (users, chains) = chain_recorder();
             let mut r = repos();
             r.instance_invite_repo = Arc::new(repo);
-            let token = CheckedToken::InstanceInvite(instance_invite(Duration::minutes(5), false));
-            let res = claim_token(&r, &token, UserId::new(), None).await;
+            r.user_repo = Arc::new(users);
+            let invite = instance_invite(Duration::minutes(5), false);
+            let expected = (invite.id.into(), invite.created_by_user_id);
+            let token = CheckedToken::InstanceInvite(invite);
+            let user_id = UserId::new();
+            let res = claim_token(&r, &token, user_id, None).await;
             if consumed {
                 assert_eq!(res.unwrap(), None);
+                assert_eq!(
+                    *chains.lock().unwrap(),
+                    vec![(user_id, expected.0, expected.1)]
+                );
             } else {
                 assert!(matches!(res, Err(ServiceError::InvalidToken)));
+                assert!(chains.lock().unwrap().is_empty());
             }
         }
     }
@@ -685,13 +753,22 @@ mod tests {
             .times(1)
             .returning(|_| Ok(true));
 
+        let (users, chains) = chain_recorder();
+        let invite_id: uuid::Uuid = invite.id.into();
+        let creator = invite.created_by_user_id;
+
         let mut r = repos();
         r.moderation_repo = Arc::new(moderation);
         r.server_member_repo = Arc::new(members);
         r.conversation_repo = Arc::new(conversations);
         r.invite_repo = Arc::new(invites);
+        r.user_repo = Arc::new(users);
         let res = claim_token(&r, &CheckedToken::WorkspaceInvite(invite), user_id, None).await;
         assert_eq!(res.unwrap(), Some(server_id));
+        assert_eq!(
+            *chains.lock().unwrap(),
+            vec![(user_id, invite_id, Some(creator))]
+        );
     }
 
     #[tokio::test]
@@ -750,6 +827,9 @@ mod tests {
             .expect_find_by_username()
             .returning(|_| Ok(None));
         email_taken
+            .expect_is_email_blocked()
+            .returning(|_| Ok(false));
+        email_taken
             .expect_find_by_email()
             .returning(|_| Ok(Some(user())));
         assert!(matches!(
@@ -759,9 +839,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_user_refuses_a_blocked_email_before_checking_it_is_taken() {
+        let mut repo = MockUserRepository::new();
+        repo.expect_find_by_username().returning(|_| Ok(None));
+        repo.expect_is_email_blocked()
+            .withf(|email| email == "a@example.com")
+            .returning(|_| Ok(true));
+        repo.expect_find_by_email().never();
+        repo.expect_create_user().never();
+        assert!(matches!(
+            create_user(&repo, new_user(Some("a@example.com"))).await,
+            Err(ServiceError::Validation(m)) if m == BLOCKED_EMAIL_REFUSAL
+        ));
+    }
+
+    #[tokio::test]
     async fn create_user_without_email_skips_the_email_check() {
         let mut repo = MockUserRepository::new();
         repo.expect_find_by_username().returning(|_| Ok(None));
+        repo.expect_is_email_blocked().never();
         repo.expect_find_by_email().never();
         repo.expect_create_user().returning(|_| Ok(user()));
         assert!(create_user(&repo, new_user(None)).await.is_ok());

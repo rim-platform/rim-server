@@ -1,15 +1,44 @@
 use async_trait::async_trait;
 use entity::user;
 use rim_core::repository::error::RepoResult;
-use rim_core::user::model::{NewUser, UpdateProfilePatch, User, UserId};
+use rim_core::user::model::{
+    CreatedInvite, InviteChain, InviteKind, NewUser, UpdateProfilePatch, User, UserId,
+};
 use rim_core::user::repository::UserRepository;
+use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult,
+    IntoActiveModel, QueryFilter, Set, Statement, Value, sea_query::Expr,
 };
 
 use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
+
+fn statement(sql: &str, values: Vec<Value>) -> Statement {
+    Statement::from_sql_and_values(DbBackend::Postgres, sql, values)
+}
+
+#[derive(FromQueryResult)]
+struct FlagRow {
+    flag: bool,
+}
+
+#[derive(FromQueryResult)]
+struct IdRow {
+    id: Uuid,
+}
+
+#[derive(FromQueryResult)]
+struct CreatedInviteRow {
+    id: Uuid,
+    kind: String,
+    created_at: DateTimeWithTimeZone,
+    expires_at: Option<DateTimeWithTimeZone>,
+    max_uses: i32,
+    use_count: i32,
+    revoked_at: Option<DateTimeWithTimeZone>,
+}
 
 pub struct SeaOrmUserRepository {
     pub db: DbHandle,
@@ -165,5 +194,138 @@ impl UserRepository for SeaOrmUserRepository {
             return Err(RepoError::new(RepoErrorKind::NotFound));
         }
         Ok(())
+    }
+
+    async fn record_invite_chain(
+        &self,
+        id: UserId,
+        invite_id: Uuid,
+        invited_by: Option<UserId>,
+    ) -> RepoResult<()> {
+        let result = user::Entity::update_many()
+            .col_expr(user::Column::CreatedByInviteId, Expr::value(invite_id))
+            .col_expr(
+                user::Column::InvitedByUserId,
+                Expr::value(invited_by.map(Uuid::from)),
+            )
+            .filter(user::Column::Id.eq(Uuid::from(id)))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        if result.rows_affected == 0 {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
+        }
+        Ok(())
+    }
+
+    async fn invite_chain(&self, id: UserId) -> RepoResult<Option<InviteChain>> {
+        let model = user::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(model.and_then(|m| {
+            m.created_by_invite_id.map(|invite_id| InviteChain {
+                invite_id,
+                invited_by_user_id: m.invited_by_user_id.map(Into::into),
+            })
+        }))
+    }
+
+    async fn invited_users(&self, id: UserId) -> RepoResult<Vec<UserId>> {
+        Ok(IdRow::find_by_statement(statement(
+            r#"SELECT id FROM "user" WHERE invited_by_user_id = $1 ORDER BY created_at, id"#,
+            vec![Uuid::from(id).into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(map_db_err)?
+        .into_iter()
+        .map(|r| r.id.into())
+        .collect())
+    }
+
+    async fn invites_created_by(&self, id: UserId) -> RepoResult<Vec<CreatedInvite>> {
+        Ok(CreatedInviteRow::find_by_statement(statement(
+            "SELECT id, 'instance' AS kind, created_at, expires_at, max_uses, use_count, \
+             revoked_at FROM instance_invite WHERE created_by_user_id = $1 \
+             UNION ALL SELECT id, 'workspace' AS kind, created_at, expires_at, max_uses, \
+             use_count, revoked_at FROM invite WHERE created_by_user_id = $1 \
+             ORDER BY created_at DESC, id",
+            vec![Uuid::from(id).into()],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(map_db_err)?
+        .into_iter()
+        .map(|r| CreatedInvite {
+            id: r.id,
+            kind: if r.kind == "instance" {
+                InviteKind::Instance
+            } else {
+                InviteKind::Workspace
+            },
+            created_at: r.created_at.into(),
+            expires_at: r.expires_at.map(Into::into),
+            max_uses: r.max_uses,
+            use_count: r.use_count,
+            revoked_at: r.revoked_at.map(Into::into),
+        })
+        .collect())
+    }
+
+    async fn revoke_invites_created_by(&self, id: UserId) -> RepoResult<u64> {
+        let mut revoked = 0;
+        for table in ["instance_invite", "invite"] {
+            revoked += self
+                .db
+                .execute_raw(statement(
+                    &format!(
+                        "UPDATE {table} SET revoked_at = now() WHERE created_by_user_id = $1 \
+                         AND revoked_at IS NULL AND use_count < max_uses"
+                    ),
+                    vec![Uuid::from(id).into()],
+                ))
+                .await
+                .map_err(map_db_err)?
+                .rows_affected();
+        }
+        Ok(revoked)
+    }
+
+    async fn block_email(&self, email: &str, reason: &str) -> RepoResult<bool> {
+        let row = FlagRow::find_by_statement(statement(
+            "INSERT INTO blocked_email (email, reason) VALUES (lower($1), $2) \
+             ON CONFLICT (email) DO UPDATE SET reason = EXCLUDED.reason \
+             RETURNING (xmax = 0) AS flag",
+            vec![email.trim().into(), reason.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.is_some_and(|r| r.flag))
+    }
+
+    async fn unblock_email(&self, email: &str) -> RepoResult<bool> {
+        Ok(self
+            .db
+            .execute_raw(statement(
+                "DELETE FROM blocked_email WHERE email = lower($1)",
+                vec![email.trim().into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .rows_affected()
+            == 1)
+    }
+
+    async fn is_email_blocked(&self, email: &str) -> RepoResult<bool> {
+        let row = FlagRow::find_by_statement(statement(
+            "SELECT EXISTS (SELECT 1 FROM blocked_email WHERE email = lower($1)) AS flag",
+            vec![email.trim().into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.is_some_and(|r| r.flag))
     }
 }

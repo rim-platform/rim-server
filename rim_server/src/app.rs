@@ -327,6 +327,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let account_deletion_grace_days = config
         .account_deletion_grace_days()
         .map_err(std::io::Error::other)?;
+    let reserved_names = config.reserved_names().map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -449,6 +450,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             quotas: config.quotas(),
             host_service: Some(Arc::clone(&s2s.host) as Arc<dyn HostService>),
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
+            reserved_names,
         },
         Arc::clone(&feature_gate),
         instance_limits,
