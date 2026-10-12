@@ -14,6 +14,7 @@ mod support;
 use support::nodes::{Node, databases, start};
 
 use std::path::Path;
+use std::time::Duration;
 
 use chrono::Utc;
 use rim_core::s2s::model::{PeerServer, PeerStatus};
@@ -32,6 +33,8 @@ use rim_s2s::{
 use rim_services::s2s::dto::{S2sMethod, S2sRequest};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 async fn two_nodes() -> (Node, Node) {
     let (first, second) = databases().await;
@@ -201,6 +204,32 @@ async fn client_ping(from: &Node, to: &Node) -> rim_services::s2s::dto::S2sRespo
 
 fn error_code(body: &Value) -> &str {
     body["error"].as_str().unwrap_or_default()
+}
+
+/// POST to `path` on `to` declaring a body of `length` bytes and sending none, and return the
+/// status and body of the answer. The server refuses an oversized length before reading the
+/// body and closes the connection; a client still writing the body could lose the answer.
+async fn declare_oversized_post(to: &Node, path: &str, length: usize) -> (u16, Value) {
+    let authority = to.origin.trim_start_matches("http://");
+    let mut stream = TcpStream::connect(authority).await.expect("connect");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nhost: {authority}\r\ncontent-type: application/json\r\n\
+         content-length: {length}\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut raw))
+        .await
+        .expect("the server answers and closes")
+        .expect("read");
+    let text = String::from_utf8_lossy(&raw);
+    let (head, body) = text.split_once("\r\n\r\n").expect("a complete response");
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("status");
+    (status, serde_json::from_str(body.trim()).expect("json"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -375,10 +404,13 @@ async fn replayed_tampered_expired_unknown_and_misrouted_requests_are_refused() 
     let (status, body) = missing.answer(&a, missing.send(&b).await).await;
     assert_eq!((status, error_code(&body)), (404, "not_found"));
 
-    // Too large, before anything else is looked at.
-    let big = vec![b' '; rim_server::config::DEFAULT_S2S_MAX_BODY_BYTES + 1];
-    let too_large = Manual::post(&a, "/s2s/v1/ping", &big);
-    let (status, body) = too_large.answer(&a, too_large.send(&b).await).await;
+    // Too large, from the declared length alone, before anything else is looked at.
+    let (status, body) = declare_oversized_post(
+        &a,
+        "/s2s/v1/ping",
+        rim_server::config::DEFAULT_S2S_MAX_BODY_BYTES + 1,
+    )
+    .await;
     assert_eq!((status, error_code(&body)), (413, "too_large"));
     a.stop().await;
     b.stop().await;
