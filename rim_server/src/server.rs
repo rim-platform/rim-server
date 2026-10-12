@@ -17,6 +17,7 @@ use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
 use rim_api::subscription_limit::SubscriptionSlots;
+use rim_api::subscriptions_only::WebSocketConnection;
 use tracing::{Instrument, info, info_span};
 
 use std::sync::Arc;
@@ -337,9 +338,12 @@ async fn refuse_remote_account_mutation(
     batch: &async_graphql::BatchRequest,
     user_id: rim_core::user::model::UserId,
 ) -> Option<GraphQLResponse> {
-    let field = batch
-        .iter()
-        .find_map(|request| rim_api::federation::refused_account_mutation(&request.query))?;
+    let field = batch.iter().find_map(|request| {
+        rim_api::federation::refused_account_mutation(
+            &request.query,
+            request.operation_name.as_deref(),
+        )
+    })?;
     let state = req.app_data::<web::Data<crate::s2s::S2sState>>()?;
     match state.host.is_remote_user(user_id).await {
         Ok(false) => None,
@@ -406,6 +410,8 @@ async fn graphql_ws_handler(
 
     let mut data = async_graphql::Data::default();
     data.insert(actor_ctx);
+    // The socket runs subscriptions only; queries and mutations go through POST /api.
+    data.insert(WebSocketConnection);
     if let Some(edge_limits) = req.app_data::<web::Data<EdgeLimits>>() {
         // The connection slot lives in the connection's data, so it is given back when the
         // connection ends.

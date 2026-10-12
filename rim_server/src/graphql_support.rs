@@ -1,58 +1,21 @@
 use actix_web::HttpRequest;
 use async_graphql_actix_web::GraphQLResponse;
-use async_graphql_parser::types::{ExecutableDocument, OperationType, Selection};
 use rim_auth::csrf::verify_csrf_token;
 use rim_services::auth::service::RequestAuthenticator;
 
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
+use rim_api::operation::parse_root_fields;
 
 pub const COOKIE_SESSION: &str = "rim_session";
 pub const COOKIE_CSRF: &str = "rim_csrf";
 
-/// Extract the actual mutation field names from a parsed GraphQL document.
-///
-/// This inspects the AST rather than trusting the client-supplied `operationName`,
-/// preventing CSRF bypass via operationName manipulation.
-fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
-    let mut fields = Vec::new();
-    for (_name, operation) in doc.operations.iter() {
-        if matches!(operation.node.ty, OperationType::Mutation) {
-            for selection in &operation.node.selection_set.node.items {
-                match &selection.node {
-                    Selection::Field(field) => {
-                        fields.push(field.node.name.node.to_string());
-                    }
-                    Selection::InlineFragment(inline) => {
-                        for sub_selection in &inline.node.selection_set.node.items {
-                            if let Selection::Field(field) = &sub_selection.node {
-                                fields.push(field.node.name.node.to_string());
-                            }
-                        }
-                    }
-                    Selection::FragmentSpread(spread) => {
-                        let frag_name = &spread.node.fragment_name.node;
-                        if let Some(frag) = doc.fragments.get(frag_name.as_str()) {
-                            for sub_selection in &frag.node.selection_set.node.items {
-                                if let Selection::Field(field) = &sub_selection.node {
-                                    fields.push(field.node.name.node.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fields
-}
-
-/// Mutation fields across a batch, aliases and repeats each counted; a request that does not
-/// parse counts none, since it runs nothing.
+/// Mutation fields across a batch, aliases, repeats and each fragment expansion counted; a
+/// request that does not parse counts none, since it runs nothing.
 pub fn count_mutation_fields(batch: &async_graphql::BatchRequest) -> u32 {
     let fields: usize = batch
         .iter()
-        .filter_map(|gql| async_graphql_parser::parse_query(gql.query.as_str()).ok())
-        .map(|doc| extract_mutation_fields(&doc).len())
+        .filter_map(|gql| parse_root_fields(&gql.query, gql.operation_name.as_deref()).ok())
+        .map(|fields| fields.mutation_count())
         .sum();
     u32::try_from(fields).unwrap_or(u32::MAX)
 }
@@ -107,37 +70,21 @@ pub fn enforce_csrf_for_batch(
     }
 }
 
-/// Returns true if a single GraphQL request contains mutations that require
-/// CSRF validation. `has_session` says whether the request carries a session cookie.
+/// Whether a single GraphQL request needs the CSRF header: it may run a mutation and either its
+/// root fields cannot all be found, through fragments at any depth, or one is not exempt. A
+/// request that does not parse needs it. `has_session` says whether the request carries a
+/// session cookie.
 fn request_needs_csrf(gql: &async_graphql::Request, has_session: bool) -> bool {
-    let doc = match async_graphql_parser::parse_query(gql.query.as_str()) {
-        Ok(d) => d,
-        Err(_) => {
-            // Fail-closed: if we can't parse the query, require CSRF.
-            return true;
-        }
+    let Ok(fields) = parse_root_fields(&gql.query, gql.operation_name.as_deref()) else {
+        return true;
     };
-
-    let has_mutation_ops = doc
-        .operations
-        .iter()
-        .any(|(_, op)| matches!(op.node.ty, OperationType::Mutation));
-
-    if !has_mutation_ops {
+    if !fields.may_mutate() {
         return false;
     }
-
-    let mutation_fields = extract_mutation_fields(&doc);
-
-    // Fail-closed: if mutation operations exist but we couldn't extract any
-    // field names (e.g. deeply nested fragment spreads we don't resolve),
-    // require CSRF rather than silently skipping validation.
-    if mutation_fields.is_empty() {
+    if !fields.is_complete() || fields.fields.is_empty() {
         return true;
     }
-
-    // All mutation fields must be in the exempt list to skip CSRF.
-    let all_exempt = mutation_fields.iter().all(|f| {
+    let all_exempt = fields.fields.iter().all(|f| {
         CSRF_EXEMPT_MUTATIONS
             .iter()
             .any(|a| a.eq_ignore_ascii_case(f))
@@ -146,7 +93,6 @@ fn request_needs_csrf(gql: &async_graphql::Request, has_session: bool) -> bool {
                     .iter()
                     .any(|a| a.eq_ignore_ascii_case(f)))
     });
-
     !all_exempt
 }
 
@@ -374,6 +320,122 @@ mod tests {
             async_graphql::Request::new("mutation {"),
         ]);
         assert_eq!(count_mutation_fields(&batch), 3);
+    }
+
+    /// `depth` inline fragments around `field`.
+    fn nested_inline(depth: usize, field: &str) -> String {
+        format!(
+            "mutation {{ {}{field}{} }}",
+            "... on Mutation { ".repeat(depth),
+            " }".repeat(depth)
+        )
+    }
+
+    #[test]
+    fn csrf_decision_and_budget_charge_follow_every_fragment() {
+        const PROFILE: &str = r#"updateMyProfile(input: { statusText: "s" }) { id }"#;
+        let depth = rim_api::operation::MAX_FRAGMENT_DEPTH;
+        let several =
+            format!("query Q {{ me {{ id }} }} mutation M {{ {PROFILE} }} mutation L {{ logout }}");
+        // (case, query, operation name, needs the header, mutation fields charged)
+        let cases: Vec<(&str, String, Option<&str>, bool, u32)> = vec![
+            (
+                "the review's document",
+                r#"mutation {
+  logout @skip(if: true)
+  ...Outer
+}
+fragment Outer on Mutation { ...Inner }
+fragment Inner on Mutation {
+  updateMyProfile(input: { statusText: "changed without CSRF" }) { id }
+}"#
+                .to_string(),
+                None,
+                true,
+                2,
+            ),
+            (
+                "protected field in a nested named fragment beside an exempt one",
+                format!(
+                    "mutation {{ login(username: \"u\", password: \"p\") {{ userId }} ...A }} fragment A on Mutation {{ ...B }} fragment B on Mutation {{ {PROFILE} }}"
+                ),
+                None,
+                true,
+                2,
+            ),
+            (
+                "nested inline fragments",
+                format!("mutation {{ logout ... on Mutation {{ ... {{ {PROFILE} }} }} }}"),
+                None,
+                true,
+                2,
+            ),
+            (
+                "aliases of an exempt field",
+                "mutation { a: logout b: logout ... on Mutation { c: logout } }".to_string(),
+                None,
+                false,
+                3,
+            ),
+            (
+                "the same fragment spread twice",
+                "mutation { ...F ...F } fragment F on Mutation { logout }".to_string(),
+                None,
+                false,
+                2,
+            ),
+            (
+                "a cyclic fragment pair",
+                "mutation { logout ...A } fragment A on Mutation { ...B } fragment B on Mutation { ...A }"
+                    .to_string(),
+                None,
+                true,
+                1,
+            ),
+            (
+                "an exempt field at the depth bound",
+                nested_inline(depth, "logout"),
+                None,
+                false,
+                1,
+            ),
+            (
+                "an exempt field past the depth bound",
+                nested_inline(depth + 1, "logout"),
+                None,
+                true,
+                0,
+            ),
+            (
+                "an unknown fragment",
+                "mutation { logout ...Missing }".to_string(),
+                None,
+                true,
+                1,
+            ),
+            ("the exempt operation of several", several.clone(), Some("L"), false, 1),
+            ("the protected operation of several", several.clone(), Some("M"), true, 1),
+            ("the query of several", several.clone(), Some("Q"), false, 0),
+            ("several operations and no name", several.clone(), None, true, 0),
+            ("a name no operation has", several, Some("X"), true, 0),
+        ];
+        for (case, query, operation_name, needs_csrf, charged) in cases {
+            let mut request = async_graphql::Request::new(query);
+            if let Some(name) = operation_name {
+                request = request.operation_name(name);
+            }
+            assert_eq!(request_needs_csrf(&request, true), needs_csrf, "{case}");
+            let batch = async_graphql::BatchRequest::Single(request);
+            assert_eq!(count_mutation_fields(&batch), charged, "{case}");
+            let signed_in = TestRequest::default()
+                .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
+                .to_http_request();
+            assert_eq!(
+                enforce_csrf_for_batch(&signed_in, &batch).is_err(),
+                needs_csrf,
+                "{case}"
+            );
+        }
     }
 
     #[actix_web::test]

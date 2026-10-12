@@ -107,10 +107,9 @@ async fn graphql(
             return Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed GraphQL");
         }
     };
-    if let Some(field) = batch
-        .iter()
-        .find_map(|request| refused_account_mutation(&request.query))
-    {
+    if let Some(field) = batch.iter().find_map(|request| {
+        refused_account_mutation(&request.query, request.operation_name.as_deref())
+    }) {
         tracing::info!(field, user_id = %auth.user_id, "refused an account mutation for a remote member");
         return Reply::ok(json!({
             "errors": [{

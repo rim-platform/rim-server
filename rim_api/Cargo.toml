@@ -46,3 +46,4 @@ hmac = "0.12.1"
 openmls = "=0.9.1"
 openmls_rust_crypto = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 openmls_traits = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
