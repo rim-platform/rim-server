@@ -24,5 +24,18 @@ tag `v<version>`, the version every crate in the workspace carries.
 ### Added
 
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
+- GraphQL `ServerInfo.auditRetentionDays`: the days command audit rows are kept before they are
+  exported and deleted, null when they are kept forever. Readable without a session, like the
+  rest of `serverInfo`.
+
+### Changed
+
+- The packaged desktop app's origins (`tauri://localhost`, `http://tauri.localhost` and
+  `https://tauri.localhost`) are accepted by every server without `RIM_CORS_ALLOWED_ORIGIN`.
+
+### Fixed
+
+- A local account's first use of the direct space, any operation that needs membership there,
+  joins it as a guest instead of being refused.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

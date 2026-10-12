@@ -46,7 +46,8 @@ repository.
   (`docs/server-identity.md`, `docs/relay.md`, `docs/specs/server-to-server-v1.md`).
 - **Operations.** `/healthz` and `/readyz` probes, Prometheus metrics on a separate listener,
   audit log retention with export, instance feature switches, background jobs, a compose stack
-  with backup and restore (`docs/self-hosting.md`, `docs/operations/`).
+  with backup and restore, an upgrade guide with rollback, and a changelog (`docs/self-hosting.md`,
+  `docs/operations/`, `CHANGELOG.md`).
 
 ## Crates
 
@@ -93,8 +94,8 @@ A server bound to anything but a loopback address needs `RIM_PUBLIC_BASE_URL` or
 `RIM_KEY_LOGIN_AUDIENCES`, or it refuses to start (`docs/server-identity.md`). The first start
 creates the server key and the franking key file in `RIM_DATA_DIR`, and writes a server recovery
 key file there to move offline. The packaged desktop app is accepted from any server; a client
-served from another web origin, such as the rim-ui dev server, needs `RIM_CORS_ALLOWED_ORIGIN`. Without `RIM_SMTP_*` email is logged (recipient and subject) instead
-of sent.
+served from another web origin, such as the rim-ui dev server, needs `RIM_CORS_ALLOWED_ORIGIN`.
+Without `RIM_SMTP_*` email is logged (recipient and subject) instead of sent.
 
 To deploy a server, follow `docs/self-hosting.md`: `deploy/compose.yml` runs rim-server,
 PostgreSQL, the web client and Caddy on one domain, and covers the recovery key, the first
@@ -159,7 +160,9 @@ cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
 
 `CONTRIBUTING.md` has the rules for a pull request and what each gate checks; `CLAUDE.md` has
 the conventions, the migration and entity-generation rules, and the GraphQL schema export for
-rim-ui.
+rim-ui. A change that an operator, a user or a client author can see adds a line under
+`Unreleased` in `CHANGELOG.md` in the same pull request; `docs/operations/release-checklist.md`
+turns that into a release.
 
 ## Specifications
 
