@@ -125,4 +125,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A local account's first use of the direct space, any operation that needs membership there,
   joins it as a guest instead of being refused.
 
+### Security
+
+- A mutation whose protected field sits in nested fragments, named or inline, needs the CSRF
+  header. Before, a request that showed only an exempt field such as `logout` at its top level
+  skipped the check while a fragment two levels down ran `updateMyProfile`. The server reads
+  the operation `operationName` selects through fragments at any depth, and requires the header
+  whenever it cannot account for every root field. The refusal of account mutations for people
+  from another server reads operations the same way.
+- `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` charges every mutation field a request runs: fields
+  in nested fragments count, and a fragment spread twice counts twice. Before, fields more than
+  one fragment deep were not charged.
+
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

@@ -21,6 +21,8 @@ pub mod graphql;
 pub mod ids;
 pub mod loaders;
 pub mod mutation;
+// pub: rim_server classifies requests for the CSRF check and the mutation budget.
+pub mod operation;
 pub mod pagination;
 pub mod query;
 pub mod resolve;

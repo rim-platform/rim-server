@@ -120,7 +120,7 @@ fn people_from_other_servers_delete_their_account_at_their_relay() {
         ),
     ] {
         assert_eq!(
-            crate::federation::refused_account_mutation(query),
+            crate::federation::refused_account_mutation(query, None),
             Some(name.to_string())
         );
     }

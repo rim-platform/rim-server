@@ -337,9 +337,12 @@ async fn refuse_remote_account_mutation(
     batch: &async_graphql::BatchRequest,
     user_id: rim_core::user::model::UserId,
 ) -> Option<GraphQLResponse> {
-    let field = batch
-        .iter()
-        .find_map(|request| rim_api::federation::refused_account_mutation(&request.query))?;
+    let field = batch.iter().find_map(|request| {
+        rim_api::federation::refused_account_mutation(
+            &request.query,
+            request.operation_name.as_deref(),
+        )
+    })?;
     let state = req.app_data::<web::Data<crate::s2s::S2sState>>()?;
     match state.host.is_remote_user(user_id).await {
         Ok(false) => None,

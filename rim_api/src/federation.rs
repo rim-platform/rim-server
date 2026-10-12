@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use async_graphql::parser::types::{ExecutableDocument, OperationType, Selection, SelectionSet};
 use async_graphql::{Context, Error, ErrorExtensions, Value};
 use rim_core::user::model::UserId;
 use rim_services::host::service::HostService;
@@ -12,6 +11,7 @@ use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
 
 use crate::errors::map_service_error;
+use crate::operation::{Classification, parse_root_fields};
 
 /// The relay and host services and this server's roles, injected into the schema.
 #[derive(Clone)]
@@ -162,42 +162,24 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "cancelAccountDeletion",
 ];
 
-fn refused_in(document: &ExecutableDocument, set: &SelectionSet, depth: usize) -> Option<String> {
-    if depth > 16 {
-        return Some("fragments nest too deep".to_string());
-    }
-    for selection in &set.items {
-        let found = match &selection.node {
-            Selection::Field(field) => {
-                let name = field.node.name.node.as_str();
-                ACCOUNT_MUTATIONS.contains(&name).then(|| name.to_string())
-            }
-            Selection::InlineFragment(fragment) => {
-                refused_in(document, &fragment.node.selection_set.node, depth + 1)
-            }
-            Selection::FragmentSpread(spread) => document
-                .fragments
-                .get(&spread.node.fragment_name.node)
-                .and_then(|f| refused_in(document, &f.node.selection_set.node, depth + 1)),
-        };
-        if found.is_some() {
-            return found;
-        }
-    }
-    None
-}
-
-/// The first account mutation a query names at its top level, or a parse failure's message.
-pub fn refused_account_mutation(query: &str) -> Option<String> {
-    let document = match async_graphql::parser::parse_query(query) {
-        Ok(document) => document,
+/// The first account mutation the operation `operation_name` selects runs at its top level,
+/// through fragments at any depth; or why the request cannot be cleared: a parse failure, or a
+/// mutation whose root fields cannot all be found.
+pub fn refused_account_mutation(query: &str, operation_name: Option<&str>) -> Option<String> {
+    let fields = match parse_root_fields(query, operation_name) {
+        Ok(fields) => fields,
         Err(e) => return Some(e.to_string()),
     };
-    document
-        .operations
-        .iter()
-        .filter(|(_, op)| op.node.ty == OperationType::Mutation)
-        .find_map(|(_, op)| refused_in(&document, &op.node.selection_set.node, 0))
+    if !fields.may_mutate() {
+        return None;
+    }
+    if let Classification::Incomplete(reason) = &fields.classification {
+        return Some(reason.to_string());
+    }
+    fields
+        .fields
+        .into_iter()
+        .find(|name| ACCOUNT_MUTATIONS.contains(&name.as_str()))
 }
 
 #[cfg(test)]
@@ -208,21 +190,48 @@ mod tests {
     fn account_mutations_are_found_under_aliases_and_fragments() {
         assert_eq!(
             refused_account_mutation(
-                "mutation { x: publishProfileCard(card: {payload: \"\", signature: \"\"}) { version } }"
+                "mutation { x: publishProfileCard(card: {payload: \"\", signature: \"\"}) { version } }",
+                None
             ),
             Some("publishProfileCard".to_string())
         );
         assert_eq!(
             refused_account_mutation(
-                "mutation { ...F } fragment F on Mutation { ... on Mutation { createServer(input: {name: \"x\"}) { id } } }"
+                "mutation { ...F } fragment F on Mutation { ... on Mutation { createServer(input: {name: \"x\"}) { id } } }",
+                None
             ),
             Some("createServer".to_string())
         );
         assert_eq!(
-            refused_account_mutation("mutation($id: ID!) { deleteMessage(messageId: $id) }"),
+            refused_account_mutation("mutation($id: ID!) { deleteMessage(messageId: $id) }", None),
             None
         );
-        assert_eq!(refused_account_mutation("query { login }"), None);
-        assert!(refused_account_mutation("mutation {").is_some());
+        assert_eq!(refused_account_mutation("query { login }", None), None);
+        assert!(refused_account_mutation("mutation {", None).is_some());
+    }
+
+    #[test]
+    fn the_selected_operation_decides_and_an_unclear_mutation_is_refused() {
+        let query = "mutation Space { deleteMessage(messageId: \"m\") } mutation Account { ...A } fragment A on Mutation { ...B } fragment B on Mutation { leaveRelay }";
+        assert_eq!(refused_account_mutation(query, Some("Space")), None);
+        assert_eq!(
+            refused_account_mutation(query, Some("Account")),
+            Some("leaveRelay".to_string())
+        );
+        assert_eq!(
+            refused_account_mutation(query, None),
+            Some("no operation is selected".to_string())
+        );
+        assert_eq!(
+            refused_account_mutation(
+                "mutation { deleteMessage(messageId: \"m\") ...Missing }",
+                None
+            ),
+            Some("unknown fragment Missing".to_string())
+        );
+        assert_eq!(
+            refused_account_mutation("query Q { me { id } } mutation M { leaveRelay }", Some("Q")),
+            None
+        );
     }
 }

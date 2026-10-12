@@ -234,9 +234,12 @@ equals the cookie and the token is bound to the request's session cookie.
 
 The header is required on:
 
-- every GraphQL request that contains a mutation, with the exceptions below. The check runs
-  once for the whole batch, before anything executes, and a query that cannot be parsed counts
-  as needing it;
+- every GraphQL request whose operation is a mutation, with the exceptions below. The check
+  runs once for the whole batch, before anything executes, on the operation the request's
+  `operationName` selects. A query that cannot be parsed counts as needing it, and so does a
+  document whose mutation the server cannot classify completely: an operation that cannot be
+  selected, a fragment it does not define, fragments that spread each other, or fragments
+  nested deeper than 32;
 - `POST /api/files/upload`, `POST /api/files/avatar` and `POST /api/plugin-bundles/{server_id}`;
 - `POST /api/remote/...`.
 
@@ -244,7 +247,9 @@ Queries and subscriptions never need it. The mutations used before a session exi
 `login`, `logout`, `signupWithInvite`, `requestPasswordReset`, `resetPassword`,
 `keyLoginChallenge`, `loginWithKey`, `signupWithKey`, `sendDeviceLinkOffer` and
 `applyRemoteRevocation`. `rotateIdentityKey` and `cancelDeviceLink` are exempt only when the
-request carries no session cookie. A request is exempt only when every mutation field in it is.
+request carries no session cookie. A request is exempt only when every root field of its
+mutation is, counting the fields of named and inline fragments at any depth and fields under
+`@skip` or `@include` whatever their condition.
 
 A GraphQL request refused by the check gets an error with a message such as
 `csrf validation failed` and no `extensions.code`; a file route answers 403.
@@ -275,7 +280,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | Variable | Limits | Over the limit |
 |---|---|---|
 | `RIM_RATE_REQUESTS_PER_MIN_PER_IP` | Requests to routes under `/api` per client address per minute, with a burst of the same size. IPv6 addresses count per /64. | HTTP 429, `Retry-After` and `{"error":"rate_limited","retryAfterSeconds":n}` |
-| `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` | Mutation fields per session per minute, each field and alias counted; a request without a session counts against its address. | `RATE_LIMITED` with `retryAfterSeconds`; nothing in the request runs |
+| `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` | Mutation fields per session per minute, each field, alias and fragment expansion counted, a fragment spread twice counting twice; a request without a session counts against its address. | `RATE_LIMITED` with `retryAfterSeconds`; nothing in the request runs |
 | `RIM_RATE_MESSAGES_PER_MIN_PER_USER`, `RIM_RATE_MESSAGES_BURST` | Messages per user per minute, sent, replied, forwarded or encrypted, with a burst defaulting to the per-minute number. | `RATE_LIMITED` with `retryAfterSeconds` on the mutation |
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
