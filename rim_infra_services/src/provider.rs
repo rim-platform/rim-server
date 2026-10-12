@@ -181,21 +181,23 @@ impl DefaultAppServiceProvider {
             ));
         let mls_wire: Arc<dyn rim_services::e2ee::wire::MlsWire> =
             Arc::new(crate::e2ee::openmls_wire::OpenMlsWire::new());
-        let message_service: Arc<dyn MessageService> = Arc::new(
-            crate::message::DefaultMessageService::new(
-                repos.for_message(),
-                Some(db.clone()),
-                observers.clone(),
-            )
-            .with_audit_log_service(Arc::clone(&audit_log_service))
-            .with_notification_service(Arc::clone(&notification_service))
-            .with_e2ee(
-                Arc::clone(&repos.e2ee_repo),
-                Arc::clone(&mls_wire),
-                franking_keys.clone(),
-            )
-            .with_moderation_repo(Arc::clone(&repos.moderation_repo)),
-        );
+        let mut message_concrete = crate::message::DefaultMessageService::new(
+            repos.for_message(),
+            Some(db.clone()),
+            observers.clone(),
+        )
+        .with_audit_log_service(Arc::clone(&audit_log_service))
+        .with_notification_service(Arc::clone(&notification_service))
+        .with_e2ee(
+            Arc::clone(&repos.e2ee_repo),
+            Arc::clone(&mls_wire),
+            franking_keys.clone(),
+        )
+        .with_moderation_repo(Arc::clone(&repos.moderation_repo));
+        if let Some(rate) = federation.quotas.messages {
+            message_concrete = message_concrete.with_message_budget(rate);
+        }
+        let message_service: Arc<dyn MessageService> = Arc::new(message_concrete);
         let mut e2ee_concrete = crate::e2ee::DefaultE2eeService::new(
             repos.for_e2ee(),
             Some(db.clone()),

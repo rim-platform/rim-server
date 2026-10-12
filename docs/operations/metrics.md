@@ -108,6 +108,11 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `stranger_claim` | Key package claims by servers with no tie to the user. |
 | `delegations_per_relay` | Active delegations one relay holds on this host (`RIM_S2S_SUBSCRIPTIONS_PER_PEER`). |
 | `direct_revocation` | Device revocations brought directly, per address. |
+| `api_ip` | Requests to `/api` routes per client address (`RIM_RATE_REQUESTS_PER_MIN_PER_IP`). |
+| `api_mutations` | Mutation fields per session, or per address without one (`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`). |
+| `messages` | Messages per user (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`). |
+| `ws_connections` | Open WebSocket connections per user (`RIM_RATE_WS_CONNECTIONS_PER_USER`). |
+| `ws_subscriptions` | Subscriptions per WebSocket connection (`RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`). |
 
 Slow mode in a conversation is not counted here.
 

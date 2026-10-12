@@ -92,6 +92,14 @@ USER rim
 #   RIM_FEATURES_DISABLED — comma-separated optional features to switch off: attachments,
 #                           link_previews, email, custom_emoji, workspace_plugins, ai_commands
 #                           (default: none); an unknown name stops the server at boot
+#   RIM_RATE_REQUESTS_PER_MIN_PER_IP — requests per client address per minute to /api routes,
+#                           with a burst of the same size (default: off); over it 429
+#   RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION — mutation fields per session per minute (default: off)
+#   RIM_RATE_MESSAGES_PER_MIN_PER_USER — messages per user per minute (default: off)
+#   RIM_RATE_MESSAGES_BURST — messages a user may send at once (default: the per-minute number)
+#   RIM_RATE_WS_CONNECTIONS_PER_USER — open WebSocket connections per user (default: off)
+#   RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION — subscriptions per WebSocket connection (default: off)
+#   RIM_API_MAX_BATCH     — GraphQL requests in one batch (default: 20)
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

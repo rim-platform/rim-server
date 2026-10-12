@@ -8,6 +8,7 @@ pub mod app;
 pub mod audit_cmd;
 mod body;
 pub mod config;
+mod edge;
 mod file_handlers;
 pub mod franking_key_cmd;
 mod graphql_support;

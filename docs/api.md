@@ -35,8 +35,11 @@ the route needs the session cookie; "CSRF" means it also needs the `X-CSRF-Token
 ### GraphQL: `POST /api`
 
 The request body is the usual GraphQL JSON (`query`, `variables`, `operationName`), or an array
-of such objects, which the server runs as one batch and answers with an array. The answer is
-always HTTP 200; errors are in the `errors` array of each response (see "Errors"). The server
+of such objects, which the server runs as one batch and answers with an array. A batch holds
+at most `RIM_API_MAX_BATCH` requests (default 20); a larger one is answered 400 with
+`{"error":"batch_too_large"}` and none of it runs. Apart from that and the refusals under
+"Limits", the answer is HTTP 200; errors are in the `errors` array of each response (see
+"Errors"). The server
 reads an `X-Request-Id` header, or makes one, and adds it to every error as
 `extensions.request_id`, so a report can be matched to the server log.
 
@@ -49,7 +52,11 @@ A WebSocket upgrade carrying the session cookie. The subprotocol is chosen with
 `Sec-WebSocket-Protocol`: `graphql-transport-ws` (the protocol of the `graphql-ws` library) or
 `graphql-ws` (the older `subscriptions-transport-ws` protocol). An upgrade without one of them
 is refused with 400, and an upgrade without a valid session with 401: there are no anonymous
-subscriptions. The subscription roots are `workspaceEvents` and `relayStream`; the schema
+subscriptions. A user holding as many connections as `RIM_RATE_WS_CONNECTIONS_PER_USER` allows
+is refused with 429 and `{"error":"too_many_connections"}`. A subscription started past
+`RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` on one connection answers one error with the code
+`TOO_MANY_SUBSCRIPTIONS` and ends; ending another subscription frees its place. The
+subscription roots are `workspaceEvents` and `relayStream`; the schema
 describes both.
 
 ### The schema: `GET /api/sdl`
@@ -210,8 +217,28 @@ with 400 on every route under `/api`. The allowed origins are:
 
 Origins compare without case and without a default port. The browser may send `Content-Type`,
 `Authorization`, `X-CSRF-Token` and `X-Request-Id`, with credentials, on `GET`, `POST` and
-`OPTIONS`; a preflight is cached for an hour. The discovery document, the probes and
-`/s2s/v1/...` are outside this check.
+`OPTIONS`; a preflight is cached for an hour, and the browser may read the `Retry-After` header
+of an answer. The discovery document, the probes and `/s2s/v1/...` are outside this check.
+
+## Limits
+
+An operator can limit what one client sends. Every limit is off unless its variable is set to
+a number above 0, so a private server limits nothing but the batch size.
+
+| Variable | Limits | Over the limit |
+|---|---|---|
+| `RIM_RATE_REQUESTS_PER_MIN_PER_IP` | Requests to routes under `/api` per client address per minute, with a burst of the same size. IPv6 addresses count per /64. | HTTP 429, `Retry-After` and `{"error":"rate_limited","retryAfterSeconds":n}` |
+| `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` | Mutation fields per session per minute, each field and alias counted; a request without a session counts against its address. | `RATE_LIMITED` with `retryAfterSeconds`; nothing in the request runs |
+| `RIM_RATE_MESSAGES_PER_MIN_PER_USER`, `RIM_RATE_MESSAGES_BURST` | Messages per user per minute, sent, replied, forwarded or encrypted, with a burst defaulting to the per-minute number. | `RATE_LIMITED` with `retryAfterSeconds` on the mutation |
+| `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
+| `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
+| `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20. | HTTP 400 and `{"error":"batch_too_large"}` |
+
+The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the client a
+`Forwarded` or `X-Forwarded-For` header names. The limits are kept in memory by each server
+process, so a restart forgets them and two processes behind one proxy each allow the full
+amount. `/healthz`, `/readyz`, discovery and `/s2s/v1/...` are outside the per-address limit;
+server-to-server traffic has its own, `RIM_S2S_PEER_RATE_PER_MIN`.
 
 ## Errors
 
@@ -230,7 +257,8 @@ on the message.
 | `EMAIL_TAKEN` | The signup email address is already in use. | |
 | `INVALID_TOKEN` | An invite token is unknown, used up or revoked. | |
 | `EXPIRED_TOKEN` | An invite token has expired. | |
-| `RATE_LIMITED` | Too many attempts; wait before retrying. | `retryAfterSeconds` |
+| `RATE_LIMITED` | Too many attempts, mutations or messages; wait before retrying (see "Limits"). | `retryAfterSeconds` |
+| `TOO_MANY_SUBSCRIPTIONS` | The WebSocket connection holds as many subscriptions as it may. | `limit` |
 | `CONFIRMATION_STALE` | A command confirmation expired or was already used; ask again. | |
 | `CONFIRMATION_FAILED` | A command confirmation failed verification: it was made for another command, context or caller. | |
 | `CONVERSATION_ARCHIVED` | The conversation is archived and read-only. | |
@@ -245,6 +273,17 @@ on the message.
 
 Errors raised by GraphQL itself, before a resolver runs (a query that does not parse or does not
 match the schema), carry no `code`, and neither does the CSRF refusal.
+
+### Refusals before a route runs
+
+The limits under "Limits" refuse a request before its route runs, with a JSON body naming the
+refusal:
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `{"error":"batch_too_large"}` | A GraphQL batch over `RIM_API_MAX_BATCH`. |
+| 429 | `{"error":"rate_limited","retryAfterSeconds":n}`, with `Retry-After: n` | The client address is over `RIM_RATE_REQUESTS_PER_MIN_PER_IP`. |
+| 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
 
 ### Errors from the file routes
 

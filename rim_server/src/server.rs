@@ -1,19 +1,22 @@
 use crate::app::{S2sRuntime, build_app_runtime};
 use crate::config::RIMConfig;
+use crate::edge::{EdgeLimits, MutationCaller};
 use crate::file_handlers::{
     handle_attachment_download, handle_avatar_upload, handle_file_download, handle_file_upload,
     handle_report_attachment_download,
 };
 use crate::graphql_support::{
-    apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
+    apply_auth_cookies, count_mutation_fields, enforce_csrf_for_batch, extract_auth,
+    internal_graphql_error_response,
 };
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, guard, web};
+use actix_web::{App, Either, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
 use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
+use rim_api::subscription_limit::SubscriptionSlots;
 use tracing::{Instrument, info, info_span};
 
 use std::sync::Arc;
@@ -84,6 +87,11 @@ pub async fn serve(
         force_secure_cookies: config.force_secure_cookies(),
     };
 
+    let edge_limits = web::Data::new(crate::edge::EdgeLimits::new(
+        config.api_limits(),
+        config.trust_forwarded_headers(),
+    ));
+
     let metrics_addr = config.metrics_addr().map_err(std::io::Error::other)?;
     let runtime = build_app_runtime(config).await?;
     let schema: AppSchema = runtime.schema;
@@ -117,7 +125,10 @@ pub async fn serve(
 
         let cors = allowed_origins.clone().cors();
 
+        // The per-address limit sits inside CORS, so a refusal carries the CORS headers and a
+        // preflight is not counted.
         let mut api = web::scope("")
+            .wrap(actix_web::middleware::from_fn(crate::edge::limit_api))
             .wrap(cors)
             .service(
                 web::resource("/api")
@@ -181,6 +192,7 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))
             .app_data(web::Data::new(Arc::clone(&feature_gate)))
             .app_data(web::Data::new(handler_cfg))
+            .app_data(edge_limits.clone())
     })
     .listen(listener)?
     .run();
@@ -203,9 +215,16 @@ async fn sdl_handler(schema: web::Data<AppSchema>) -> HttpResponse {
 async fn graphql_handler(
     schema: web::Data<AppSchema>,
     handler_cfg: web::Data<HandlerConfig>,
+    edge_limits: web::Data<EdgeLimits>,
     req: HttpRequest,
     gql: GraphQLBatchRequest,
-) -> GraphQLResponse {
+) -> Either<GraphQLResponse, HttpResponse> {
+    let batch = gql.into_inner();
+    if let async_graphql::BatchRequest::Batch(requests) = &batch
+        && edge_limits.batch_too_large(requests.len())
+    {
+        return Either::Right(crate::edge::batch_too_large_response());
+    }
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -213,7 +232,6 @@ async fn graphql_handler(
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::now_v7().to_string());
 
-    let batch = gql.into_inner();
     let has_mutation = batch_has_mutation(&batch);
     let span = info_span!(
         "graphql.request",
@@ -222,7 +240,7 @@ async fn graphql_handler(
         has_mutation = %has_mutation
     );
 
-    async move {
+    let response = async move {
         // CSRF is enforced once at the HTTP level for the entire batch.
         if let Err(resp) = enforce_csrf_for_batch(&req, &batch) {
             return resp;
@@ -243,6 +261,18 @@ async fn graphql_handler(
             },
             None => Default::default(),
         };
+        let client_ip = crate::edge::client_ip(&req, handler_cfg.trust_forwarded_headers);
+        let caller = match (auth.session_id, client_ip) {
+            (Some(session_id), _) => Some(MutationCaller::Session(session_id)),
+            (None, Some(ip)) => Some(MutationCaller::Address(ip)),
+            (None, None) => None,
+        };
+        if let Some(caller) = caller
+            && let Err(retry_after_seconds) =
+                edge_limits.spend_mutations(&caller, count_mutation_fields(&batch))
+        {
+            return rate_limited_graphql_response(retry_after_seconds);
+        }
         if let Some(user_id) = auth.user_id
             && let Some(response) = refuse_remote_account_mutation(&req, &batch, user_id).await
         {
@@ -252,26 +282,12 @@ async fn graphql_handler(
             .with_device_key_id(auth.device_key_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
-        // Extract the remote IP for rate-limiting resolvers (e.g. previewInviteToken).
-        //
-        // Trust X-Forwarded-For only when the operator has explicitly
-        // set RIM_TRUST_FORWARDED_HEADERS=true, indicating a trusted reverse proxy
-        // is the sole entry point. Without a proxy, clients can forge the header and
-        // spoof their IP, defeating the per-IP rate limits.
-        //
-        // Default: use the TCP peer address (reliable, un-spoofable).
-        // With trust: use realip_remote_addr() which reads X-Forwarded-For / Forwarded.
-        let remote_ip_str = if handler_cfg.trust_forwarded_headers {
-            req.connection_info()
-                .realip_remote_addr()
-                .unwrap_or("unknown")
-                .to_string()
-        } else {
-            req.peer_addr()
-                .map(|a| a.ip().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        };
-        let remote_ip = rim_api::auth_context::RemoteIp::new(remote_ip_str);
+        // The client address for the rate-limiting resolvers (e.g. previewInviteToken): the
+        // proxy headers count only with RIM_TRUST_FORWARDED_HEADERS=true, since without a
+        // proxy in front a client could forge them.
+        let remote_ip = rim_api::auth_context::RemoteIp::new(
+            client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string()),
+        );
 
         // Inject auth context and auth intent into each request in the batch.
         // Auth intent is shared across the batch so cookies are set once.
@@ -298,7 +314,19 @@ async fn graphql_handler(
         )
     }
     .instrument(span)
-    .await
+    .await;
+    Either::Left(response)
+}
+
+/// The GraphQL answer to a request over its mutation budget: `RATE_LIMITED` with
+/// `retryAfterSeconds`.
+fn rate_limited_graphql_response(retry_after_seconds: u64) -> GraphQLResponse {
+    let error = rim_api::errors::map_service_error(rim_services::ServiceError::RateLimited {
+        retry_after_seconds,
+    });
+    GraphQLResponse::from(async_graphql::Response::from_errors(vec![
+        error.into_server_error(async_graphql::Pos::default()),
+    ]))
 }
 
 /// `FORBIDDEN` when someone whose relay is another server, signed in here directly, sends a
@@ -377,6 +405,23 @@ async fn graphql_ws_handler(
 
     let mut data = async_graphql::Data::default();
     data.insert(actor_ctx);
+    if let Some(edge_limits) = req.app_data::<web::Data<EdgeLimits>>() {
+        // The connection slot lives in the connection's data, so it is given back when the
+        // connection ends.
+        match edge_limits.open_ws(actor) {
+            Ok(Some(slot)) => data.insert(slot),
+            Ok(None) => {}
+            Err(()) => {
+                return Ok(HttpResponse::TooManyRequests()
+                    .json(serde_json::json!({ "error": "too_many_connections" })));
+            }
+        }
+        if let Some(limit) = edge_limits.subscriptions_per_connection() {
+            data.insert(SubscriptionSlots::new(limit, || {
+                rim_infra_services::metrics::rate_limited("ws_subscriptions");
+            }));
+        }
+    }
 
     GraphQLSubscription::new(schema.into_inner().as_ref().clone())
         .with_data(data)
