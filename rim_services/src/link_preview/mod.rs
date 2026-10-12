@@ -5,6 +5,12 @@ pub mod service;
 
 pub use service::LinkPreviewService;
 
+/// Preview fetches one process runs at once when `RIM_LINK_PREVIEW_CONCURRENCY` is unset.
+pub const DEFAULT_FETCH_CONCURRENCY: usize = 8;
+
+/// Most preview fetches one process may run at once.
+pub const MAX_FETCH_CONCURRENCY: usize = 64;
+
 static URL_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\[\](){}|\\^`]+").unwrap());
 

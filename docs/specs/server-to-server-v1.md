@@ -132,8 +132,8 @@ endpoints), and signing the whole document (the log is self-certifying; one veri
 
 A server learns a peer's id from a request's `keyid`, a delegation, a card's relay URL or an
 invite. To pin it: fetch `<origin>/.well-known/rim-server` over HTTPS (5 s, 64 KiB, no redirects;
-origins resolving to loopback, link-local, private or unique-local addresses are refused unless
-`RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true`), replay the log, check the inception against the expected
+origins that are or resolve to a non-public address, as "Implementation" defines it, are refused
+unless `RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true`), replay the log, check the inception against the expected
 id, verify the descriptor (its `endpoints.s2s` must start with the origin), and store everything in
 `peer_server`. Refresh every 6 hours on use, on a `keyid` above the pinned head, and on a `401` from
 the peer; at most one fetch per peer per minute and 60 in total.
@@ -262,6 +262,16 @@ profile, `Content-Digest`, and the server-signed statements. Structured fields t
 0.15.0** (2026-06-16; RFC 8941/9651); Ed25519 through `rim_identity`'s key encodings. Its tests
 check RFC 9421 appendix B.2.6 ("Signing a Request Using ed25519") and appendix A here byte for
 byte. Outgoing requests use `reqwest` with rustls behind a signing client in `rim_infra_services`.
+
+Outgoing requests ignore proxy environment variables and connect only to public addresses: an IP
+literal is checked before the request, a name when it resolves, and the connection uses the
+checked addresses. Refused in IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`,
+`169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`,
+`198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24` and `224.0.0.0/3` (multicast, reserved,
+broadcast). In IPv6 only global unicast (`2000::/3`) is public, less `2001::/23` (Teredo,
+benchmarking, ORCHID), `2001:db8::/32` and `3fff::/20`; IPv4-mapped (`::ffff:0:0/96`),
+IPv4-compatible (`::/96`), NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are judged by
+the IPv4 address they embed, and local-use NAT64 (`64:ff9b:1::/48`) is refused.
 
 Considered on crates.io, 2026-10-09: **`httpsig`** 0.0.26 (2026-07-22, MIT; Ed25519,
 `Content-Digest`, response binding, but its README says work in progress and hyper-only

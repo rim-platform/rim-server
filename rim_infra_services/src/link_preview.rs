@@ -1,18 +1,21 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 
 use rim_core::link_preview::model::NewLinkPreview;
 use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::message::model::MessageId;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::feature::service::FeatureGate;
+use rim_services::link_preview::DEFAULT_FETCH_CONCURRENCY;
 use rim_services::link_preview::dto::LinkPreviewDto;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::{ServiceError, ServiceResult};
+
+use crate::outbound::{BodyError, PublicOnlyResolver, is_public_address, read_capped, url_ip};
 
 /// Maximum number of link previews per message.
 const MAX_PREVIEWS_PER_MESSAGE: usize = 5;
@@ -23,6 +26,7 @@ const MAX_BODY_SIZE: usize = 1_048_576;
 /// HTTP request timeout per URL.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub struct DefaultLinkPreviewService {
     link_preview_repo: Arc<dyn LinkPreviewRepository>,
     /// `None` only if the hardened client failed to build; every fetch is then refused rather
@@ -31,6 +35,10 @@ pub struct DefaultLinkPreviewService {
     /// `None` keeps previews on; otherwise nothing is fetched or served while
     /// [`ServerFeature::LinkPreviews`] is not enabled.
     features: Option<Arc<dyn FeatureGate>>,
+    /// Fetches in flight in this process, shared by every clone of the service.
+    fetch_slots: Arc<Semaphore>,
+    /// How long a fetch waits for a slot before it is dropped.
+    slot_wait: Duration,
 }
 
 impl DefaultLinkPreviewService {
@@ -46,7 +54,7 @@ impl DefaultLinkPreviewService {
             .no_proxy()
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 // Block redirects to private IPs (hostnames are vetted by the resolver)
-                if host_ip(attempt.url()).is_some_and(|addr| is_private_ip(&addr)) {
+                if url_ip(attempt.url()).is_some_and(|addr| !is_public_address(addr)) {
                     return attempt.stop();
                 }
                 if attempt.previous().len() > 5 {
@@ -65,7 +73,16 @@ impl DefaultLinkPreviewService {
             link_preview_repo,
             http_client,
             features: None,
+            fetch_slots: Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY)),
+            slot_wait: FETCH_TIMEOUT,
         }
+    }
+
+    /// Run at most `fetches` preview fetches at once (at least one); a fetch that finds every
+    /// slot busy for longer than the fetch timeout is dropped.
+    pub fn with_concurrency(mut self, fetches: usize) -> Self {
+        self.fetch_slots = Arc::new(Semaphore::new(fetches.max(1)));
+        self
     }
 
     /// Fetch and serve previews only while the instance has link previews enabled.
@@ -81,88 +98,6 @@ impl DefaultLinkPreviewService {
     }
 }
 
-/// DNS resolver for the link-preview client that refuses hosts resolving to a non-public address.
-///
-/// `is_url_safe` and the redirect policy only see the URL's host *string*, so on their own they
-/// block literal private IPs but not a public hostname whose DNS record points at e.g.
-/// `169.254.169.254`. Literal-IP hosts never reach a resolver, so both layers are needed.
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async move {
-            let host = name.as_str();
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, 0)).await?.collect();
-            if addrs.is_empty() || addrs.iter().any(|a| is_private_ip(&a.ip())) {
-                return Err(format!(
-                    "refusing to connect: {host} resolves to a non-public address"
-                )
-                .into());
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-fn is_private_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_private_v4(v4),
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // Unique local (fc00::/7)
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                // Link-local (fe80::/10)
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // IPv4-mapped (::ffff:x.x.x.x) — check the embedded IPv4
-                || v6.to_ipv4_mapped().is_some_and(|v4| is_private_v4(&v4))
-                // IPv4-compatible (::a.b.c.d, deprecated) — check the embedded IPv4
-                || (v6.segments()[..6] == [0, 0, 0, 0, 0, 0] && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[12], o[13], o[14], o[15]))
-                })
-                // 6to4 (2002::/16) — check the IPv4 embedded in bits 16..48
-                || (v6.segments()[0] == 0x2002 && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[2], o[3], o[4], o[5]))
-                })
-                // NAT64 well-known prefix (64:ff9b::/96) — check the embedded IPv4
-                || (v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[12], o[13], o[14], o[15]))
-                })
-        }
-    }
-}
-
-fn is_private_v4(v4: &Ipv4Addr) -> bool {
-    let o = v4.octets();
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || v4.is_multicast()
-        || o[0] == 0
-        // Carrier-grade NAT (100.64.0.0/10) — also where some clouds put metadata services
-        || (o[0] == 100 && (o[1] & 0xc0) == 64)
-        // Reserved (240.0.0.0/4), which includes broadcast
-        || o[0] >= 240
-}
-
-/// The URL's host as an IP address, if it is an IP literal.
-///
-/// `Url::host_str` keeps the brackets around IPv6 literals (`"[::1]"`), which `IpAddr` won't
-/// parse — and the HTTP connector connects to literals without consulting the resolver — so
-/// strip them before parsing.
-fn host_ip(url: &reqwest::Url) -> Option<IpAddr> {
-    let host = url.host_str()?;
-    host.strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host)
-        .parse()
-        .ok()
-}
-
 fn is_url_safe(url: &str) -> bool {
     let lower = url.to_lowercase();
     if !lower.starts_with("http://") && !lower.starts_with("https://") {
@@ -171,7 +106,7 @@ fn is_url_safe(url: &str) -> bool {
 
     // Parse the URL and check for private IPs in the host
     if let Ok(parsed) = reqwest::Url::parse(url) {
-        if host_ip(&parsed).is_some_and(|ip| is_private_ip(&ip)) {
+        if url_ip(&parsed).is_some_and(|ip| !is_public_address(ip)) {
             return false;
         }
         if let Some(host) = parsed.host_str() {
@@ -258,6 +193,8 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         for url in urls_to_fetch {
             let og = match self.fetch_og_data(url).await {
                 Ok(og) => og,
+                // Dropped for want of a fetch slot, and logged there.
+                Err(ServiceError::Unavailable) => continue,
                 Err(e) => {
                     tracing::warn!(url = %url, error = %e, "failed to fetch link preview");
                     continue;
@@ -314,24 +251,24 @@ impl DefaultLinkPreviewService {
                 "link-preview HTTP client unavailable"
             )));
         };
+        let Ok(Ok(_slot)) = tokio::time::timeout(self.slot_wait, self.fetch_slots.acquire()).await
+        else {
+            tracing::warn!(url = %url, "link preview dropped: every fetch slot stayed busy");
+            return Err(ServiceError::Unavailable);
+        };
         let response = http_client
             .get(url)
             .send()
             .await
             .map_err(ServiceError::internal)?;
-
-        // Check content length before downloading
-        if let Some(len) = response.content_length()
-            && len > MAX_BODY_SIZE as u64
-        {
-            return Err(ServiceError::Validation("response body too large".into()));
-        }
-
-        let bytes = response.bytes().await.map_err(ServiceError::internal)?;
-
-        if bytes.len() > MAX_BODY_SIZE {
-            return Err(ServiceError::Validation("response body too large".into()));
-        }
+        let bytes = read_capped(response, MAX_BODY_SIZE)
+            .await
+            .map_err(|e| match e {
+                BodyError::TooLarge(_) => {
+                    ServiceError::Validation("response body too large".into())
+                }
+                BodyError::Transport(why) => ServiceError::internal(anyhow::anyhow!(why)),
+            })?;
 
         let html = String::from_utf8_lossy(&bytes);
         Ok(parse_og_tags(&html))
@@ -340,6 +277,8 @@ impl DefaultLinkPreviewService {
 
 #[cfg(test)]
 mod tests {
+    use crate::outbound::fixture::{serve, sized_head};
+
     use super::*;
 
     #[test]
@@ -430,13 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn is_private_ip_ipv6_loopback() {
-        let addr: std::net::IpAddr = "::1".parse().unwrap();
-        assert!(is_private_ip(&addr));
-    }
-
-    #[test]
-    fn is_private_ip_169_254_link_local() {
+    fn is_url_safe_rejects_link_local() {
         assert!(!is_url_safe("http://169.254.1.1/something"));
     }
 
@@ -457,26 +390,6 @@ mod tests {
     }
 
     #[test]
-    fn is_private_ip_covers_non_public_ranges() {
-        for ip in [
-            "100.64.0.1",      // CGNAT
-            "100.100.100.200", // CGNAT-hosted cloud metadata
-            "224.0.0.1",       // multicast
-            "240.0.0.1",       // reserved
-            "255.255.255.255", // broadcast
-            "::",              // unspecified
-            "ff02::1",         // IPv6 multicast
-            "::ffff:169.254.169.254",
-            "64:ff9b::a9fe:a9fe", // NAT64-embedded 169.254.169.254
-            "::7f00:1",           // IPv4-compatible 127.0.0.1
-            "2002:a9fe:a9fe::",   // 6to4-embedded 169.254.169.254
-        ] {
-            let addr: IpAddr = ip.parse().unwrap();
-            assert!(is_private_ip(&addr), "{ip} must be treated as non-public");
-        }
-    }
-
-    #[test]
     fn is_url_safe_rejects_ipv6_literals() {
         for url in [
             "http://[::1]/",
@@ -488,14 +401,6 @@ mod tests {
             assert!(!is_url_safe(url), "{url} must be rejected");
         }
         assert!(is_url_safe("http://[2606:4700::1111]/"));
-    }
-
-    #[test]
-    fn host_ip_strips_ipv6_brackets() {
-        let url = reqwest::Url::parse("http://[::1]:8080/x").unwrap();
-        assert_eq!(host_ip(&url), Some("::1".parse().unwrap()));
-        let url = reqwest::Url::parse("http://example.com/").unwrap();
-        assert_eq!(host_ip(&url), None);
     }
 
     /// Redirect to an IPv6 loopback literal must be stopped by the redirect policy (literals
@@ -533,31 +438,6 @@ mod tests {
 
         let accepted = tokio::time::timeout(Duration::from_millis(200), target.accept()).await;
         assert!(accepted.is_err(), "redirect to [::1] must not be followed");
-    }
-
-    #[test]
-    fn is_private_ip_allows_public_addresses() {
-        for ip in [
-            "8.8.8.8",
-            "100.128.0.1",
-            "2606:4700::1111",
-            "64:ff9b::808:808",
-        ] {
-            let addr: IpAddr = ip.parse().unwrap();
-            assert!(!is_private_ip(&addr), "{ip} must be treated as public");
-        }
-    }
-
-    #[tokio::test]
-    async fn resolver_rejects_hostname_resolving_to_loopback() {
-        use reqwest::dns::Resolve;
-
-        let name: reqwest::dns::Name = "localhost".parse().unwrap();
-        let result = PublicOnlyResolver.resolve(name).await;
-        assert!(
-            result.is_err(),
-            "localhost resolves to loopback and must be refused"
-        );
     }
 
     /// A *hostname* that resolves to a private address must not be fetched.
@@ -633,5 +513,75 @@ mod tests {
             .await
             .expect("serve");
         assert_eq!(served[&message_id][0].url, "https://example.com/");
+    }
+    /// A service whose fetches share `slots` slots and wait at most `wait` for one.
+    fn limited_service(slots: usize, wait: Duration) -> DefaultLinkPreviewService {
+        use rim_core::link_preview::repository::MockLinkPreviewRepository;
+
+        let mut svc = DefaultLinkPreviewService::new(Arc::new(MockLinkPreviewRepository::new()))
+            .with_concurrency(slots);
+        svc.slot_wait = wait;
+        svc
+    }
+
+    const PAGE: &str = r#"<html><head><meta property="og:title" content="Slow"></head></html>"#;
+
+    /// 2 MiB of chunks with no terminating chunk: the fetch stops at the 1 MiB cap while the
+    /// connection is still open, before the fetch timeout.
+    #[tokio::test]
+    async fn a_chunked_body_over_the_cap_fails_before_eof() {
+        let mut body = Vec::new();
+        for _ in 0..32 {
+            body.extend_from_slice(format!("{:x}\r\n", 64 * 1024).as_bytes());
+            body.extend(std::iter::repeat_n(b'a', 64 * 1024));
+            body.extend_from_slice(b"\r\n");
+        }
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let linger = Duration::from_secs(30);
+        let server = serve(head.to_string(), body, Duration::ZERO, linger).await;
+        let svc = limited_service(1, FETCH_TIMEOUT);
+
+        let started = std::time::Instant::now();
+        let result = svc.fetch_og_data(&format!("http://{}/", server.addr)).await;
+        assert!(
+            matches!(&result, Err(ServiceError::Validation(why)) if why.contains("too large")),
+            "{:?}",
+            result.err()
+        );
+        assert!(started.elapsed() < FETCH_TIMEOUT);
+    }
+
+    /// With one slot, the second fetch connects only once the first has finished.
+    #[tokio::test]
+    async fn a_second_fetch_waits_for_the_only_slot() {
+        let delay = Duration::from_millis(500);
+        let server = serve(sized_head(PAGE.len()), PAGE.into(), delay, Duration::ZERO).await;
+        let svc = limited_service(1, FETCH_TIMEOUT);
+        let url = format!("http://{}/", server.addr);
+
+        let (first, second) = tokio::join!(svc.fetch_og_data(&url), svc.fetch_og_data(&url));
+        assert_eq!(first.expect("first").title.as_deref(), Some("Slow"));
+        assert_eq!(second.expect("second").title.as_deref(), Some("Slow"));
+        let accepted = server.accepted();
+        assert_eq!(accepted.len(), 2);
+        assert!(accepted[1] - accepted[0] >= delay);
+    }
+
+    /// With one slot held past the wait, the second fetch is dropped without connecting.
+    #[tokio::test]
+    async fn a_fetch_waiting_past_the_limit_is_dropped() {
+        let delay = Duration::from_secs(2);
+        let server = serve(sized_head(PAGE.len()), PAGE.into(), delay, Duration::ZERO).await;
+        let svc = limited_service(1, Duration::from_millis(200));
+        let url = format!("http://{}/", server.addr);
+
+        let (first, second) = tokio::join!(svc.fetch_og_data(&url), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            svc.fetch_og_data(&url).await
+        });
+        assert!(first.is_ok());
+        assert!(matches!(second, Err(ServiceError::Unavailable)));
+        assert_eq!(server.accepted().len(), 1);
     }
 }

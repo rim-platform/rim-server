@@ -172,6 +172,10 @@ pub struct RIMConfig {
     /// `RIM_FEATURES_DISABLED`; see [`RIMConfig::features_disabled`].
     pub features_disabled: Option<String>,
 
+    /// Link preview fetches the process runs at once, 1 to 64; default 8. Controlled by
+    /// `RIM_LINK_PREVIEW_CONCURRENCY`; see [`RIMConfig::link_preview_concurrency`].
+    pub link_preview_concurrency: Option<usize>,
+
     /// Requests one client address sends to `/api` routes per minute, with a burst of the same
     /// size; unset or 0 sets no limit. Controlled by `RIM_RATE_REQUESTS_PER_MIN_PER_IP`.
     pub rate_requests_per_min_per_ip: Option<u32>,
@@ -349,6 +353,7 @@ impl fmt::Debug for RIMConfig {
             .field("metrics_addr", &self.metrics_addr)
             .field("audit_retention_days", &self.audit_retention_days)
             .field("features_disabled", &self.features_disabled)
+            .field("link_preview_concurrency", &self.link_preview_concurrency)
             .field("api_limits", &self.api_limits())
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
@@ -409,6 +414,7 @@ impl Default for RIMConfig {
             metrics_addr: None,
             audit_retention_days: None,
             features_disabled: None,
+            link_preview_concurrency: None,
             rate_requests_per_min_per_ip: None,
             rate_mutations_per_min_per_session: None,
             rate_messages_per_min_per_user: None,
@@ -803,6 +809,22 @@ impl RIMConfig {
             Some(days) if days <= MAX_GRACE_DAYS => Ok(days),
             Some(days) => Err(format!(
                 "RIM_ACCOUNT_DELETION_GRACE_DAYS={days} is outside 0 to {MAX_GRACE_DAYS}"
+            )),
+        }
+    }
+
+    /// `RIM_LINK_PREVIEW_CONCURRENCY`: the link preview fetches the process runs at once; 8
+    /// when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is outside 1 to 64.
+    pub fn link_preview_concurrency(&self) -> Result<usize, String> {
+        use rim_services::link_preview::{DEFAULT_FETCH_CONCURRENCY, MAX_FETCH_CONCURRENCY};
+        match self.link_preview_concurrency {
+            None => Ok(DEFAULT_FETCH_CONCURRENCY),
+            Some(n) if (1..=MAX_FETCH_CONCURRENCY).contains(&n) => Ok(n),
+            Some(n) => Err(format!(
+                "RIM_LINK_PREVIEW_CONCURRENCY={n} is outside 1 to {MAX_FETCH_CONCURRENCY}"
             )),
         }
     }
@@ -1547,6 +1569,26 @@ mod tests {
             };
             let err = config.audit_retention_days().unwrap_err();
             assert!(err.contains("RIM_AUDIT_RETENTION_DAYS"), "{err}");
+        }
+    }
+
+    #[test]
+    fn link_preview_concurrency_is_8_unless_set_between_1_and_64() {
+        assert_eq!(RIMConfig::default().link_preview_concurrency(), Ok(8));
+        for n in [1, 16, 64] {
+            let config = RIMConfig {
+                link_preview_concurrency: Some(n),
+                ..Default::default()
+            };
+            assert_eq!(config.link_preview_concurrency(), Ok(n));
+        }
+        for n in [0, 65] {
+            let config = RIMConfig {
+                link_preview_concurrency: Some(n),
+                ..Default::default()
+            };
+            let err = config.link_preview_concurrency().unwrap_err();
+            assert!(err.contains("RIM_LINK_PREVIEW_CONCURRENCY"), "{err}");
         }
     }
 

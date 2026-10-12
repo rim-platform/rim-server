@@ -92,6 +92,8 @@ USER rim
 #   RIM_FEATURES_DISABLED — comma-separated optional features to switch off: attachments,
 #                           link_previews, email, custom_emoji, workspace_plugins, ai_commands
 #                           (default: none); an unknown name stops the server at boot
+#   RIM_LINK_PREVIEW_CONCURRENCY — link preview fetches the server runs at once, 1-64
+#                           (default: 8); outside the range stops the server at boot
 #   RIM_RATE_REQUESTS_PER_MIN_PER_IP — requests per client address per minute to /api routes,
 #                           with a burst of the same size (default: off); over it 429
 #   RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION — mutation fields per session per minute (default: off)

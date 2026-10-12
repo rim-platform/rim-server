@@ -54,6 +54,7 @@ pub(crate) mod moderation;
 // by the composition root (rim_server/src/app.rs).
 pub mod notification;
 pub(crate) mod notification_preference;
+pub(crate) mod outbound;
 pub(crate) mod password_reset;
 pub(crate) mod pin;
 pub(crate) mod pipeline;
