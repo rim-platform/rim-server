@@ -145,4 +145,23 @@ impl UserRepository for SeaOrmUserRepository {
         active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
     }
+
+    async fn record_terms_acceptance(
+        &self,
+        id: UserId,
+        url: String,
+        accepted_at: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<()> {
+        let result = user::Entity::update_many()
+            .col_expr(user::Column::TermsAcceptedAt, Expr::value(accepted_at))
+            .col_expr(user::Column::TermsAcceptedUrl, Expr::value(url))
+            .filter(user::Column::Id.eq(sea_orm::prelude::Uuid::from(id)))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        if result.rows_affected == 0 {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
+        }
+        Ok(())
+    }
 }

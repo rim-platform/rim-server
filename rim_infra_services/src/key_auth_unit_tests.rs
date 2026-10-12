@@ -71,6 +71,8 @@ mod tests {
         created: HashMap<UserId, NewUser>,
         /// Principals an operator blocked on this server.
         blocked: HashSet<String>,
+        /// The terms URL each user accepted, as `record_terms_acceptance` stored it.
+        terms: HashMap<UserId, String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -556,6 +558,13 @@ mod tests {
                 }
                 s.created.insert(id, new);
                 Ok(user_row(&s, id))
+            });
+        let users = Arc::clone(state);
+        user_repo
+            .expect_record_terms_acceptance()
+            .returning(move |id, url, _| {
+                users.lock().unwrap().terms.insert(id, url);
+                Ok(())
             });
         user_repo
     }
@@ -1899,6 +1908,7 @@ mod tests {
             token,
             proof_of_work: None,
             remote_ip: IP.to_string(),
+            terms_accepted_url: None,
         }
     }
 
@@ -1963,6 +1973,34 @@ mod tests {
         h.login(&enrolled, enrolled.device_id, &enrolled.device, AUDIENCE)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_records_the_accepted_terms_only_when_given() {
+        let h = harness();
+        let terms = "https://rim.example.org/terms";
+        let p = h.present(1).await;
+        let accepted = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                terms_accepted_url: Some(terms.to_string()),
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .expect("signup");
+        let p = h.present(2).await;
+        let without = h
+            .svc
+            .signup_with_key(open_cmd(&p, "grace"))
+            .await
+            .expect("signup");
+
+        let s = h.state.lock().unwrap();
+        assert_eq!(
+            s.terms.get(&accepted.user_id).map(String::as_str),
+            Some(terms)
+        );
+        assert!(!s.terms.contains_key(&without.user_id));
     }
 
     #[tokio::test]

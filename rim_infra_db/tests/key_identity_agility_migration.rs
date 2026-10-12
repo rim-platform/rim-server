@@ -82,6 +82,9 @@ async fn identity_key(conn: &DatabaseConnection, user_id: Uuid) -> String {
 async fn existing_keys_are_tagged_and_hashed_and_down_restores_them() {
     let ctx = support::TestCtx::new().await;
     let conn = support::db_conn().await;
+    // Created on the current schema: the repository writes every column the entity has.
+    let alice = ctx.create_user("alice").await;
+    let alice_id: Uuid = alice.id.into();
 
     Migrator::down(&conn, Some(steps_to_before_migration()))
         .await
@@ -89,8 +92,6 @@ async fn existing_keys_are_tagged_and_hashed_and_down_restores_them() {
 
     // An account enrolled before the migration: bare Ed25519 keys, as the first key identity
     // release stored them.
-    let alice = ctx.create_user("alice").await;
-    let alice_id: Uuid = alice.id.into();
     let identity = ed25519_key(1);
     let laptop_key = ed25519_key(20);
     let phone_key = ed25519_key(21);

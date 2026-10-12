@@ -389,6 +389,7 @@ fn schema_for(
         RegistrationContext {
             registration_mode: Arc::new(registration_mode),
             audit_retention_days: None,
+            instance_policy: Default::default(),
         },
         None,
     )

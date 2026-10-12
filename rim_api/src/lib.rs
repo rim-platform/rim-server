@@ -38,6 +38,8 @@ pub struct RegistrationContext {
     pub registration_mode: Arc<rim_services::auth::dto::RegistrationMode>,
     /// Days a command audit row is kept; `None` keeps rows forever.
     pub audit_retention_days: Option<u32>,
+    /// The instance notice and the terms URL signups accept.
+    pub instance_policy: crate::types::InstancePolicy,
 }
 
 /// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
@@ -126,6 +128,7 @@ pub fn build_schema(
             registration.audit_retention_days,
         ))
         .extension(crate::subscription_limit::SubscriptionLimit)
+        .data(registration.instance_policy)
         .limit_depth(10)
         .limit_complexity(200);
     match federation {

@@ -1,6 +1,7 @@
 use crate::repository::error::RepoResult;
 use crate::user::model::{NewUser, UpdateProfilePatch, User, UserId};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
@@ -35,4 +36,15 @@ pub trait UserRepository: Send + Sync {
     /// # Errors
     /// Propagates any underlying storage error as [`RepoError`].
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<User>>;
+
+    /// Record that the user accepted the instance's terms at `url` at `accepted_at`.
+    ///
+    /// # Errors
+    /// `NotFound` when no user has `id`.
+    async fn record_terms_acceptance(
+        &self,
+        id: UserId,
+        url: String,
+        accepted_at: DateTime<Utc>,
+    ) -> RepoResult<()>;
 }

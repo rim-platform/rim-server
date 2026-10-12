@@ -44,6 +44,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   A running server picks up changes within 30 seconds; blocks are audited as `ip.block` and
   `ip.unblock` and refusals counted in `rim_ip_blocked_requests_total`. Adds the `ip_block`
   table.
+- `RIM_INSTANCE_NOTICE` and `RIM_TERMS_URL`: a short operator notice and the terms of service
+  URL, served as GraphQL `ServerInfo.instanceNotice` and `ServerInfo.termsUrl`. With terms set,
+  `signupWithInvite` and `signupWithKey` require `acceptedTermsUrl` (a new optional field of
+  `SignupWithInviteInput` and `SignupWithKeyInput`) equal to the terms URL and answer
+  `VALIDATION` otherwise; the acceptance is stored on the account.
 
 ### Changed
 

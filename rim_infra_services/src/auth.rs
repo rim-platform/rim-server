@@ -583,6 +583,7 @@ impl AuthService for DefaultAuthService {
             invite_token,
             username,
             password,
+            terms_accepted_url,
         } = cmd;
         let (invite_token, username, password) =
             (invite_token.as_str(), username.as_str(), password.as_str());
@@ -639,6 +640,7 @@ impl AuthService for DefaultAuthService {
                 }
                 e
             })?;
+        signup::record_terms(repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // Joins the server, then consumes the invite; a failure rolls the transaction back.
         signup::claim_token(&repos.signup_repos(), &token, user.id).await?;
@@ -774,6 +776,7 @@ impl AuthService for DefaultAuthService {
             password,
             email,
             display_name,
+            terms_accepted_url,
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
@@ -816,6 +819,7 @@ impl AuthService for DefaultAuthService {
             Some(resolved_display_name),
         )
         .await?;
+        signup::record_terms(txn_repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // An invite used up since the pre-check is `InvalidToken`.
         signup::claim_token(&txn_repos.signup_repos(), &token, user.id).await?;
@@ -846,6 +850,7 @@ impl AuthService for DefaultAuthService {
             remote_ip,
             email,
             display_name,
+            terms_accepted_url,
         } = cmd;
         let (username, password) = (username.as_str(), password.as_str());
 
@@ -882,6 +887,7 @@ impl AuthService for DefaultAuthService {
             Some(resolved_display_name),
         )
         .await?;
+        signup::record_terms(txn_repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
 

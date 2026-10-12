@@ -87,3 +87,53 @@ async fn find_by_username() {
     let found = repo.find_by_username("u_test_find").await.unwrap().unwrap();
     assert_eq!(found.id, created.id);
 }
+
+#[tokio::test]
+async fn record_terms_acceptance_stores_the_url_and_time() {
+    use sea_orm::EntityTrait;
+
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let user = ctx.create_user("u_test_terms").await;
+    let untouched = ctx.create_user("u_test_no_terms").await;
+    let at = chrono::DateTime::parse_from_rfc3339("2026-10-12T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    repo.record_terms_acceptance(user.id, "https://rim.example.org/terms".to_string(), at)
+        .await
+        .unwrap();
+
+    let row = entity::user::Entity::find_by_id(sea_orm::prelude::Uuid::from(user.id))
+        .one(&ctx.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.terms_accepted_url.as_deref(),
+        Some("https://rim.example.org/terms")
+    );
+    assert_eq!(row.terms_accepted_at.map(|t| t.to_utc()), Some(at));
+    let row = entity::user::Entity::find_by_id(sea_orm::prelude::Uuid::from(untouched.id))
+        .one(&ctx.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.terms_accepted_url, row.terms_accepted_at),
+        (None, None)
+    );
+
+    let err = repo
+        .record_terms_acceptance(
+            rim_core::user::model::UserId::new(),
+            "https://rim.example.org/terms".to_string(),
+            at,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rim_core::repository::error::RepoErrorKind::NotFound
+    ));
+}

@@ -293,6 +293,16 @@ Attachments, link previews, email, custom emoji, workspace plugins and the AI co
 can be switched off with `RIM_FEATURES_DISABLED` (commented out in the `rim` service);
 `docs/operations/features.md` lists what each one covers and what clients see.
 
+## Notice and terms
+
+`RIM_INSTANCE_NOTICE` is a short text, at most 500 characters, that clients show people on
+your server, such as who runs it and how to reach you. `RIM_TERMS_URL` is the address of your
+terms of service; once it is set, every signup has to accept those terms and the server records
+on the account when it did and which URL it accepted. Both are commented out in
+`deploy/.env.example` and reach the `rim` service when set; clients read them from
+`serverInfo`. A notice over 500 characters or a terms URL that is not an absolute http(s) URL
+stops the server at boot. Changing the terms URL does not ask existing accounts to accept again.
+
 ## Another proxy
 
 Caddy is an example. Any TLS proxy works if it:

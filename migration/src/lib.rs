@@ -101,6 +101,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261010_205121_fold_bootstrap_tokens_into_instance_invites::Migration),
             Box::new(m20261011_141814_widen_message_text::Migration),
             Box::new(m20261012_142739_add_ip_block::Migration),
+            Box::new(m20261012_140916_add_terms_acceptance_to_user::Migration),
         ]
     }
 }
@@ -189,3 +190,4 @@ mod m20261010_205037_drop_redundant_indexes;
 mod m20261010_205121_fold_bootstrap_tokens_into_instance_invites;
 mod m20261011_141814_widen_message_text;
 mod m20261012_142739_add_ip_block;
+mod m20261012_140916_add_terms_acceptance_to_user;

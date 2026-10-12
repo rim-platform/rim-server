@@ -352,6 +352,24 @@ pub(crate) async fn create_user(
     Ok(user)
 }
 
+/// Record on `user_id` the terms URL the signup accepted, stamped now; nothing when it accepted
+/// none. Runs on the signup's transaction.
+///
+/// # Errors
+/// Propagates storage errors.
+pub(crate) async fn record_terms(
+    user_repo: &dyn UserRepository,
+    user_id: UserId,
+    accepted: Option<String>,
+) -> ServiceResult<()> {
+    if let Some(url) = accepted {
+        user_repo
+            .record_terms_acceptance(user_id, url, Utc::now())
+            .await?;
+    }
+    Ok(())
+}
+
 /// Insert a session for `user_id` with `session_repo`, returning it with its raw token and
 /// CSRF token.
 ///

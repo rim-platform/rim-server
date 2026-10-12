@@ -197,6 +197,8 @@ pub struct SignupWithKeyInput {
     /// `SHA-256("rim.pow.v1\0" || server id || "\0" || inception payload || nonce)` starts with
     /// the descriptor's `powBits` zero bits.
     pub proof_of_work: Option<String>,
+    /// The terms of service the person accepted, as for `signupWithInvite`.
+    pub accepted_terms_url: Option<String>,
 }
 
 #[derive(InputObject, Clone, Debug)]

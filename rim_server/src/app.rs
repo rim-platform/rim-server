@@ -321,6 +321,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
+    let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -777,6 +778,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         rim_api::RegistrationContext {
             registration_mode: Arc::new(registration_mode),
             audit_retention_days,
+            instance_policy,
         },
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,

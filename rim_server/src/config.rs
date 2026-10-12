@@ -193,6 +193,13 @@ pub struct RIMConfig {
     pub rate_subscriptions_per_connection: Option<u32>,
     /// Most GraphQL requests in one batch. Default 20. Controlled by `RIM_API_MAX_BATCH`.
     pub api_max_batch: Option<usize>,
+    /// A short text shown to people on this instance, at most 500 characters. Controlled by
+    /// `RIM_INSTANCE_NOTICE`; see [`RIMConfig::instance_notice`].
+    pub instance_notice: Option<String>,
+
+    /// The terms of service every signup accepts, an absolute http(s) URL. Controlled by
+    /// `RIM_TERMS_URL`; see [`RIMConfig::terms_url`].
+    pub terms_url: Option<String>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -229,6 +236,9 @@ impl ServerRole {
         self.roles().contains(&role)
     }
 }
+
+/// Longest `RIM_INSTANCE_NOTICE`, in characters.
+pub const MAX_INSTANCE_NOTICE_CHARS: usize = 500;
 
 /// Default of `RIM_S2S_PEER_RATE_PER_MIN`.
 const DEFAULT_S2S_PEER_RATE_PER_MIN: u32 = 600;
@@ -292,6 +302,8 @@ impl fmt::Debug for RIMConfig {
             .field("audit_retention_days", &self.audit_retention_days)
             .field("features_disabled", &self.features_disabled)
             .field("api_limits", &self.api_limits())
+            .field("instance_notice", &self.instance_notice)
+            .field("terms_url", &self.terms_url)
             .finish()
     }
 }
@@ -350,6 +362,8 @@ impl Default for RIMConfig {
             rate_ws_connections_per_user: None,
             rate_subscriptions_per_connection: None,
             api_max_batch: None,
+            instance_notice: None,
+            terms_url: None,
         }
     }
 }
@@ -765,6 +779,62 @@ impl RIMConfig {
             &self.features_unavailable(),
         ))
     }
+}
+
+impl RIMConfig {
+    /// `RIM_INSTANCE_NOTICE`, trimmed; `None` when unset or blank.
+    ///
+    /// # Errors
+    /// A message naming the variable when the notice is longer than
+    /// [`MAX_INSTANCE_NOTICE_CHARS`] characters.
+    pub fn instance_notice(&self) -> Result<Option<String>, String> {
+        let Some(notice) = non_blank(self.instance_notice.as_deref()) else {
+            return Ok(None);
+        };
+        let chars = notice.chars().count();
+        if chars > MAX_INSTANCE_NOTICE_CHARS {
+            return Err(format!(
+                "RIM_INSTANCE_NOTICE is {chars} characters long; the most is \
+                 {MAX_INSTANCE_NOTICE_CHARS}"
+            ));
+        }
+        Ok(Some(notice.to_string()))
+    }
+
+    /// `RIM_TERMS_URL`, trimmed; `None` when unset or blank.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is not an absolute `http` or `https` URL
+    /// with a host.
+    pub fn terms_url(&self) -> Result<Option<String>, String> {
+        let Some(terms) = non_blank(self.terms_url.as_deref()) else {
+            return Ok(None);
+        };
+        match url::Url::parse(terms) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => {
+                Ok(Some(terms.to_string()))
+            }
+            _ => Err(format!(
+                "RIM_TERMS_URL={terms} is not an absolute http or https URL"
+            )),
+        }
+    }
+
+    /// The instance notice and terms URL the GraphQL schema serves and signups follow.
+    ///
+    /// # Errors
+    /// The messages of [`RIMConfig::instance_notice`] and [`RIMConfig::terms_url`].
+    pub fn instance_policy(&self) -> Result<rim_api::types::InstancePolicy, String> {
+        Ok(rim_api::types::InstancePolicy {
+            notice: self.instance_notice()?,
+            terms_url: self.terms_url()?,
+        })
+    }
+}
+
+/// `value` trimmed, or `None` when it is unset or blank.
+fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
 }
 
 /// A comma-separated list of server ids; refuses anything else so a typo does not silently
@@ -1472,6 +1542,83 @@ mod tests {
             Ok(vec![
                 rim_core::server_feature::model::ServerFeature::CustomEmoji
             ])
+        );
+    }
+
+    #[test]
+    fn instance_notice_is_trimmed_blank_is_none_and_over_500_characters_is_refused() {
+        let notice = |value: &str| {
+            RIMConfig {
+                instance_notice: Some(value.to_string()),
+                ..Default::default()
+            }
+            .instance_notice()
+        };
+        assert_eq!(RIMConfig::default().instance_notice(), Ok(None));
+        assert_eq!(notice("  "), Ok(None));
+        assert_eq!(
+            notice(" Run by the Example club. "),
+            Ok(Some("Run by the Example club.".to_string()))
+        );
+        // Characters, not bytes: 500 two-byte characters fit.
+        let longest = "é".repeat(MAX_INSTANCE_NOTICE_CHARS);
+        assert_eq!(notice(&longest), Ok(Some(longest.clone())));
+        let err = notice(&format!("{longest}x")).unwrap_err();
+        assert!(err.contains("RIM_INSTANCE_NOTICE"), "{err}");
+        assert!(err.contains("501"), "{err}");
+    }
+
+    #[test]
+    fn terms_url_takes_only_an_absolute_http_or_https_url() {
+        let terms = |value: &str| {
+            RIMConfig {
+                terms_url: Some(value.to_string()),
+                ..Default::default()
+            }
+            .terms_url()
+        };
+        assert_eq!(RIMConfig::default().terms_url(), Ok(None));
+        assert_eq!(terms(" "), Ok(None));
+        for url in [
+            "https://rim.example.org/terms",
+            "http://localhost:8080/terms.html",
+        ] {
+            assert_eq!(terms(&format!(" {url} ")), Ok(Some(url.to_string())));
+        }
+        for bad in [
+            "/terms",
+            "rim.example.org/terms",
+            "ftp://rim.example.org/terms",
+            "mailto:legal@example.org",
+            "https://",
+        ] {
+            let err = terms(bad).unwrap_err();
+            assert!(err.contains("RIM_TERMS_URL"), "{bad}: {err}");
+        }
+        let config = RIMConfig {
+            terms_url: Some("/terms".to_string()),
+            ..Default::default()
+        };
+        assert!(config.instance_policy().is_err());
+    }
+
+    #[test]
+    fn instance_notice_and_terms_url_are_read_from_their_variables() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            (
+                "RIM_INSTANCE_NOTICE",
+                "Run by the Example club, rules at /rules",
+            ),
+            ("RIM_TERMS_URL", "https://rim.example.org/terms"),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.instance_policy(),
+            Ok(rim_api::types::InstancePolicy {
+                notice: Some("Run by the Example club, rules at /rules".to_string()),
+                terms_url: Some("https://rim.example.org/terms".to_string()),
+            })
         );
     }
 }

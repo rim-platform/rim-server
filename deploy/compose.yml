@@ -100,6 +100,8 @@ services:
       RIM_RATE_WS_CONNECTIONS_PER_USER:
       RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION:
       RIM_API_MAX_BATCH:
+      RIM_INSTANCE_NOTICE:
+      RIM_TERMS_URL:
       # Days command audit rows are kept; older ones are exported to /data/audit-exports and
       # deleted daily. Unset keeps them forever.
       # RIM_AUDIT_RETENTION_DAYS: 365

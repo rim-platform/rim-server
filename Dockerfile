@@ -100,6 +100,10 @@ USER rim
 #   RIM_RATE_WS_CONNECTIONS_PER_USER — open WebSocket connections per user (default: off)
 #   RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION — subscriptions per WebSocket connection (default: off)
 #   RIM_API_MAX_BATCH     — GraphQL requests in one batch (default: 20)
+#   RIM_INSTANCE_NOTICE   — a short text shown to people on this instance, at most 500
+#                           characters (default: none); longer stops the server at boot
+#   RIM_TERMS_URL         — absolute http(s) URL of the terms of service; set, every signup must
+#                           accept it (default: none); a malformed URL stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

@@ -1009,6 +1009,12 @@ impl KeyAuthService for DefaultKeyAuthService {
             .get_by_id(user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
+        signup::record_terms(
+            repos.user_repo.as_ref(),
+            user.id,
+            cmd.terms_accepted_url.clone(),
+        )
+        .await?;
         let server_id = match &token {
             Some(token) => signup::claim_token(&repos.signup, token, user.id).await?,
             None => None,

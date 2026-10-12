@@ -60,6 +60,8 @@ pub struct SignupWithKeyCmd {
     pub proof_of_work: Option<String>,
     /// Client IP for the open-mode signup rate limit (`"unknown"` when unavailable).
     pub remote_ip: String,
+    /// The terms URL the person accepted, recorded on the new account; `None` records nothing.
+    pub terms_accepted_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
