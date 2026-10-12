@@ -58,10 +58,10 @@ as the way the app is used, not as a separate pillar.
 _Verified against both repositories on 2026-10-10 (rim-server `4945eda`, rim-ui `92fc764`)._
 
 **Shipped:** all five stages below, on both `master` branches. After them, the release
-preparation of `docs/plans/release-prep-2026-10-10.md` (version and health probes, metrics, the
+preparation (version and health probes, metrics, the
 compose stack with backup and restore, the dormant updater, instance feature switches, message
 rendering, the Vim profile, audit retention) and the first groups of the cleanup before going
-public (`docs/plans/cleanup-2026-10-10.md`): the incident and on-call vertical was dropped from
+public: the incident and on-call vertical was dropped from
 the core (the last commit with it is tagged `incidents-last`), dead code and GraphQL roots no
 client calls were removed, bootstrap tokens were folded into instance invites, and the schema,
 build and metadata were tidied. The documentation and comment pass (C-4) is in progress; the
@@ -251,7 +251,7 @@ both encryption and relays depend on them.
    existing `user` row with a kind of local or remote, so none of the dozens of tables that
    reference the user id move. Bots, ingest tokens and the CLI keep host-local credentials and
    host-scoped ids. The web app becomes a linked device of the desktop app.
-   _Shipped 2026-10-09_ (`docs/plans/stage-3-remaining-2026-10-09.md` lists the PRs): the
+   _Shipped 2026-10-09_: the
    `rim_identity` crate, enrollment, devices, rotation and recovery, profile cards, challenge
    login, algorithm-agile statements, key-only signup, device linking by code (desktop and
    web), the 12-word recovery phrase, the identity-key backup on the drive, and sign-out of
