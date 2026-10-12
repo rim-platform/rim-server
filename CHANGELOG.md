@@ -143,5 +143,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Link previews stop reading a page at 1 MiB as it arrives, where a page sent without a length
   used to be read whole before the cap applied. At most `RIM_LINK_PREVIEW_CONCURRENCY` fetches
   (default 8, 1 to 64) run at once; a fetch that waits five seconds for a slot is dropped.
+- Link previews and server-to-server requests share one address policy that also refuses
+  reserved IPv4 (`240.0.0.0/4`), benchmarking and protocol-assignment ranges, and IPv6
+  addresses that embed a private IPv4 address through NAT64 (`64:ff9b::/96`) or 6to4
+  (`2002::/16`). Server-to-server requests now ignore proxy environment variables, as link
+  previews did. `docs/specs/server-to-server-v1.md` lists the refused ranges.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

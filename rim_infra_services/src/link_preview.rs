@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +15,7 @@ use rim_services::link_preview::dto::LinkPreviewDto;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::{ServiceError, ServiceResult};
 
-use crate::outbound::{BodyError, read_capped};
+use crate::outbound::{BodyError, PublicOnlyResolver, is_public_address, read_capped, url_ip};
 
 /// Maximum number of link previews per message.
 const MAX_PREVIEWS_PER_MESSAGE: usize = 5;
@@ -55,7 +54,7 @@ impl DefaultLinkPreviewService {
             .no_proxy()
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 // Block redirects to private IPs (hostnames are vetted by the resolver)
-                if host_ip(attempt.url()).is_some_and(|addr| is_private_ip(&addr)) {
+                if url_ip(attempt.url()).is_some_and(|addr| !is_public_address(addr)) {
                     return attempt.stop();
                 }
                 if attempt.previous().len() > 5 {
@@ -99,88 +98,6 @@ impl DefaultLinkPreviewService {
     }
 }
 
-/// DNS resolver for the link-preview client that refuses hosts resolving to a non-public address.
-///
-/// `is_url_safe` and the redirect policy only see the URL's host *string*, so on their own they
-/// block literal private IPs but not a public hostname whose DNS record points at e.g.
-/// `169.254.169.254`. Literal-IP hosts never reach a resolver, so both layers are needed.
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async move {
-            let host = name.as_str();
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, 0)).await?.collect();
-            if addrs.is_empty() || addrs.iter().any(|a| is_private_ip(&a.ip())) {
-                return Err(format!(
-                    "refusing to connect: {host} resolves to a non-public address"
-                )
-                .into());
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
-fn is_private_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_private_v4(v4),
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // Unique local (fc00::/7)
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                // Link-local (fe80::/10)
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // IPv4-mapped (::ffff:x.x.x.x) — check the embedded IPv4
-                || v6.to_ipv4_mapped().is_some_and(|v4| is_private_v4(&v4))
-                // IPv4-compatible (::a.b.c.d, deprecated) — check the embedded IPv4
-                || (v6.segments()[..6] == [0, 0, 0, 0, 0, 0] && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[12], o[13], o[14], o[15]))
-                })
-                // 6to4 (2002::/16) — check the IPv4 embedded in bits 16..48
-                || (v6.segments()[0] == 0x2002 && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[2], o[3], o[4], o[5]))
-                })
-                // NAT64 well-known prefix (64:ff9b::/96) — check the embedded IPv4
-                || (v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && {
-                    let o = v6.octets();
-                    is_private_v4(&Ipv4Addr::new(o[12], o[13], o[14], o[15]))
-                })
-        }
-    }
-}
-
-fn is_private_v4(v4: &Ipv4Addr) -> bool {
-    let o = v4.octets();
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || v4.is_multicast()
-        || o[0] == 0
-        // Carrier-grade NAT (100.64.0.0/10) — also where some clouds put metadata services
-        || (o[0] == 100 && (o[1] & 0xc0) == 64)
-        // Reserved (240.0.0.0/4), which includes broadcast
-        || o[0] >= 240
-}
-
-/// The URL's host as an IP address, if it is an IP literal.
-///
-/// `Url::host_str` keeps the brackets around IPv6 literals (`"[::1]"`), which `IpAddr` won't
-/// parse — and the HTTP connector connects to literals without consulting the resolver — so
-/// strip them before parsing.
-fn host_ip(url: &reqwest::Url) -> Option<IpAddr> {
-    let host = url.host_str()?;
-    host.strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host)
-        .parse()
-        .ok()
-}
-
 fn is_url_safe(url: &str) -> bool {
     let lower = url.to_lowercase();
     if !lower.starts_with("http://") && !lower.starts_with("https://") {
@@ -189,7 +106,7 @@ fn is_url_safe(url: &str) -> bool {
 
     // Parse the URL and check for private IPs in the host
     if let Ok(parsed) = reqwest::Url::parse(url) {
-        if host_ip(&parsed).is_some_and(|ip| is_private_ip(&ip)) {
+        if url_ip(&parsed).is_some_and(|ip| !is_public_address(ip)) {
             return false;
         }
         if let Some(host) = parsed.host_str() {
@@ -452,13 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn is_private_ip_ipv6_loopback() {
-        let addr: std::net::IpAddr = "::1".parse().unwrap();
-        assert!(is_private_ip(&addr));
-    }
-
-    #[test]
-    fn is_private_ip_169_254_link_local() {
+    fn is_url_safe_rejects_link_local() {
         assert!(!is_url_safe("http://169.254.1.1/something"));
     }
 
@@ -479,26 +390,6 @@ mod tests {
     }
 
     #[test]
-    fn is_private_ip_covers_non_public_ranges() {
-        for ip in [
-            "100.64.0.1",      // CGNAT
-            "100.100.100.200", // CGNAT-hosted cloud metadata
-            "224.0.0.1",       // multicast
-            "240.0.0.1",       // reserved
-            "255.255.255.255", // broadcast
-            "::",              // unspecified
-            "ff02::1",         // IPv6 multicast
-            "::ffff:169.254.169.254",
-            "64:ff9b::a9fe:a9fe", // NAT64-embedded 169.254.169.254
-            "::7f00:1",           // IPv4-compatible 127.0.0.1
-            "2002:a9fe:a9fe::",   // 6to4-embedded 169.254.169.254
-        ] {
-            let addr: IpAddr = ip.parse().unwrap();
-            assert!(is_private_ip(&addr), "{ip} must be treated as non-public");
-        }
-    }
-
-    #[test]
     fn is_url_safe_rejects_ipv6_literals() {
         for url in [
             "http://[::1]/",
@@ -510,14 +401,6 @@ mod tests {
             assert!(!is_url_safe(url), "{url} must be rejected");
         }
         assert!(is_url_safe("http://[2606:4700::1111]/"));
-    }
-
-    #[test]
-    fn host_ip_strips_ipv6_brackets() {
-        let url = reqwest::Url::parse("http://[::1]:8080/x").unwrap();
-        assert_eq!(host_ip(&url), Some("::1".parse().unwrap()));
-        let url = reqwest::Url::parse("http://example.com/").unwrap();
-        assert_eq!(host_ip(&url), None);
     }
 
     /// Redirect to an IPv6 loopback literal must be stopped by the redirect policy (literals
@@ -555,31 +438,6 @@ mod tests {
 
         let accepted = tokio::time::timeout(Duration::from_millis(200), target.accept()).await;
         assert!(accepted.is_err(), "redirect to [::1] must not be followed");
-    }
-
-    #[test]
-    fn is_private_ip_allows_public_addresses() {
-        for ip in [
-            "8.8.8.8",
-            "100.128.0.1",
-            "2606:4700::1111",
-            "64:ff9b::808:808",
-        ] {
-            let addr: IpAddr = ip.parse().unwrap();
-            assert!(!is_private_ip(&addr), "{ip} must be treated as public");
-        }
-    }
-
-    #[tokio::test]
-    async fn resolver_rejects_hostname_resolving_to_loopback() {
-        use reqwest::dns::Resolve;
-
-        let name: reqwest::dns::Name = "localhost".parse().unwrap();
-        let result = PublicOnlyResolver.resolve(name).await;
-        assert!(
-            result.is_err(),
-            "localhost resolves to loopback and must be refused"
-        );
     }
 
     /// A *hostname* that resolves to a private address must not be fetched.
@@ -656,7 +514,6 @@ mod tests {
             .expect("serve");
         assert_eq!(served[&message_id][0].url, "https://example.com/");
     }
-
     /// A service whose fetches share `slots` slots and wait at most `wait` for one.
     fn limited_service(slots: usize, wait: Duration) -> DefaultLinkPreviewService {
         use rim_core::link_preview::repository::MockLinkPreviewRepository;
