@@ -159,6 +159,7 @@ mod tests {
                     email: Some("x@example.com".to_string()),
                     timezone: None,
                     principal_id: None,
+                    deletion_scheduled_for: None,
                 })
                 .collect())
         });

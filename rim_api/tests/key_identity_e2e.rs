@@ -31,7 +31,9 @@ use support::graphql::{
     Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
     exec_ok, merged,
 };
-use support::identity::{Enrolled, signed_login, signed_out, statement, tampered};
+use support::identity::{
+    Enrolled, SIGNUP_WITH_KEY, signed_login, signed_out, signup_input, statement, tampered,
+};
 use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
@@ -62,9 +64,6 @@ query { myKeyIdentity { principalId keySeq devices { deviceId revokedAt } } }"#;
 
 const KEY_LOG: &str = r#"
 query KeyLog($principalId: String!) { keyLog(principalId: $principalId) { seq kind statement { payload } } }"#;
-
-const SIGNUP_WITH_KEY: &str = r#"
-mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId serverId } }"#;
 
 const PASSWORD_LOGIN: &str = r#"
 mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
@@ -479,32 +478,6 @@ async fn signup_request(
     extra: Value,
 ) -> Request {
     signup(&signup_input(schema, username, id, device_seed, extra).await)
-}
-
-/// The input of [`signup_request`].
-async fn signup_input(
-    schema: &rim_api::AppSchema,
-    username: &str,
-    id: &TestIdentity,
-    device_seed: u8,
-    extra: Value,
-) -> Value {
-    let inception = id.inception();
-    let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
-    let device = signing_key(device_seed);
-    let cert = id.device_cert(&state, device_id, &device, "Laptop");
-    let proof = signed_login(schema, &device, &state, device_id).await;
-    let mut input = json!({
-        "username": username,
-        "keyLog": [statement(&inception)],
-        "device": statement(&cert),
-        "proof": statement(&proof),
-    });
-    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
-        input.extend(extra.clone());
-    }
-    input
 }
 
 /// Open mode: an account is created from a version 2 key identity alone. It signs in with its

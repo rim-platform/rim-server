@@ -158,6 +158,8 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "remoteJoinChallenge",
     "joinRemoteWorkspace",
     "renewDelegations",
+    "requestAccountDeletion",
+    "cancelAccountDeletion",
 ];
 
 fn refused_in(document: &ExecutableDocument, set: &SelectionSet, depth: usize) -> Option<String> {

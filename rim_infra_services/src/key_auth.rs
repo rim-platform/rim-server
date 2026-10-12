@@ -579,15 +579,36 @@ impl DefaultKeyAuthService {
         Ok(())
     }
 
-    /// `Conflict` when an account on this server already has `principal_id`.
+    /// `Conflict` when an account on this server already has `principal_id`; `Validation` when
+    /// a deleted account had it.
     async fn ensure_principal_unused(
         repos: &KeyAuthRepos,
         principal_id: &str,
     ) -> ServiceResult<()> {
+        Self::ensure_principal_not_retired(repos, principal_id).await?;
         match Self::remote_holder(repos, principal_id).await? {
             None => Ok(()),
             Some(_) => Err(Self::principal_taken()),
         }
+    }
+
+    /// `Validation` when an account deleted on this server held `principal_id`; its tombstone
+    /// keeps the id, so the key identity cannot come back here.
+    async fn ensure_principal_not_retired(
+        repos: &KeyAuthRepos,
+        principal_id: &str,
+    ) -> ServiceResult<()> {
+        if repos
+            .key_identity_repo
+            .principal_retired(principal_id)
+            .await?
+        {
+            return Err(ServiceError::Validation(
+                "this key identity belonged to an account deleted on this server and cannot be                  used here again; create a new identity"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn principal_taken() -> ServiceError {
@@ -965,6 +986,7 @@ impl KeyAuthService for DefaultKeyAuthService {
 
         let (scope, repos) = self.begin().await?;
         Self::consume_proof_challenge(&repos, &proof).await?;
+        Self::ensure_principal_not_retired(&repos, &state.principal_id).await?;
         // Checked for a clear answer; two signups racing for one principal are settled by the
         // unique index, which turns the second insert into `Conflict` as well.
         let (user_id, device) = match Self::remote_holder(&repos, &state.principal_id).await? {

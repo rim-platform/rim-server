@@ -47,6 +47,7 @@ use crate::auth_context::AuthActorCtx;
 use crate::broadcast::InMemoryBroadcaster;
 use crate::build_schema;
 
+mod account;
 mod attachment;
 mod audit;
 mod auth;
@@ -304,6 +305,7 @@ fn test_user_dto() -> rim_services::user::dto::UserDto {
         status_text: None,
         bio: None,
         principal_id: None,
+        deletion_scheduled_for: None,
     }
 }
 
@@ -528,6 +530,13 @@ impl AppServiceProvider for TestAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::workspace_plugin::service::PluginBundleService> {
         Arc::new(rim_services::workspace_plugin::service::MockPluginBundleService::new())
+    }
+
+    fn account_deletion_service(
+        &self,
+    ) -> Arc<dyn rim_services::account_deletion::service::AccountDeletionService> {
+        // A test of the account mutations passes its own mock as request data.
+        Arc::new(rim_services::account_deletion::service::MockAccountDeletionService::new())
     }
 
     fn feature_gate(&self) -> Arc<dyn rim_services::feature::service::FeatureGate> {

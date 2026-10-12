@@ -122,6 +122,8 @@ USER rim
 #                           and sends no DM request to a stranger (default: off)
 #   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,
 #                           instead of the normal rate (default: the normal rate)
+#   RIM_ACCOUNT_DELETION_GRACE_DAYS — days between an account's deletion request and its purge,
+#                           0-30 (default: 14); outside the range stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

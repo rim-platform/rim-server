@@ -71,6 +71,7 @@ impl UserRepository for SeaOrmUserRepository {
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>> {
         let model = user::Entity::find()
             .filter(user::Column::Username.eq(username))
+            .filter(user::Column::DeletedAt.is_null())
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
@@ -125,6 +126,7 @@ impl UserRepository for SeaOrmUserRepository {
                 "LOWER(email) = $1",
                 [sea_orm::Value::from(lower_email)],
             ))
+            .filter(user::Column::DeletedAt.is_null())
             .one(&self.db)
             .await
             .map_err(map_db_err)?;

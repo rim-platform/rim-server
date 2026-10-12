@@ -4,6 +4,7 @@
 //! consumers of the public modules.
 
 pub mod abuse_cmd;
+pub mod account_cmd;
 pub mod app;
 pub mod audit_cmd;
 mod body;

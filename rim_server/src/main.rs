@@ -1,7 +1,7 @@
 use rim_logging::{LoggingHandle, init_logging};
 use rim_server::server::start_server;
 use rim_server::{
-    abuse_cmd, audit_cmd, config, franking_key_cmd, invite_cmd, ip_cmd, server_key_cmd,
+    abuse_cmd, account_cmd, audit_cmd, config, franking_key_cmd, invite_cmd, ip_cmd, server_key_cmd,
 };
 
 /// Starts logging and returns the handle that keeps the audit file writer alive. Without
@@ -45,6 +45,7 @@ async fn main() {
             "invite" => Some(invite_cmd::run(args).await),
             "audit" => Some(audit_cmd::run(args).await),
             "ip" => Some(ip_cmd::run(args).await),
+            "account" => Some(account_cmd::run(args).await),
             _ => None,
         };
         if let Some(code) = exit_code {

@@ -20,6 +20,7 @@ pub(crate) fn account(id: UserId, created_at: DateTime<Utc>, principal_id: Optio
         email: None,
         timezone: None,
         principal_id: principal_id.map(str::to_string),
+        deletion_scheduled_for: None,
     }
 }
 

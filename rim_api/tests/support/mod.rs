@@ -24,6 +24,8 @@ pub mod relay;
 pub mod roles;
 #[allow(dead_code)] // Only the messaging suites send every messaging root.
 pub mod roots;
+#[allow(dead_code)] // Only the suites that sign in with a password use it.
+pub mod sessions;
 
 use std::env;
 use std::path::PathBuf;
@@ -336,6 +338,28 @@ impl TestCtx {
         )
     }
 
+    /// Build the schema and the provider it runs on with account deletions purged `grace`
+    /// after they are requested.
+    pub fn build_with_deletion_grace(
+        &self,
+        grace: chrono::Duration,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+    ) -> (rim_api::AppSchema, std::sync::Arc<dyn AppServiceProvider>) {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+        );
+        let provider: std::sync::Arc<dyn AppServiceProvider> =
+            std::sync::Arc::new(provider.with_account_deletion(grace, None));
+        let schema = schema_for(
+            std::sync::Arc::clone(&provider),
+            observers,
+            registration_mode,
+        );
+        (schema, provider)
+    }
+
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
     /// and the test database.
     ///
@@ -438,6 +462,17 @@ pub fn build_test_provider_with_gate(
     broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
     gate: rim_infra_services::feature_gate::InstanceFeatureGate,
 ) -> (std::sync::Arc<dyn AppServiceProvider>, Observers) {
+    let (provider, observers) = test_provider(conn, broadcaster, gate);
+    (std::sync::Arc::new(provider), observers)
+}
+
+/// The real service provider over `conn` with the instance feature gate `gate`, before it is
+/// shared, so a test can set what the composition root sets on it.
+fn test_provider(
+    conn: &DatabaseConnection,
+    broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
+    gate: rim_infra_services::feature_gate::InstanceFeatureGate,
+) -> (DefaultAppServiceProvider, Observers) {
     use std::sync::Arc;
 
     use rim_infra_db::sea_orm_impl::{
@@ -587,7 +622,7 @@ pub fn build_test_provider_with_gate(
 
     let observers = Observers::new(broadcaster);
 
-    let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
+    let service_provider = DefaultAppServiceProvider::new(
         &repos,
         raw_db,
         chrono::Duration::days(30),
@@ -609,7 +644,7 @@ pub fn build_test_provider_with_gate(
         rim_infra_services::FederationHooks::default(),
         Arc::new(gate),
         rim_services::limits::InstanceLimits::default(),
-    ));
+    );
 
     (service_provider, observers)
 }

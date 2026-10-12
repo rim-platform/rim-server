@@ -336,6 +336,7 @@ mod tests {
             email: Some(email.to_string()),
             timezone: None,
             principal_id: None,
+            deletion_scheduled_for: None,
         }
     }
 

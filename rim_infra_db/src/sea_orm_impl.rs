@@ -1,3 +1,4 @@
+pub mod account_deletion;
 pub mod audit;
 pub mod capability_registry;
 pub mod channel_lens;

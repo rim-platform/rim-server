@@ -199,6 +199,32 @@ name (`VALIDATION` otherwise). Every member gets `MemberLeft` for themself and t
 for the workspace ends; the workspace then answers like one they never joined. The direct space
 can be neither handed over nor deleted (`VALIDATION`).
 
+### Deleting an account
+
+`requestAccountDeletion(input: { confirmUsername })` schedules the signed-in account for
+deletion and answers `{ scheduledFor }`. The caller types their username again; a different one
+answers `VALIDATION`, and so does a request from the owner of a workspace that has other
+members, who hands it over or deletes it first (previous section; a workspace where the account
+is the only member is deleted with the account). A request while one is pending answers `CONFLICT`, and a person from
+another server, who deletes their account at their relay, gets `FORBIDDEN`. The request ends
+every other session of the account.
+
+The deletion waits out a grace period, `RIM_ACCOUNT_DELETION_GRACE_DAYS` (default 14). Until it
+ends the account works as before, `me.deletionScheduledFor` holds the date (null when nothing is
+pending, and on every other user), and `cancelAccountDeletion` keeps the account; it returns
+whether a deletion was pending. Both mutations need a session and the CSRF header.
+
+When the grace period ends, the hourly purge removes the account's sessions, devices, keys,
+memberships, plaintext messages and files, settings and personal automations, and frees its
+username. The user row stays as a tombstone: `deleted-` and the start of its id as the username,
+"Deleted account" as the display name, no email, password or key. It cannot sign in and is in no
+member list or search result. It stays the author of the account's encrypted messages, which are
+kept so a conversation's history does not shift, and of a message others replied to, which shows
+as deleted (`isDeleted: true`, no text) with the replies under it. The tombstone keeps the
+account's key identity id, so the same key identity cannot sign up on this server again:
+`signupWithKey` with it answers `VALIDATION`.
+`operations/background-jobs.md` and `self-hosting.md` have the operator's side.
+
 ### The CSRF token
 
 The mutations that set a session also set the `rim_csrf` cookie, with the same attributes except

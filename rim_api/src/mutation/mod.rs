@@ -19,6 +19,7 @@
 
 use async_graphql::MergedObject;
 
+pub(crate) mod account;
 pub(crate) mod attachment;
 pub(crate) mod auth;
 pub(crate) mod channel_lens;
@@ -114,4 +115,5 @@ pub(crate) struct MutationGroup7(
 pub(crate) struct MutationGroup8(
     remote_workspace::RemoteWorkspaceMutations,
     workspace::WorkspaceOwnerMutations,
+    account::AccountMutations,
 );

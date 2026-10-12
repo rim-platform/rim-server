@@ -55,10 +55,21 @@ impl KeyIdentityRepository for SeaOrmKeyIdentityRepository {
     async fn find_user_by_principal_id(&self, principal_id: &str) -> RepoResult<Option<UserId>> {
         let model = user::Entity::find()
             .filter(user::Column::PrincipalId.eq(principal_id))
+            .filter(user::Column::DeletedAt.is_null())
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
         Ok(model.map(|m| m.id.into()))
+    }
+
+    async fn principal_retired(&self, principal_id: &str) -> RepoResult<bool> {
+        let model = user::Entity::find()
+            .filter(user::Column::PrincipalId.eq(principal_id))
+            .filter(user::Column::DeletedAt.is_not_null())
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(model.is_some())
     }
 
     async fn list_key_log(&self, user_id: UserId) -> RepoResult<Vec<KeyLogEntry>> {

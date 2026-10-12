@@ -12,4 +12,6 @@ pub struct UserDto {
     pub bio: Option<String>,
     /// Key-based principal id once the account enrolled a key.
     pub principal_id: Option<String>,
+    /// When the account's pending deletion runs; set only for the account itself (`me`).
+    pub deletion_scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
 }

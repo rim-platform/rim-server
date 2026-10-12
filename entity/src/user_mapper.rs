@@ -17,6 +17,7 @@ impl From<user::Model> for User {
             email: m.email,
             timezone: m.timezone,
             principal_id: m.principal_id,
+            deletion_scheduled_for: m.deletion_scheduled_for.map(Into::into),
         }
     }
 }

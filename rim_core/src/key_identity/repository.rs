@@ -23,8 +23,12 @@ pub trait KeyIdentityRepository: Send + Sync {
     /// Returns `false` when the user does not exist.
     async fn lock_user(&self, user_id: UserId) -> RepoResult<bool>;
 
-    /// The user who enrolled `principal_id` on this server.
+    /// The user who enrolled `principal_id` on this server; a purged account is nobody.
     async fn find_user_by_principal_id(&self, principal_id: &str) -> RepoResult<Option<UserId>>;
+
+    /// Whether a purged account held `principal_id`: its tombstone keeps the id, so the same key
+    /// identity cannot sign up or enroll here again.
+    async fn principal_retired(&self, principal_id: &str) -> RepoResult<bool>;
 
     /// The user's key log, oldest entry first. Empty when the user has no key.
     async fn list_key_log(&self, user_id: UserId) -> RepoResult<Vec<KeyLogEntry>>;

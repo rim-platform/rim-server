@@ -19,6 +19,9 @@ const ENROLL: &str = r#"
 mutation Enroll($input: EnrollIdentityKeyInput!) { enrollIdentityKey(input: $input) { principalId } }"#;
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 
+pub const SIGNUP_WITH_KEY: &str = r#"
+mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId serverId } }"#;
+
 /// A statement as GraphQL input.
 pub fn statement(s: &SignedStatement) -> Value {
     json!({ "payload": s.payload, "signature": s.signature })
@@ -111,4 +114,32 @@ impl TestCtx {
             device,
         }
     }
+}
+
+/// The input of `signupWithKey` for `username` with the identity `id`: its inception as the key
+/// log, a new device from `device_seed` and a fresh login proof; `extra` adds input fields (a
+/// token).
+pub async fn signup_input(
+    schema: &AppSchema,
+    username: &str,
+    id: &TestIdentity,
+    device_seed: u8,
+    extra: Value,
+) -> Value {
+    let inception = id.inception();
+    let state = KeyState::from_inception(&inception).expect("inception");
+    let device_id = Uuid::now_v7();
+    let device = signing_key(device_seed);
+    let cert = id.device_cert(&state, device_id, &device, "Laptop");
+    let proof = signed_login(schema, &device, &state, device_id).await;
+    let mut input = json!({
+        "username": username,
+        "keyLog": [statement(&inception)],
+        "device": statement(&cert),
+        "proof": statement(&proof),
+    });
+    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
+        input.extend(extra.clone());
+    }
+    input
 }

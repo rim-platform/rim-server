@@ -117,6 +117,7 @@ pub fn build_schema(
         .data(service_provider.e2ee_service())
         .data(service_provider.workspace_plugin_service())
         .data(service_provider.feature_gate())
+        .data(service_provider.account_deletion_service())
         .data(presence_manager)
         .data(typing_tracker)
         .data(observers)

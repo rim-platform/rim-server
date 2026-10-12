@@ -128,6 +128,7 @@ mod tests {
             email: Some("u@example.com".to_string()),
             timezone: None,
             principal_id: None,
+            deletion_scheduled_for: None,
         }
     }
 

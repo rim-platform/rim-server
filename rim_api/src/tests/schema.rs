@@ -171,13 +171,15 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
 }
 
-/// `User` ends with the caller's probation end.
+/// `User` ends with the caller's probation end and pending deletion.
 #[test]
-fn user_sdl_ends_with_the_probation_end() {
+fn user_sdl_ends_with_the_probation_end_and_the_pending_deletion() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     assert!(
-        sdl.contains("principalId: String probationEndsAt: DateTime }"),
-        "User must end with probationEndsAt"
+        sdl.contains(
+            "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime }"
+        ),
+        "User must end with probationEndsAt, then deletionScheduledFor"
     );
 }
 
