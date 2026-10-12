@@ -1104,6 +1104,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn message_text_follows_the_message_bytes_cap_in_bytes() {
+        use rim_core::server_member::model::ServerMemberRole;
+        let (svc, server_id, conv_id) =
+            slow_mode_service(ServerMemberRole::Owner, 0, chrono::Duration::seconds(1));
+        let capped = svc
+            .clone()
+            .with_limits(rim_services::limits::InstanceLimits {
+                message_bytes: Some(16),
+                ..Default::default()
+            });
+        let with_text = |text: &str| SendMessageCmd {
+            text: Some(text.to_string()),
+            ..send(server_id, conv_id)
+        };
+        let refused = |result: Result<_, ServiceError>| match result {
+            Err(ServiceError::Validation(message)) => {
+                assert_eq!(message, "this instance allows 16 bytes of text per message")
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        };
+
+        capped
+            .send_message(with_text(&"a".repeat(16)))
+            .await
+            .expect("at the cap");
+        refused(capped.send_message(with_text(&"a".repeat(17))).await);
+        // Nine characters, eighteen bytes.
+        refused(capped.send_message(with_text(&"é".repeat(9))).await);
+        refused(
+            capped
+                .edit_message(rim_services::message::command::EditMessageCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id,
+                    conversation_id: conv_id,
+                    message_id: MessageId::new(),
+                    text: "a".repeat(17),
+                })
+                .await,
+        );
+        svc.send_message(with_text(&"a".repeat(9_000)))
+            .await
+            .expect("no cap");
+    }
+
+    #[test]
+    fn an_encrypted_message_may_exceed_the_text_cap_only_by_its_framing() {
+        let (svc, _, _) = slow_mode_service(
+            rim_core::server_member::model::ServerMemberRole::Owner,
+            0,
+            chrono::Duration::seconds(1),
+        );
+        let capped = svc
+            .clone()
+            .with_limits(rim_services::limits::InstanceLimits {
+                message_bytes: Some(16),
+                ..Default::default()
+            });
+        let framing = 4096;
+        assert!(capped.ensure_ciphertext_bytes(16 + framing, 0).is_ok());
+        assert!(
+            capped
+                .ensure_ciphertext_bytes(16 + framing + 100, 100)
+                .is_ok(),
+            "the authenticated data does not count"
+        );
+        assert!(matches!(
+            capped.ensure_ciphertext_bytes(17 + framing, 0),
+            Err(ServiceError::Validation(m)) if m == "this instance allows 16 bytes of text per message"
+        ));
+        assert!(svc.ensure_ciphertext_bytes(96 * 1024, 0).is_ok());
+    }
+
+    #[tokio::test]
     async fn timed_out_member_cannot_send() {
         let server_id = ServerId::new();
         let conv = conversation(server_id);

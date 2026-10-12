@@ -14,6 +14,7 @@ use rim_services::events::Observers;
 use rim_services::feature::service::FeatureGate;
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
+use rim_services::limits::InstanceLimits;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::macro_def::service::MacroService;
 use rim_services::mention::service::MentionService;
@@ -113,6 +114,7 @@ impl DefaultAppServiceProvider {
         franking_keys: crate::franking_keys::SharedFrankingKeys,
         federation: FederationHooks,
         feature_gate: Arc<dyn FeatureGate>,
+        limits: InstanceLimits,
     ) -> Self {
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
@@ -129,7 +131,8 @@ impl DefaultAppServiceProvider {
                 public_base_url.clone(),
             )
             .with_known_login_sources(known_login_sources.clone())
-            .with_signup_rate_limiter(signup_rate_limiter.clone()),
+            .with_signup_rate_limiter(signup_rate_limiter.clone())
+            .with_limits(limits),
         );
         let mut key_auth = crate::key_auth::DefaultKeyAuthService::new(
             repos.for_key_auth(),
@@ -145,7 +148,7 @@ impl DefaultAppServiceProvider {
         if let Some(server_id) = &federation.server_id {
             key_auth = key_auth.with_server_id(server_id.clone());
         }
-        key_auth = key_auth.with_quotas(federation.quotas);
+        key_auth = key_auth.with_quotas(federation.quotas).with_limits(limits);
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -171,7 +174,8 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
             )
             .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_limits(limits),
         );
         let notification_service: Arc<dyn NotificationService> =
             Arc::new(crate::notification::DefaultNotificationService::new(
@@ -192,7 +196,8 @@ impl DefaultAppServiceProvider {
             Arc::clone(&mls_wire),
             franking_keys.clone(),
         )
-        .with_moderation_repo(Arc::clone(&repos.moderation_repo));
+        .with_moderation_repo(Arc::clone(&repos.moderation_repo))
+        .with_limits(limits);
         if let Some(rate) = federation.quotas.messages {
             message_concrete = message_concrete.with_message_budget(rate);
         }
@@ -269,12 +274,14 @@ impl DefaultAppServiceProvider {
             )
             .with_db(db.clone()),
         );
-        let server_service: Arc<dyn ServerService> =
-            Arc::new(crate::server::DefaultServerService::new(
+        let server_service: Arc<dyn ServerService> = Arc::new(
+            crate::server::DefaultServerService::new(
                 repos.for_server(),
                 Some(db.clone()),
                 server_observers,
-            ));
+            )
+            .with_limits(limits),
+        );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
         );
@@ -346,15 +353,17 @@ impl DefaultAppServiceProvider {
             )
             .with_direct_space(federation.direct_space_id),
         );
-        let macro_service: Arc<dyn MacroService> =
-            Arc::new(crate::macro_def::DefaultMacroService::new(
+        let macro_service: Arc<dyn MacroService> = Arc::new(
+            crate::macro_def::DefaultMacroService::new(
                 repos.for_macro(),
                 crate::macro_def::MacroServices {
                     command_service: Arc::clone(&command_service),
                     audit_log_service: Some(Arc::clone(&audit_log_service)),
                     confirmation_store: Some(Arc::clone(&confirmation_store)),
                 },
-            ));
+            )
+            .with_limits(limits),
+        );
 
         // Break the command↔macro init cycle: the command service is constructed
         // first (macro cell empty), then the macro service is built from it, then
@@ -373,7 +382,8 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&command_service),
                 pipeline_broadcaster_clone,
             )
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_limits(limits),
         );
 
         let device_link_service: Arc<dyn DeviceLinkService> =
@@ -388,7 +398,8 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 workspace_plugin_observers,
             )
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_limits(limits),
         );
         let plugin_bundle_service: Arc<dyn PluginBundleService> = Arc::new(
             crate::plugin_bundle::DefaultPluginBundleService::new(

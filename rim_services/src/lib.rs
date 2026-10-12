@@ -13,6 +13,8 @@ pub mod host;
 pub mod ip_block;
 pub mod key_auth;
 pub mod keybind;
+// pub: rim_infra_services enforces the limits, rim_api reports them in serverInfo.
+pub mod limits;
 pub mod link_preview;
 pub mod macro_def;
 pub mod mention;

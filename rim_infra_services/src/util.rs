@@ -227,7 +227,8 @@ pub fn ensure_workspace_features(
 /// an empty joined-channel list. Private channels still need an invitation. A `Guest` joins no
 /// channel: guests only see conversations they are explicitly added to.
 ///
-/// Ban checks ([`ensure_not_banned`]) are the caller's job, before calling this.
+/// Ban checks ([`ensure_not_banned`]) are the caller's job, before calling this. With
+/// `max_members` set, a workspace that already has that many members refuses the newcomer.
 ///
 /// Every server-membership write (server creation, invite acceptance, join by invite, signup by
 /// workspace invite, owner adding a member) goes through here, with the caller's repos — so
@@ -241,7 +242,12 @@ pub async fn add_workspace_member(
     server_id: ServerId,
     user_id: UserId,
     role: ServerMemberRole,
+    max_members: Option<u32>,
 ) -> ServiceResult<ServerMember> {
+    if max_members.is_some() {
+        let members = server_member_repo.count_members(server_id).await?;
+        rim_services::limits::ensure_below(max_members, members, "members per workspace")?;
+    }
     let member = server_member_repo
         .add_member(server_id, user_id, role)
         .await?;
@@ -444,6 +450,9 @@ mod tests {
             ),
             ServiceError::Internal(_)
         ));
+        assert!(member_repo.count_members(server_id).await.is_err());
+        assert!(server_repo.count_owned(user_id).await.is_err());
+        assert!(conv_repo.count_channels(server_id).await.is_err());
     }
 
     struct FakeServerMemberRepo {
@@ -453,6 +462,10 @@ mod tests {
 
     #[async_trait]
     impl ServerMemberRepository for FakeServerMemberRepo {
+        async fn count_members(&self, _server_id: ServerId) -> RepoResult<u64> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn get_member(
             &self,
             _server_id: ServerId,
@@ -527,6 +540,10 @@ mod tests {
 
     #[async_trait]
     impl ServerRepository for FakeServerRepo {
+        async fn count_owned(&self, _owner: UserId) -> RepoResult<u64> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn get_by_id(&self, _id: ServerId) -> RepoResult<Option<Server>> {
             Ok(self.server.clone())
         }
@@ -554,6 +571,10 @@ mod tests {
 
     #[async_trait]
     impl ConversationRepository for FakeConversationRepo {
+        async fn count_channels(&self, _server_id: ServerId) -> RepoResult<u64> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn get_by_id(
             &self,
             _id: rim_core::conversation::model::ConversationId,
@@ -1299,6 +1320,7 @@ mod tests {
             ServerId::new(),
             UserId::new(),
             ServerMemberRole::Guest,
+            None,
         )
         .await
         .expect("add guest");
@@ -1366,6 +1388,7 @@ mod tests {
             server_id,
             user_id,
             ServerMemberRole::Member,
+            None,
         )
         .await
         .expect("add workspace member");
@@ -1393,9 +1416,67 @@ mod tests {
             ServerId::new(),
             UserId::new(),
             ServerMemberRole::Member,
+            None,
         )
         .await
         .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(_)));
+    }
+
+    /// A workspace at its member cap refuses a newcomer before inserting them; below it, or
+    /// without a cap, they join, and without a cap nothing is counted.
+    #[tokio::test]
+    async fn add_workspace_member_follows_the_members_per_workspace_cap() {
+        use rim_core::conversation::repository::MockConversationRepository;
+        use rim_core::conversation_member::repository::MockConversationMemberRepository;
+        use rim_core::server_member::repository::MockServerMemberRepository;
+
+        for (cap, members, allowed) in [
+            (Some(50), Some(49), true),
+            (Some(50), Some(50), false),
+            (None, None, true),
+        ] {
+            let mut server_member_repo = MockServerMemberRepository::new();
+            match members {
+                Some(members) => {
+                    server_member_repo
+                        .expect_count_members()
+                        .returning(move |_| Ok(members));
+                }
+                None => {
+                    server_member_repo.expect_count_members().never();
+                }
+            }
+            server_member_repo
+                .expect_add_member()
+                .times(usize::from(allowed))
+                .returning(|sid, uid, role| {
+                    Ok(ServerMember {
+                        id: ServerMemberId::new(),
+                        server_id: sid,
+                        user_id: uid,
+                        member_role: role,
+                        joined_at: chrono::Utc::now(),
+                    })
+                });
+            let result = add_workspace_member(
+                &server_member_repo,
+                &MockConversationRepository::new(),
+                &MockConversationMemberRepository::new(),
+                ServerId::new(),
+                UserId::new(),
+                ServerMemberRole::Guest,
+                cap,
+            )
+            .await;
+            match result {
+                Ok(_) => assert!(allowed, "{cap:?} {members:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {members:?}");
+                    assert_eq!(message, "this instance allows 50 members per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
     }
 }

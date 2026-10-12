@@ -28,6 +28,7 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent, WorkspacePluginChange};
 use rim_services::key_auth::command::SignedPayload;
+use rim_services::limits::{InstanceLimits, limit_reached};
 use rim_services::workspace_plugin::command::{
     AddWorkspacePluginCmd, ListWorkspacePluginsQuery, RemoveWorkspacePluginCmd,
     UpdateWorkspacePluginCmd,
@@ -71,6 +72,8 @@ pub struct DefaultWorkspacePluginService {
     change_rate_limiter: RegistrationRateLimiter,
     /// The relay's direct space, which has no plugins.
     direct_space_id: Option<ServerId>,
+    /// The instance's cap on plugins per workspace, below the built-in one.
+    limits: InstanceLimits,
 }
 
 /// A statement that verified, and the publisher key log the entry keeps with it.
@@ -220,6 +223,34 @@ impl DefaultWorkspacePluginService {
             observers,
             change_rate_limiter: RegistrationRateLimiter::new(3600, 60),
             direct_space_id: None,
+            limits: InstanceLimits::default(),
+        }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// The most entries a registry holds: the instance's cap when it is below the built-in
+    /// one.
+    fn max_entries(&self) -> u64 {
+        self.limits
+            .plugins_per_workspace
+            .map_or(MAX_WORKSPACE_PLUGINS, |cap| {
+                u64::from(cap).min(MAX_WORKSPACE_PLUGINS)
+            })
+    }
+
+    /// The refusal of an add to a full registry.
+    fn registry_full(&self) -> ServiceError {
+        match self.limits.plugins_per_workspace {
+            Some(cap) if u64::from(cap) < MAX_WORKSPACE_PLUGINS => {
+                limit_reached(cap, "plugins per workspace")
+            }
+            _ => ServiceError::Conflict(format!(
+                "this workspace already has {MAX_WORKSPACE_PLUGINS} plugins"
+            )),
         }
     }
 
@@ -599,13 +630,9 @@ impl WorkspacePluginService for DefaultWorkspacePluginService {
         );
         let entry = repos
             .workspace_plugin_repo
-            .insert(write, MAX_WORKSPACE_PLUGINS)
+            .insert(write, self.max_entries())
             .await?
-            .ok_or_else(|| {
-                ServiceError::Conflict(format!(
-                    "this workspace already has {MAX_WORKSPACE_PLUGINS} plugins"
-                ))
-            })?;
+            .ok_or_else(|| self.registry_full())?;
         Self::commit(scope).await?;
 
         audit(

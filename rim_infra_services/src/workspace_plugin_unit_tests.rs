@@ -605,6 +605,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_instance_cap_on_plugins_per_workspace_fills_the_registry_first() {
+        let mut h = harness();
+        h.service = h.service.with_limits(rim_services::limits::InstanceLimits {
+            plugins_per_workspace: Some(3),
+            ..Default::default()
+        });
+        h.upload_bundle(SHA, 1605);
+        for n in 0..3 {
+            let id = format!("dev.example.p{n}");
+            h.service
+                .add(h.add_cmd(h.owner, web_statement(&id, "1.0.0")))
+                .await
+                .expect("under the cap");
+        }
+        assert_validation(
+            h.service.add(h.add_cmd(h.owner, known())).await,
+            "this instance allows 3 plugins per workspace",
+        );
+    }
+
+    #[tokio::test]
     async fn statements_that_fail_verification_are_refused_with_the_reason() {
         let h = harness();
         h.upload_bundle(SHA, 1605);

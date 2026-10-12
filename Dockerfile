@@ -104,6 +104,20 @@ USER rim
 #                           characters (default: none); longer stops the server at boot
 #   RIM_TERMS_URL         — absolute http(s) URL of the terms of service; set, every signup must
 #                           accept it (default: none); a malformed URL stops the server at boot
+#   Instance limits, each off when unset or 0; past one a write answers VALIDATION:
+#   RIM_LIMIT_WORKSPACES_PER_USER — workspaces one user owns
+#   RIM_LIMIT_MEMBERS_PER_WORKSPACE — members of a workspace (the direct space has none)
+#   RIM_LIMIT_CHANNELS_PER_WORKSPACE — channels of a workspace, public and private
+#   RIM_LIMIT_DEVICES_PER_USER — devices on one account; the stricter of this and
+#                           RIM_RELAY_DEVICES_PER_USER applies
+#   RIM_LIMIT_DM_REQUESTS_PER_DAY — DM requests to strangers per user per day; the stricter of
+#                           this and RIM_RELAY_DM_REQUESTS_PER_DAY applies
+#   RIM_LIMIT_MACROS_PER_WORKSPACE, RIM_LIMIT_PIPELINES_PER_WORKSPACE,
+#   RIM_LIMIT_PLUGINS_PER_WORKSPACE — macros, pipelines and plugins of a workspace
+#   RIM_LIMIT_INVITES_PER_USER_PER_DAY — workspace invites one user creates per day
+#   RIM_LIMIT_INVITE_MAX_USES — the uses one invite may have
+#   RIM_LIMIT_MESSAGE_BYTES — bytes of a message's text, at most 65536; more stops the server
+#                           at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

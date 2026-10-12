@@ -19,6 +19,7 @@ use rim_services::conversation::command::{
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
+use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::{ServiceError, ServiceResult};
 
 use rim_core::repository::pagination::Page;
@@ -52,6 +53,8 @@ pub struct DefaultConversationService {
     /// The relay's direct space, where everyone is a guest, guests start DMs and groups, and
     /// there are no channels.
     direct_space_id: Option<rim_core::server::model::ServerId>,
+    /// The cap on channels per workspace.
+    limits: InstanceLimits,
 }
 
 impl DefaultConversationService {
@@ -61,7 +64,13 @@ impl DefaultConversationService {
             observers,
             e2ee_repo: None,
             direct_space_id: None,
+            limits: InstanceLimits::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// The relay's direct space, or `None` where none is wired.
@@ -440,6 +449,18 @@ impl ConversationService for DefaultConversationService {
                             "A channel with this name already exists".to_string(),
                         ));
                     }
+                }
+                if self.limits.channels_per_workspace.is_some() {
+                    let channels = self
+                        .repos
+                        .conversation_repo
+                        .count_channels(cmd.server_id)
+                        .await?;
+                    ensure_below(
+                        self.limits.channels_per_workspace,
+                        channels,
+                        "channels per workspace",
+                    )?;
                 }
 
                 // The creator is always a member of the channel, public or private.

@@ -2629,7 +2629,7 @@ mod tests {
         h.svc.add_device(add(70)).await.expect("second device");
         let err = h.svc.add_device(add(71)).await.unwrap_err();
         assert!(
-            matches!(&err, ServiceError::Validation(m) if m.contains("at most 2 devices")),
+            matches!(&err, ServiceError::Validation(m) if m == "this instance allows 2 devices per user; revoke one first"),
             "{err:?}"
         );
 

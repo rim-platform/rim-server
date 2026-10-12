@@ -581,6 +581,142 @@ mod tests {
         assert!(!result.invite_token.is_empty());
     }
 
+    /// An auth service where `owner` owns `server_id` and has created `today` invites in the
+    /// last day; `None` expects the day's invites never to be counted.
+    fn invite_service(
+        server_id: ServerId,
+        owner: UserId,
+        today: Option<u64>,
+        limits: rim_services::limits::InstanceLimits,
+    ) -> DefaultAuthService {
+        let (user_repo, server_repo, mut server_member_repo, session_repo, mut invite_repo, conv) =
+            repos();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |_, _| Ok(Some(make_owner_member(server_id, owner))));
+        match today {
+            Some(today) => {
+                invite_repo
+                    .expect_count_created_since()
+                    .withf(move |user_id, since| {
+                        *user_id == owner
+                            && (Utc::now() - Duration::days(1) - *since)
+                                .num_seconds()
+                                .abs()
+                                < 60
+                    })
+                    .returning(move |_, _| Ok(today));
+            }
+            None => {
+                invite_repo.expect_count_created_since().never();
+            }
+        }
+        invite_repo.expect_create_invite().returning(|new| {
+            Ok(Invite {
+                id: InviteId::new(),
+                server_id: new.server_id,
+                created_by_user_id: new.created_by_user_id,
+                token_hash: new.token_hash,
+                created_at: Utc::now(),
+                expires_at: new.expires_at,
+                max_uses: new.max_uses,
+                use_count: 0,
+                revoked_at: None,
+                role: new.role,
+            })
+        });
+        DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conv,
+            ),
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+        .with_limits(limits)
+    }
+
+    async fn invite_with_uses(
+        svc: &DefaultAuthService,
+        server_id: ServerId,
+        owner: UserId,
+        max_uses: i32,
+    ) -> Result<(), ServiceError> {
+        svc.create_invite(CreateInviteCmd {
+            actor: Actor::new(owner),
+            server_id,
+            expires_at: None,
+            max_uses,
+            recipient_email: None,
+            role: ServerMemberRole::Member,
+        })
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn create_invite_follows_the_invites_per_user_per_day_cap() {
+        for (cap, today, allowed) in [
+            (Some(5), Some(4), true),
+            (Some(5), Some(5), false),
+            (None, None, true),
+        ] {
+            let (server_id, owner) = (ServerId::new(), UserId::new());
+            let svc = invite_service(
+                server_id,
+                owner,
+                today,
+                rim_services::limits::InstanceLimits {
+                    invites_per_user_per_day: cap,
+                    ..Default::default()
+                },
+            );
+            match invite_with_uses(&svc, server_id, owner, 1).await {
+                Ok(()) => assert!(allowed, "{cap:?} {today:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {today:?}");
+                    assert_eq!(message, "this instance allows 5 invites per user per day");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn create_invite_follows_the_invite_max_uses_cap() {
+        for (cap, max_uses, allowed) in [
+            (Some(5), 5, true),
+            (Some(5), 6, false),
+            (None, 10_000, true),
+        ] {
+            let (server_id, owner) = (ServerId::new(), UserId::new());
+            let svc = invite_service(
+                server_id,
+                owner,
+                None,
+                rim_services::limits::InstanceLimits {
+                    invite_max_uses: cap,
+                    ..Default::default()
+                },
+            );
+            match invite_with_uses(&svc, server_id, owner, max_uses).await {
+                Ok(()) => assert!(allowed, "{cap:?} {max_uses}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {max_uses}");
+                    assert_eq!(message, "this instance allows 5 uses per invite");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn create_invite_rejects_malformed_recipient_email() {
         let server_id = ServerId::new();

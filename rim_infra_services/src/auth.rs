@@ -9,6 +9,7 @@ use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::NewInvite;
 use rim_core::server_member::model::ServerMemberRole;
+use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
     AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
@@ -21,6 +22,7 @@ use rim_services::auth::dto::{
 };
 use rim_services::auth::service::AuthService;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::limits::{InstanceLimits, ensure_below, limit_reached};
 use rim_services::{ServiceError, ServiceResult};
 
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
@@ -54,6 +56,8 @@ pub struct DefaultAuthService {
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
     /// invite emails fall back to the bare token (dev-only).
     public_base_url: Option<String>,
+    /// Caps on invites and on workspace members.
+    limits: InstanceLimits,
 }
 
 impl DefaultAuthService {
@@ -86,6 +90,7 @@ impl DefaultAuthService {
             login_known_sources: KnownLoginSources::login_default(),
             email_sender,
             public_base_url,
+            limits: InstanceLimits::default(),
         }
     }
 
@@ -128,6 +133,34 @@ impl DefaultAuthService {
         self
     }
 
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// `Validation` when an invite of `max_uses` uses would pass the instance's uses cap, or
+    /// when `user_id` already created the instance's daily number of invites.
+    async fn ensure_invite_limits(&self, user_id: UserId, max_uses: i32) -> ServiceResult<()> {
+        if let Some(cap) = self.limits.invite_max_uses
+            && i64::from(max_uses) > i64::from(cap)
+        {
+            return Err(limit_reached(cap, "uses per invite"));
+        }
+        if self.limits.invites_per_user_per_day.is_some() {
+            let today = self
+                .repos
+                .invite_repo
+                .count_created_since(user_id, Utc::now() - Duration::days(1))
+                .await?;
+            ensure_below(
+                self.limits.invites_per_user_per_day,
+                today,
+                "invites per user per day",
+            )?;
+        }
+        Ok(())
+    }
+
     /// Share the store of recent successful login sources, so other services (password
     /// reset) can forget an account's sources.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
@@ -161,6 +194,7 @@ impl DefaultAuthService {
             login_known_sources: KnownLoginSources::login_default(),
             email_sender,
             public_base_url,
+            limits: InstanceLimits::default(),
         }
     }
 
@@ -524,6 +558,8 @@ impl AuthService for DefaultAuthService {
             recipient_email,
             role,
         } = cmd;
+        self.ensure_invite_limits(actor.user_id, max_uses).await?;
+
         if max_uses <= 0 {
             return Err(ServiceError::Validation("max_uses must be > 0".to_string()));
         }
@@ -643,7 +679,13 @@ impl AuthService for DefaultAuthService {
         signup::record_terms(repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // Joins the server, then consumes the invite; a failure rolls the transaction back.
-        signup::claim_token(&repos.signup_repos(), &token, user.id).await?;
+        signup::claim_token(
+            &repos.signup_repos(),
+            &token,
+            user.id,
+            self.limits.members_per_workspace,
+        )
+        .await?;
 
         let (sess, raw_token, csrf) =
             Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
@@ -736,6 +778,7 @@ impl AuthService for DefaultAuthService {
             inv.server_id,
             actor.user_id,
             inv.role,
+            self.limits.members_per_workspace,
         )
         .await?;
 
@@ -822,7 +865,13 @@ impl AuthService for DefaultAuthService {
         signup::record_terms(txn_repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // An invite used up since the pre-check is `InvalidToken`.
-        signup::claim_token(&txn_repos.signup_repos(), &token, user.id).await?;
+        signup::claim_token(
+            &txn_repos.signup_repos(),
+            &token,
+            user.id,
+            self.limits.members_per_workspace,
+        )
+        .await?;
 
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;

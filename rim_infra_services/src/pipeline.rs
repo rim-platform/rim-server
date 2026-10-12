@@ -17,6 +17,7 @@ use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
+use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::pipeline::dto::{PipelineDto, PipelineFiredResult, PipelineTriggerDto};
 use rim_services::pipeline::request::{
     CreatePipelineCmd, DeletePipelineCmd, ListPipelinesCmd, TogglePipelineCmd, UpdatePipelineCmd,
@@ -43,6 +44,8 @@ pub struct DefaultPipelineService {
     rate_limits: Arc<DashMap<PipelineId, (u32, Instant)>>,
     /// The relay's direct space, which has no pipelines.
     direct_space_id: Option<ServerId>,
+    /// The cap on pipelines per workspace.
+    limits: InstanceLimits,
 }
 
 impl DefaultPipelineService {
@@ -58,7 +61,13 @@ impl DefaultPipelineService {
             cooldowns: Arc::new(DashMap::new()),
             rate_limits: Arc::new(DashMap::new()),
             direct_space_id: None,
+            limits: InstanceLimits::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// The relay's direct space, or `None` where none is wired.
@@ -306,6 +315,18 @@ impl PipelineService for DefaultPipelineService {
                 "quota exceeded: maximum {} pipelines per user per server",
                 MAX_PIPELINES_PER_USER_PER_SERVER
             )));
+        }
+        if self.limits.pipelines_per_workspace.is_some() {
+            let in_workspace = self
+                .repos
+                .pipeline_repo
+                .count_for_server(cmd.server_id)
+                .await?;
+            ensure_below(
+                self.limits.pipelines_per_workspace,
+                in_workspace,
+                "pipelines per workspace",
+            )?;
         }
 
         // Convert DTOs to domain types via From impls
@@ -674,6 +695,7 @@ mod tests {
             async fn count_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
             async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<Pipeline>;
             async fn set_last_fired_at(&self, id: PipelineId, fired_at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
+            async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
         }
     }
 
@@ -681,6 +703,7 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait::async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
+            async fn count_members(&self, server_id: ServerId) -> RepoResult<u64>;
             async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
             async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;
@@ -808,6 +831,61 @@ mod tests {
 
         assert_eq!(result.name, "My Pipeline");
         assert!(result.enabled);
+    }
+
+    #[tokio::test]
+    async fn create_follows_the_pipelines_per_workspace_cap() {
+        for (cap, in_workspace, allowed) in [
+            (Some(50), Some(49), true),
+            (Some(50), Some(50), false),
+            (None, None, true),
+        ] {
+            let mut repo = MockPipelineRepository::new();
+            repo.expect_count_for_user().returning(|_, _| Ok(0));
+            match in_workspace {
+                Some(n) => {
+                    repo.expect_count_for_server().returning(move |_| Ok(n));
+                }
+                None => {
+                    repo.expect_count_for_server().never();
+                }
+            }
+            repo.expect_create()
+                .times(usize::from(allowed))
+                .returning(|p| Ok(p.clone()));
+            let svc = make_service(repo, make_member_repo()).with_limits(
+                rim_services::limits::InstanceLimits {
+                    pipelines_per_workspace: cap,
+                    ..Default::default()
+                },
+            );
+            let result = svc
+                .create(CreatePipelineCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    name: "Capped".to_string(),
+                    description: None,
+                    trigger: PipelineTriggerDto {
+                        kind: PipelineTriggerKindDto::NewMessage,
+                        conversation_id: None,
+                    },
+                    filter: None,
+                    actions: vec![PipelineActionDto::ExecuteCommand {
+                        command_id: "test.cmd".to_string(),
+                        args: None,
+                    }],
+                    cooldown_secs: None,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{cap:?} {in_workspace:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {in_workspace:?}");
+                    assert_eq!(message, "this instance allows 50 pipelines per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
+use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
 use rim_services::server::dto::ServerDto;
 use rim_services::server::service::ServerService;
@@ -23,6 +24,8 @@ pub struct DefaultServerService {
     repos: ServerRepos,
     db: Option<DatabaseConnection>,
     observers: Observers,
+    /// Caps on workspaces per owner and on the default channels.
+    limits: InstanceLimits,
 }
 
 impl DefaultServerService {
@@ -31,7 +34,13 @@ impl DefaultServerService {
             repos,
             db,
             observers,
+            limits: InstanceLimits::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {
@@ -42,7 +51,8 @@ impl DefaultServerService {
     }
 }
 
-/// Create default #general and #random channels for a newly created server.
+/// Create default #general and #random channels for a newly created server, as many of them
+/// as `max_channels` allows.
 ///
 /// If channel creation fails, a warning is logged but the error is **not**
 /// propagated — we never want a default-channel failure to abort server
@@ -52,8 +62,10 @@ async fn create_default_channels(
     observers: &Observers,
     server_id: ServerId,
     creator_id: UserId,
+    max_channels: Option<u32>,
 ) {
-    for channel_name in &["general", "random"] {
+    let allowed = max_channels.map_or(usize::MAX, |n| n as usize);
+    for channel_name in ["general", "random"].iter().take(allowed) {
         match conversation_repo
             .create_conversation_with_members(
                 NewConversation {
@@ -122,6 +134,18 @@ impl ServerService for DefaultServerService {
                 existing.name
             )));
         }
+        if self.limits.workspaces_per_user.is_some() {
+            let owned = self
+                .repos
+                .server_repo
+                .count_owned(cmd.actor.user_id)
+                .await?;
+            ensure_below(
+                self.limits.workspaces_per_user,
+                owned,
+                "workspaces per user",
+            )?;
+        }
 
         // Run create + add_member inside a transaction when DB is available.
         let scope = if let Some(db) = &self.db {
@@ -148,6 +172,7 @@ impl ServerService for DefaultServerService {
             server.id,
             cmd.actor.user_id,
             ServerMemberRole::Owner,
+            None,
         )
         .await?;
 
@@ -157,6 +182,7 @@ impl ServerService for DefaultServerService {
             &self.observers,
             server.id,
             cmd.actor.user_id,
+            self.limits.channels_per_workspace,
         )
         .await;
 

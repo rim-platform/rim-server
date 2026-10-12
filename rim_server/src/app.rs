@@ -322,6 +322,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
     let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
+    let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -463,6 +464,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
         },
         Arc::clone(&feature_gate),
+        instance_limits,
     ));
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 
@@ -779,6 +781,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             registration_mode: Arc::new(registration_mode),
             audit_retention_days,
             instance_policy,
+            instance_limits,
         },
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,

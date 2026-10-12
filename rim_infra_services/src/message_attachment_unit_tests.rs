@@ -96,6 +96,7 @@ mod tests {
         ConversationRepository {}
         #[async_trait]
         impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
+            async fn count_channels(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
             async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
@@ -234,6 +235,7 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl rim_core::server_member::repository::ServerMemberRepository for ServerMemberRepository {
+            async fn count_members(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn get_member(
                 &self,
                 server_id: ServerId,

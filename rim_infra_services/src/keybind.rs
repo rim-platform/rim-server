@@ -634,6 +634,7 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
+            async fn count_members(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn add_member(
                 &self,
                 server_id: rim_core::server::model::ServerId,

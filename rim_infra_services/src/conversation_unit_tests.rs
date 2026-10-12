@@ -1373,4 +1373,81 @@ mod tests {
             .expect("list channels");
         }
     }
+
+    // ── Instance limits ──
+
+    /// A service where a member creates a channel in a workspace holding `channels` channels
+    /// under `cap`; `None` channels expects them never to be counted.
+    fn channel_service(channels: Option<u64>, cap: Option<u32>) -> DefaultConversationService {
+        let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
+            base_repos();
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Member))));
+        conversation_repo
+            .expect_exists_channel_by_title()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        match channels {
+            Some(channels) => {
+                conversation_repo
+                    .expect_count_channels()
+                    .returning(move |_| Box::pin(async move { Ok(channels) }));
+            }
+            None => {
+                conversation_repo.expect_count_channels().never();
+            }
+        }
+        conversation_repo
+            .expect_create_conversation_with_members()
+            .returning(|new, _| {
+                let mut created = conv(new.server_id);
+                created.conversation_type = ConversationType::Channel;
+                created.is_private = new.is_private;
+                Box::pin(async move { Ok(created) })
+            });
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        DefaultConversationService::new(
+            ConversationRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            test_observers(),
+        )
+        .with_limits(rim_services::limits::InstanceLimits {
+            channels_per_workspace: cap,
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn creating_a_channel_follows_the_channels_per_workspace_cap() {
+        for (cap, channels, is_private, allowed) in [
+            (Some(30), Some(29), false, true),
+            (Some(30), Some(30), true, false),
+            (Some(30), Some(30), false, false),
+            (None, None, false, true),
+        ] {
+            let result = channel_service(channels, cap)
+                .create_conversation(CreateConversationCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    participants: ConversationParticipants::Channel,
+                    title: Some("news".to_string()),
+                    is_private,
+                    encrypted: false,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{cap:?} {channels:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {channels:?}");
+                    assert_eq!(message, "this instance allows 30 channels per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
 }

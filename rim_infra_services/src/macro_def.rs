@@ -18,6 +18,7 @@ use rim_services::command::request::{ExecuteCommandCmd, GetCommandQuery};
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
 use rim_services::command::verb::TypedVerb;
+use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
     CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
@@ -49,11 +50,22 @@ pub struct MacroServices {
 pub struct DefaultMacroService {
     repos: MacroRepos,
     services: MacroServices,
+    /// The cap on macros per workspace.
+    limits: InstanceLimits,
 }
 
 impl DefaultMacroService {
     pub fn new(repos: MacroRepos, services: MacroServices) -> Self {
-        Self { repos, services }
+        Self {
+            repos,
+            services,
+            limits: InstanceLimits::default(),
+        }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     fn parse_steps(steps_json: &serde_json::Value) -> ServiceResult<Vec<MacroStepDto>> {
@@ -170,6 +182,18 @@ impl MacroService for DefaultMacroService {
             return Err(ServiceError::Validation(format!(
                 "user may have at most {MAX_MACROS_PER_USER} macros per server"
             )));
+        }
+        if self.limits.macros_per_workspace.is_some() {
+            let in_workspace = self
+                .repos
+                .macro_repo
+                .count_for_server(cmd.server_id)
+                .await?;
+            ensure_below(
+                self.limits.macros_per_workspace,
+                in_workspace,
+                "macros per workspace",
+            )?;
         }
 
         let steps_json = Self::serialize_steps(&cmd.steps)?;
@@ -661,6 +685,7 @@ mod tests {
         ServerMemberRepository {}
         #[async_trait]
         impl ServerMemberRepository for ServerMemberRepository {
+            async fn count_members(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
             async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
             async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;
@@ -683,6 +708,7 @@ mod tests {
         MacroRepository {}
         #[async_trait]
         impl MacroRepository for MacroRepository {
+            async fn count_for_server(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn get_by_id(&self, id: MacroId) -> RepoResult<Option<MacroDef>>;
             async fn find_by_name(
                 &self,
@@ -909,6 +935,74 @@ mod tests {
 
         assert_eq!(result.name, "My Macro");
         assert_eq!(result.steps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_macro_follows_the_macros_per_workspace_cap() {
+        for (cap, in_workspace, allowed) in [
+            (Some(50), Some(49), true),
+            (Some(50), Some(50), false),
+            (None, None, true),
+        ] {
+            let mut repo = MockMacroRepository::new();
+            repo.expect_count_for_user().returning(|_, _| Ok(0));
+            match in_workspace {
+                Some(n) => {
+                    repo.expect_count_for_server().returning(move |_| Ok(n));
+                }
+                None => {
+                    repo.expect_count_for_server().never();
+                }
+            }
+            repo.expect_create()
+                .times(usize::from(allowed))
+                .returning(|new_macro| {
+                    Ok(MacroDef {
+                        id: MacroId::new(),
+                        server_id: new_macro.server_id,
+                        user_id: new_macro.user_id,
+                        name: new_macro.name,
+                        description: new_macro.description,
+                        steps_json: new_macro.steps_json,
+                        ai_callable: new_macro.ai_callable,
+                        nl_description: new_macro.nl_description,
+                        intent_samples: new_macro.intent_samples,
+                        sensitivity: new_macro.sensitivity,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                    })
+                });
+            let svc = service(repo, MockCommandService::new()).with_limits(
+                rim_services::limits::InstanceLimits {
+                    macros_per_workspace: cap,
+                    ..Default::default()
+                },
+            );
+            let result = svc
+                .create_macro(CreateMacroCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    name: "Capped".to_string(),
+                    description: None,
+                    steps: vec![MacroStepDto {
+                        command_id: "chat.post_message".to_string(),
+                        args: None,
+                    }],
+                    ai_callable: false,
+                    nl_description: String::new(),
+                    intent_samples: vec![],
+                    sensitivity: CommandSensitivityDto::Safe,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{cap:?} {in_workspace:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {in_workspace:?}");
+                    assert_eq!(message, "this instance allows 50 macros per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]

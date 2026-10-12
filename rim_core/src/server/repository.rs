@@ -16,4 +16,7 @@ pub trait ServerRepository: Send + Sync {
 
     /// The workspace `owner` owns whose trimmed name equals `name` ignoring case.
     async fn find_owned_by_name(&self, owner: UserId, name: &str) -> RepoResult<Option<Server>>;
+
+    /// How many workspaces `owner` owns; the direct space is not one.
+    async fn count_owned(&self, owner: UserId) -> RepoResult<u64>;
 }

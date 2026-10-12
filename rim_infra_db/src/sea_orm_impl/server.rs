@@ -8,7 +8,8 @@ use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set,
+    ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    RelationTrait, Set,
 };
 
 use crate::DbHandle;
@@ -91,5 +92,18 @@ impl ServerRepository for SeaOrmServerRepository {
             .map_err(map_db_err)?;
 
         Ok(model.map(Into::into))
+    }
+
+    async fn count_owned(&self, owner: UserId) -> RepoResult<u64> {
+        server::Entity::find()
+            .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
+            .filter(server_member::Column::UserId.eq::<Uuid>(owner.into()))
+            .filter(server_member::Column::MemberRole.eq(
+                entity::sea_orm_active_enums::ServerMemberRole::from(ServerMemberRole::Owner),
+            ))
+            .filter(server::Column::Kind.eq(WORKSPACE_KIND))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
     }
 }
