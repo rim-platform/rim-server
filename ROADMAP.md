@@ -507,6 +507,6 @@ dropped from the core on 2026-10-10.
 Tracks 0.1, 0.3, 0.4 and 1.1 to 1.3 of the 2026-10-04 roadmap are merged on both `master`
 branches (rim-server through PR #21, `a668c05`; rim-ui through PR #9, `b62e31d`).
 
-Stages 1 to 5 of the 2026-10-08 master plan are merged on both `master` branches; the plans in
-`docs/plans/` list their PRs. The release preparation and the cleanup before going public follow
-in `docs/plans/release-prep-2026-10-10.md` and `docs/plans/cleanup-2026-10-10.md`.
+Stages 1 to 5 of the 2026-10-08 master plan are merged on both `master` branches, followed by
+the release preparation and the cleanup before going public; the pull requests are in the
+repository history.

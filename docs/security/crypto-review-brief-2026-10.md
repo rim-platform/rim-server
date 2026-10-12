@@ -1,7 +1,7 @@
 # Outside cryptographic review: brief for Stages 3 and 4
 
 _Written 2026-10-09 for the outside review that `ROADMAP.md` ("Risks", "Crypto correctness")
-and `docs/plans/stage-4-2026-10-09.md` ("Rules for every PR") require before a public release.
+and the Stage 4 plan's rules for every PR require before a public release.
 It covers key identity, device linking, recovery, the desktop secret vault and the browser
 device key (Stage 3), and end-to-end encryption of DMs and groups with MLS (Stage 4). It points
 into the specs instead of restating them; where the code and a spec differ, this brief says so

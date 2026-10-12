@@ -43,3 +43,6 @@ coverage/
 
 # Archives written by deploy/backup.sh
 backups/
+
+# Work plans stay local; docs/ documents the application only.
+/plans/
