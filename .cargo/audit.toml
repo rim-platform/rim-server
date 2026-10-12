@@ -26,8 +26,18 @@
 # HTTP/1.1 only — no TLS/ALPN and no `bind_auto_h2c`), so the server never
 # speaks HTTP/2. Revisit if the server ever binds with TLS or h2c, or once
 # actix-http ships on `h2` 0.4.
+# RUSTSEC-2026-0330 and RUSTSEC-2026-0331 — panics on short seeds and short keys in the
+# hybrid KEM of `libcrux-kem` 0.0.9 (fixed in 0.0.10). `libcrux-kem` is in Cargo.lock only
+# through `hpke-rs-libcrux`, the optional libcrux backend of `hpke-rs` 0.7 that
+# `openmls_rust_crypto` 0.6 declares but nothing here enables: `cargo tree -i libcrux-kem
+# --workspace --all-features --target all` prints nothing, so it is never compiled.
+# `hpke-rs-libcrux` 0.7 pins `libcrux-kem` `=0.0.9`; the fixed 0.8 needs `hpke-rs` 0.8, which
+# `openmls_rust_crypto` has not moved to. Revisit when `openmls_rust_crypto` ships on
+# `hpke-rs` 0.8, or if anything enables the libcrux backend.
 [advisories]
 ignore = [
+    "RUSTSEC-2026-0330",
+    "RUSTSEC-2026-0331",
     "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0235",
     "RUSTSEC-2026-0258",
