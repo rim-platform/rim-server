@@ -183,6 +183,22 @@ and the server-side expiry are both set from it, and using the session does not 
 missing, unknown, revoked or expired session cookie makes the request anonymous; a field that
 needs a session then answers `UNAUTHENTICATED`.
 
+### Handing over or deleting a workspace
+
+A workspace has exactly one owner. `transferWorkspaceOwnership(input: { serverId, userId })`
+makes another member the owner and the caller a moderator, in one step, and answers the
+workspace; both changes are announced with `MemberRoleChanged`. Only the owner may call it, the
+new owner must be a member and not a guest (`NOT_FOUND`, `VALIDATION`), and `setMemberRole` still
+never grants the owner role.
+
+`deleteWorkspace(input: { serverId, confirmName })` deletes the workspace for good, with its
+members, channels and conversations, their messages, files, pins and threads, invites, workspace
+state, keybinds, pipelines, macros, plugins, custom emoji and the notification rules scoped to it,
+and answers `{ deleted }`. Only the owner may call it and `confirmName` must be the workspace's
+name (`VALIDATION` otherwise). Every member gets `MemberLeft` for themself and their event stream
+for the workspace ends; the workspace then answers like one they never joined. The direct space
+can be neither handed over nor deleted (`VALIDATION`).
+
 ### The CSRF token
 
 The mutations that set a session also set the `rim_csrf` cookie, with the same attributes except

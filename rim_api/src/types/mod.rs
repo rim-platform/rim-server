@@ -113,7 +113,10 @@ pub use server_info::{
 };
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
-pub use workspace::{Server, ServerMember, ServerMemberRoleGql};
+pub use workspace::{
+    DeleteWorkspaceInput, DeleteWorkspacePayload, Server, ServerMember, ServerMemberRoleGql,
+    TransferWorkspaceOwnershipInput,
+};
 pub use workspace_plugin::{
     AddWorkspacePluginInput, PluginRuntimeKind, PluginSignatureStatus, PluginSource,
     PluginSourceKind, UpdateWorkspacePluginInput, WorkspacePlugin, WorkspacePluginStatus,

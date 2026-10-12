@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Context, Enum, ID, Result, SimpleObject};
+use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
 use crate::resolve::ResolveExt;
 use crate::types::User;
@@ -137,4 +137,26 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             principal_id: value.principal_id,
         }
     }
+}
+
+/// Hand a workspace's ownership to another member.
+#[derive(InputObject)]
+pub struct TransferWorkspaceOwnershipInput {
+    pub server_id: ID,
+    /// The member, not a guest, who becomes the owner.
+    pub user_id: ID,
+}
+
+/// Delete a workspace and everything in it.
+#[derive(InputObject)]
+pub struct DeleteWorkspaceInput {
+    pub server_id: ID,
+    /// The workspace's name, typed again to confirm.
+    pub confirm_name: String,
+}
+
+#[derive(SimpleObject, Clone, Copy, Debug)]
+pub struct DeleteWorkspacePayload {
+    /// Whether the workspace was deleted.
+    pub deleted: bool,
 }

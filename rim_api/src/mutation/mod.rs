@@ -111,4 +111,7 @@ pub(crate) struct MutationGroup7(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup8(remote_workspace::RemoteWorkspaceMutations);
+pub(crate) struct MutationGroup8(
+    remote_workspace::RemoteWorkspaceMutations,
+    workspace::WorkspaceOwnerMutations,
+);
