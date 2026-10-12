@@ -10,6 +10,7 @@ mod reaction;
 mod state;
 mod workspace;
 
+use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::sanitize::sanitize_command_ai_fields;
 
@@ -76,9 +77,88 @@ fn builtin_commands_raw() -> Vec<CommandDefinitionDto> {
     .collect()
 }
 
+/// The lowest workspace role a builtin needs, matching the role gate of the service behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequiredRole {
+    /// Any member, guests included.
+    Guest,
+    /// A member, moderator or owner; in the direct space, where everyone is a guest, a guest too.
+    MemberOrDirectSpaceGuest,
+    /// A member, moderator or owner.
+    Member,
+    /// A moderator or the owner.
+    Moderator,
+    /// The owner.
+    Owner,
+}
+
+impl RequiredRole {
+    /// Whether a member holding `role` meets the requirement; `direct_space` when the workspace
+    /// is the direct space.
+    pub(crate) fn admits(self, role: ServerMemberRole, direct_space: bool) -> bool {
+        match self {
+            Self::Guest => true,
+            Self::MemberOrDirectSpaceGuest => !role.is_guest() || direct_space,
+            Self::Member => !role.is_guest(),
+            Self::Moderator => role.is_moderator(),
+            Self::Owner => role == ServerMemberRole::Owner,
+        }
+    }
+}
+
+/// The role `command_id` needs in its workspace. `Guest` for every id not listed, including
+/// commands that are not builtins.
+pub(crate) fn required_role(command_id: &str) -> RequiredRole {
+    match command_id {
+        "admin.invite_member" => RequiredRole::Owner,
+        "admin.kick"
+        | "admin.ban"
+        | "admin.unban"
+        | "admin.timeout"
+        | "admin.set_role"
+        | "chat.set_slow_mode"
+        | "chat.archive_channel"
+        | "chat.unarchive_channel" => RequiredRole::Moderator,
+        "chat.create_channel" => RequiredRole::Member,
+        "chat.create_group" | "chat.join_channel" | "chat.invite_to_conversation" => {
+            RequiredRole::MemberOrDirectSpaceGuest
+        }
+        _ => RequiredRole::Guest,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_role_admits_by_role_and_space() {
+        use ServerMemberRole::{Guest, Member, Moderator, Owner};
+        // Lowest admitted role in an ordinary workspace, then in the direct space.
+        let cases = [
+            (RequiredRole::Guest, Guest, Guest),
+            (RequiredRole::MemberOrDirectSpaceGuest, Member, Guest),
+            (RequiredRole::Member, Member, Member),
+            (RequiredRole::Moderator, Moderator, Moderator),
+            (RequiredRole::Owner, Owner, Owner),
+        ];
+        let ranked = [Guest, Member, Moderator, Owner];
+        let rank = |role| ranked.iter().position(|r| *r == role).unwrap_or(0);
+        for (required, lowest, lowest_in_direct) in cases {
+            for role in ranked {
+                assert_eq!(
+                    required.admits(role, false),
+                    rank(role) >= rank(lowest),
+                    "{required:?} {role}"
+                );
+                assert_eq!(
+                    required.admits(role, true),
+                    rank(role) >= rank(lowest_in_direct),
+                    "{required:?} {role} in the direct space"
+                );
+            }
+        }
+    }
 
     #[test]
     fn builtin_commands_ids_are_unique() {

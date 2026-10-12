@@ -88,7 +88,9 @@ fn build_service_with_store(
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    rim_core::server_member::model::ServerMemberRole::Owner,
+                )),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
@@ -138,7 +140,16 @@ async fn ai_surface_lists_all_six_chat_and_navigation_commands() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(CommandContextDto {
+                workspace_id: Some(ServerId::new()),
+                conversation_id: None,
+                thread_id: None,
+                selected_text: None,
+                selected_message_id: None,
+                selected_message_ids: vec![],
+                focused_surface: None,
+                active_panel: None,
+            }),
             surface: CommandSurfaceDto::Ai,
         })
         .await
@@ -174,7 +185,16 @@ async fn ai_surface_preserves_desktop_local_target_on_navigation_commands() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(CommandContextDto {
+                workspace_id: Some(ServerId::new()),
+                conversation_id: None,
+                thread_id: None,
+                selected_text: None,
+                selected_message_id: None,
+                selected_message_ids: vec![],
+                focused_surface: None,
+                active_panel: None,
+            }),
             surface: CommandSurfaceDto::Ai,
         })
         .await

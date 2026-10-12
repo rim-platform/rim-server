@@ -437,6 +437,22 @@ A command may be:
 - available only when a required capability is granted
 - available only when the workspace has the command's optional module (`feature`) turned on
 
+Visibility: the `commands` and `commandDiscover` queries list only the commands the caller could
+run in the given context, so the palette and the AI agent never offer one that `executeCommand`
+refuses for who the caller is. A command the server runs (`backend`) is listed only when the
+context names a workspace the caller is a member of, their role there may run it, and each of its
+required capabilities passes the capability gate; a user command needs the role every step
+needs. The role a builtin needs is the one the service behind it enforces: the Owner for
+`admin.invite_member`; an Owner or Moderator for `admin.kick`, `admin.ban`, `admin.unban`,
+`admin.timeout`, `admin.set_role`, `chat.set_slow_mode`, `chat.archive_channel` and
+`chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`; a member, or a guest
+in the direct space, for `chat.create_group`, `chat.join_channel` and
+`chat.invite_to_conversation`; any member, guests included, for the rest. The commands the client
+runs itself (`desktop_local`) need no workspace and are listed to every signed-in caller, with a
+workspace or without. Naming the direct space makes the caller a guest of it, as other reads
+there do. A listed command can still be refused for its arguments, a confirmation it needs, or a
+timeout in force.
+
 Examples:
 
 - `chat.post_message` may require conversation context or explicit arguments

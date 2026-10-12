@@ -33,6 +33,7 @@ use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
+use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_services::CommandRepos;
 use rim_infra_services::command::{CommandServices, DefaultCommandService};
@@ -42,7 +43,7 @@ use rim_services::capability::service::MockCapabilityService;
 use rim_services::command::confirmation::{
     ConfirmationStore, issue_in_band, shared_in_memory_store,
 };
-use rim_services::command::dto::{CommandResultStatusDto, CommandSurfaceDto};
+use rim_services::command::dto::{CommandContextDto, CommandResultStatusDto, CommandSurfaceDto};
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, ListCommandsQuery};
 use rim_services::command::service::CommandService;
@@ -66,6 +67,19 @@ fn actor_with_id(user_id: UserId) -> Actor {
 
 fn actor() -> Actor {
     actor_with_id(UserId::new())
+}
+
+fn workspace_context() -> CommandContextDto {
+    CommandContextDto {
+        workspace_id: Some(ServerId::new()),
+        conversation_id: None,
+        thread_id: None,
+        selected_text: None,
+        selected_message_id: None,
+        selected_message_ids: vec![],
+        focused_surface: None,
+        active_panel: None,
+    }
 }
 
 struct Mocks {
@@ -214,12 +228,13 @@ fn user_dto(id: UserId, username: &str) -> UserDto {
 async fn ai_surface_lists_all_five_commands_when_caps_granted() {
     let mut mocks = Mocks::new();
     mocks.capability = grant_all_caps();
+    mocks.server_member = MockServerMemberService::with_own_role(Some(ServerMemberRole::Owner));
     let svc = build_service(mocks);
 
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(workspace_context()),
             surface: CommandSurfaceDto::Ai,
         })
         .await
@@ -244,12 +259,13 @@ async fn ai_surface_lists_all_five_commands_when_caps_granted() {
 async fn ai_surface_omits_all_five_commands_when_caps_denied() {
     let mut mocks = Mocks::new();
     mocks.capability = deny_all_caps();
+    mocks.server_member = MockServerMemberService::with_own_role(Some(ServerMemberRole::Owner));
     let svc = build_service(mocks);
 
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(workspace_context()),
             surface: CommandSurfaceDto::Ai,
         })
         .await

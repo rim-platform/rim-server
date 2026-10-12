@@ -11,6 +11,8 @@
 
 mod support;
 
+use std::collections::BTreeSet;
+
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
@@ -1533,6 +1535,10 @@ const COMMAND_DISCOVER: &str = r#"
 query Discover($workspaceId: ID) { commandDiscover(workspaceId: $workspaceId, limit: 100) { id } }
 "#;
 
+const PALETTE_COMMANDS: &str = r#"
+query Palette($context: CommandContextInput) { commands(commandContext: $context) { id } }
+"#;
+
 /// A user command `key` titled `title` that runs `step`.
 fn user_command(key: &str, title: &str, step: &str) -> Value {
     json!({ "commandId": key, "title": title, "description": "", "steps": [{ "commandId": step }] })
@@ -1567,6 +1573,22 @@ fn every_user_command_root(key: &str) -> Vec<Call> {
 }
 
 impl Fixture {
+    /// The palette command ids `who` sees, with `workspace` as the context when given.
+    async fn palette(&self, who: &Caller, workspace: Option<&str>) -> BTreeSet<String> {
+        let context = workspace.map(|id| json!({ "workspaceId": id }));
+        let data = exec_ok(
+            &self.schema,
+            who.request(PALETTE_COMMANDS, json!({ "context": context })),
+        )
+        .await;
+        data["commands"]
+            .as_array()
+            .expect("commands")
+            .iter()
+            .map(|c| c["id"].as_str().expect("id").to_string())
+            .collect()
+    }
+
     /// The ids `who` discovers, scoped to `workspace` when given.
     async fn discovered(&self, who: &Caller, workspace: Option<&str>) -> Vec<String> {
         let data = exec_ok(
@@ -1655,26 +1677,84 @@ async fn user_command_roots_refuse_an_unknown_or_malformed_id() {
     assert_eq!(f.code(&f.bob, call).await, "VALIDATION");
 }
 
-/// Discovery filters by capability, not by role: every member of the workspace discovers the
-/// agent-callable moderation commands, which only a Moderator or the Owner may run. Outside the
-/// workspace, or without one, only the commands that need no capability are listed.
+/// `commands` and `commandDiscover` list what the caller may run. A command the server runs is
+/// listed only to a member of the context's workspace whose role may run it; the commands the
+/// client runs itself are listed to everyone, in a workspace or without one.
 #[tokio::test]
-async fn command_discover_lists_by_capability_not_by_role() {
+async fn command_listings_follow_membership_and_role() {
     let f = setup().await;
     f.ctx.seed_capabilities().await;
-    let moderation = ["admin.timeout", "chat.set_slow_mode", "chat.post_message"];
-    for who in [&f.bob, &f.gina, &f.mona] {
-        let ids = f.discovered(who, Some(&f.server_id)).await;
-        for id in moderation {
-            assert!(ids.contains(&id.to_string()), "{id} for {:?}", who.user_id);
-        }
+    let olive = f.outsider().await;
+
+    let client_run = f.palette(&f.bob, None).await;
+    assert!(client_run.contains("workspace.open_settings"));
+    assert!(!client_run.contains("chat.post_message"));
+    assert_eq!(f.palette(&olive, Some(&f.server_id)).await, client_run);
+
+    let member = [
+        "chat.create_channel",
+        "chat.create_group",
+        "chat.invite_to_conversation",
+        "chat.join_channel",
+    ];
+    let moderator = [
+        "admin.ban",
+        "admin.kick",
+        "admin.set_role",
+        "admin.timeout",
+        "admin.unban",
+        "chat.archive_channel",
+        "chat.set_slow_mode",
+        "chat.unarchive_channel",
+    ];
+    let owner = ["admin.invite_member"];
+    let role_bound: BTreeSet<String> = member
+        .iter()
+        .chain(&moderator)
+        .chain(&owner)
+        .map(|id| id.to_string())
+        .collect();
+    let set = |groups: &[&[&str]]| -> BTreeSet<String> {
+        groups
+            .iter()
+            .flat_map(|ids| ids.iter().map(|id| id.to_string()))
+            .collect()
+    };
+    for (who, sees) in [
+        (&f.gina, set(&[])),
+        (&f.bob, set(&[&member])),
+        (&f.mona, set(&[&member, &moderator])),
+        (&f.alice, set(&[&member, &moderator, &owner])),
+    ] {
+        let ids = f.palette(who, Some(&f.server_id)).await;
+        assert!(client_run.is_subset(&ids), "{:?}", who.user_id);
+        assert!(ids.contains("chat.post_message"), "{:?}", who.user_id);
+        let bound: BTreeSet<String> = ids.intersection(&role_bound).cloned().collect();
+        assert_eq!(bound, sees, "{:?}", who.user_id);
     }
 
-    let olive = f.outsider().await;
+    let moderation = ["admin.timeout", "chat.set_slow_mode"];
+    for (who, moderates) in [
+        (&f.gina, false),
+        (&f.bob, false),
+        (&f.mona, true),
+        (&f.alice, true),
+    ] {
+        let ids = f.discovered(who, Some(&f.server_id)).await;
+        assert!(ids.contains(&"chat.post_message".to_string()));
+        for id in moderation {
+            assert_eq!(
+                ids.contains(&id.to_string()),
+                moderates,
+                "{id} for {:?}",
+                who.user_id
+            );
+        }
+    }
     for (who, workspace) in [(&olive, Some(f.server_id.as_str())), (&f.bob, None)] {
         let ids = f.discovered(who, workspace).await;
-        assert!(ids.contains(&"state.get".to_string()));
-        for id in moderation {
+        assert!(ids.contains(&"workspace.open_settings".to_string()));
+        for id in ["state.get", "chat.post_message", "admin.timeout"] {
             assert!(!ids.contains(&id.to_string()), "{id} for {workspace:?}");
         }
     }

@@ -16,14 +16,10 @@
 //! Actor wiring: workspace member, only `chat.read` is registered. Expected
 //! AI-surface result: [A]. (B is dropped because admin.x is unregistered →
 //! strict default-deny via the capability gate. C is dropped because ai_callable is
-//! false.) `Surface::Palette` is exercised through the unit-test path; this
-//! file's "sanity" branch confirms the real DefaultCapabilityService never
-//! gets consulted for non-Ai surfaces, satisfying the regression-guard
-//! requirement without a full HTTP round-trip.
+//! false.) The palette goes through the same gate, which the last test checks.
 
 use std::sync::Arc;
 
-use mockall::predicate::eq;
 use rim_core::capability::model::RegisteredCapability;
 use rim_core::capability::repository::MockCapabilityRegistryRepository;
 use rim_core::command::repository::MockUserCommandRepository;
@@ -144,7 +140,9 @@ fn build_service(
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(
+                    is_member.then_some(ServerMemberRole::Member),
+                ),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
@@ -221,23 +219,19 @@ async fn ai_surface_drops_command_when_actor_not_workspace_member() {
 }
 
 #[tokio::test]
-async fn ai_surface_with_no_workspace_context_denies_workspace_scoped_caps() {
-    // Workspace-scoped caps (chat.read) must be denied when workspace_id is
-    // None, so they cannot bypass the membership check.
-    // Self-scoped caps (audit.read.self) still pass with workspace_id=None,
-    // and the registry leg still runs for them (unregistered → denied).
+async fn ai_surface_without_workspace_context_lists_only_commands_the_client_runs() {
+    // A command the server runs needs a workspace, so without one it is dropped whatever its
+    // capabilities, self-scoped ones included. A command the client runs needs none.
     let actor = Actor::new(UserId::new());
-    // is_member=false proves the membership repo is NOT consulted for
-    // workspace-scoped + None path — the gate denies before reaching it.
     let svc = build_service(&["chat.read", "audit.read.self"], false);
 
     let input = vec![
-        // workspace-scoped: must be denied without workspace context
         ai_cmd("a.workspace_cap", true, &["chat.read"]),
-        // self-scoped + registered: must pass without workspace context
         ai_cmd("b.self_scoped", true, &["audit.read.self"]),
-        // self-scoped but unregistered: registry leg still denies
-        ai_cmd("c.unregistered", true, &["never.registered"]),
+        CommandDefinitionDto {
+            execution_target: CommandExecutionTargetDto::DesktopLocal,
+            ..ai_cmd("c.client", true, &[])
+        },
     ];
     let kept = svc
         .filter_ai_surface_test_only(&actor, None, input)
@@ -245,41 +239,34 @@ async fn ai_surface_with_no_workspace_context_denies_workspace_scoped_caps() {
         .unwrap();
 
     let ids: Vec<&str> = kept.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec!["b.self_scoped"],
-        "workspace-scoped cap must be denied without workspace_id; \
-         self-scoped registered cap must pass; unregistered cap must be denied"
-    );
+    assert_eq!(ids, vec!["c.client"]);
 }
 
 #[tokio::test]
-async fn list_commands_palette_does_not_consult_capability_service() {
-    // Regression guard: register a CapabilityService whose `is_registered`
-    // expectation is the explicit `eq("chat.read")` — if the Palette path
-    // ever started invoking the gate, it would query for the union of
-    // builtin caps (chat.write, admin.manage_members, etc.) and mockall
-    // would panic with "no expectation matching args". This locks the
-    // ai_callable opt-in to the Ai surface only.
+async fn list_commands_palette_goes_through_the_capability_gate() {
+    // The palette lists by the same gate as the AI surface: with only `chat.read` registered, a
+    // member sees `chat.list_channels` but not `chat.post_message` (`chat.write` unregistered,
+    // strict default-deny).
     let actor = Actor::new(UserId::new());
     let mut registry = MockCapabilityRegistryRepository::new();
-    // Palette listing must NOT call into the capability gate at all — this
-    // expectation matches chat.read only; any other key would panic (no
-    // matching expectation) which is exactly the guard we want. Using `get()`
-    // since that's what check/check_many call.
-    registry
-        .expect_get()
-        .with(eq("chat.read"))
-        .returning(|_| {
-            Ok(Some(RegisteredCapability {
-                capability_key: "chat.read".to_string(),
-                registered_at: chrono::Utc::now(),
-                retired_at: None,
-                is_self_scoped: false,
-            }))
-        })
-        .times(0..); // permissive count, but only matches chat.read
-    let members = MockServerMemberRepository::new();
+    registry.expect_get().returning(|key| {
+        Ok((key == "chat.read").then(|| RegisteredCapability {
+            capability_key: key.to_string(),
+            registered_at: chrono::Utc::now(),
+            retired_at: None,
+            is_self_scoped: false,
+        }))
+    });
+    let mut members = MockServerMemberRepository::new();
+    members.expect_get_member().returning(|server_id, user_id| {
+        Ok(Some(ServerMember {
+            id: ServerMemberId::new(),
+            server_id,
+            user_id,
+            member_role: ServerMemberRole::Member,
+            joined_at: chrono::Utc::now(),
+        }))
+    });
 
     let capability_service = Arc::new(DefaultCapabilityService::new(CapabilityRepos {
         capability_registry_repo: Arc::new(registry),
@@ -307,7 +294,9 @@ async fn list_commands_palette_does_not_consult_capability_service() {
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    ServerMemberRole::Member,
+                )),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
@@ -321,20 +310,16 @@ async fn list_commands_palette_does_not_consult_capability_service() {
         },
     );
 
+    let context = workspace_context();
     let palette = svc
         .list_commands(ListCommandsQuery {
             actor,
-            context: None,
+            context: Some(context),
             surface: CommandSurfaceDto::Palette,
         })
         .await
-        .expect("Palette listing must not call into the capability gate");
+        .expect("palette listing");
 
-    assert!(
-        !palette.is_empty(),
-        "sanity: palette should include builtin commands"
-    );
-    // Sanity: a `visible_in_palette = true` builtin like chat.post_message
-    // shows up regardless of whether ai_callable is true or false on it.
-    assert!(palette.iter().any(|c| c.id == "chat.post_message"));
+    assert!(palette.iter().any(|c| c.id == "chat.list_channels"));
+    assert!(!palette.iter().any(|c| c.id == "chat.post_message"));
 }

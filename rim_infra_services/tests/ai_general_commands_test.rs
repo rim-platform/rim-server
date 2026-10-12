@@ -105,7 +105,9 @@ fn build_service_with_conversations(
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    rim_core::server_member::model::ServerMemberRole::Owner,
+                )),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(workspace_state_service),
@@ -171,7 +173,7 @@ async fn ai_surface_lists_every_general_command() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: Actor::new(UserId::new()),
-            context: None,
+            context: context(ServerId::new()),
             surface: CommandSurfaceDto::Ai,
         })
         .await
@@ -214,7 +216,7 @@ async fn confirmation_gate_matches_read_and_write_split() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: Actor::new(UserId::new()),
-            context: None,
+            context: context(ServerId::new()),
             surface: CommandSurfaceDto::Ai,
         })
         .await

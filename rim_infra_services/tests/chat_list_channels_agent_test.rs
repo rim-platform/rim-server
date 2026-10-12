@@ -79,7 +79,9 @@ fn build_service(
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    rim_core::server_member::model::ServerMemberRole::Owner,
+                )),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
@@ -100,6 +102,19 @@ fn build_service(
 /// `admin.manage_members` from the agent-callable `admin.timeout`. The
 /// DesktopLocal commands contribute no caps. Compared as a set so a change
 /// in registration order doesn't break the test.
+fn workspace_context() -> CommandContextDto {
+    CommandContextDto {
+        workspace_id: Some(ServerId::new()),
+        conversation_id: None,
+        thread_id: None,
+        selected_text: None,
+        selected_message_id: None,
+        selected_message_ids: vec![],
+        focused_surface: None,
+        active_panel: None,
+    }
+}
+
 fn caps_match_ai_surface_union(caps: &[String]) -> bool {
     let cap_set: std::collections::HashSet<&str> = caps.iter().map(|s| s.as_str()).collect();
     cap_set.len() == 3
@@ -128,7 +143,7 @@ async fn ai_surface_lists_chat_list_channels_when_actor_has_chat_read() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(workspace_context()),
             surface: CommandSurfaceDto::Ai,
         })
         .await
@@ -170,7 +185,7 @@ async fn ai_surface_omits_chat_list_channels_when_actor_lacks_chat_read() {
     let listed = svc
         .list_commands(ListCommandsQuery {
             actor: actor(),
-            context: None,
+            context: Some(workspace_context()),
             surface: CommandSurfaceDto::Ai,
         })
         .await
