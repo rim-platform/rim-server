@@ -1,4 +1,4 @@
-> **Status:** Accepted 2026-10-09 for Stage 4 (S4-0). Implementation follows `docs/plans/stage-4-2026-10-09.md`.
+> **Status:** Accepted 2026-10-09 for Stage 4 (S4-0). Implementation followed the Stage 4 plan.
 > **Do not edit** once implementation lands — historical record. For changes, write a new ADR.
 
 # MLS library, providers and cipher suite for E2EE v1

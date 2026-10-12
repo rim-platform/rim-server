@@ -58,10 +58,10 @@ as the way the app is used, not as a separate pillar.
 _Verified against both repositories on 2026-10-10 (rim-server `4945eda`, rim-ui `92fc764`)._
 
 **Shipped:** all five stages below, on both `master` branches. After them, the release
-preparation of `docs/plans/release-prep-2026-10-10.md` (version and health probes, metrics, the
+preparation (version and health probes, metrics, the
 compose stack with backup and restore, the dormant updater, instance feature switches, message
 rendering, the Vim profile, audit retention) and the first groups of the cleanup before going
-public (`docs/plans/cleanup-2026-10-10.md`): the incident and on-call vertical was dropped from
+public: the incident and on-call vertical was dropped from
 the core (the last commit with it is tagged `incidents-last`), dead code and GraphQL roots no
 client calls were removed, bootstrap tokens were folded into instance invites, and the schema,
 build and metadata were tidied. The documentation and comment pass (C-4) is in progress; the
@@ -251,7 +251,7 @@ both encryption and relays depend on them.
    existing `user` row with a kind of local or remote, so none of the dozens of tables that
    reference the user id move. Bots, ingest tokens and the CLI keep host-local credentials and
    host-scoped ids. The web app becomes a linked device of the desktop app.
-   _Shipped 2026-10-09_ (`docs/plans/stage-3-remaining-2026-10-09.md` lists the PRs): the
+   _Shipped 2026-10-09_: the
    `rim_identity` crate, enrollment, devices, rotation and recovery, profile cards, challenge
    login, algorithm-agile statements, key-only signup, device linking by code (desktop and
    web), the 12-word recovery phrase, the identity-key backup on the drive, and sign-out of
@@ -327,9 +327,9 @@ reaches its showcase in Stage 1 before any decentralization work starts.
 |---|---|---|---|---|
 | 1. Plugins run | 2.1, 2.2, 4.1, 4.2 with 7.0; palette and keybind part of 2.5 | L | Install the k8s pods panel, see pods next to chat, restart one with a keybind or by asking the agent, behind a confirmation | Shipped |
 | 2. Your history is yours | 7.1 | L | Instant start, offline reading, and full history on a fresh install from the drive alone | Shipped |
-| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app | Shipped 2026-10-09 (`docs/plans/stage-3-remaining-2026-10-09.md`) |
-| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs | Shipped 2026-10-09 (`docs/plans/stage-4-2026-10-09.md`) |
-| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss | Shipped 2026-10-10 (`docs/plans/stage-5-2026-10-09.md`) |
+| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app | Shipped 2026-10-09 |
+| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs | Shipped 2026-10-09 |
+| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss | Shipped 2026-10-10 |
 
 **Stage 1 in more detail.** Plugin commands execute from the palette, keybinds and the agent.
 Protocol v1 is frozen with the identity shape from 7.0. A TypeScript SDK, a template and a
@@ -507,6 +507,6 @@ dropped from the core on 2026-10-10.
 Tracks 0.1, 0.3, 0.4 and 1.1 to 1.3 of the 2026-10-04 roadmap are merged on both `master`
 branches (rim-server through PR #21, `a668c05`; rim-ui through PR #9, `b62e31d`).
 
-Stages 1 to 5 of the 2026-10-08 master plan are merged on both `master` branches; the plans in
-`docs/plans/` list their PRs. The release preparation and the cleanup before going public follow
-in `docs/plans/release-prep-2026-10-10.md` and `docs/plans/cleanup-2026-10-10.md`.
+Stages 1 to 5 of the 2026-10-08 master plan are merged on both `master` branches, followed by
+the release preparation and the cleanup before going public; the pull requests are in the
+repository history.

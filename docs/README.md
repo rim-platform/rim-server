@@ -66,6 +66,5 @@ Normative, versioned contracts in `specs/`:
 Dated documents that describe a point in time and are not updated:
 
 - `decisions/`: sealed decision records (`decisions/README.md` indexes them).
-- `plans/`: the work plans, each with a table of what shipped.
 - `testing/manual-test-plan-2026-10-10.md`: the manual test run for key identity, encryption
   and two servers.
