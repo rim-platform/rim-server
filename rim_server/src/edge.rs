@@ -1,20 +1,25 @@
-//! Limits applied at the HTTP edge: the client address of a request, the per-address request
-//! limit on `/api` routes, the per-session mutation budget, the GraphQL batch cap and the
-//! per-user WebSocket connection cap.
+//! Limits applied at the HTTP edge: the client address of a request, the IP deny list, the
+//! per-address request limit on `/api` routes, the per-session mutation budget, the GraphQL
+//! batch cap and the per-user WebSocket connection cap.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Instant;
 
 use actix_web::body::{EitherBody, MessageBody};
 use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::middleware::Next;
 use actix_web::{HttpRequest, HttpResponse, web};
+use chrono::{DateTime, Utc};
 use rim_core::auth::model::SessionId;
+use rim_core::ip_block::model::IpRange;
 use rim_core::user::model::UserId;
 use rim_infra_services::token_bucket::TokenBucketLimiter;
+use rim_services::ServiceResult;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::ip_block::dto::IpBlockDto;
+use rim_services::ip_block::service::IpBlockService;
 
 use crate::config::ApiLimits;
 
@@ -89,9 +94,53 @@ pub(crate) enum MutationCaller {
     Address(IpAddr),
 }
 
+/// The IP deny list in force: each blocked range with its expiry, replaced whole on each
+/// refresh.
+#[derive(Default)]
+pub(crate) struct IpDenyList {
+    blocks: RwLock<Vec<(IpRange, Option<DateTime<Utc>>)>>,
+}
+
+impl IpDenyList {
+    pub(crate) fn replace(&self, blocks: Vec<IpBlockDto>) {
+        let blocks = blocks
+            .into_iter()
+            .map(|block| (block.range, block.expires_at))
+            .collect();
+        *self.blocks.write().unwrap_or_else(PoisonError::into_inner) = blocks;
+    }
+
+    /// Whether a block in force at `now` covers `ip`; one that expired no longer does, before
+    /// the next refresh drops it.
+    fn blocks(&self, ip: IpAddr, now: DateTime<Utc>) -> bool {
+        self.blocks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|(range, expires_at)| expires_at.is_none_or(|at| at > now) && range.contains(ip))
+    }
+}
+
+/// Load the blocks in force into `list`, then delete the expired ones.
+///
+/// # Errors
+/// What the service failed with; `list` keeps what it held when the read fails.
+pub(crate) async fn refresh_deny_list(
+    service: &dyn IpBlockService,
+    list: &IpDenyList,
+) -> ServiceResult<()> {
+    list.replace(service.active().await?);
+    let purged = service.purge_expired().await?;
+    if purged > 0 {
+        tracing::info!(purged, "purged expired IP blocks");
+    }
+    Ok(())
+}
+
 /// The edge limits of one server, shared by its workers.
 pub(crate) struct EdgeLimits {
     trust_forwarded_headers: bool,
+    deny_list: Arc<IpDenyList>,
     per_ip: Option<TokenBucketLimiter<IpAddr>>,
     mutations: Option<TokenBucketLimiter<MutationCaller>>,
     ws_connections: Option<Arc<WsConnections>>,
@@ -103,6 +152,7 @@ impl EdgeLimits {
     pub(crate) fn new(limits: ApiLimits, trust_forwarded_headers: bool) -> Self {
         Self {
             trust_forwarded_headers,
+            deny_list: Arc::default(),
             per_ip: limits.requests_per_ip.map(TokenBucketLimiter::new),
             mutations: limits.mutations_per_session.map(TokenBucketLimiter::new),
             ws_connections: limits.ws_connections_per_user.map(|limit| {
@@ -114,6 +164,20 @@ impl EdgeLimits {
             subscriptions_per_connection: limits.subscriptions_per_connection,
             max_batch: limits.max_batch,
         }
+    }
+
+    /// Refuse the addresses on `deny_list`.
+    pub(crate) fn with_deny_list(mut self, deny_list: Arc<IpDenyList>) -> Self {
+        self.deny_list = deny_list;
+        self
+    }
+
+    /// Whether the request's address is blocked at `now`. `/healthz` never is, so a blocked
+    /// monitor still sees the process alive.
+    fn refuses_address(&self, req: &HttpRequest, now: DateTime<Utc>) -> bool {
+        req.path() != "/healthz"
+            && client_ip(req, self.trust_forwarded_headers)
+                .is_some_and(|ip| self.deny_list.blocks(ip, now))
     }
 
     /// The `429` for a request to an `/api` route its address may not send now.
@@ -172,6 +236,25 @@ impl EdgeLimits {
     pub(crate) fn subscriptions_per_connection(&self) -> Option<u32> {
         self.subscriptions_per_connection
     }
+}
+
+/// Middleware answering `403` with `{"error":"blocked"}` to a request from a blocked address,
+/// before anything else runs.
+pub(crate) async fn deny_blocked(
+    req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> Result<ServiceResponse<EitherBody<impl MessageBody>>, actix_web::Error> {
+    let refused = req
+        .app_data::<web::Data<EdgeLimits>>()
+        .is_some_and(|limits| limits.refuses_address(req.request(), Utc::now()));
+    if refused {
+        crate::metrics::ip_blocked();
+        let response = HttpResponse::Forbidden().json(serde_json::json!({ "error": "blocked" }));
+        return Ok(req.into_response(response).map_into_right_body());
+    }
+    next.call(req)
+        .await
+        .map(ServiceResponse::map_into_left_body)
 }
 
 /// Middleware answering `429` to a request to an `/api` route over its address's limit.
@@ -261,17 +344,23 @@ mod tests {
         HttpResponse::Ok().finish()
     }
 
-    /// An app with the per-address limit on every route, as the server mounts it.
+    /// An app with the deny list on every route and the per-address limit, as the server
+    /// mounts them.
     macro_rules! app {
         ($limits:expr) => {
             test::init_service(
-                App::new().app_data(web::Data::new($limits)).service(
-                    web::scope("")
-                        .wrap(actix_web::middleware::from_fn(limit_api))
-                        .route("/api", web::post().to(ok))
-                        .route("/api/sdl", web::get().to(ok))
-                        .route("/healthz", web::get().to(ok)),
-                ),
+                App::new()
+                    .app_data(web::Data::new($limits))
+                    .wrap(actix_web::middleware::from_fn(deny_blocked))
+                    .service(
+                        web::scope("")
+                            .wrap(actix_web::middleware::from_fn(limit_api))
+                            .route("/api", web::post().to(ok))
+                            .route("/api/sdl", web::get().to(ok))
+                            .route("/healthz", web::get().to(ok))
+                            .route("/readyz", web::get().to(ok))
+                            .route("/s2s/v1/inbox", web::post().to(ok)),
+                    ),
             )
             .await
         };
@@ -440,6 +529,120 @@ mod tests {
                 .open_ws(user)
                 .expect("no cap")
                 .is_none()
+        );
+    }
+
+    fn deny_list(blocks: &[(&str, Option<DateTime<Utc>>)]) -> Arc<IpDenyList> {
+        let list = Arc::new(IpDenyList::default());
+        list.replace(
+            blocks
+                .iter()
+                .map(|(cidr, expires_at)| IpBlockDto {
+                    range: cidr.parse().expect("a range"),
+                    reason: "test".to_string(),
+                    expires_at: *expires_at,
+                    created_at: Utc::now(),
+                })
+                .collect(),
+        );
+        list
+    }
+
+    #[test]
+    fn the_deny_list_matches_ranges_until_they_expire() {
+        let now = Utc::now();
+        let list = deny_list(&[
+            ("198.51.100.0/24", None),
+            ("2001:db8::/32", Some(now + chrono::Duration::hours(1))),
+            ("203.0.113.9", Some(now - chrono::Duration::seconds(1))),
+        ]);
+        let ip = |s: &str| s.parse::<IpAddr>().expect("ip");
+        assert!(list.blocks(ip("198.51.100.200"), now));
+        assert!(list.blocks(ip("::ffff:198.51.100.7"), now));
+        assert!(!list.blocks(ip("198.51.101.1"), now));
+        assert!(list.blocks(ip("2001:db8:ffff::1"), now));
+        assert!(
+            !list.blocks(ip("2001:db8::1"), now + chrono::Duration::hours(2)),
+            "expired before the next refresh"
+        );
+        assert!(!list.blocks(ip("203.0.113.9"), now), "already expired");
+        list.replace(Vec::new());
+        assert!(!list.blocks(ip("198.51.100.200"), now));
+    }
+
+    #[actix_web::test]
+    async fn a_blocked_address_gets_403_on_every_route_but_healthz() {
+        let limits = EdgeLimits::new(limits_off(), false)
+            .with_deny_list(deny_list(&[("127.0.0.1/32", None)]));
+        let app = app!(limits);
+        for (method, path) in [
+            ("GET", "/api/sdl"),
+            ("POST", "/api"),
+            ("GET", "/readyz"),
+            ("POST", "/s2s/v1/inbox"),
+            ("GET", "/nowhere"),
+        ] {
+            let req = from("127.0.0.1")
+                .method(method.parse().expect("method"))
+                .uri(path)
+                .to_request();
+            let res = test::call_service(&app, req).await;
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            let body: serde_json::Value = test::read_body_json(res).await;
+            assert_eq!(body, serde_json::json!({ "error": "blocked" }));
+        }
+        let res = test::call_service(&app, from("127.0.0.1").uri("/healthz").to_request()).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = test::call_service(&app, from("127.0.0.2").to_request()).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn the_deny_list_reads_x_forwarded_for_only_when_trusted() {
+        let blocked = || deny_list(&[("203.0.113.0/24", None)]);
+        let forwarded = || {
+            from("10.0.0.1")
+                .insert_header(("x-forwarded-for", "203.0.113.5"))
+                .to_request()
+        };
+        let app = app!(EdgeLimits::new(limits_off(), false).with_deny_list(blocked()));
+        let res = test::call_service(&app, forwarded()).await;
+        assert_eq!(res.status(), StatusCode::OK, "the proxy is not blocked");
+        let app = app!(EdgeLimits::new(limits_off(), true).with_deny_list(blocked()));
+        let res = test::call_service(&app, forwarded()).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_loads_the_active_blocks_and_purges_the_expired() {
+        let mut service = rim_services::ip_block::service::MockIpBlockService::new();
+        service.expect_active().times(1).returning(|| {
+            Box::pin(async {
+                Ok(vec![IpBlockDto {
+                    range: "192.0.2.0/24".parse().expect("a range"),
+                    reason: "spam".to_string(),
+                    expires_at: None,
+                    created_at: Utc::now(),
+                }])
+            })
+        });
+        service
+            .expect_purge_expired()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(2) }));
+        let list = IpDenyList::default();
+        refresh_deny_list(&service, &list).await.expect("refreshed");
+        assert!(list.blocks("192.0.2.9".parse().expect("ip"), Utc::now()));
+
+        let mut failing = rim_services::ip_block::service::MockIpBlockService::new();
+        failing
+            .expect_active()
+            .returning(|| Box::pin(async { Err(rim_services::ServiceError::Unavailable) }));
+        failing.expect_purge_expired().never();
+        assert!(refresh_deny_list(&failing, &list).await.is_err());
+        assert!(
+            list.blocks("192.0.2.9".parse().expect("ip"), Utc::now()),
+            "a failed read keeps the list"
         );
     }
 }

@@ -63,6 +63,8 @@ pub struct AppRuntime {
     pub db: DatabaseConnection,
     /// The background tasks' stop signal: they stop once it is dropped.
     pub shutdown_tx: watch::Sender<bool>,
+    /// The IP deny list the edge refuses, kept current by a background task.
+    pub(crate) ip_deny_list: Arc<crate::edge::IpDenyList>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -107,6 +109,9 @@ const S2S_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// How often revocations due for another attempt are sent to hosts.
 const REVOCATION_FANOUT_INTERVAL_SECS: u64 = 5;
+
+/// How often the IP deny list is read again and expired blocks are deleted.
+const IP_DENY_LIST_REFRESH_SECS: u64 = 30;
 
 /// How often expired request nonces are deleted and a CLI key rotation (server key or franking
 /// keys) is picked up.
@@ -353,6 +358,17 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     rim_infra_services::command::emit_ai_callable_inventory_audit();
 
     let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
+
+    // The deny list is in force before the listener binds.
+    let ip_block_service: Arc<dyn rim_services::ip_block::service::IpBlockService> = Arc::new(
+        rim_infra_services::ip_block::DefaultIpBlockService::new(Arc::new(
+            rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository::new(db.clone()),
+        )),
+    );
+    let ip_deny_list = Arc::new(crate::edge::IpDenyList::default());
+    crate::edge::refresh_deny_list(ip_block_service.as_ref(), &ip_deny_list)
+        .await
+        .map_err(|e| io_error("IP deny list")(e.to_string()))?;
 
     let broadcaster = InMemoryBroadcaster::new(1024);
     let broadcaster_arc: Arc<dyn Broadcaster> = Arc::new(broadcaster.clone());
@@ -667,6 +683,31 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         });
     }
 
+    // Background task: read the IP deny list again and delete expired blocks, so a block or
+    // unblock made by the CLI applies within the interval.
+    {
+        let service = Arc::clone(&ip_block_service);
+        let list = Arc::clone(&ip_deny_list);
+        let mut shutdown_rx7 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(IP_DENY_LIST_REFRESH_SECS));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick fires at once; the list was loaded at boot.
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        if let Err(e) = crate::edge::refresh_deny_list(service.as_ref(), &list).await {
+                            tracing::error!(error = %e, "could not refresh the IP deny list");
+                        }
+                    }
+                    _ = shutdown_rx7.changed() => break,
+                }
+            }
+        });
+    }
+
     // Background task: export and delete command audit rows older than
     // `RIM_AUDIT_RETENTION_DAYS`, a minute after boot and then daily.
     if let Some(days) = audit_retention_days {
@@ -772,6 +813,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         s2s,
         db: raw_db_for_tasks,
         shutdown_tx,
+        ip_deny_list,
     })
 }
 

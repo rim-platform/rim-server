@@ -240,6 +240,11 @@ process, so a restart forgets them and two processes behind one proxy each allow
 amount. `/healthz`, `/readyz`, discovery and `/s2s/v1/...` are outside the per-address limit;
 server-to-server traffic has its own, `RIM_S2S_PEER_RATE_PER_MIN`.
 
+An operator can also block an address or range (`rim_server ip block`). A blocked address is
+answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,
+the readiness probe, discovery and `/s2s/v1/...`. The address is found the same way as for the
+limits.
+
 ## Errors
 
 ### GraphQL error codes
@@ -276,14 +281,15 @@ match the schema), carry no `code`, and neither does the CSRF refusal.
 
 ### Refusals before a route runs
 
-The limits under "Limits" refuse a request before its route runs, with a JSON body naming the
-refusal:
+The limits and the IP deny list under "Limits" refuse a request before its route runs, with a
+JSON body naming the refusal:
 
 | Status | Body | When |
 |---|---|---|
 | 400 | `{"error":"batch_too_large"}` | A GraphQL batch over `RIM_API_MAX_BATCH`. |
 | 429 | `{"error":"rate_limited","retryAfterSeconds":n}`, with `Retry-After: n` | The client address is over `RIM_RATE_REQUESTS_PER_MIN_PER_IP`. |
 | 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
+| 403 | `{"error":"blocked"}` | The client address is on the operator's IP deny list. |
 
 ### Errors from the file routes
 

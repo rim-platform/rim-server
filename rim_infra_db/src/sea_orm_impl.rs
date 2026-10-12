@@ -10,6 +10,7 @@ pub mod e2ee;
 pub mod host;
 pub mod instance_invite;
 pub mod invite;
+pub mod ip_block;
 pub mod key_identity;
 pub mod keybind;
 pub mod link_preview;

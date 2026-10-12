@@ -87,13 +87,12 @@ pub async fn serve(
         force_secure_cookies: config.force_secure_cookies(),
     };
 
-    let edge_limits = web::Data::new(crate::edge::EdgeLimits::new(
-        config.api_limits(),
-        config.trust_forwarded_headers(),
-    ));
-
     let metrics_addr = config.metrics_addr().map_err(std::io::Error::other)?;
     let runtime = build_app_runtime(config).await?;
+    let edge_limits = web::Data::new(
+        EdgeLimits::new(config.api_limits(), config.trust_forwarded_headers())
+            .with_deny_list(runtime.ip_deny_list),
+    );
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
     let request_authenticator = runtime.request_authenticator;
@@ -170,8 +169,10 @@ pub async fn serve(
 
         // Server-to-server routes sit outside CORS: peers send no `Origin`, and the discovery
         // document is readable from any origin. The health probes sit there too: no session,
-        // no CSRF, no `Origin` needed.
+        // no CSRF, no `Origin` needed. The deny list covers every route but `/healthz`, inside
+        // the request metrics so its refusals are counted.
         App::new()
+            .wrap(actix_web::middleware::from_fn(crate::edge::deny_blocked))
             .wrap(actix_web::middleware::from_fn(crate::metrics::record_http))
             .service(
                 web::resource("/.well-known/rim-server")

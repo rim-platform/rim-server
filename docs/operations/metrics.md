@@ -82,6 +82,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `rim_rate_limit_rejections_total` | counter | `limiter` | Requests a rate limiter or quota refused. |
+| `rim_ip_blocked_requests_total` | counter | | Requests refused because their address is on the IP deny list (`rim_server ip block`). |
 | `rim_pow_rejections_total` | counter | | Key-only signups whose proof-of-work did not meet `RIM_REGISTRATION_POW_BITS` or was malformed. |
 
 `limiter` values:

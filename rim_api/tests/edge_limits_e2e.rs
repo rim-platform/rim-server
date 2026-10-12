@@ -1,5 +1,6 @@
 //! The edge limits on a real server: the per-address request limit on `/api` routes with
-//! `/healthz` outside it, the GraphQL batch cap, and the per-caller mutation budget.
+//! `/healthz` outside it, the GraphQL batch cap, the per-caller mutation budget, and the IP
+//! deny list loaded at boot.
 //!
 //! Run with:
 //! ```sh
@@ -13,6 +14,12 @@ use reqwest::StatusCode;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 
+use std::sync::Arc;
+
+use rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository;
+use rim_infra_services::ip_block::DefaultIpBlockService;
+use rim_services::ip_block::dto::BlockIpCmd;
+use rim_services::ip_block::service::IpBlockService;
 use support::nodes::{Node, S2S_TABLES, start};
 
 /// A node on `DATABASE_URL` with `tweak` applied, its S2S tables cleared first.
@@ -137,5 +144,59 @@ async fn mutation_fields_past_the_budget_answer_rate_limited() {
         "queries are not counted: {res}"
     );
 
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_address_gets_403_on_every_route_but_healthz() {
+    let ctx = support::TestCtx::new().await;
+    ctx.conn
+        .execute_unprepared(S2S_TABLES)
+        .await
+        .expect("truncate");
+    let blocks = DefaultIpBlockService::new(Arc::new(SeaOrmIpBlockRepository::new(ctx.db.clone())));
+    blocks
+        .block(BlockIpCmd {
+            cidr: "127.0.0.1/32".to_string(),
+            reason: "e2e".to_string(),
+            expires_in_days: Some(1),
+        })
+        .await
+        .expect("block");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let node = start(&url, |_| {}).await;
+    let http = reqwest::Client::new();
+
+    let healthz = http
+        .get(format!("{}/healthz", node.origin))
+        .send()
+        .await
+        .expect("healthz");
+    assert_eq!(healthz.status(), StatusCode::OK);
+
+    for (method, path) in [
+        (reqwest::Method::POST, "/api"),
+        (reqwest::Method::GET, "/api/sdl"),
+        (reqwest::Method::GET, "/readyz"),
+        (reqwest::Method::GET, "/.well-known/rim-server"),
+        (reqwest::Method::POST, "/s2s/v1/deliver"),
+    ] {
+        let res = http
+            .request(method.clone(), format!("{}{path}", node.origin))
+            .json(&json!({ "query": SERVER_INFO }))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{method} {path}");
+        let body: Value = res.json().await.expect("403 json");
+        assert_eq!(body, json!({ "error": "blocked" }), "{method} {path}");
+    }
+
+    assert!(
+        blocks
+            .unblock("127.0.0.1".to_string())
+            .await
+            .expect("unblock")
+    );
     node.stop().await;
 }

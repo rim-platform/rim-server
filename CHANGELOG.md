@@ -38,6 +38,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   and `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` (the new GraphQL error code
   `TOO_MANY_SUBSCRIPTIONS`). Refusals are counted in `rim_rate_limit_rejections_total`, and
   browsers may read `Retry-After`. `docs/api.md` ("Limits") describes them.
+- An IP deny list: `rim_server ip block <cidr> --reason <text> [--expires-in-days <1-365>]`,
+  `ip unblock <cidr>` and `ip list`. A blocked address or range, IPv4 or IPv6, is answered 403
+  with `{"error":"blocked"}` on every route but `/healthz`, server-to-server routes included.
+  A running server picks up changes within 30 seconds; blocks are audited as `ip.block` and
+  `ip.unblock` and refusals counted in `rim_ip_blocked_requests_total`. Adds the `ip_block`
+  table.
 
 ### Changed
 
