@@ -1,0 +1,30 @@
+# =============================================================================
+# RIM — builds the images from local checkouts instead of pulling the published
+# ones: rim-server from this repository, the web client from a rim-ui checkout
+# next to it (../../rim-ui from this directory). Add it after the other files:
+#
+#   docker compose -f deploy/compose.yml -f deploy/compose.dev.yml up -d --build
+#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml \
+#     -f deploy/compose.dev.yml up -d --build
+#
+# The relay starts no web client, so it needs no rim-ui checkout.
+# =============================================================================
+
+services:
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${RIM_SERVER_IMAGE:-rim-server:local}
+
+  rim:
+    image: ${RIM_SERVER_IMAGE:-rim-server:local}
+
+  # The GraphQL endpoint is baked in at build time; the default `/api` is this origin.
+  web:
+    build:
+      context: ../../rim-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_GRAPHQL_ENDPOINT: ${RIM_WEB_GRAPHQL_ENDPOINT:-/api}
+    image: ${RIM_WEB_IMAGE:-rim-web:local}

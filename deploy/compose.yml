@@ -5,15 +5,16 @@
 # to rim-server and everything else to the web client.
 #
 #   cp deploy/.env.example deploy/.env      # then fill it in
-#   docker compose -f deploy/compose.yml up -d --build
+#   docker compose -f deploy/compose.yml up -d
 #
 # A public relay is this file plus compose.relay.yml:
 #
-#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d --build
+#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d
 #
-# Images are built locally by default: rim-server from this repository, the web
-# client from a rim-ui checkout next to it (../../rim-ui from this directory).
-# RIM_SERVER_IMAGE and RIM_WEB_IMAGE name other images, such as a registry's.
+# The images are the published, signed ghcr.io/rim-platform/rim-server and
+# rim-web at RIM_VERSION (default latest; pin it in deploy/.env).
+# RIM_SERVER_IMAGE and RIM_WEB_IMAGE name other images. compose.dev.yml on top
+# builds both from local checkouts instead.
 # =============================================================================
 
 name: rim
@@ -40,10 +41,7 @@ services:
 
   # Runs the migrations, then exits; the server starts after it succeeded.
   migrate:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: ${RIM_SERVER_IMAGE:-rim-server:local}
+    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}}
     entrypoint: ["/app/migration", "up"]
     environment:
       DATABASE_URL: *database-url
@@ -54,7 +52,7 @@ services:
     restart: "no"
 
   rim:
-    image: ${RIM_SERVER_IMAGE:-rim-server:local}
+    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}}
     environment:
       DATABASE_URL: *database-url
       RUST_LOG: ${RUST_LOG:-info}
@@ -122,15 +120,10 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # The web client: static files behind nginx. The GraphQL endpoint is baked in at build
-  # time; the default `/api` is this origin, so one image serves any domain.
+  # The web client: static files behind nginx. The published image is built with the
+  # GraphQL endpoint `/api`, this origin, so one image serves any domain.
   web:
-    build:
-      context: ../../rim-ui
-      dockerfile: Dockerfile
-      args:
-        VITE_GRAPHQL_ENDPOINT: ${RIM_WEB_GRAPHQL_ENDPOINT:-/api}
-    image: ${RIM_WEB_IMAGE:-rim-web:local}
+    image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_VERSION:-latest}}
     networks: [internal]
     restart: unless-stopped
 

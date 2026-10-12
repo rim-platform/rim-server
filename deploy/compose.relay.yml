@@ -2,7 +2,7 @@
 # RIM — a public relay: compose.yml with rim-server in the relay role, the
 # public relay's quotas and proof-of-work signups, and no web client.
 #
-#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d --build
+#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d
 #
 # relay.rim.chat is a working name: that domain is not registered. Set
 # RIM_DOMAIN in deploy/.env to the real one.

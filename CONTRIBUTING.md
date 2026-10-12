@@ -115,3 +115,53 @@ cd ../rim-ui && npm run codegen
 Enum variants become `SCREAMING_SNAKE` and fields `camelCase` in the schema. New resolvers go
 into the last `QueryGroupN` or `MutationGroupN` (or into an existing domain object) so the field
 order of the existing schema does not change; `CLAUDE.md` explains why.
+
+## Who can merge and publish
+
+- **Every change is a pull request.** Nobody pushes to `master` directly, the maintainer
+  included.
+- **CI must pass.** The jobs of `.github/workflows/ci.yaml` are required checks; a pull request
+  whose checks fail or did not run cannot merge.
+- **The maintainer merges.** `.github/CODEOWNERS` names the maintainer, @dvorakj31, as the
+  reviewer of every path, and only the maintainer has write access. Everyone else works from a
+  fork.
+- **The maintainer releases.** Only the maintainer can push a `v*` tag. The tag starts
+  `.github/workflows/release.yaml`, which publishes nothing until the maintainer approves the
+  run in the `release` environment.
+- **Images are signed.** `ghcr.io/rim-platform/rim-server` is signed with cosign keyless by the
+  release workflow. The certificate names the workflow and the tag, so an image built or signed
+  anywhere else does not verify:
+
+  ```sh
+  v=<version>
+  cosign verify ghcr.io/rim-platform/rim-server:$v \
+    --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+  Each release also carries the image's SBOM (SPDX JSON), attested to the image;
+  `cosign verify-attestation --type spdxjson` with the same flags checks it.
+
+### Repository settings
+
+The rules above live in the repository's settings on GitHub, which the maintainer keeps:
+
+1. **Ruleset on `master`.** Require a pull request before merging, with one approval and review
+   from Code Owners. Require the status checks `Lint & Format`, `Test & Coverage`,
+   `Security Audit` and `Docker Build`. Block force pushes and deletion. Bypass list: the
+   maintainer, for pull requests only, so the maintainer's own pull requests merge without a
+   second reviewer.
+2. **Ruleset on tags `v*`.** Restrict creations, updates and deletions. Bypass list: the
+   maintainer only.
+3. **Environment `release`.** Required reviewer: the maintainer, with "Prevent self-review" off
+   (the maintainer pushes the tag and approves the run). Deployment branches and tags: the tag
+   pattern `v*` only. Administrators may not bypass the protection rules.
+4. **Actions.** Workflow permissions: read repository contents and packages. Actions may not
+   create or approve pull requests. Workflows from forks need approval for all external
+   contributors. Allowed actions: GitHub's own and those the workflows name (`docker/*`,
+   `actions-rust-lang/setup-rust-toolchain`, `taiki-e/install-action`, `anchore/sbom-action`,
+   `sigstore/cosign-installer`). Requiring actions pinned to a full commit SHA can follow once
+   `ci.yaml` pins its actions as `release.yaml` does.
+5. **Access.** Nobody but the maintainer holds the write role or above.
+6. **Package `rim-server`.** After the first release: visibility public, and under "Manage
+   Actions access" only this repository, with the write role.

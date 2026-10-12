@@ -124,7 +124,7 @@ the database. The scripts restore both from one archive; never mix sets.
 ### Restore
 
 On the new host, with the repository checked out, `deploy/.env` taken from the archive's `env`
-file, and the image built (`dc build rim`) or pulled:
+file, and the image pulled (`dc pull rim`):
 
 ```sh
 dc stop rim                                            # restore.sh refuses while it runs

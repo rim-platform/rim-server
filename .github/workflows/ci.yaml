@@ -5,6 +5,11 @@ on:
   push:
     branches: ["master"]
 
+# Read-only token for every job: none pushes, comments or publishes. Caches and the coverage
+# artifact use the Actions runtime token, not this one.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
