@@ -34,6 +34,34 @@
 # `hpke-rs-libcrux` 0.7 pins `libcrux-kem` `=0.0.9`; the fixed 0.8 needs `hpke-rs` 0.8, which
 # `openmls_rust_crypto` has not moved to. Revisit when `openmls_rust_crypto` ships on
 # `hpke-rs` 0.8, or if anything enables the libcrux backend.
+#
+# RUSTSEC-2026-0253 (unsound) — `LruCache::pop` in `lru` 0.16 is not panic-safe: a key whose
+# `Drop` panics during `pop` can leave a freed entry reachable (fixed in 0.18.2). `lru` is
+# compiled only through async-graphql's `dataloader` feature, for its opt-in `LruCache`;
+# async-graphql 7.2.1 and 8.0.0-rc.5 both require `lru` ^0.16.2, so no release takes the fix.
+# Nothing constructs that cache: every loader in `rim_api/src/lib.rs` is built with
+# `DataLoader::new`, whose cache is `NoCache`, and the `apollo_persisted_queries` feature (the
+# other `lru` user) is off. Even with the cache, reaching the defect needs a key type whose
+# `Drop` panics, and the loader keys are plain ids. Remove once an async-graphql release depends
+# on `lru` 0.18.2 or later and the lockfile takes it; revisit sooner if anything builds a
+# loader with `LruCache` or enables `apollo_persisted_queries`.
+#
+# RUSTSEC-2025-0057 (unmaintained) — `fxhash` 0.2, reached through `scraper` 0.22 → `selectors`
+# 0.26, which link previews use to read a page's metadata. No vulnerability is reported, only
+# that the crate is no longer maintained. `scraper` 0.25 and later use a `selectors` that moved
+# to `rustc-hash`, but that is a breaking upgrade of the preview parser. Remove once the
+# workspace moves to `scraper` 0.25 or later.
+#
+# RUSTSEC-2026-0173 (unmaintained) — `proc-macro-error2` 2.0, reached through
+# `openmls_rust_crypto` → `hpke-rs` 0.7 → `libcrux-sha3`/`libcrux-intrinsics` → `hax-lib` 0.3 →
+# `hax-lib-macros`. It runs only at build time, inside a proc macro, and is never linked into
+# the server binary; no vulnerability is reported. `hax-lib-macros` 0.4 dropped it, but the
+# `libcrux` crates `hpke-rs` 0.7 uses require `hax-lib` 0.3. Remove once the `libcrux` crates
+# in the lockfile move to `hax-lib` 0.4 or later (through an `hpke-rs` or
+# `openmls_rust_crypto` release).
+#
+# The two unmaintained entries are listed so that `--deny unmaintained` can be switched on
+# without failing on them; CI runs `cargo audit --deny unsound` today.
 [advisories]
 ignore = [
     "RUSTSEC-2026-0330",
@@ -41,4 +69,7 @@ ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0235",
     "RUSTSEC-2026-0258",
+    "RUSTSEC-2026-0253",
+    "RUSTSEC-2025-0057",
+    "RUSTSEC-2026-0173",
 ]
