@@ -10,6 +10,7 @@ pub mod custom_emoji;
 pub mod device_link;
 pub mod e2ee;
 pub mod host;
+pub mod ip_block;
 pub mod key_identity;
 pub mod keybind;
 pub mod link_preview;

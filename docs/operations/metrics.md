@@ -82,6 +82,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `rim_rate_limit_rejections_total` | counter | `limiter` | Requests a rate limiter or quota refused. |
+| `rim_ip_blocked_requests_total` | counter | | Requests refused because their address is on the IP deny list (`rim_server ip block`). |
 | `rim_pow_rejections_total` | counter | | Key-only signups whose proof-of-work did not meet `RIM_REGISTRATION_POW_BITS` or was malformed. |
 
 `limiter` values:
@@ -108,6 +109,11 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `stranger_claim` | Key package claims by servers with no tie to the user. |
 | `delegations_per_relay` | Active delegations one relay holds on this host (`RIM_S2S_SUBSCRIPTIONS_PER_PEER`). |
 | `direct_revocation` | Device revocations brought directly, per address. |
+| `api_ip` | Requests to `/api` routes per client address (`RIM_RATE_REQUESTS_PER_MIN_PER_IP`). |
+| `api_mutations` | Mutation fields per session, or per address without one (`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`). |
+| `messages` | Messages per user (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`). |
+| `ws_connections` | Open WebSocket connections per user (`RIM_RATE_WS_CONNECTIONS_PER_USER`). |
+| `ws_subscriptions` | Subscriptions per WebSocket connection (`RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`). |
 
 Slow mode in a conversation is not counted here.
 

@@ -171,10 +171,12 @@ fn close_when_the_test_ends(conn: &DatabaseConnection) {
 ///
 /// Uses `TRUNCATE … RESTART IDENTITY CASCADE` so FK-dependent rows are removed
 /// and serial sequences are reset.  Only tables that may accumulate state from
-/// registration e2e tests are listed here.
+/// registration e2e tests are listed here, and the IP deny list, whose rows would refuse every
+/// later test's requests.
 pub async fn reset_db(conn: &DatabaseConnection) {
     let sql = r#"
 TRUNCATE TABLE
+  ip_block,
   session,
   key_challenge,
   instance_invite,

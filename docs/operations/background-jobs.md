@@ -17,5 +17,6 @@ purges are idempotent, so a second run finds nothing left to do.
 | Metrics sampler | 30 seconds | runs when `RIM_METRICS_ADDR` is set | Reads the relay queue, the database pool and pending migrations into gauges (`docs/operations/metrics.md`). |
 | Audit retention | daily, first a minute after boot | `RIM_AUDIT_RETENTION_DAYS`; unset, the job does not run | Exports and deletes command audit rows past retention (`docs/operations/audit-retention.md`). |
 | Stale attachment cleanup | daily, first 5 minutes after boot | none | Marks attachment uploads still pending 15 minutes after they started as failed, so they stop counting as in progress. Logs the count and adds it to `rim_attachments_cleaned_total`. |
+| IP deny list | 30 seconds, first loaded at boot | none | Reads the IP blocks in force, so a block or unblock made with `rim_server ip` applies within 30 seconds, and deletes expired blocks. A read that fails keeps the list it had. |
 | Workspace state expiry | hourly, first 5 minutes after boot | none | Deletes workspace state entries whose time to live ran out. Logs the count and adds it to `rim_workspace_state_purged_total`. |
 

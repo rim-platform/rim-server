@@ -1,6 +1,8 @@
 use rim_logging::{LoggingHandle, init_logging};
 use rim_server::server::start_server;
-use rim_server::{abuse_cmd, audit_cmd, config, franking_key_cmd, invite_cmd, server_key_cmd};
+use rim_server::{
+    abuse_cmd, audit_cmd, config, franking_key_cmd, invite_cmd, ip_cmd, server_key_cmd,
+};
 
 /// Starts logging and returns the handle that keeps the audit file writer alive. Without
 /// logging the audit trail would be lost, so a failure ends the process.
@@ -42,6 +44,7 @@ async fn main() {
             "principal" | "abuse-reports" => Some(abuse_cmd::run(&subcmd, args).await),
             "invite" => Some(invite_cmd::run(args).await),
             "audit" => Some(audit_cmd::run(args).await),
+            "ip" => Some(ip_cmd::run(args).await),
             _ => None,
         };
         if let Some(code) = exit_code {

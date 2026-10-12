@@ -24,6 +24,8 @@ pub mod instance_invite;
 mod instance_invite_mapper;
 pub mod invite;
 mod invite_mapper;
+pub mod ip_block;
+mod ip_block_mapper;
 pub mod key_challenge;
 mod key_identity_mapper;
 pub mod key_log_entry;

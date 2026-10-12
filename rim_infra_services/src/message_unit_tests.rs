@@ -1039,6 +1039,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_message_budget_is_per_user_and_covers_replies_forwards_and_encrypted_sends() {
+        use rim_core::server_member::model::ServerMemberRole;
+        let (svc, server_id, conv_id) =
+            slow_mode_service(ServerMemberRole::Owner, 0, chrono::Duration::seconds(1));
+        let rate = crate::token_bucket::BucketRate::new(1, 2).expect("a rate");
+        let svc = svc.with_message_budget(rate);
+        let sender = send(server_id, conv_id);
+        let actor = sender.actor;
+        for _ in 0..2 {
+            svc.send_message(sender.clone())
+                .await
+                .expect("within the burst");
+        }
+        let assert_limited = |result: Result<_, ServiceError>| match result {
+            Err(ServiceError::RateLimited {
+                retry_after_seconds,
+            }) => assert!(
+                (59..=60).contains(&retry_after_seconds),
+                "{retry_after_seconds}"
+            ),
+            other => panic!("expected RateLimited, got {other:?}"),
+        };
+        assert_limited(svc.send_message(sender.clone()).await);
+        assert_limited(
+            svc.reply_to_message(rim_services::message::command::ReplyToMessageCmd {
+                actor,
+                server_id,
+                conversation_id: conv_id,
+                root_message_id: MessageId::new(),
+                text: "reply".to_string(),
+                parent_message_id: None,
+            })
+            .await,
+        );
+        assert_limited(
+            svc.forward_message(rim_services::message::command::ForwardMessageCmd {
+                actor,
+                server_id,
+                source_conversation_id: conv_id,
+                target_conversation_id: conv_id,
+                message_id: MessageId::new(),
+            })
+            .await,
+        );
+        assert_limited(
+            svc.send_encrypted_message(rim_services::message::command::SendEncryptedMessageCmd {
+                caller: rim_services::e2ee::command::MlsCaller {
+                    actor,
+                    device_key_id: None,
+                },
+                server_id,
+                conversation_id: conv_id,
+                message_id: MessageId::new(),
+                envelope: String::new(),
+                thread_root_message_id: None,
+                forwarded_from_message_id: None,
+            })
+            .await,
+        );
+        svc.send_message(send(server_id, conv_id))
+            .await
+            .expect("another user has their own budget");
+    }
+
+    #[tokio::test]
     async fn timed_out_member_cannot_send() {
         let server_id = ServerId::new();
         let conv = conversation(server_id);

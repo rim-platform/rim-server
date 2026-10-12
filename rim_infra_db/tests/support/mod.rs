@@ -141,6 +141,7 @@ TRUNCATE TABLE
   host_event_stream,
   instance_invite,
   invite,
+  ip_block,
   key_challenge,
   key_log_entry,
   keybind,

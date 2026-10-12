@@ -171,6 +171,28 @@ pub struct RIMConfig {
     /// `attachments,custom_emoji`; unset or empty keeps every feature on. Controlled by
     /// `RIM_FEATURES_DISABLED`; see [`RIMConfig::features_disabled`].
     pub features_disabled: Option<String>,
+
+    /// Requests one client address sends to `/api` routes per minute, with a burst of the same
+    /// size; unset or 0 sets no limit. Controlled by `RIM_RATE_REQUESTS_PER_MIN_PER_IP`.
+    pub rate_requests_per_min_per_ip: Option<u32>,
+    /// Mutation fields one session runs per minute, counted per GraphQL request; callers
+    /// without a session count per address. Unset or 0 sets no limit. Controlled by
+    /// `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`.
+    pub rate_mutations_per_min_per_session: Option<u32>,
+    /// Messages one user sends per minute; unset or 0 sets no limit. Controlled by
+    /// `RIM_RATE_MESSAGES_PER_MIN_PER_USER`.
+    pub rate_messages_per_min_per_user: Option<u32>,
+    /// Messages one user may send at once before the per-minute rate applies; unset uses the
+    /// per-minute number. Controlled by `RIM_RATE_MESSAGES_BURST`.
+    pub rate_messages_burst: Option<u32>,
+    /// WebSocket connections one user holds open at once; unset or 0 sets no limit.
+    /// Controlled by `RIM_RATE_WS_CONNECTIONS_PER_USER`.
+    pub rate_ws_connections_per_user: Option<u32>,
+    /// Subscriptions one WebSocket connection holds at once; unset or 0 sets no limit.
+    /// Controlled by `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`.
+    pub rate_subscriptions_per_connection: Option<u32>,
+    /// Most GraphQL requests in one batch. Default 20. Controlled by `RIM_API_MAX_BATCH`.
+    pub api_max_batch: Option<usize>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -269,6 +291,7 @@ impl fmt::Debug for RIMConfig {
             .field("metrics_addr", &self.metrics_addr)
             .field("audit_retention_days", &self.audit_retention_days)
             .field("features_disabled", &self.features_disabled)
+            .field("api_limits", &self.api_limits())
             .finish()
     }
 }
@@ -320,6 +343,13 @@ impl Default for RIMConfig {
             metrics_addr: None,
             audit_retention_days: None,
             features_disabled: None,
+            rate_requests_per_min_per_ip: None,
+            rate_mutations_per_min_per_session: None,
+            rate_messages_per_min_per_user: None,
+            rate_messages_burst: None,
+            rate_ws_connections_per_user: None,
+            rate_subscriptions_per_connection: None,
+            api_max_batch: None,
         }
     }
 }
@@ -366,8 +396,9 @@ impl RIMConfig {
         })
     }
 
-    /// What each local user may hold and send, from `RIM_RELAY_*` and
-    /// `RIM_S2S_DEVICE_RATE_PER_MIN`, each kept within what the protocol allows.
+    /// What each local user may hold and send, from `RIM_RELAY_*`,
+    /// `RIM_S2S_DEVICE_RATE_PER_MIN` and the message rate, each kept within what the protocol
+    /// allows.
     pub fn quotas(&self) -> rim_infra_services::quota::Quotas {
         use rim_infra_services::quota::{MAX_CARD_BYTES, Quotas};
         let defaults = Quotas::default();
@@ -393,6 +424,7 @@ impl RIMConfig {
                 .relay_dm_requests_per_day
                 .unwrap_or(defaults.dm_requests_per_day)
                 .max(1),
+            messages: self.api_limits().messages,
         }
     }
 
@@ -759,6 +791,47 @@ fn url_authority(url: &str) -> Option<String> {
     let authority = rest.split(['/', '?', '#']).next()?;
     let authority = authority.rsplit('@').next()?;
     (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
+}
+
+/// Most GraphQL requests in one batch unless `RIM_API_MAX_BATCH` says otherwise.
+pub const DEFAULT_API_MAX_BATCH: usize = 20;
+
+/// The API's request limits; a `None` limit is off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApiLimits {
+    /// Requests per client address to `/api` routes.
+    pub requests_per_ip: Option<rim_infra_services::token_bucket::BucketRate>,
+    /// Mutation fields per session, or per address without one.
+    pub mutations_per_session: Option<rim_infra_services::token_bucket::BucketRate>,
+    /// Messages per user.
+    pub messages: Option<rim_infra_services::token_bucket::BucketRate>,
+    /// Open WebSocket connections per user.
+    pub ws_connections_per_user: Option<u32>,
+    /// Active subscriptions per WebSocket connection.
+    pub subscriptions_per_connection: Option<u32>,
+    /// GraphQL requests per batch.
+    pub max_batch: usize,
+}
+
+impl RIMConfig {
+    /// The API limits from `RIM_RATE_*` and `RIM_API_MAX_BATCH`: each rate off when unset or
+    /// 0, the message burst defaulting to the per-minute rate, the batch cap to
+    /// [`DEFAULT_API_MAX_BATCH`] and at least 1.
+    pub fn api_limits(&self) -> ApiLimits {
+        use rim_infra_services::token_bucket::BucketRate;
+        let per_minute = |n: Option<u32>| n.and_then(BucketRate::per_minute);
+        let cap = |n: Option<u32>| n.filter(|n| *n > 0);
+        ApiLimits {
+            requests_per_ip: per_minute(self.rate_requests_per_min_per_ip),
+            mutations_per_session: per_minute(self.rate_mutations_per_min_per_session),
+            messages: self
+                .rate_messages_per_min_per_user
+                .and_then(|rate| BucketRate::new(rate, self.rate_messages_burst.unwrap_or(rate))),
+            ws_connections_per_user: cap(self.rate_ws_connections_per_user),
+            subscriptions_per_connection: cap(self.rate_subscriptions_per_connection),
+            max_batch: self.api_max_batch.unwrap_or(DEFAULT_API_MAX_BATCH).max(1),
+        }
+    }
 }
 
 /// Variables the configuration reads without the `RIM_` prefix. Every other setting needs the
@@ -1328,6 +1401,57 @@ mod tests {
         };
         let gate = disabled.feature_gate().expect("gate");
         assert_eq!(gate.state(ServerFeature::Email), FeatureState::Disabled);
+    }
+
+    #[test]
+    fn api_limits_are_off_by_default_except_the_batch_cap() {
+        let limits = RIMConfig::default().api_limits();
+        assert_eq!(
+            limits,
+            ApiLimits {
+                requests_per_ip: None,
+                mutations_per_session: None,
+                messages: None,
+                ws_connections_per_user: None,
+                subscriptions_per_connection: None,
+                max_batch: DEFAULT_API_MAX_BATCH,
+            }
+        );
+        assert_eq!(RIMConfig::default().quotas().messages, None);
+    }
+
+    #[test]
+    fn api_limits_are_read_from_their_variables() {
+        use rim_infra_services::token_bucket::BucketRate;
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_RATE_REQUESTS_PER_MIN_PER_IP", "300"),
+            ("RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION", "0"),
+            ("RIM_RATE_MESSAGES_PER_MIN_PER_USER", "30"),
+            ("RIM_RATE_WS_CONNECTIONS_PER_USER", "5"),
+            ("RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION", "50"),
+            ("RIM_API_MAX_BATCH", "0"),
+        ]))
+        .expect("loads");
+        let limits = config.api_limits();
+        assert_eq!(limits.requests_per_ip, BucketRate::new(300, 300));
+        assert_eq!(limits.mutations_per_session, None, "0 is off");
+        assert_eq!(
+            limits.messages,
+            BucketRate::new(30, 30),
+            "the burst defaults to the rate"
+        );
+        assert_eq!(limits.ws_connections_per_user, Some(5));
+        assert_eq!(limits.subscriptions_per_connection, Some(50));
+        assert_eq!(limits.max_batch, 1, "the batch cap is at least 1");
+        assert_eq!(config.quotas().messages, limits.messages);
+
+        let config = RIMConfig {
+            rate_messages_per_min_per_user: Some(30),
+            rate_messages_burst: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(config.api_limits().messages, BucketRate::new(30, 5));
     }
 
     #[test]

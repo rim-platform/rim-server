@@ -38,6 +38,8 @@ pub(crate) const DB_POOL_MAX: &str = "rim_db_pool_max_connections";
 pub(crate) const PENDING_MIGRATIONS: &str = "rim_pending_migrations";
 /// Always 1, labelled `version`.
 pub(crate) const BUILD_INFO: &str = "rim_build_info";
+/// Requests refused because their address is on the IP deny list.
+pub(crate) const IP_BLOCKED: &str = "rim_ip_blocked_requests_total";
 
 /// Histogram buckets of [`HTTP_DURATION`], in seconds.
 const DURATION_BUCKETS: &[f64] = &[
@@ -148,6 +150,11 @@ pub(crate) fn forwarded(direction: &'static str, outcome: &'static str) {
     counter!(FORWARDED_REQUESTS, "direction" => direction, "outcome" => outcome).increment(1);
 }
 
+/// Count one request refused for its blocked address.
+pub(crate) fn ip_blocked() {
+    counter!(IP_BLOCKED).increment(1);
+}
+
 /// Register the help text and units of every metric with the installed recorder.
 fn describe() {
     describe_counter!(
@@ -189,6 +196,11 @@ fn describe() {
         PENDING_MIGRATIONS,
         Unit::Count,
         "Migrations this binary knows that the database has not applied."
+    );
+    describe_counter!(
+        IP_BLOCKED,
+        Unit::Count,
+        "Requests refused because their address is on the IP deny list."
     );
     describe_gauge!(
         BUILD_INFO,

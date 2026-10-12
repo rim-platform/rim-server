@@ -27,6 +27,9 @@ pub mod host;
 /// Public for `rim_server`, whose `invite` command issues, lists and revokes the operator's
 /// instance invites.
 pub mod instance_invite;
+/// Public for `rim_server`, whose `ip` command manages the deny list and whose edge refreshes
+/// it.
+pub mod ip_block;
 pub(crate) mod key_auth;
 pub(crate) mod keybind;
 /// Public for `rim_server`, whose S2S routes rate-limit each peer with it.
@@ -69,6 +72,8 @@ pub(crate) mod server_member;
 pub(crate) mod signup;
 pub mod storage;
 pub(crate) mod thread;
+/// Public for `rim_server`, whose per-address, per-session and WebSocket limits use it.
+pub mod token_bucket;
 pub mod typing;
 pub(crate) mod user;
 pub(crate) mod workspace_plugin;

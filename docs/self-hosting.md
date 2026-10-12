@@ -272,6 +272,21 @@ production's. Record each drill: **FILL** where.
   timer, how often, and the setting that changes it.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.
 
+## Limits and blocking
+
+A server open to the internet can limit what one client sends: requests per address, mutations
+per session, messages per user, and WebSocket connections and subscriptions. Every limit is off
+until its `RIM_RATE_*` variable is set in `deploy/.env` (the "Request limits" block of
+`deploy/.env.example`); `docs/api.md` ("Limits") says what clients see past each one. An
+address or range that keeps misbehaving is blocked outright with
+`dc exec rim /app/rim-server ip block 203.0.113.0/24 --reason "scraping" --expires-in-days 30`:
+it gets 403 `{"error":"blocked"}` on every route but `/healthz`, server-to-server routes
+included. Leave out `--expires-in-days` to block until `ip unblock`; `ip list` shows every block
+with its expiry. A running server reads the list every 30 seconds, so a change applies within
+that; each block and unblock is written to the audit log as `ip.block` or `ip.unblock`. Behind
+Caddy the address is the client's, since `RIM_TRUST_FORWARDED_HEADERS` is on; behind another
+proxy it must replace `X-Forwarded-For` (next sections), or one forged header unblocks a client.
+
 ## Optional features
 
 Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface

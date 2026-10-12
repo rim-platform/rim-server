@@ -260,6 +260,18 @@ refused as `invalid_envelope`; reports naming one server.
 3. `rim-relay peer unblock <serverId>` when it is resolved. A peer refused as forked is not
    unblocked: check with its operator out of band, then `rim-relay peer reset <serverId>`.
 
+### Traffic from one address
+
+Signs: `rim_rate_limit_rejections_total{limiter="api_ip"}` climbing, one address over and over
+in Caddy's access log, signup or login refusals from one range.
+
+1. `rim-relay ip block <address or range> --reason "<what> <date>" --expires-in-days 7`. Every
+   route but `/healthz` answers it 403 within 30 seconds; audited as `ip.block`.
+2. A block is per address, so a client with many addresses comes back: block its range (a /24
+   or a /48) and set `RIM_RATE_REQUESTS_PER_MIN_PER_IP` if it is not set yet.
+3. `rim-relay ip list` shows what is blocked until when; `rim-relay ip unblock <range>` lifts
+   one early. An expired block is ignored at once and deleted within 30 seconds.
+
 ### A stolen server key
 
 Signs: a peer's operator reports requests signed by this server that it did not send; the host
@@ -327,13 +339,15 @@ rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
 rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
 rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
 rim-relay audit purge [--dry-run] [--older-than-days N]
+rim-relay ip block <cidr> --reason <text> [--expires-in-days D] | unblock <cidr> | list
 ```
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`),
 `relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
-`server_key.recovered`, `instance_invite_issued` and
-`instance_invite_revoked` (`issued_by` or `actor` `operator`). `audit purge` writes
+`server_key.recovered`, `instance_invite_issued`,
+`instance_invite_revoked` (`issued_by` or `actor` `operator`), `ip.block` and `ip.unblock`
+(`scope` `server`, with the `cidr`). `audit purge` writes
 `audit.retention.purged` (`trigger` `cli`), the same event the daily purge writes; the purge, its
 export files and the logrotate setup for `/data/audit.log` are in
 `docs/operations/audit-retention.md`.

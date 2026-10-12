@@ -46,6 +46,17 @@ fn extract_mutation_fields(doc: &ExecutableDocument) -> Vec<String> {
     fields
 }
 
+/// Mutation fields across a batch, aliases and repeats each counted; a request that does not
+/// parse counts none, since it runs nothing.
+pub fn count_mutation_fields(batch: &async_graphql::BatchRequest) -> u32 {
+    let fields: usize = batch
+        .iter()
+        .filter_map(|gql| async_graphql_parser::parse_query(gql.query.as_str()).ok())
+        .map(|doc| extract_mutation_fields(&doc).len())
+        .sum();
+    u32::try_from(fields).unwrap_or(u32::MAX)
+}
+
 /// Mutation field names (camelCase, matching the GraphQL schema) that are
 /// exempt from CSRF validation because they are used before the client has
 /// a CSRF token.
@@ -352,6 +363,17 @@ mod tests {
                 token.to_string(),
             ))
             .to_http_request()
+    }
+
+    #[test]
+    fn count_mutation_fields_counts_every_field_across_the_batch() {
+        let batch = async_graphql::BatchRequest::Batch(vec![
+            async_graphql::Request::new("mutation { a: logout b: logout }"),
+            async_graphql::Request::new("{ me { id } }"),
+            async_graphql::Request::new("mutation M { ...F } fragment F on Mutation { logout }"),
+            async_graphql::Request::new("mutation {"),
+        ]);
+        assert_eq!(count_mutation_fields(&batch), 3);
     }
 
     #[actix_web::test]

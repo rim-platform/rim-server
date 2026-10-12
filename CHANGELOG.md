@@ -31,6 +31,19 @@ tag `v<version>`, the version every crate in the workspace carries.
 - GraphQL `ServerInfo.auditRetentionDays`: the days command audit rows are kept before they are
   exported and deleted, null when they are kept forever. Readable without a session, like the
   rest of `serverInfo`.
+- Request limits, each off unless set: `RIM_RATE_REQUESTS_PER_MIN_PER_IP` (requests to `/api`
+  routes per client address, answered 429 with `Retry-After`),
+  `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`, `RIM_RATE_MESSAGES_PER_MIN_PER_USER` with
+  `RIM_RATE_MESSAGES_BURST` (both answered `RATE_LIMITED`), `RIM_RATE_WS_CONNECTIONS_PER_USER`
+  and `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` (the new GraphQL error code
+  `TOO_MANY_SUBSCRIPTIONS`). Refusals are counted in `rim_rate_limit_rejections_total`, and
+  browsers may read `Retry-After`. `docs/api.md` ("Limits") describes them.
+- An IP deny list: `rim_server ip block <cidr> --reason <text> [--expires-in-days <1-365>]`,
+  `ip unblock <cidr>` and `ip list`. A blocked address or range, IPv4 or IPv6, is answered 403
+  with `{"error":"blocked"}` on every route but `/healthz`, server-to-server routes included.
+  A running server picks up changes within 30 seconds; blocks are audited as `ip.block` and
+  `ip.unblock` and refusals counted in `rim_ip_blocked_requests_total`. Adds the `ip_block`
+  table.
 
 ### Changed
 
@@ -39,6 +52,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   them. Set `RIM_VERSION` in `deploy/.env` to the release you run, and run `pull` then `up -d`
   where you ran `up -d --build`. Operators who build locally add `-f deploy/compose.dev.yml` to
   every compose command; `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` still name other images.
+- **Upgrade:** a GraphQL batch holds at most 20 requests; a larger one is answered 400 with
+  `{"error":"batch_too_large"}` and none of it runs. `RIM_API_MAX_BATCH` changes the cap.
+
 - The packaged desktop app's origins (`tauri://localhost`, `http://tauri.localhost` and
   `https://tauri.localhost`) are accepted by every server without `RIM_CORS_ALLOWED_ORIGIN`.
 - GraphQL `commands` and `commandDiscover` list only the commands the caller may run. A command

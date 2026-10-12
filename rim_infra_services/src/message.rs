@@ -29,6 +29,7 @@ use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::e2ee::wire::{MlsContentType, MlsWire};
 use rim_services::e2ee::{MAX_ENVELOPE_BYTES, MlsCommitRequiredReason};
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
@@ -80,6 +81,7 @@ use crate::franking_keys::SharedFrankingKeys;
 use crate::mention::parse_mention_ids;
 use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_action};
 use crate::repos::AppRepos;
+use crate::token_bucket::{BucketRate, TokenBucketLimiter};
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
     ensure_conversation_writable_with_standing, ensure_not_archived, member_standing,
@@ -125,6 +127,9 @@ pub struct DefaultMessageService {
     /// Lets a moderator delete a message with a verified report outside its conversation.
     /// `None` in unit tests that are not about it; the composition root wires it.
     moderation_repo: Option<Arc<dyn ModerationRepository>>,
+    /// Messages each user may send per minute, across every way of creating one. `None` sets
+    /// no limit.
+    message_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
 }
 
 impl DefaultMessageService {
@@ -137,6 +142,30 @@ impl DefaultMessageService {
             notification_service: None,
             e2ee: None,
             moderation_repo: None,
+            message_budget: None,
+        }
+    }
+
+    pub fn with_message_budget(mut self, rate: BucketRate) -> Self {
+        self.message_budget = Some(Arc::new(TokenBucketLimiter::new(rate)));
+        self
+    }
+
+    /// `RateLimited` once `author` has used their message budget.
+    fn ensure_message_budget(&self, author: UserId) -> ServiceResult<()> {
+        let Some(budget) = &self.message_budget else {
+            return Ok(());
+        };
+        match budget.check(&author, std::time::Instant::now()) {
+            RateLimitDecision::Allowed => Ok(()),
+            RateLimitDecision::Limited {
+                retry_after_seconds,
+            } => {
+                crate::metrics::rate_limited("messages");
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
         }
     }
 
@@ -837,6 +866,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
+        self.ensure_message_budget(cmd.actor.user_id)?;
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
@@ -952,6 +982,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
+        self.ensure_message_budget(cmd.actor.user_id)?;
         // 1. Validate access (membership, archive, timeout) and slow mode
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
@@ -1580,6 +1611,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto> {
+        self.ensure_message_budget(cmd.actor.user_id)?;
         let access_repos = ConversationAccessRepos::from_arcs(
             &self.repos.server_member_repo,
             &self.repos.conversation_repo,
@@ -1789,6 +1821,7 @@ impl MessageService for DefaultMessageService {
         &self,
         cmd: SendEncryptedMessageCmd,
     ) -> ServiceResult<MessageDto> {
+        self.ensure_message_budget(cmd.caller.actor.user_id)?;
         let e2ee = self.e2ee()?;
         require_device(&cmd.caller)?;
         let author = cmd.caller.actor.user_id;

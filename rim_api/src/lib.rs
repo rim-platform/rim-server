@@ -25,6 +25,8 @@ pub mod pagination;
 pub mod query;
 pub mod resolve;
 pub mod subscription;
+// pub: rim_server gives each WebSocket connection its subscription slots.
+pub mod subscription_limit;
 pub mod types;
 
 #[cfg(test)]
@@ -39,7 +41,8 @@ pub struct RegistrationContext {
 }
 
 /// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
-/// to depth 10 and complexity 200.
+/// to depth 10 and complexity 200, and to the subscriptions a connection's
+/// [`subscription_limit::SubscriptionSlots`] allow.
 pub fn build_schema(
     service_provider: Arc<dyn AppServiceProvider>,
     broadcaster: InMemoryBroadcaster,
@@ -122,6 +125,7 @@ pub fn build_schema(
         .data(crate::types::AuditRetention(
             registration.audit_retention_days,
         ))
+        .extension(crate::subscription_limit::SubscriptionLimit)
         .limit_depth(10)
         .limit_complexity(200);
     match federation {

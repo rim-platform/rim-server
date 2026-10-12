@@ -93,6 +93,13 @@ services:
       RIM_S2S_MAX_BODY_BYTES:
       RIM_S2S_ALLOW_HTTP:
       RIM_S2S_ALLOW_PRIVATE_ADDRESSES:
+      RIM_RATE_REQUESTS_PER_MIN_PER_IP:
+      RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION:
+      RIM_RATE_MESSAGES_PER_MIN_PER_USER:
+      RIM_RATE_MESSAGES_BURST:
+      RIM_RATE_WS_CONNECTIONS_PER_USER:
+      RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION:
+      RIM_API_MAX_BATCH:
       # Days command audit rows are kept; older ones are exported to /data/audit-exports and
       # deleted daily. Unset keeps them forever.
       # RIM_AUDIT_RETENTION_DAYS: 365

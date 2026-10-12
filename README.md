@@ -122,12 +122,16 @@ rim_server abuse-reports list [--open]
 rim_server abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text>
 rim_server abuse-reports resolve <report-id>
 rim_server audit purge [--dry-run] [--older-than-days <1-3650>]
+rim_server ip block <cidr> --reason <text> [--expires-in-days <1-365>]
+rim_server ip unblock <cidr>
+rim_server ip list
 ```
 
 `invite create` prints a signup link; with `--email` it admits only a password signup with that
 address. `docs/server-identity.md` explains the key and peer commands, `docs/relay.md` and
 `docs/operations/relay-public.md` the abuse tools, `docs/operations/audit-retention.md` the
-purge.
+purge. `ip block` refuses an address or CIDR range, IPv4 or IPv6, on every route but `/healthz`
+(`docs/self-hosting.md`, "Limits and blocking").
 
 ## Configuration
 

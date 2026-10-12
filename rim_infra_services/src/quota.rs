@@ -24,6 +24,8 @@ pub struct Quotas {
     /// DM requests: those one sender principal files on this relay per day, and invites a
     /// local user sends to people on other servers who are not their contacts per day.
     pub dm_requests_per_day: u32,
+    /// Messages a user sends per minute, with their burst; `None` sets no limit.
+    pub messages: Option<crate::token_bucket::BucketRate>,
 }
 
 /// Largest card the statement rules allow.
@@ -38,6 +40,7 @@ impl Default for Quotas {
             forwards_per_device_per_min: 120,
             forwards_per_user_per_day: 50_000,
             dm_requests_per_day: 20,
+            messages: None,
         }
     }
 }
@@ -102,6 +105,7 @@ mod tests {
         assert_eq!(q.forwards_per_device_per_min, 120);
         assert_eq!(q.forwards_per_user_per_day, 50_000);
         assert_eq!(q.dm_requests_per_day, 20);
+        assert_eq!(q.messages, None);
     }
 
     #[test]

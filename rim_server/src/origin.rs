@@ -67,6 +67,7 @@ impl AllowedOrigins {
                 "x-csrf-token",
                 "x-request-id",
             ])
+            .expose_headers(vec!["Retry-After"])
             .supports_credentials()
             .block_on_origin_mismatch(true)
             .max_age(3600)
