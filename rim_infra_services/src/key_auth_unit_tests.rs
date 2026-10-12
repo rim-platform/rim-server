@@ -524,6 +524,7 @@ mod tests {
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::new()),
+            user_repo: Arc::new(MockUserRepository::new()),
         }
     }
 
@@ -2267,6 +2268,7 @@ mod tests {
     async fn signup_with_key_with_an_instance_invite_consumes_it_and_joins_nothing() {
         let invite = instance_invite(Duration::minutes(15), None);
         let invite_id = invite.id;
+        let creator = invite.created_by_user_id;
         let mut invites = MockInstanceInviteRepository::new();
         invites
             .expect_get_by_token_hash()
@@ -2277,8 +2279,10 @@ mod tests {
             .withf(move |id| *id == invite_id)
             .times(1)
             .returning(|_| Ok(true));
+        let (users, chains) = crate::signup::tests::chain_recorder();
         let signup = SignupRepos {
             instance_invite_repo: Arc::new(invites),
+            user_repo: Arc::new(users),
             ..no_signup_repos()
         };
         let events = Arc::new(Recording::default());
@@ -2297,6 +2301,10 @@ mod tests {
             .unwrap();
         assert_eq!(res.server_id, None);
         assert!(events.0.lock().unwrap().is_empty());
+        assert_eq!(
+            *chains.lock().unwrap(),
+            vec![(res.user_id, invite_id.into(), creator)]
+        );
         let s = h.state.lock().unwrap();
         assert_eq!(s.created[&res.user_id].password, None);
     }
@@ -2378,6 +2386,7 @@ mod tests {
             role: ServerMemberRole::Member,
         };
         let invite_id = invite.id;
+        let creator = invite.created_by_user_id;
         let mut invites = MockInviteRepository::new();
         invites
             .expect_get_by_token_hash()
@@ -2408,11 +2417,13 @@ mod tests {
         conversations
             .expect_list_public_channel_ids()
             .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        let (users, chains) = crate::signup::tests::chain_recorder();
         let signup = SignupRepos {
             invite_repo: Arc::new(invites),
             moderation_repo: Arc::new(moderation),
             server_member_repo: Arc::new(members),
             conversation_repo: Arc::new(conversations),
+            user_repo: Arc::new(users),
             ..no_signup_repos()
         };
         let events = Arc::new(Recording::default());
@@ -2430,6 +2441,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.server_id, Some(server_id));
+        assert_eq!(
+            *chains.lock().unwrap(),
+            vec![(res.user_id, invite_id.into(), Some(creator))]
+        );
         let events = events.0.lock().unwrap();
         assert!(matches!(
             events.as_slice(),

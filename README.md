@@ -115,8 +115,9 @@ rim_server invite revoke <invite-id>
 rim_server server-key show | rotate | recover --recovery-key-file <file> [--new-recovery-key]
 rim_server peer reset | block | unblock <server-id>
 rim_server franking-key show | rotate
-rim_server principal block <principal-id> --reason <text>
+rim_server principal block <principal-id> --reason <text> [--cascade]
 rim_server principal unblock <principal-id>
+rim_server principal show <principal-id>
 rim_server principal list
 rim_server abuse-reports list [--open]
 rim_server abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text>

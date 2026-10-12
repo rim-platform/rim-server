@@ -693,3 +693,189 @@ async fn signup_with_a_workspace_invite_keeps_a_placeholder_email() {
         Some("placeholder_user@local.invalid")
     );
 }
+
+// ── The complete ban ─────────────────────────────────────────────────────────
+
+const SIGNUP_WITH_INVITE: &str = r#"
+mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId } }"#;
+
+const PASSWORD: &str = "ValidPass123!";
+
+/// Sign `username` up with the instance invite `token`; returns the user id and session token.
+async fn invited_signup(
+    schema: &rim_api::AppSchema,
+    username: &str,
+    token: &str,
+) -> (rim_core::user::model::UserId, String) {
+    use std::sync::Arc;
+
+    use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_ok};
+
+    let intent = Arc::new(AuthIntentCtx::default());
+    let request = anonymous_request(
+        SIGNUP_WITH_INVITE,
+        json!({ "input": {
+            "username": username,
+            "email": format!("{username}@test.example.com"),
+            "password": PASSWORD,
+            "instanceInviteToken": token,
+        } }),
+    )
+    .data(Arc::clone(&intent));
+    let data = exec_ok(schema, request).await;
+    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
+        panic!("signup must set a session");
+    };
+    let user_id = data["signupWithInvite"]["userId"]
+        .as_str()
+        .expect("userId")
+        .parse::<uuid::Uuid>()
+        .expect("uuid")
+        .into();
+    (user_id, session_token)
+}
+
+/// `rim_server principal …` against the test database.
+async fn principal_cmd(args: &[&str]) -> String {
+    let config = rim_server::config::RIMConfig {
+        database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        ..Default::default()
+    };
+    rim_server::abuse_cmd::run_with(&config, "principal", args.iter().map(|a| a.to_string()))
+        .await
+        .unwrap_or_else(|e| panic!("rim_server principal {args:?}: {e}"))
+}
+
+/// Ada invited Bob, who invited Cyd. Blocking Ada with `--cascade` blocks all three: their
+/// sessions end, their unused invites are revoked, their emails can neither sign up nor sign
+/// in, and `principal show` lists the chain.
+#[tokio::test]
+async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
+    use rim_core::auth::repository::SessionRepository;
+    use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_err, exec_err_code};
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let provider = ctx.build_provider();
+    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let principal = ada.state.principal_id.clone();
+
+    seed_instance_invite(
+        &ctx.db,
+        ada.user.id,
+        "rim_iinv_for_bob",
+        SeedInstanceInviteOpts::default(),
+    )
+    .await;
+    let (bob, bob_session) = invited_signup(&schema, "bob", "rim_iinv_for_bob").await;
+    seed_instance_invite(
+        &ctx.db,
+        bob,
+        "rim_iinv_for_cy",
+        SeedInstanceInviteOpts {
+            max_uses: Some(3),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (_, cy_session) = invited_signup(&schema, "cyd", "rim_iinv_for_cy").await;
+
+    let shown = principal_cmd(&["show", &principal]).await;
+    for needle in [
+        "account    : ada",
+        "invitees   : 2",
+        "bob (no key identity)",
+        "    cyd (no key identity)",
+        "blocked    : no",
+    ] {
+        assert!(shown.contains(needle), "{needle:?} in {shown}");
+    }
+
+    let blocked = principal_cmd(&["block", &principal, "--reason", "spam ring", "--cascade"]).await;
+    for needle in [
+        format!("blocked ada ({principal})"),
+        "blocked email ada@test.example.com".to_string(),
+        "blocked bob (no key identity)".to_string(),
+        "reason: spam ring (invited by ada)".to_string(),
+        "blocked cyd (no key identity)".to_string(),
+        "reason: spam ring (invited by bob)".to_string(),
+    ] {
+        assert!(blocked.contains(&needle), "{needle:?} in {blocked}");
+    }
+
+    // Every session ends: Ada's enrolling session, Bob's and Cyd's signup sessions.
+    let sessions = SeaOrmSessionRepository::new(ctx.db.clone());
+    let ada_session = sessions
+        .get_by_id(ada.caller.session_id)
+        .await
+        .expect("lookup")
+        .expect("session row");
+    assert!(ada_session.revoked_at.is_some());
+    for token in [&bob_session, &cy_session] {
+        let auth = provider
+            .request_authenticator()
+            .authenticate_session_token(Some(token))
+            .await
+            .expect("authenticate");
+        let request = Request::new("query { me { id } }").data(
+            rim_api::auth_context::AuthActorCtx::new(auth.user_id, auth.session_id),
+        );
+        assert_eq!(exec_err_code(&schema, request).await, "UNAUTHENTICATED");
+    }
+
+    // Bob's password no longer signs him in, and the invite he gave Cyd, uses left, is revoked.
+    let login = anonymous_request(
+        "mutation($input: LoginInput!) { login(input: $input) { userId } }",
+        json!({ "input": { "username": "bob", "password": PASSWORD } }),
+    );
+    assert_eq!(exec_err_code(&schema, login).await, "FORBIDDEN");
+    let request = anonymous_request(
+        SIGNUP_WITH_INVITE,
+        json!({ "input": {
+            "username": "dee",
+            "email": "dee@test.example.com",
+            "password": PASSWORD,
+            "instanceInviteToken": "rim_iinv_for_cy",
+        } }),
+    );
+    assert_eq!(exec_err_code(&schema, request).await, "INVALID_TOKEN");
+
+    // Ada's address cannot sign up again, whatever its case.
+    seed_operator_invite(
+        &ctx.db,
+        "rim_iinv_operator",
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    let request = anonymous_request(
+        SIGNUP_WITH_INVITE,
+        json!({ "input": {
+            "username": "ada_again",
+            "email": "ADA@test.example.com",
+            "password": PASSWORD,
+            "instanceInviteToken": "rim_iinv_operator",
+        } }),
+    );
+    assert_eq!(
+        exec_err(&schema, request).await,
+        (
+            "VALIDATION".to_string(),
+            "this email cannot sign up here".to_string()
+        )
+    );
+
+    let shown = principal_cmd(&["show", &principal]).await;
+    for needle in [
+        "email      : ada@test.example.com (blocked)",
+        "blocked    : since",
+        "bob (no key identity)",
+        "  blocked",
+    ] {
+        assert!(shown.contains(needle), "{needle:?} in {shown}");
+    }
+}

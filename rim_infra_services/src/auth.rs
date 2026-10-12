@@ -324,6 +324,22 @@ impl DefaultAuthService {
             return Err(ServiceError::Unauthenticated);
         }
 
+        // An operator's complete ban blocks the account's address.
+        if let Some(email) = &user.email
+            && self.repos.user_repo.is_email_blocked(email).await?
+        {
+            tracing::info!(
+                target: "audit",
+                event = "blocked_email_refused",
+                action = "login",
+                user_id = %user.id,
+                "login refused: the account's email is blocked on this server"
+            );
+            return Err(ServiceError::Forbidden(
+                "this account is blocked on this server".to_string(),
+            ));
+        }
+
         let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
 
         // Audit: successful login.

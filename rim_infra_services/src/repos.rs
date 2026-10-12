@@ -163,6 +163,7 @@ impl AuthRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 }
@@ -359,6 +360,7 @@ impl AppRepos {
             relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
             key_identity_repo: Arc::clone(&self.key_identity_repo),
             session_repo: Arc::clone(&self.session_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 

@@ -10,8 +10,8 @@ use crate::e2ee::command::MlsCaller;
 use crate::relay::dto::{
     AbuseReportDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, FileAbuseReport,
     IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
-    PrincipalBlockOutcome, RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto,
-    RemoteServerDto, SignedJson,
+    PrincipalBlockOutcome, PrincipalRecordDto, PrincipalUnblockOutcome, RelayCleanup,
+    RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
 };
 use crate::{Actor, ServiceResult};
 
@@ -156,16 +156,29 @@ pub trait RelayService: Send + Sync {
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait RelayAbuseService: Send + Sync {
-    /// Block a principal for `reason`: end the sessions of the account holding it here and
-    /// ignore its pending DM requests.
+    /// Ban a principal for `reason`, in one transaction: block it, ignore its pending DM
+    /// requests, and for the account holding it here end its sessions, revoke its invites that
+    /// have uses left, block its email and record the reason as a resolved abuse report. With
+    /// `cascade`, every account its invites created is banned the same way, recursively, with
+    /// the reason suffixed "(invited by <username>)". Returns one outcome per account, the
+    /// principal's first, then breadth first.
     async fn block_principal(
         &self,
         principal_id: String,
         reason: String,
-    ) -> ServiceResult<PrincipalBlockOutcome>;
+        cascade: bool,
+    ) -> ServiceResult<Vec<PrincipalBlockOutcome>>;
 
-    /// Returns whether a block was lifted.
-    async fn unblock_principal(&self, principal_id: String) -> ServiceResult<bool>;
+    /// Lift a principal's block and its account's email block. Sessions and invites stay
+    /// ended.
+    async fn unblock_principal(
+        &self,
+        principal_id: String,
+    ) -> ServiceResult<PrincipalUnblockOutcome>;
+
+    /// The account holding a principal here, its inviter, its invite tree, its open reports
+    /// and its block.
+    async fn principal_record(&self, principal_id: String) -> ServiceResult<PrincipalRecordDto>;
 
     /// Every block, newest first.
     async fn principal_blocks(&self) -> ServiceResult<Vec<PrincipalBlockDto>>;

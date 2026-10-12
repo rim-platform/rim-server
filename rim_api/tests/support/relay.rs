@@ -25,7 +25,7 @@ use super::nodes::{Node, databases_with, start};
 /// Everything a cross-relay test touches, emptied on both databases first.
 pub const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, \
      peer_server, s2s_nonce, s2s_outbox, s2s_peer_delivery, s2s_peer_inbound, relay_envelope, \
-     remote_identity_cache, key_challenge, relay_principal_block, relay_abuse_report, \"user\", \
+     remote_identity_cache, key_challenge, relay_principal_block, relay_abuse_report, blocked_email, \"user\", \
      server RESTART IDENTITY CASCADE";
 
 pub const SIGNUP: &str = r#"

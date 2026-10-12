@@ -1,5 +1,6 @@
 use crate::model_id;
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 model_id!(UserId);
 
@@ -60,4 +61,34 @@ pub struct UpdateProfilePatch {
     pub avatar_url: Option<Option<String>>,
     pub status_text: Option<Option<String>>,
     pub bio: Option<Option<String>>,
+}
+
+/// How an account was created with an invite: the invite and its creator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InviteChain {
+    /// The instance or workspace invite the account signed up with.
+    pub invite_id: Uuid,
+    /// The invite's creator; `None` for an operator's invite or a deleted creator.
+    pub invited_by_user_id: Option<UserId>,
+}
+
+/// Which table an invite lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteKind {
+    /// An instance invite: a signup to this server.
+    Instance,
+    /// A workspace invite: a signup or join into one workspace.
+    Workspace,
+}
+
+/// An invite as its creator's record lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedInvite {
+    pub id: Uuid,
+    pub kind: InviteKind,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_uses: i32,
+    pub use_count: i32,
+    pub revoked_at: Option<DateTime<Utc>>,
 }

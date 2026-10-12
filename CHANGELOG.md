@@ -77,6 +77,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   so `signupWithKey` with a deleted account's identity answers `VALIDATION`. Signups may no
   longer take usernames starting with `deleted-`. Adds `user.deletion_requested_at`, `deletion_scheduled_for` and
   `deleted_at`.
+- The invite chain and the complete ban. Every account records the invite it signed up with
+  and that invite's creator (new nullable `user.created_by_invite_id` and
+  `user.invited_by_user_id`). `rim_server principal block` now also revokes the account's
+  invites that have uses left, blocks its email (the new `blocked_email` table: a signup with
+  it answers `VALIDATION` "this email cannot sign up here", a password login `FORBIDDEN`),
+  records the reason as a resolved abuse report, and lists the accounts its invites created;
+  `--cascade` blocks those too, recursively, in the same transaction. `principal unblock` also
+  lifts the email block; sessions and invites stay ended. The new `principal show
+  <principal-id>` prints the account, its inviter, its invite tree, its invites, its open
+  reports and its block.
 
 ### Changed
 

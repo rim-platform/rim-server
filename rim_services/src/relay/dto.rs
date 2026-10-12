@@ -287,16 +287,93 @@ pub struct PrincipalBlockDto {
     pub created_at: DateTime<Utc>,
 }
 
-/// What blocking a principal did.
+/// An account on this server as the operator's tools list it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSummaryDto {
+    pub user_id: UserId,
+    pub username: String,
+    /// `None` for an account that never enrolled a key.
+    pub principal_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What blocking one principal or account did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrincipalBlockOutcome {
+    /// The principal blocked; `None` for an account of a cascade that has no key identity.
+    pub principal_id: Option<String>,
     /// `false` when it was blocked already; the reason is replaced.
     pub newly_blocked: bool,
-    /// The account holding the principal here, if any.
-    pub user_id: Option<UserId>,
+    /// The account here, if any.
+    pub account: Option<AccountSummaryDto>,
+    /// The reason recorded, with the cascade's "(invited by …)" suffix.
+    pub reason: String,
     pub ended_sessions: u64,
     /// Pending DM requests from the principal, ignored for every recipient.
     pub ignored_requests: u64,
+    /// The account's invites that still had uses left.
+    pub revoked_invites: u64,
+    /// The account's email, now refused at signup and password login.
+    pub blocked_email: Option<String>,
+    /// Accounts the account's invites created, oldest first.
+    pub invitees: Vec<AccountSummaryDto>,
+}
+
+/// What lifting a block did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrincipalUnblockOutcome {
+    /// Whether the principal was blocked.
+    pub lifted: bool,
+    /// Whether the account's email was blocked and is no longer.
+    pub email_unblocked: bool,
+}
+
+/// An account in an invite tree, at `depth` 1 for one the root's invites created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InviteeDto {
+    pub depth: u32,
+    pub account: AccountSummaryDto,
+    /// Whether its principal or its email is blocked.
+    pub blocked: bool,
+}
+
+/// An invite as an account's record lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedInviteDto {
+    pub id: Uuid,
+    /// `true` for an instance invite, `false` for a workspace invite.
+    pub instance: bool,
+    pub created_at: DateTime<Utc>,
+    pub max_uses: i32,
+    pub use_count: i32,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// The account holding a principal here, as `principal show` prints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRecordDto {
+    pub account: AccountSummaryDto,
+    pub email: Option<String>,
+    pub email_blocked: bool,
+    /// The invite the account signed up with.
+    pub invite_id: Option<Uuid>,
+    /// That invite's creator.
+    pub inviter: Option<AccountSummaryDto>,
+    /// Every account its invites created, recursively, depth first.
+    pub invitees: Vec<InviteeDto>,
+    /// The invites it created, newest first.
+    pub invites: Vec<CreatedInviteDto>,
+}
+
+/// What this server knows of a principal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrincipalRecordDto {
+    pub principal_id: String,
+    /// `None` when no account here holds it.
+    pub account: Option<AccountRecordDto>,
+    pub block: Option<PrincipalBlockDto>,
+    /// Unresolved reports naming the principal, oldest first.
+    pub open_reports: Vec<AbuseReportDto>,
 }
 
 /// An abuse report an operator files, from the abuse address.

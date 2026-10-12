@@ -127,6 +127,7 @@ pub async fn reset_db(conn: &DatabaseConnection) {
     // CASCADE ensures FK-dependent rows are cleared regardless of declaration order.
     let sql = r#"
 TRUNCATE TABLE
+  blocked_email,
   capability_registry,
   channel_lens,
   command_audit_log,
