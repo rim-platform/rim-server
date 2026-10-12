@@ -68,3 +68,6 @@ Dated documents that describe a point in time and are not updated:
 - `decisions/`: sealed decision records (`decisions/README.md` indexes them).
 - `testing/manual-test-plan-2026-10-10.md`: the manual test run for key identity, encryption
   and two servers.
+- `testing/manual-test-plan-2026-10-12.md`: the manual test run for the public launch: a packaged
+  app against a remote server, the notice and terms, direct messages at sign-in, command
+  visibility, rate limits, bans and the IP deny list, backups, the operator routine.
