@@ -37,7 +37,9 @@ holds the DMs and groups its users start with people on other servers, and is ne
 `servers` nor found by name. Everyone in it is a guest: nobody sees its member list, and nobody
 creates channels, invites or plugins there. Local users join it on first use: a signed-in
 `relayInfo`, or any read or write of the direct space that needs membership; people from
-other servers join when a local user adds them.
+other servers join when a local user adds them. Custom emojis, plugins, workspace keybinds,
+pipelines, workspace state and channels answer `VALIDATION` ("not available in the direct
+space") there, reads and writes alike, and the refused call joins nobody.
 
 A conversation's home is the relay whose direct space holds it. The home sequences it: it stores
 the messages, Commits and Welcomes, and every member's app reads and writes there, through their

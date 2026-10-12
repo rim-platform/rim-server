@@ -262,7 +262,7 @@ on the message.
 | `UNAUTHENTICATED` | No valid session, or a sign-in attempt that failed. | |
 | `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation. | |
 | `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). | |
-| `VALIDATION` | The input is malformed or out of range; the message says what. | |
+| `VALIDATION` | The input is malformed or out of range, or the feature does not exist in the direct space; the message says what. | |
 | `CONFLICT` | The change conflicts with the current state; the message says how. | |
 | `EMAIL_TAKEN` | The signup email address is already in use. | |
 | `INVALID_TOKEN` | An invite token is unknown, used up or revoked. | |

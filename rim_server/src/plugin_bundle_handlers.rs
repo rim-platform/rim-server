@@ -12,7 +12,7 @@ use rim_services::feature::service::FeatureGate;
 use rim_services::workspace_plugin::command::{DownloadPluginBundleQuery, UploadPluginBundleCmd};
 use rim_services::workspace_plugin::service::PluginBundleService;
 use rim_services::workspace_plugin::{MAX_PLUGIN_BUNDLE_BYTES, PLUGIN_BUNDLE_MEDIA_TYPE};
-use rim_services::{Actor, ServiceError};
+use rim_services::{Actor, NOT_IN_DIRECT_SPACE, ServiceError};
 use sha2::{Digest, Sha256};
 
 use crate::body::{BodyError, read_bounded};
@@ -118,6 +118,9 @@ pub async fn handle_plugin_bundle_upload(
             } else {
                 HttpResponse::Ok().json(body)
             }
+        }
+        Err(ServiceError::Validation(reason)) if reason == NOT_IN_DIRECT_SPACE => {
+            HttpResponse::BadRequest().json(serde_json::json!({"error": reason}))
         }
         Err(ServiceError::Validation(reason)) => {
             HttpResponse::UnprocessableEntity().json(serde_json::json!({"error": reason}))
@@ -382,17 +385,24 @@ mod tests {
     #[actix_web::test]
     async fn upload_maps_refusals_to_their_codes() {
         let server_id = ServerId::new();
-        for (error, status) in [
-            (ServiceError::PermissionDenied, 403),
+        for (error, status, message) in [
+            (ServiceError::PermissionDenied, 403, None),
             (
                 ServiceError::Validation("rim-plugin.json is missing".into()),
                 422,
+                Some("rim-plugin.json is missing"),
+            ),
+            (
+                ServiceError::not_in_direct_space(),
+                400,
+                Some(NOT_IN_DIRECT_SPACE),
             ),
             (
                 ServiceError::RateLimited {
                     retry_after_seconds: 60,
                 },
                 429,
+                None,
             ),
         ] {
             let mut service = MockPluginBundleService::new();
@@ -408,9 +418,9 @@ mod tests {
             )
             .await;
             assert_eq!(resp.status(), status);
-            if status == 422 {
+            if let Some(message) = message {
                 let body: serde_json::Value = actix_test::read_body_json(resp).await;
-                assert_eq!(body["error"], "rim-plugin.json is missing");
+                assert_eq!(body["error"], message);
             }
         }
     }

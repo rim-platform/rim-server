@@ -208,6 +208,19 @@ pub async fn ensure_server_member(
     Err(ServiceError::PermissionDenied)
 }
 
+/// `Validation` when `server_id` is the direct space, which has no custom emojis, plugins,
+/// workspace keybinds, pipelines, workspace state or channels. `direct_space_id` is `None` where
+/// no direct space is wired.
+pub fn ensure_workspace_features(
+    direct_space_id: Option<ServerId>,
+    server_id: ServerId,
+) -> ServiceResult<()> {
+    if direct_space_id == Some(server_id) {
+        return Err(ServiceError::not_in_direct_space());
+    }
+    Ok(())
+}
+
 /// The one way a user becomes a workspace member: inserts the `server_member` row, then joins
 /// the user to every public, unarchived channel of the workspace, skipping channels
 /// they are already in, so a member who arrives after the channel back-fill does not start with
@@ -806,6 +819,17 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied));
+    }
+
+    #[test]
+    fn ensure_workspace_features_refuses_only_the_direct_space() {
+        let direct = ServerId::new();
+        let err = ensure_workspace_features(Some(direct), direct).unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(msg) if msg == rim_services::NOT_IN_DIRECT_SPACE)
+        );
+        assert!(ensure_workspace_features(Some(direct), ServerId::new()).is_ok());
+        assert!(ensure_workspace_features(None, direct).is_ok());
     }
 
     #[tokio::test]

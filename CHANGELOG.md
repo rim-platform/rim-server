@@ -70,6 +70,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   it and its capabilities: a non-member, or a call without a workspace, sees only the commands
   the client runs itself, and the moderation and owner commands are listed only to the roles
   that run them. Naming the direct space makes the caller a guest of it.
+- Workspace-only features answer `VALIDATION` ("not available in the direct space") in the
+  direct space instead of an empty result, for reads and writes alike: custom emojis, workspace
+  plugins and plugin bundles (`POST /api/plugin-bundles/{server_id}` answers 400), keybinds
+  scoped to a workspace, pipelines, workspace state and channels. The caller's own keybinds,
+  asked without a workspace id, still answer.
 
 ### Fixed
 

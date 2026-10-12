@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use rim_core::custom_emoji::model::{CustomEmojiId, NewCustomEmoji};
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
+use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::custom_emoji::command::{
     CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
@@ -28,6 +29,8 @@ pub struct CustomEmojiRepos {
 pub struct DefaultCustomEmojiService {
     repos: CustomEmojiRepos,
     storage_service: Arc<dyn StorageService>,
+    /// The relay's direct space, which has no custom emojis.
+    direct_space_id: Option<ServerId>,
 }
 
 impl DefaultCustomEmojiService {
@@ -35,7 +38,18 @@ impl DefaultCustomEmojiService {
         Self {
             repos,
             storage_service,
+            direct_space_id: None,
         }
+    }
+
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
+    }
+
+    fn ensure_workspace_features(&self, server_id: ServerId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)
     }
 }
 
@@ -57,6 +71,7 @@ fn validate_emoji_name(name: &str) -> ServiceResult<()> {
 #[async_trait]
 impl CustomEmojiService for DefaultCustomEmojiService {
     async fn create(&self, cmd: CreateCustomEmojiCmd) -> ServiceResult<CustomEmojiDto> {
+        self.ensure_workspace_features(cmd.server_id)?;
         // Validate actor is a server member
         self.repos
             .server_member_repo
@@ -114,6 +129,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
             .find_by_id(cmd.emoji_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
+        self.ensure_workspace_features(emoji.server_id)?;
 
         // Check that actor is a member of the server
         let member = self
@@ -139,6 +155,7 @@ impl CustomEmojiService for DefaultCustomEmojiService {
     }
 
     async fn list(&self, query: ListCustomEmojisQuery) -> ServiceResult<Vec<CustomEmojiDto>> {
+        self.ensure_workspace_features(query.server_id)?;
         crate::util::ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             query.server_id,

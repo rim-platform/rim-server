@@ -165,15 +165,14 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&audit_log_repo),
                 Arc::clone(&capability_service),
             ));
-        let mut conversation_concrete = crate::conversation::DefaultConversationService::new(
-            repos.for_conversation(),
-            observers.clone(),
-        )
-        .with_e2ee_repo(Arc::clone(&repos.e2ee_repo));
-        if let Some(direct_space_id) = federation.direct_space_id {
-            conversation_concrete = conversation_concrete.with_direct_space(direct_space_id);
-        }
-        let conversation_service: Arc<dyn ConversationService> = Arc::new(conversation_concrete);
+        let conversation_service: Arc<dyn ConversationService> = Arc::new(
+            crate::conversation::DefaultConversationService::new(
+                repos.for_conversation(),
+                observers.clone(),
+            )
+            .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
+            .with_direct_space(federation.direct_space_id),
+        );
         let notification_service: Arc<dyn NotificationService> =
             Arc::new(crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
@@ -283,11 +282,13 @@ impl DefaultAppServiceProvider {
             Arc::new(crate::thread::DefaultThreadService::new(repos.for_thread()));
         let user_service: Arc<dyn UserService> =
             Arc::new(crate::user::DefaultUserService::new(repos.for_user()));
-        let workspace_state_service: Arc<dyn WorkspaceStateService> =
-            Arc::new(crate::workspace_state::DefaultWorkspaceStateService::new(
+        let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
+            crate::workspace_state::DefaultWorkspaceStateService::new(
                 repos.for_workspace_state(),
                 ws_state_broadcaster,
-            ));
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
         // Shared confirmation store — same instance used by command_service and
         // macro_service so that a proof issued by command_service can be verified
         // by macro_service (and vice versa, once macro-level challenge issuance lands).
@@ -322,13 +323,15 @@ impl DefaultAppServiceProvider {
         let command_service_concrete = Arc::new(command_service_concrete);
         let command_service: Arc<dyn CommandService> =
             Arc::clone(&command_service_concrete) as Arc<dyn CommandService>;
-        let keybind_service: Arc<dyn KeybindService> =
-            Arc::new(crate::keybind::DefaultKeybindService::new(
+        let keybind_service: Arc<dyn KeybindService> = Arc::new(
+            crate::keybind::DefaultKeybindService::new(
                 repos.for_keybind(),
                 crate::keybind::KeybindServices {
                     command_service: Arc::clone(&command_service),
                 },
-            ));
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
@@ -336,11 +339,13 @@ impl DefaultAppServiceProvider {
             crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview())
                 .with_feature_gate(Arc::clone(&feature_gate)),
         );
-        let custom_emoji_service: Arc<dyn CustomEmojiService> =
-            Arc::new(crate::custom_emoji::DefaultCustomEmojiService::new(
+        let custom_emoji_service: Arc<dyn CustomEmojiService> = Arc::new(
+            crate::custom_emoji::DefaultCustomEmojiService::new(
                 repos.for_custom_emoji(),
                 Arc::clone(&storage_service),
-            ));
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
         let macro_service: Arc<dyn MacroService> =
             Arc::new(crate::macro_def::DefaultMacroService::new(
                 repos.for_macro(),
@@ -362,12 +367,14 @@ impl DefaultAppServiceProvider {
             crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),
         );
 
-        let pipeline_service: Arc<dyn PipelineService> =
-            Arc::new(crate::pipeline::DefaultPipelineService::new(
+        let pipeline_service: Arc<dyn PipelineService> = Arc::new(
+            crate::pipeline::DefaultPipelineService::new(
                 repos.for_pipeline(),
                 Arc::clone(&command_service),
                 pipeline_broadcaster_clone,
-            ));
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
 
         let device_link_service: Arc<dyn DeviceLinkService> =
             Arc::new(crate::device_link::DefaultDeviceLinkService::new(
@@ -375,17 +382,21 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
             ));
 
-        let workspace_plugin_service: Arc<dyn WorkspacePluginService> =
-            Arc::new(crate::workspace_plugin::DefaultWorkspacePluginService::new(
+        let workspace_plugin_service: Arc<dyn WorkspacePluginService> = Arc::new(
+            crate::workspace_plugin::DefaultWorkspacePluginService::new(
                 repos.for_workspace_plugin(),
                 Some(db.clone()),
                 workspace_plugin_observers,
-            ));
-        let plugin_bundle_service: Arc<dyn PluginBundleService> =
-            Arc::new(crate::plugin_bundle::DefaultPluginBundleService::new(
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
+        let plugin_bundle_service: Arc<dyn PluginBundleService> = Arc::new(
+            crate::plugin_bundle::DefaultPluginBundleService::new(
                 repos.for_plugin_bundle(),
                 Arc::clone(&storage_service),
-            ));
+            )
+            .with_direct_space(federation.direct_space_id),
+        );
 
         Self {
             audit_log_service,

@@ -69,6 +69,8 @@ pub struct DefaultWorkspacePluginService {
     observers: Observers,
     /// Adds, updates and removals per user.
     change_rate_limiter: RegistrationRateLimiter,
+    /// The relay's direct space, which has no plugins.
+    direct_space_id: Option<ServerId>,
 }
 
 /// A statement that verified, and the publisher key log the entry keeps with it.
@@ -217,7 +219,14 @@ impl DefaultWorkspacePluginService {
             db,
             observers,
             change_rate_limiter: RegistrationRateLimiter::new(3600, 60),
+            direct_space_id: None,
         }
+    }
+
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     /// Replace the limiter of adds, updates and removals per user.
@@ -269,8 +278,10 @@ impl DefaultWorkspacePluginService {
         }
     }
 
-    /// `PermissionDenied` unless the user is a member of the workspace, of any role.
+    /// `Validation` in the direct space, else `PermissionDenied` unless the user is a member of
+    /// the workspace, of any role.
     async fn require_member(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
         crate::util::ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             server_id,
@@ -279,8 +290,10 @@ impl DefaultWorkspacePluginService {
         .await
     }
 
-    /// `PermissionDenied` unless the user is an Owner or Moderator of the workspace.
+    /// `Validation` in the direct space, else `PermissionDenied` unless the user is an Owner or
+    /// Moderator of the workspace.
     async fn require_manager(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
         let member = self
             .repos
             .server_member_repo

@@ -31,7 +31,7 @@ use crate::util::{
     ConversationAccessRepos, ensure_conversation_access_as, ensure_conversation_in_server,
     ensure_conversation_member_access, ensure_conversation_writable, ensure_not_archived,
     ensure_not_timed_out, ensure_server_member, ensure_server_owner_or_moderator,
-    ensure_workspace_writable, member_standing,
+    ensure_workspace_features, ensure_workspace_writable, member_standing,
 };
 
 /// The refusal of a member who cannot read an encrypted conversation.
@@ -64,8 +64,12 @@ impl DefaultConversationService {
         }
     }
 
-    pub fn with_direct_space(mut self, direct_space_id: rim_core::server::model::ServerId) -> Self {
-        self.direct_space_id = Some(direct_space_id);
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(
+        mut self,
+        direct_space_id: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.direct_space_id = direct_space_id;
         self
     }
 
@@ -322,13 +326,11 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
+        if cmd.participants == ConversationParticipants::Channel {
+            ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
+        }
         let direct = self.is_direct_space(cmd.server_id);
         if direct {
-            if cmd.participants == ConversationParticipants::Channel {
-                return Err(ServiceError::Validation(
-                    "the direct space has no channels".to_string(),
-                ));
-            }
             let mut joining = vec![cmd.actor.user_id];
             match &cmd.participants {
                 ConversationParticipants::DirectMessage { other_user_id } => {
@@ -603,6 +605,7 @@ impl ConversationService for DefaultConversationService {
         &self,
         query: ListChannelsQuery,
     ) -> ServiceResult<Page<ConversationDto, ChannelPageCursor>> {
+        ensure_workspace_features(self.direct_space_id, query.server_id)?;
         let standing = member_standing(
             self.repos.server_member_repo.as_ref(),
             query.server_id,
@@ -823,6 +826,7 @@ impl ConversationService for DefaultConversationService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
     )]
     async fn join_channel(&self, cmd: JoinChannelCmd) -> ServiceResult<ConversationDto> {
+        ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
         // Guests cannot join; a timed-out member cannot either. A private channel
         // the actor is not in is NotFound here, so it cannot be joined.
         let conversation = self

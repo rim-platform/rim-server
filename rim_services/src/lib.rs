@@ -172,6 +172,9 @@ pub enum ServiceError {
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
+/// The message of the `Validation` error a workspace-only feature answers in the direct space.
+pub const NOT_IN_DIRECT_SPACE: &str = "not available in the direct space";
+
 /// The message of [`ServiceError::UpstreamUnavailable`].
 pub fn upstream_message(host_server_id: Option<&str>, origin: Option<&str>) -> String {
     match (host_server_id, origin) {
@@ -197,6 +200,11 @@ impl ServiceError {
             host_server_id: None,
             origin: Some(origin.to_string()),
         }
+    }
+
+    /// [`ServiceError::Validation`] for a workspace-only feature asked of the direct space.
+    pub fn not_in_direct_space() -> Self {
+        Self::Validation(NOT_IN_DIRECT_SPACE.to_string())
     }
 
     pub fn internal<E>(err: E) -> Self
