@@ -54,7 +54,7 @@ git clone --mirror . ../rim-server-backup-$(date +%Y%m%d).git
 git filter-repo --path .env --invert-paths --force
 
 # 3. filter-repo drops the 'origin' remote by design — re-add it
-git remote add origin git@github.com:dvorakj31/rim-server.git
+git remote add origin git@github.com:rim-platform/rim-server.git
 
 # 4. Force-push the rewritten history for every branch + tags
 git push origin --force --all

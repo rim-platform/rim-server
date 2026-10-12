@@ -19,6 +19,8 @@ How the programmable layer works, independent of the transport:
 
 ## Server contracts
 
+- `api.md`: talking to a server over HTTP: the routes, sessions and CSRF, origins, error codes
+  and version negotiation, for client authors.
 - `messaging.md`: conversations, channels, roles and moderation, notification rules, threads.
 - `pagination.md`: the cursor pagination contract.
 - `message-change-feed.md`: the change feed client caches sync from.
