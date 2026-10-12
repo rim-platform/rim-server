@@ -38,6 +38,9 @@ entity = { path = "../entity" }
 rim_server = { path = "../rim_server" }
 rim_s2s = { path = "../rim_s2s", features = ["testing"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+# A WebSocket client for the transport tests; the versions actix-web builds on.
+actix-codec = "0.5.2"
+actix-http = "3.11.2"
 tempfile = "3"
 async-trait = "0.1.89"
 anyhow = "1.0.99"
@@ -46,4 +49,3 @@ hmac = "0.12.1"
 openmls = "=0.9.1"
 openmls_rust_crypto = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 openmls_traits = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
