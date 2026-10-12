@@ -230,4 +230,62 @@ mod tests {
             );
         }
     }
+    /// A user service reserving `rim` over one account named `username`.
+    fn reserving_svc(id: UserId, username: &'static str) -> DefaultUserService {
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(User {
+                username: username.to_string(),
+                ..user(id)
+            }))
+        });
+        user_repo
+            .expect_update_profile()
+            .returning(move |_, patch: UpdateProfilePatch| {
+                Ok(User {
+                    display_name: patch.display_name.flatten(),
+                    ..user(id)
+                })
+            });
+        DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        })
+        .with_reserved_names(crate::reserved_names::ReservedNames::parse("rim").unwrap())
+    }
+
+    fn rename(id: UserId, display_name: &str) -> UpdateMyProfileCmd {
+        UpdateMyProfileCmd {
+            actor: Actor::new(id),
+            display_name: Some(display_name.to_string()),
+            avatar_url: None,
+            status_text: None,
+            bio: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn update_profile_refuses_a_reserved_display_name_but_its_holders_keep_theirs() {
+        let id = UserId::new();
+        let svc = reserving_svc(id, "carol");
+        for name in ["Rim", "rim.official", "ｒｉｍ team"] {
+            let err = svc.update_my_profile(rename(id, name)).await.unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == crate::reserved_names::RESERVED_NAME_REFUSAL),
+                "{name}: {err:?}"
+            );
+        }
+        let dto = svc
+            .update_my_profile(rename(id, "Rimmer"))
+            .await
+            .expect("not reserved");
+        assert_eq!(dto.display_name.as_deref(), Some("Rimmer"));
+
+        // An account whose own username is reserved belongs to the maintainers.
+        let svc = reserving_svc(id, "rim-ops");
+        let dto = svc
+            .update_my_profile(rename(id, "RIM Team"))
+            .await
+            .expect("a maintainer's name");
+        assert_eq!(dto.display_name.as_deref(), Some("RIM Team"));
+    }
 }

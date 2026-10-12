@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use rim_core::user::model::UpdateProfilePatch;
+use rim_core::user::model::{UpdateProfilePatch, UserId};
 use rim_services::limits::InstanceLimits;
 use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
@@ -9,6 +9,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::UserRepos;
 use crate::clock::Clock;
+use crate::reserved_names::ReservedNames;
 
 /// Strip control characters (except newline/tab in bio) from a string.
 fn strip_control_chars(s: &str) -> String {
@@ -28,6 +29,8 @@ pub struct DefaultUserService {
     /// The probation of new accounts.
     limits: InstanceLimits,
     clock: Clock,
+    /// Display names a profile edit may not take.
+    reserved_names: ReservedNames,
 }
 
 impl DefaultUserService {
@@ -36,6 +39,7 @@ impl DefaultUserService {
             repos,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
+            reserved_names: ReservedNames::default(),
         }
     }
 
@@ -48,6 +52,29 @@ impl DefaultUserService {
     pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    pub fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
+        self.reserved_names = reserved_names;
+        self
+    }
+
+    /// Refuse a reserved display name, unless the account's own username is reserved: such an
+    /// account belongs to the instance's maintainers, who hold the names.
+    async fn check_display_name(&self, user_id: UserId, display_name: &str) -> ServiceResult<()> {
+        if !self.reserved_names.is_reserved(display_name) {
+            return Ok(());
+        }
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if self.reserved_names.is_reserved(&user.username) {
+            return Ok(());
+        }
+        self.reserved_names.check(display_name)
     }
 
     fn convert_to_dto(user: rim_core::user::model::User) -> UserDto {
@@ -120,6 +147,9 @@ impl UserService for DefaultUserService {
             return Err(ServiceError::Validation(
                 "display_name must be at most 64 characters".to_string(),
             ));
+        }
+        if let Some(Some(ref dn)) = display_name {
+            self.check_display_name(cmd.actor.user_id, dn).await?;
         }
 
         // Sanitize and validate status_text.

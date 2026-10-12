@@ -1447,6 +1447,66 @@ mod tests {
         );
     }
 
+    /// Every password signup refuses a reserved username or display name before it touches
+    /// a repository.
+    #[tokio::test]
+    async fn password_signups_refuse_reserved_names() {
+        use crate::reserved_names::{RESERVED_NAME_REFUSAL, ReservedNames};
+
+        let (ur, sr, smr, sess_r, ir, cr) = repos();
+        let svc = svc_with_registration(
+            ur,
+            sr,
+            smr,
+            sess_r,
+            ir,
+            cr,
+            MockInstanceInviteRepository::new(),
+        )
+        .with_reserved_names(ReservedNames::parse("rim,admin").unwrap());
+        let open = |username: &str, display_name: Option<&str>| SignupOpenCmd {
+            username: username.to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            remote_ip: "1.2.3.4".to_string(),
+            email: "carol@example.com".to_string(),
+            display_name: display_name.map(str::to_string),
+            terms_accepted_url: None,
+        };
+        let refusals = [
+            svc.signup_open(open("rim-team", None)).await,
+            svc.signup_open(open("carol", Some("ＡＤＭＩＮ"))).await,
+        ];
+        let invited = svc
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: Some("Rim Support".to_string()),
+                terms_accepted_url: None,
+            })
+            .await;
+        let accepted = svc
+            .accept_invite(AcceptInviteCmd {
+                invite_token: "token".to_string(),
+                username: "admin_2".to_string(),
+                password: "password123".to_string(),
+                terms_accepted_url: None,
+            })
+            .await
+            .map(|_| ());
+        for res in refusals
+            .into_iter()
+            .map(|r| r.map(|_| ()))
+            .chain([invited.map(|_| ()), accepted])
+        {
+            assert!(
+                matches!(&res, Err(ServiceError::Validation(m)) if m == RESERVED_NAME_REFUSAL),
+                "{res:?}"
+            );
+        }
+    }
+
     /// `previewInviteToken` for a valid workspace invite returns `WORKSPACE` type
     /// with server name and inviter display name, and no owner name for a workspace without an
     /// owner; underlying row is NOT mutated.

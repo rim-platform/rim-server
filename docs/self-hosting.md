@@ -320,6 +320,9 @@ on the account when it did and which URL it accepted. Both are commented out in
 `deploy/.env.example` and reach the `rim` service when set; clients read them from
 `serverInfo`. A notice over 500 characters or a terms URL that is not an absolute http(s) URL
 stops the server at boot. Changing the terms URL does not ask existing accounts to accept again.
+`RIM_RESERVED_NAMES` (commented out in `deploy/.env.example`) lists usernames and display names
+that signups and profile edits refuse, ignoring case, so nobody can pose as your maintainers;
+set it once their accounts exist, since it refuses those names to new signups too.
 
 ## Deleted accounts
 

@@ -87,6 +87,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   lifts the email block; sessions and invites stay ended. The new `principal show
   <principal-id>` prints the account, its inviter, its invite tree, its invites, its open
   reports and its block.
+- `RIM_RESERVED_NAMES`: comma-separated usernames and display names that `signupWithInvite`,
+  `signupWithKey` and `updateMyProfile` refuse with `VALIDATION` "this name is reserved",
+  compared after trimming, Unicode NFKC normalisation and lowercasing, and also followed by
+  `-`, `_`, `.` or a space (`rim` reserves `rim-admin`, not `rimmer`). An account whose own
+  username is reserved may still take a reserved display name. An empty entry stops the server
+  at boot.
 
 ### Changed
 

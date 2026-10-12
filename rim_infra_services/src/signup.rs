@@ -25,6 +25,7 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::registration_rate_limiter::RegistrationRateLimiter;
+use crate::reserved_names::ReservedNames;
 use crate::util::{add_workspace_member, ensure_not_banned};
 
 /// The repositories a registration token is checked and claimed with. Inside a transaction,
@@ -128,6 +129,19 @@ pub(crate) fn normalize_display_name(input: Option<&str>, username: &str) -> Ser
             Ok(trimmed.to_string())
         }
     }
+}
+
+/// Refuse a signup whose username or resolved display name is reserved on this instance.
+///
+/// # Errors
+/// `Validation` ("this name is reserved").
+pub(crate) fn check_reserved(
+    reserved: &ReservedNames,
+    username: &str,
+    display_name: &str,
+) -> ServiceResult<()> {
+    reserved.check(username)?;
+    reserved.check(display_name)
 }
 
 /// Count an open-mode signup against the caller's IP; `RateLimited` once over the

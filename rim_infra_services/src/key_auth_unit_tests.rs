@@ -2006,6 +2006,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn signup_with_key_refuses_a_reserved_username_or_display_name() {
+        use crate::reserved_names::{RESERVED_NAME_REFUSAL, ReservedNames};
+
+        let mut h = harness();
+        h.svc = h
+            .svc
+            .with_reserved_names(ReservedNames::parse("rim").unwrap());
+        let p = h.present(1).await;
+        for cmd in [
+            open_cmd(&p, "rim-admin"),
+            SignupWithKeyCmd {
+                display_name: Some("RIM Team".to_string()),
+                ..open_cmd(&p, "ada")
+            },
+        ] {
+            let err = h.svc.signup_with_key(cmd).await.unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == RESERVED_NAME_REFUSAL),
+                "{err:?}"
+            );
+        }
+        assert_eq!(h.user_count(), 0);
+        h.svc
+            .signup_with_key(open_cmd(&p, "rimmer"))
+            .await
+            .expect("a name that only starts with the letters");
+    }
+
+    #[tokio::test]
     async fn signup_with_key_records_the_accepted_terms_only_when_given() {
         let h = harness();
         let terms = "https://rim.example.org/terms";

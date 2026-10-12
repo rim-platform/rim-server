@@ -68,6 +68,8 @@ pub mod relay;
 pub mod remote_workspace;
 pub(crate) mod repos;
 pub(crate) mod request_auth;
+/// Public for `rim_server`, whose configuration parses `RIM_RESERVED_NAMES` into it.
+pub mod reserved_names;
 pub mod s2s;
 /// Public for `rim_server`, whose composition root runs the stale-attachment cleanup and the
 /// workspace-state expiry purge.

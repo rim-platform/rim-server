@@ -879,3 +879,43 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
         assert!(shown.contains(needle), "{needle:?} in {shown}");
     }
 }
+
+/// With `RIM_RESERVED_NAMES=rim`, a signup as `rim-admin` and a profile edit to "RIM Team" are
+/// refused.
+#[tokio::test]
+async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_err};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema_reserving("rim");
+    seed_operator_invite(
+        &ctx.db,
+        "rim_iinv_reserved",
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    let refused = (
+        "VALIDATION".to_string(),
+        "this name is reserved".to_string(),
+    );
+
+    let signup = anonymous_request(
+        SIGNUP_WITH_INVITE,
+        json!({ "input": {
+            "username": "rim-admin",
+            "email": "rim-admin@test.example.com",
+            "password": PASSWORD,
+            "instanceInviteToken": "rim_iinv_reserved",
+        } }),
+    );
+    assert_eq!(exec_err(&schema, signup).await, refused);
+
+    let carol = ctx.create_user("carol").await;
+    let caller = ctx.caller(&carol).await;
+    let edit = caller.request(
+        "mutation($input: UpdateMyProfileInput!) { updateMyProfile(input: $input) { id } }",
+        json!({ "input": { "displayName": "RIM Team" } }),
+    );
+    assert_eq!(exec_err(&schema, edit).await, refused);
+}
