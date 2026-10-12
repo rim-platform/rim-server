@@ -327,9 +327,9 @@ reaches its showcase in Stage 1 before any decentralization work starts.
 |---|---|---|---|---|
 | 1. Plugins run | 2.1, 2.2, 4.1, 4.2 with 7.0; palette and keybind part of 2.5 | L | Install the k8s pods panel, see pods next to chat, restart one with a keybind or by asking the agent, behind a confirmation | Shipped |
 | 2. Your history is yours | 7.1 | L | Instant start, offline reading, and full history on a fresh install from the drive alone | Shipped |
-| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app | Shipped 2026-10-09 (`docs/plans/stage-3-remaining-2026-10-09.md`) |
-| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs | Shipped 2026-10-09 (`docs/plans/stage-4-2026-10-09.md`) |
-| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss | Shipped 2026-10-10 (`docs/plans/stage-5-2026-10-09.md`) |
+| 3. You are a key | 7.2 (absorbs 6.1), 2.3, 2.4 | L | No password for new accounts, a device list with revoke, and plugins that work in the web app | Shipped 2026-10-09 |
+| 4. Private DMs and groups | 7.3 | XL | A server operator with full database access cannot read their DMs | Shipped 2026-10-09 |
+| 5. No central server | 7.4a, 7.4b, 7.4c | XL | A DM with someone on another server, a workspace shared across servers, and the freedom to switch relay with no data loss | Shipped 2026-10-10 |
 
 **Stage 1 in more detail.** Plugin commands execute from the palette, keybinds and the agent.
 Protocol v1 is frozen with the identity shape from 7.0. A TypeScript SDK, a template and a
