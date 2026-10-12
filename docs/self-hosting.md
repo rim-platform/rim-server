@@ -310,6 +310,7 @@ not hold back anyone older than the setting.
 Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface
 can be switched off with `RIM_FEATURES_DISABLED` (commented out in the `rim` service);
 `docs/operations/features.md` lists what each one covers and what clients see.
+`RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once.
 
 ## Notice and terms
 

@@ -328,6 +328,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .account_deletion_grace_days()
         .map_err(std::io::Error::other)?;
     let reserved_names = config.reserved_names().map_err(std::io::Error::other)?;
+    let link_preview_concurrency = config
+        .link_preview_concurrency()
+        .map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -458,7 +461,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     .with_account_deletion(
         chrono::Duration::days(i64::from(account_deletion_grace_days)),
         Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn WorkspaceRelayService>),
-    );
+    )
+    .with_link_preview_concurrency(link_preview_concurrency);
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(service_provider);
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 

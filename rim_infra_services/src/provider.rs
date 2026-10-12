@@ -75,7 +75,7 @@ pub struct DefaultAppServiceProvider {
     custom_emoji_service: Arc<dyn CustomEmojiService>,
     key_auth_service: Arc<dyn KeyAuthService>,
     keybind_service: Arc<dyn KeybindService>,
-    link_preview_service: Arc<dyn LinkPreviewService>,
+    link_preview: crate::link_preview::DefaultLinkPreviewService,
     macro_service: Arc<dyn MacroService>,
     mention_service: Arc<dyn MentionService>,
     message_service: Arc<dyn MessageService>,
@@ -370,10 +370,9 @@ impl DefaultAppServiceProvider {
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
-        let link_preview_service: Arc<dyn LinkPreviewService> = Arc::new(
+        let link_preview =
             crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview())
-                .with_feature_gate(Arc::clone(&feature_gate)),
-        );
+                .with_feature_gate(Arc::clone(&feature_gate));
         let custom_emoji_service: Arc<dyn CustomEmojiService> = Arc::new(
             crate::custom_emoji::DefaultCustomEmojiService::new(
                 repos.for_custom_emoji(),
@@ -446,7 +445,7 @@ impl DefaultAppServiceProvider {
             custom_emoji_service,
             key_auth_service,
             keybind_service,
-            link_preview_service,
+            link_preview,
             macro_service,
             mention_service,
             message_service,
@@ -490,6 +489,12 @@ impl DefaultAppServiceProvider {
         self.account_deletion = account_deletion;
         self
     }
+
+    /// Set how many link preview fetches the process runs at once.
+    pub fn with_link_preview_concurrency(mut self, fetches: usize) -> Self {
+        self.link_preview = self.link_preview.with_concurrency(fetches);
+        self
+    }
 }
 
 impl AppServiceProvider for DefaultAppServiceProvider {
@@ -515,7 +520,7 @@ impl AppServiceProvider for DefaultAppServiceProvider {
         Arc::clone(&self.custom_emoji_service)
     }
     fn link_preview_service(&self) -> Arc<dyn LinkPreviewService> {
-        Arc::clone(&self.link_preview_service)
+        Arc::new(self.link_preview.clone())
     }
     fn key_auth_service(&self) -> Arc<dyn KeyAuthService> {
         Arc::clone(&self.key_auth_service)

@@ -4,15 +4,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 
 use rim_core::link_preview::model::NewLinkPreview;
 use rim_core::link_preview::repository::LinkPreviewRepository;
 use rim_core::message::model::MessageId;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::feature::service::FeatureGate;
+use rim_services::link_preview::DEFAULT_FETCH_CONCURRENCY;
 use rim_services::link_preview::dto::LinkPreviewDto;
 use rim_services::link_preview::service::LinkPreviewService;
 use rim_services::{ServiceError, ServiceResult};
+
+use crate::outbound::{BodyError, read_capped};
 
 /// Maximum number of link previews per message.
 const MAX_PREVIEWS_PER_MESSAGE: usize = 5;
@@ -23,6 +27,7 @@ const MAX_BODY_SIZE: usize = 1_048_576;
 /// HTTP request timeout per URL.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub struct DefaultLinkPreviewService {
     link_preview_repo: Arc<dyn LinkPreviewRepository>,
     /// `None` only if the hardened client failed to build; every fetch is then refused rather
@@ -31,6 +36,10 @@ pub struct DefaultLinkPreviewService {
     /// `None` keeps previews on; otherwise nothing is fetched or served while
     /// [`ServerFeature::LinkPreviews`] is not enabled.
     features: Option<Arc<dyn FeatureGate>>,
+    /// Fetches in flight in this process, shared by every clone of the service.
+    fetch_slots: Arc<Semaphore>,
+    /// How long a fetch waits for a slot before it is dropped.
+    slot_wait: Duration,
 }
 
 impl DefaultLinkPreviewService {
@@ -65,7 +74,16 @@ impl DefaultLinkPreviewService {
             link_preview_repo,
             http_client,
             features: None,
+            fetch_slots: Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY)),
+            slot_wait: FETCH_TIMEOUT,
         }
+    }
+
+    /// Run at most `fetches` preview fetches at once (at least one); a fetch that finds every
+    /// slot busy for longer than the fetch timeout is dropped.
+    pub fn with_concurrency(mut self, fetches: usize) -> Self {
+        self.fetch_slots = Arc::new(Semaphore::new(fetches.max(1)));
+        self
     }
 
     /// Fetch and serve previews only while the instance has link previews enabled.
@@ -258,6 +276,8 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         for url in urls_to_fetch {
             let og = match self.fetch_og_data(url).await {
                 Ok(og) => og,
+                // Dropped for want of a fetch slot, and logged there.
+                Err(ServiceError::Unavailable) => continue,
                 Err(e) => {
                     tracing::warn!(url = %url, error = %e, "failed to fetch link preview");
                     continue;
@@ -314,24 +334,24 @@ impl DefaultLinkPreviewService {
                 "link-preview HTTP client unavailable"
             )));
         };
+        let Ok(Ok(_slot)) = tokio::time::timeout(self.slot_wait, self.fetch_slots.acquire()).await
+        else {
+            tracing::warn!(url = %url, "link preview dropped: every fetch slot stayed busy");
+            return Err(ServiceError::Unavailable);
+        };
         let response = http_client
             .get(url)
             .send()
             .await
             .map_err(ServiceError::internal)?;
-
-        // Check content length before downloading
-        if let Some(len) = response.content_length()
-            && len > MAX_BODY_SIZE as u64
-        {
-            return Err(ServiceError::Validation("response body too large".into()));
-        }
-
-        let bytes = response.bytes().await.map_err(ServiceError::internal)?;
-
-        if bytes.len() > MAX_BODY_SIZE {
-            return Err(ServiceError::Validation("response body too large".into()));
-        }
+        let bytes = read_capped(response, MAX_BODY_SIZE)
+            .await
+            .map_err(|e| match e {
+                BodyError::TooLarge(_) => {
+                    ServiceError::Validation("response body too large".into())
+                }
+                BodyError::Transport(why) => ServiceError::internal(anyhow::anyhow!(why)),
+            })?;
 
         let html = String::from_utf8_lossy(&bytes);
         Ok(parse_og_tags(&html))
@@ -340,6 +360,8 @@ impl DefaultLinkPreviewService {
 
 #[cfg(test)]
 mod tests {
+    use crate::outbound::fixture::{serve, sized_head};
+
     use super::*;
 
     #[test]
@@ -633,5 +655,76 @@ mod tests {
             .await
             .expect("serve");
         assert_eq!(served[&message_id][0].url, "https://example.com/");
+    }
+
+    /// A service whose fetches share `slots` slots and wait at most `wait` for one.
+    fn limited_service(slots: usize, wait: Duration) -> DefaultLinkPreviewService {
+        use rim_core::link_preview::repository::MockLinkPreviewRepository;
+
+        let mut svc = DefaultLinkPreviewService::new(Arc::new(MockLinkPreviewRepository::new()))
+            .with_concurrency(slots);
+        svc.slot_wait = wait;
+        svc
+    }
+
+    const PAGE: &str = r#"<html><head><meta property="og:title" content="Slow"></head></html>"#;
+
+    /// 2 MiB of chunks with no terminating chunk: the fetch stops at the 1 MiB cap while the
+    /// connection is still open, before the fetch timeout.
+    #[tokio::test]
+    async fn a_chunked_body_over_the_cap_fails_before_eof() {
+        let mut body = Vec::new();
+        for _ in 0..32 {
+            body.extend_from_slice(format!("{:x}\r\n", 64 * 1024).as_bytes());
+            body.extend(std::iter::repeat_n(b'a', 64 * 1024));
+            body.extend_from_slice(b"\r\n");
+        }
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let linger = Duration::from_secs(30);
+        let server = serve(head.to_string(), body, Duration::ZERO, linger).await;
+        let svc = limited_service(1, FETCH_TIMEOUT);
+
+        let started = std::time::Instant::now();
+        let result = svc.fetch_og_data(&format!("http://{}/", server.addr)).await;
+        assert!(
+            matches!(&result, Err(ServiceError::Validation(why)) if why.contains("too large")),
+            "{:?}",
+            result.err()
+        );
+        assert!(started.elapsed() < FETCH_TIMEOUT);
+    }
+
+    /// With one slot, the second fetch connects only once the first has finished.
+    #[tokio::test]
+    async fn a_second_fetch_waits_for_the_only_slot() {
+        let delay = Duration::from_millis(500);
+        let server = serve(sized_head(PAGE.len()), PAGE.into(), delay, Duration::ZERO).await;
+        let svc = limited_service(1, FETCH_TIMEOUT);
+        let url = format!("http://{}/", server.addr);
+
+        let (first, second) = tokio::join!(svc.fetch_og_data(&url), svc.fetch_og_data(&url));
+        assert_eq!(first.expect("first").title.as_deref(), Some("Slow"));
+        assert_eq!(second.expect("second").title.as_deref(), Some("Slow"));
+        let accepted = server.accepted();
+        assert_eq!(accepted.len(), 2);
+        assert!(accepted[1] - accepted[0] >= delay);
+    }
+
+    /// With one slot held past the wait, the second fetch is dropped without connecting.
+    #[tokio::test]
+    async fn a_fetch_waiting_past_the_limit_is_dropped() {
+        let delay = Duration::from_secs(2);
+        let server = serve(sized_head(PAGE.len()), PAGE.into(), delay, Duration::ZERO).await;
+        let svc = limited_service(1, Duration::from_millis(200));
+        let url = format!("http://{}/", server.addr);
+
+        let (first, second) = tokio::join!(svc.fetch_og_data(&url), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            svc.fetch_og_data(&url).await
+        });
+        assert!(first.is_ok());
+        assert!(matches!(second, Err(ServiceError::Unavailable)));
+        assert_eq!(server.accepted().len(), 1);
     }
 }

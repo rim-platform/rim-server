@@ -8,6 +8,8 @@ use std::time::Duration;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use url::Url;
 
+use crate::outbound::{BodyError, read_capped};
+
 /// Why an origin or an address was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NetError {
@@ -131,29 +133,12 @@ pub fn http_client(allow_private: bool, timeout: Duration) -> Result<reqwest::Cl
         .map_err(|e| NetError::Transport(e.to_string()))
 }
 
-/// Read a response body, failing once it exceeds `max` bytes.
-pub async fn read_limited(
-    mut response: reqwest::Response,
-    max: usize,
-) -> Result<Vec<u8>, NetError> {
-    if response
-        .content_length()
-        .is_some_and(|len| len > max as u64)
-    {
-        return Err(NetError::TooLarge(max));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| NetError::Transport(e.to_string()))?
-    {
-        if body.len() + chunk.len() > max {
-            return Err(NetError::TooLarge(max));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+/// Read a response body, failing once it would pass `max` bytes.
+pub async fn read_limited(response: reqwest::Response, max: usize) -> Result<Vec<u8>, NetError> {
+    read_capped(response, max).await.map_err(|e| match e {
+        BodyError::TooLarge(max) => NetError::TooLarge(max),
+        BodyError::Transport(why) => NetError::Transport(why),
+    })
 }
 
 #[cfg(test)]

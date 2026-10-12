@@ -69,6 +69,21 @@ With `email` disabled, `requestPasswordReset` answers `FEATURE_DISABLED`, invite
 sent (the invite link is still returned to whoever created it), and the notification digest job
 does not run.
 
+## Link preview limits
+
+While `link_previews` is on, the server fetches each page under these limits:
+
+| Limit | Value |
+|---|---|
+| Links previewed per message | 5 |
+| Time per fetch, redirects and body included | 5 seconds |
+| Redirects followed | 5 |
+| Body read | 1 MiB; a longer body is cut off there and the link gets no preview |
+| Fetches at once, per process | `RIM_LINK_PREVIEW_CONCURRENCY`, 1 to 64, default 8 |
+
+A fetch that finds every slot busy for five seconds is dropped with a log line and its link gets
+no preview.
+
 ## What clients see
 
 - **`serverInfo.features`**, readable without a session: one entry per feature, in a fixed

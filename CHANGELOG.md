@@ -140,5 +140,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   error, "only subscriptions over the WebSocket", and runs nothing. Before, a mutation sent
   there ran without the CSRF check, the mutation budget or the refusal of account mutations
   for people from another server. Clients send queries and mutations to `POST /api`.
+- Link previews stop reading a page at 1 MiB as it arrives, where a page sent without a length
+  used to be read whole before the cap applied. At most `RIM_LINK_PREVIEW_CONCURRENCY` fetches
+  (default 8, 1 to 64) run at once; a fetch that waits five seconds for a slot is dropped.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
