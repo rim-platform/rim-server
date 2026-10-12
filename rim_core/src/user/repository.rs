@@ -8,6 +8,8 @@ use mockall::automock;
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
 pub trait UserRepository: Send + Sync {
+    /// The user with `id`, a purged account's tombstone included, so what it left behind still
+    /// names its author.
     async fn get_by_id(&self, id: UserId) -> RepoResult<Option<User>>;
 
     async fn get_by_ids(&self, ids: &[UserId]) -> RepoResult<Vec<User>>;
@@ -21,6 +23,7 @@ pub trait UserRepository: Send + Sync {
     /// a password nor a principal id is refused by the database (an `Internal` error: no caller
     /// builds one on purpose).
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User>;
+    /// The account signing in or named by `username`; a purged account is nobody.
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>>;
 
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;
@@ -31,7 +34,7 @@ pub trait UserRepository: Send + Sync {
     ///
     /// The lookup uses `LOWER(email) = LOWER($1)` so that `"Foo@Bar.COM"` and
     /// `"foo@bar.com"` resolve to the same row. Returns `None` when no row
-    /// matches.
+    /// matches, or only a purged account's tombstone does.
     ///
     /// # Errors
     /// Propagates any underlying storage error as [`RepoError`].

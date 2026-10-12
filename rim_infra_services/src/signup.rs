@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use rim_auth::csrf::generate_csrf_token;
 use rim_auth::session_token::{generate_session_token, hash_token};
+use rim_core::account_deletion::model::TOMBSTONE_USERNAME_PREFIX;
 use rim_core::auth::model::{InstanceInvite, Invite, NewSession, Session};
 use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository, SessionRepository};
 use rim_core::conversation::repository::ConversationRepository;
@@ -56,7 +57,7 @@ pub(crate) const EMAIL_BOUND_INVITE_REFUSAL: &str =
 pub(crate) const REMOTE_USERNAME_PREFIX: &str = "r_";
 
 /// Check a username: 3 to 32 characters after trimming, ASCII letters, digits, `_` and `-`,
-/// not starting with the remote users' `r_` prefix.
+/// not starting with the remote users' `r_` prefix or the purged accounts' `deleted-` prefix.
 ///
 /// # Errors
 /// `Validation` naming the rule that failed.
@@ -83,6 +84,14 @@ pub(crate) fn validate_username(username: &str) -> ServiceResult<()> {
     {
         return Err(ServiceError::Validation(format!(
             "usernames starting with {REMOTE_USERNAME_PREFIX} are reserved for people from other servers"
+        )));
+    }
+    if trimmed
+        .get(..TOMBSTONE_USERNAME_PREFIX.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(TOMBSTONE_USERNAME_PREFIX))
+    {
+        return Err(ServiceError::Validation(format!(
+            "usernames starting with {TOMBSTONE_USERNAME_PREFIX} are reserved for deleted accounts"
         )));
     }
     Ok(())
@@ -498,7 +507,13 @@ mod tests {
             validate_username("ali ce"),
             Err(ServiceError::Validation(_))
         ));
-        for reserved in ["r_alice", "R_alice", " r_x1 "] {
+        for reserved in [
+            "r_alice",
+            "R_alice",
+            " r_x1 ",
+            "deleted-0199d1a0",
+            "Deleted-x",
+        ] {
             assert!(
                 matches!(
                     validate_username(reserved),
@@ -509,6 +524,7 @@ mod tests {
         }
         assert!(validate_username("ra_alice").is_ok());
         assert!(validate_username("r-alice").is_ok());
+        assert!(validate_username("deleted_alice").is_ok());
     }
 
     #[test]
@@ -809,6 +825,7 @@ mod tests {
             email: None,
             timezone: None,
             principal_id: Some("rimp1_x".to_string()),
+            deletion_scheduled_for: None,
         }
     }
 }

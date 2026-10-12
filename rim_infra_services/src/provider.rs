@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use crate::account_deletion::DefaultAccountDeletionService;
 use crate::email::EmailSender;
 use chrono::Duration;
+use rim_services::account_deletion::service::AccountDeletionService;
 use rim_services::audit::service::AuditLogService;
 use rim_services::auth::service::{AuthService, RequestAuthenticator};
 use rim_services::capability::service::CapabilityService;
@@ -95,6 +97,7 @@ pub struct DefaultAppServiceProvider {
     workspace_plugin_service: Arc<dyn WorkspacePluginService>,
     plugin_bundle_service: Arc<dyn PluginBundleService>,
     feature_gate: Arc<dyn FeatureGate>,
+    account_deletion: DefaultAccountDeletionService,
 }
 
 impl DefaultAppServiceProvider {
@@ -133,6 +136,17 @@ impl DefaultAppServiceProvider {
             .with_known_login_sources(known_login_sources.clone())
             .with_signup_rate_limiter(signup_rate_limiter.clone())
             .with_limits(limits),
+        );
+        let account_deletion = DefaultAccountDeletionService::new(
+            Arc::new(
+                rim_infra_db::sea_orm_impl::account_deletion::SeaOrmAccountDeletionRepository::new(
+                    rim_infra_db::DbHandle::from(db.clone()),
+                ),
+            ),
+            Arc::clone(&repos.session_repo),
+            Some(db.clone()),
+            Arc::clone(&storage_service),
+            observers.clone(),
         );
         let mut key_auth = crate::key_auth::DefaultKeyAuthService::new(
             repos.for_key_auth(),
@@ -283,7 +297,9 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 server_observers,
             )
-            .with_limits(limits),
+            .with_limits(limits)
+            .with_storage(Arc::clone(&storage_service))
+            .with_direct_space(federation.direct_space_id),
         );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
@@ -445,11 +461,32 @@ impl DefaultAppServiceProvider {
             workspace_plugin_service,
             plugin_bundle_service,
             feature_gate,
+            account_deletion,
         }
+    }
+
+    /// Set the time between an account's deletion request and its purge, and the relay whose
+    /// hosts a purged account's subscriptions are cancelled at.
+    pub fn with_account_deletion(
+        mut self,
+        grace: Duration,
+        relay_departure: Option<
+            Arc<dyn rim_services::remote_workspace::service::WorkspaceRelayService>,
+        >,
+    ) -> Self {
+        let mut account_deletion = self.account_deletion.with_grace(grace);
+        if let Some(relay) = relay_departure {
+            account_deletion = account_deletion.with_relay_departure(relay);
+        }
+        self.account_deletion = account_deletion;
+        self
     }
 }
 
 impl AppServiceProvider for DefaultAppServiceProvider {
+    fn account_deletion_service(&self) -> Arc<dyn AccountDeletionService> {
+        Arc::new(self.account_deletion.clone())
+    }
     fn audit_log_service(&self) -> Arc<dyn AuditLogService> {
         Arc::clone(&self.audit_log_service)
     }

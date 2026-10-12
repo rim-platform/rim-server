@@ -14,6 +14,11 @@ pub struct User {
     /// When the account leaves probation, while it is in it. Read on `me` only; null for
     /// everyone else and once probation is over.
     pub probation_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the account's pending deletion runs, after its grace period (`requestAccountDeletion`);
+    /// null while none is pending, and always null except on `me`. Once it runs, the account is
+    /// purged and only a tombstone named "Deleted account" stays as the author of its encrypted
+    /// messages.
+    pub deletion_scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -27,6 +32,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             bio: value.bio,
             principal_id: value.principal_id,
             probation_ends_at: None,
+            deletion_scheduled_for: value.deletion_scheduled_for,
         }
     }
 }

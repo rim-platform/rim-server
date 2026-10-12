@@ -31,7 +31,7 @@ pub trait HostRepository: Send + Sync {
 
     async fn user_kind(&self, user_id: UserId) -> RepoResult<Option<UserKind>>;
 
-    /// The user holding a principal, local or remote.
+    /// The user holding a principal, local or remote; a purged account is nobody.
     async fn find_user(&self, principal_id: &str) -> RepoResult<Option<(UserId, UserKind)>>;
 
     /// # Errors

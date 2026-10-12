@@ -12,7 +12,10 @@ mod tests {
     use rim_core::user::model::UserId;
     use rim_core::user::repository::MockUserRepository;
     use rim_services::events::Observers;
-    use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
+    use rim_services::server::command::{
+        CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery,
+        TransferWorkspaceOwnershipCmd,
+    };
     use rim_services::server::service::ServerService;
     use rim_services::{Actor, ServiceError};
 
@@ -402,6 +405,262 @@ mod tests {
                 }
                 (other, expected) => panic!("expected {expected:?}, got {other:?}"),
             }
+        }
+    }
+
+    /// Every event broadcast through it, in order.
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<rim_services::events::WorkspaceEvent>>);
+
+    impl rim_services::events::Broadcaster for Recorder {
+        fn broadcast(&self, event: rim_services::events::WorkspaceEvent) {
+            self.0.lock().expect("lock").push(event);
+        }
+    }
+
+    fn member(server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> ServerMember {
+        ServerMember {
+            id: ServerMemberId::new(),
+            server_id,
+            user_id,
+            member_role: role,
+            joined_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Members answering `get_member` from `roles`; anyone else is no member.
+    fn members(roles: Vec<(UserId, ServerMemberRole)>) -> MockServerMemberRepository {
+        let mut repo = MockServerMemberRepository::new();
+        let all = roles.clone();
+        repo.expect_get_member().returning(move |sid, uid| {
+            Ok(roles
+                .iter()
+                .find(|(id, _)| *id == uid)
+                .map(|(id, role)| member(sid, *id, *role)))
+        });
+        repo.expect_get_members_for_server().returning(move |sid| {
+            Ok(all
+                .iter()
+                .map(|(id, role)| member(sid, *id, *role))
+                .collect())
+        });
+        repo
+    }
+
+    fn server_named(id: ServerId, name: &str) -> Server {
+        let now = chrono::Utc::now();
+        Server {
+            id,
+            name: name.to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn owner_service(
+        server_repo: MockServerRepository,
+        server_member_repo: MockServerMemberRepository,
+        storage: rim_services::storage::service::MockStorageService,
+        events: Arc<Recorder>,
+        direct_space: Option<ServerId>,
+    ) -> DefaultServerService {
+        DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                conversation_repo: Arc::new(mock_conversation_repo()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
+            },
+            None,
+            Observers::new(events),
+        )
+        .with_storage(Arc::new(storage))
+        .with_direct_space(direct_space)
+    }
+
+    fn transfer(server_id: ServerId, actor: UserId, to: UserId) -> TransferWorkspaceOwnershipCmd {
+        TransferWorkspaceOwnershipCmd {
+            actor: Actor::new(actor),
+            server_id,
+            user_id: to,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_owner_hands_ownership_to_a_member_and_becomes_a_moderator() {
+        let (server_id, owner, bob) = (ServerId::new(), UserId::new(), UserId::new());
+        let mut repo = members(vec![
+            (owner, ServerMemberRole::Owner),
+            (bob, ServerMemberRole::Member),
+        ]);
+        let changes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let c = Arc::clone(&changes);
+        repo.expect_change_member_role()
+            .times(2)
+            .returning(move |_, uid, role| {
+                c.lock().expect("lock").push((uid, role));
+                Ok(())
+            });
+        let mut servers = MockServerRepository::new();
+        servers
+            .expect_get_by_id()
+            .returning(|id| Ok(Some(server_named(id, "Team"))));
+        let events = Arc::new(Recorder::default());
+        let dto = owner_service(
+            servers,
+            repo,
+            rim_services::storage::service::MockStorageService::new(),
+            Arc::clone(&events),
+            None,
+        )
+        .transfer_ownership(transfer(server_id, owner, bob))
+        .await
+        .expect("transferred");
+
+        assert_eq!(dto.id, server_id);
+        assert_eq!(
+            *changes.lock().expect("lock"),
+            vec![
+                (bob, ServerMemberRole::Owner),
+                (owner, ServerMemberRole::Moderator),
+            ]
+        );
+        assert_eq!(events.0.lock().expect("lock").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ownership_moves_only_from_the_owner_to_a_member_outside_the_direct_space() {
+        let (server_id, owner, mona, gina, stranger) = (
+            ServerId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        );
+        let roles = vec![
+            (owner, ServerMemberRole::Owner),
+            (mona, ServerMemberRole::Moderator),
+            (gina, ServerMemberRole::Guest),
+        ];
+        let cases: Vec<(UserId, UserId, Option<ServerId>, &str)> = vec![
+            (mona, owner, None, "PermissionDenied"),
+            (owner, gina, None, "Validation"),
+            (owner, owner, None, "Validation"),
+            (owner, stranger, None, "NotFound"),
+            (owner, mona, Some(server_id), "Validation"),
+        ];
+        for (actor, to, direct, want) in cases {
+            let mut repo = members(roles.clone());
+            repo.expect_change_member_role().never();
+            let err = owner_service(
+                MockServerRepository::new(),
+                repo,
+                rim_services::storage::service::MockStorageService::new(),
+                Arc::new(Recorder::default()),
+                direct,
+            )
+            .transfer_ownership(transfer(server_id, actor, to))
+            .await
+            .expect_err("refused");
+            let got = match err {
+                ServiceError::PermissionDenied => "PermissionDenied",
+                ServiceError::Validation(_) => "Validation",
+                ServiceError::NotFound => "NotFound",
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(got, want, "{actor} -> {to}");
+        }
+    }
+
+    fn delete(server_id: ServerId, actor: UserId, name: &str) -> DeleteWorkspaceCmd {
+        DeleteWorkspaceCmd {
+            actor: Actor::new(actor),
+            server_id,
+            confirm_name: name.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_owner_deletes_the_workspace_by_name_its_files_go_and_every_member_is_told() {
+        let (server_id, owner, bob) = (ServerId::new(), UserId::new(), UserId::new());
+        let repo = members(vec![
+            (owner, ServerMemberRole::Owner),
+            (bob, ServerMemberRole::Member),
+        ]);
+        let mut servers = MockServerRepository::new();
+        servers
+            .expect_get_by_id()
+            .returning(|id| Ok(Some(server_named(id, "Team"))));
+        servers
+            .expect_delete_workspaces()
+            .withf(move |ids| ids == [server_id])
+            .times(1)
+            .returning(|_| {
+                Ok(rim_core::server::model::DeletedWorkspaces {
+                    deleted: 1,
+                    storage_keys: vec!["uploads/a".to_string()],
+                })
+            });
+        let mut storage = rim_services::storage::service::MockStorageService::new();
+        storage
+            .expect_delete_file()
+            .withf(|key| key == "uploads/a")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let events = Arc::new(Recorder::default());
+        let deleted = owner_service(servers, repo, storage, Arc::clone(&events), None)
+            .delete_workspace(delete(server_id, owner, " Team "))
+            .await
+            .expect("deleted");
+        assert!(deleted);
+        let left: Vec<UserId> = events
+            .0
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter_map(|e| match e {
+                rim_services::events::WorkspaceEvent::MemberLeft { user_id, .. } => Some(*user_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(left, vec![owner, bob]);
+    }
+
+    #[tokio::test]
+    async fn a_workspace_is_deleted_only_by_its_owner_with_its_name_outside_the_direct_space() {
+        let (server_id, owner, mona) = (ServerId::new(), UserId::new(), UserId::new());
+        let cases: Vec<(UserId, &str, Option<ServerId>, &str)> = vec![
+            (owner, "team", None, "Validation"),
+            (mona, "Team", None, "PermissionDenied"),
+            (owner, "Team", Some(server_id), "Validation"),
+        ];
+        for (actor, name, direct, want) in cases {
+            let repo = members(vec![
+                (owner, ServerMemberRole::Owner),
+                (mona, ServerMemberRole::Moderator),
+            ]);
+            let mut servers = MockServerRepository::new();
+            servers
+                .expect_get_by_id()
+                .returning(|id| Ok(Some(server_named(id, "Team"))));
+            servers.expect_delete_workspaces().never();
+            let err = owner_service(
+                servers,
+                repo,
+                rim_services::storage::service::MockStorageService::new(),
+                Arc::new(Recorder::default()),
+                direct,
+            )
+            .delete_workspace(delete(server_id, actor, name))
+            .await
+            .expect_err("refused");
+            let got = match err {
+                ServiceError::PermissionDenied => "PermissionDenied",
+                ServiceError::Validation(_) => "Validation",
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(got, want, "{name}");
         }
     }
 }

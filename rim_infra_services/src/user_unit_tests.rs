@@ -27,6 +27,7 @@ mod tests {
             email: Some("u@local.invalid".to_string()),
             timezone: None,
             principal_id: None,
+            deletion_scheduled_for: None,
         }
     }
 
@@ -47,6 +48,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn only_me_shows_a_pending_deletion() {
+        let id = UserId::new();
+        let at = chrono::Utc::now();
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_get_by_id().returning(move |id| {
+            Ok(Some(User {
+                deletion_scheduled_for: Some(at),
+                ..user(id)
+            }))
+        });
+        user_repo.expect_get_by_ids().returning(move |ids| {
+            Ok(ids
+                .iter()
+                .map(|id| User {
+                    deletion_scheduled_for: Some(at),
+                    ..user(*id)
+                })
+                .collect())
+        });
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        });
+
+        let me = svc
+            .get_me(GetMeQuery {
+                actor: Actor::new(id),
+            })
+            .await
+            .unwrap();
+        assert_eq!(me.deletion_scheduled_for, Some(at));
+        let others = svc.get_users_by_ids(&[id]).await.unwrap();
+        assert_eq!(others[0].deletion_scheduled_for, None);
     }
 
     #[tokio::test]

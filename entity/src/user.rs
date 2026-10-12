@@ -34,6 +34,12 @@ pub struct Model {
     /// The terms URL the account accepted.
     #[sea_orm(column_type = "Text", nullable)]
     pub terms_accepted_url: Option<String>,
+    /// When the account asked to be deleted; null while no deletion is pending.
+    pub deletion_requested_at: Option<DateTimeWithTimeZone>,
+    /// When the pending deletion's grace period ends.
+    pub deletion_scheduled_for: Option<DateTimeWithTimeZone>,
+    /// When the account was purged; the row is then a tombstone.
+    pub deleted_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

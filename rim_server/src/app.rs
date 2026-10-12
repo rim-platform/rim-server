@@ -165,7 +165,7 @@ fn descriptor_settings(
 }
 
 /// Load or create the server key, sign the descriptor, and wire peers, nonces and the client.
-async fn build_s2s(
+pub(crate) async fn build_s2s(
     config: &RIMConfig,
     db: &DbHandle,
     raw_db: &sea_orm::DatabaseConnection,
@@ -324,6 +324,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .map_err(std::io::Error::other)?;
     let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
     let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
+    let account_deletion_grace_days = config
+        .account_deletion_grace_days()
+        .map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -387,24 +390,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let observers_for_presence = Arc::new(observers.clone());
     let observers_for_schema = Arc::new(observers.clone());
 
-    // Build storage backend
-    let files_dir = config
-        .storage_local_path
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&config.data_dir).join("files"));
-    std::fs::create_dir_all(&files_dir)
-        .map_err(|e| std::io::Error::other(format!("failed to create files dir: {e}")))?;
-    let storage_backend: Arc<dyn StorageBackend> = Arc::new(LocalFileStorage::new(files_dir));
-
-    let max_workspace_bytes = config.max_workspace_storage_bytes.unwrap_or(1_073_741_824);
-    let storage_service: Arc<dyn StorageService> =
-        Arc::new(rim_infra_services::storage::DefaultStorageService::new(
-            Arc::clone(&storage_backend),
-            Arc::clone(&repos.message_attachment_repo),
-            Arc::clone(&repos.workspace_plugin_repo),
-            max_workspace_bytes,
-        ));
+    let (storage_backend, storage_service) = build_storage(config, &repos)?;
 
     // Real SMTP only when RIM_SMTP_HOST + RIM_SMTP_FROM are both configured; otherwise every
     // send falls back to LogEmailSender (log-only, no delivery). With email disabled every
@@ -445,7 +431,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         audiences = ?key_login_audiences,
         "key login accepts proofs naming these audiences (RIM_KEY_LOGIN_AUDIENCES)"
     );
-    let service_provider: Arc<dyn AppServiceProvider> = Arc::new(DefaultAppServiceProvider::new(
+    let service_provider = DefaultAppServiceProvider::new(
         &repos,
         raw_db,
         chrono::Duration::days(i64::from(config.session_ttl_days)),
@@ -466,7 +452,12 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         },
         Arc::clone(&feature_gate),
         instance_limits,
-    ));
+    )
+    .with_account_deletion(
+        chrono::Duration::days(i64::from(account_deletion_grace_days)),
+        Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn WorkspaceRelayService>),
+    );
+    let service_provider: Arc<dyn AppServiceProvider> = Arc::new(service_provider);
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 
     let presence_manager = Arc::new(rim_infra_services::presence::PresenceManager::new(
@@ -753,6 +744,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    // Background task: purge the accounts whose deletion grace period ended, hourly.
+    tokio::spawn(rim_infra_services::scheduled_purges::run_account_purge(
+        service_provider.account_deletion_service(),
+        shutdown_tx.subscribe(),
+    ));
     let moderation_service = service_provider.moderation_service();
     let plugin_bundle_service = service_provider.plugin_bundle_service();
 
@@ -821,6 +817,32 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         shutdown_tx,
         ip_deny_list,
     })
+}
+
+/// The stored files: `RIM_STORAGE_LOCAL_PATH`, else `files` under the data directory, created
+/// when missing, and the storage service over them.
+pub(crate) fn build_storage(
+    config: &RIMConfig,
+    repos: &AppRepos,
+) -> std::io::Result<(Arc<dyn StorageBackend>, Arc<dyn StorageService>)> {
+    let files_dir = config
+        .storage_local_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&config.data_dir).join("files"));
+    std::fs::create_dir_all(&files_dir)
+        .map_err(|e| std::io::Error::other(format!("failed to create files dir: {e}")))?;
+    let storage_backend: Arc<dyn StorageBackend> = Arc::new(LocalFileStorage::new(files_dir));
+
+    let max_workspace_bytes = config.max_workspace_storage_bytes.unwrap_or(1_073_741_824);
+    let storage_service: Arc<dyn StorageService> =
+        Arc::new(rim_infra_services::storage::DefaultStorageService::new(
+            Arc::clone(&storage_backend),
+            Arc::clone(&repos.message_attachment_repo),
+            Arc::clone(&repos.workspace_plugin_repo),
+            max_workspace_bytes,
+        ));
+    Ok((storage_backend, storage_service))
 }
 
 /// Log the features that are not enabled, so an operator sees what the instance runs.

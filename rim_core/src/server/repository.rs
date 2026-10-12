@@ -1,5 +1,5 @@
 use crate::repository::error::RepoResult;
-use crate::server::model::{Server, ServerId};
+use crate::server::model::{DeletedWorkspaces, Server, ServerId};
 use crate::user::model::UserId;
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
@@ -19,4 +19,11 @@ pub trait ServerRepository: Send + Sync {
 
     /// How many workspaces `owner` owns; the direct space is not one.
     async fn count_owned(&self, owner: UserId) -> RepoResult<u64>;
+
+    /// Delete the workspaces in `ids` with everything in them: members, channels and
+    /// conversations with their messages, attachments, pins and threads, invites, bans, workspace
+    /// state, keybinds, pipelines, macros, the plugin registry and bundles, custom emoji and the
+    /// notification rules scoped to them. The direct space is never deleted. Run it in a
+    /// transaction and delete the returned files after it commits.
+    async fn delete_workspaces(&self, ids: &[ServerId]) -> RepoResult<DeletedWorkspaces>;
 }

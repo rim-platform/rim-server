@@ -5,6 +5,7 @@
 //! `rim_api::types::X`) keeps working regardless of which file defines it.
 //! Cursor inputs/outputs and the generic page types live in `pagination`.
 
+pub(crate) mod account;
 pub(crate) mod attachment;
 pub(crate) mod audit;
 pub(crate) mod channel_lens;
@@ -32,6 +33,7 @@ pub(crate) mod workspace;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
+pub use account::{AccountDeletionSchedule, RequestAccountDeletionInput};
 pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
 pub use audit::{
     AuditLogEntry, AuditLogFilterInput, AuditLogPage, AuditLogPageInfo, AuditLogPaginationInput,
@@ -113,7 +115,10 @@ pub use server_info::{
 };
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};
-pub use workspace::{Server, ServerMember, ServerMemberRoleGql};
+pub use workspace::{
+    DeleteWorkspaceInput, DeleteWorkspacePayload, Server, ServerMember, ServerMemberRoleGql,
+    TransferWorkspaceOwnershipInput,
+};
 pub use workspace_plugin::{
     AddWorkspacePluginInput, PluginRuntimeKind, PluginSignatureStatus, PluginSource,
     PluginSourceKind, UpdateWorkspacePluginInput, WorkspacePlugin, WorkspacePluginStatus,

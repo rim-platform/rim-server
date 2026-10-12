@@ -241,6 +241,9 @@ pub struct RIMConfig {
     /// instead of the normal message rate; unset or 0 keeps the normal rate. Controlled by
     /// `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
     pub rate_probation_messages_per_min: Option<u32>,
+    /// Days between an account's deletion request and its purge, 0 to 30; default 14.
+    /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
+    pub account_deletion_grace_days: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -346,6 +349,10 @@ impl fmt::Debug for RIMConfig {
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
             .field("instance_limits", &self.instance_limits())
+            .field(
+                "account_deletion_grace_days",
+                &self.account_deletion_grace_days,
+            )
             .finish()
     }
 }
@@ -419,6 +426,7 @@ impl Default for RIMConfig {
             limit_message_bytes: None,
             probation_hours: None,
             rate_probation_messages_per_min: None,
+            account_deletion_grace_days: None,
         }
     }
 }
@@ -773,6 +781,22 @@ impl RIMConfig {
             Some(days) => Err(format!(
                 "RIM_AUDIT_RETENTION_DAYS={days} is outside {MIN_RETENTION_DAYS} to \
                  {MAX_RETENTION_DAYS}; unset it to keep audit rows forever"
+            )),
+        }
+    }
+
+    /// `RIM_ACCOUNT_DELETION_GRACE_DAYS`: the days between an account's deletion request and
+    /// its purge; 14 when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is above 30.
+    pub fn account_deletion_grace_days(&self) -> Result<u32, String> {
+        use rim_services::account_deletion::dto::{DEFAULT_GRACE_DAYS, MAX_GRACE_DAYS};
+        match self.account_deletion_grace_days {
+            None => Ok(DEFAULT_GRACE_DAYS),
+            Some(days) if days <= MAX_GRACE_DAYS => Ok(days),
+            Some(days) => Err(format!(
+                "RIM_ACCOUNT_DELETION_GRACE_DAYS={days} is outside 0 to {MAX_GRACE_DAYS}"
             )),
         }
     }
@@ -1502,6 +1526,24 @@ mod tests {
             let err = config.audit_retention_days().unwrap_err();
             assert!(err.contains("RIM_AUDIT_RETENTION_DAYS"), "{err}");
         }
+    }
+
+    #[test]
+    fn the_account_deletion_grace_is_14_days_unless_set_between_0_and_30() {
+        assert_eq!(RIMConfig::default().account_deletion_grace_days(), Ok(14));
+        for days in [0, 7, 30] {
+            let config = RIMConfig {
+                account_deletion_grace_days: Some(days),
+                ..Default::default()
+            };
+            assert_eq!(config.account_deletion_grace_days(), Ok(days));
+        }
+        let config = RIMConfig {
+            account_deletion_grace_days: Some(31),
+            ..Default::default()
+        };
+        let err = config.account_deletion_grace_days().unwrap_err();
+        assert!(err.contains("RIM_ACCOUNT_DELETION_GRACE_DAYS"), "{err}");
     }
 
     #[test]

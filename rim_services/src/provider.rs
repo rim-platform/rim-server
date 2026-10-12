@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::account_deletion::service::AccountDeletionService;
 use crate::audit::service::AuditLogService;
 use crate::auth::service::{AuthService, RequestAuthenticator};
 use crate::channel_lens::service::ChannelLensService;
@@ -65,4 +66,5 @@ pub trait AppServiceProvider: Send + Sync {
     ) -> Arc<dyn crate::workspace_plugin::service::PluginBundleService>;
     /// The instance's feature switches.
     fn feature_gate(&self) -> Arc<dyn FeatureGate>;
+    fn account_deletion_service(&self) -> Arc<dyn AccountDeletionService>;
 }

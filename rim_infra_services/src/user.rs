@@ -59,6 +59,7 @@ impl DefaultUserService {
             status_text: user.status_text,
             bio: user.bio,
             principal_id: user.principal_id,
+            deletion_scheduled_for: None,
         }
     }
 }
@@ -72,8 +73,12 @@ impl UserService for DefaultUserService {
             .get_by_id(query.actor.user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
+        let deletion_scheduled_for = user.deletion_scheduled_for;
 
-        Ok(Self::convert_to_dto(user))
+        Ok(UserDto {
+            deletion_scheduled_for,
+            ..Self::convert_to_dto(user)
+        })
     }
 
     async fn probation_ends_at(

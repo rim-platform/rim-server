@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
@@ -7,18 +9,24 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
-use rim_infra_db::begin_transaction;
+use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::limits::{InstanceLimits, ensure_below};
-use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
+use rim_services::server::command::{
+    CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery,
+    TransferWorkspaceOwnershipCmd,
+};
 use rim_services::server::dto::ServerDto;
 use rim_services::server::service::ServerService;
+use rim_services::storage::service::StorageService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
 use crate::clock::Clock;
 use crate::repos::AppRepos;
-use crate::util::{add_workspace_member, ensure_server_exists, ensure_server_member};
+use crate::util::{
+    add_workspace_member, ensure_server_exists, ensure_server_member, ensure_workspace_features,
+};
 
 #[derive(Clone)]
 pub struct DefaultServerService {
@@ -29,6 +37,9 @@ pub struct DefaultServerService {
     /// accounts.
     limits: InstanceLimits,
     clock: Clock,
+    /// Where a deleted workspace's files are; `None` leaves them in place.
+    storage: Option<Arc<dyn StorageService>>,
+    direct_space_id: Option<ServerId>,
 }
 
 impl DefaultServerService {
@@ -39,6 +50,64 @@ impl DefaultServerService {
             observers,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
+            storage: None,
+            direct_space_id: None,
+        }
+    }
+
+    pub fn with_storage(mut self, storage: Arc<dyn StorageService>) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
+    }
+
+    /// `PermissionDenied` unless `user_id` owns the workspace.
+    async fn ensure_owner(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
+        match self
+            .repos
+            .server_member_repo
+            .get_member(server_id, user_id)
+            .await?
+        {
+            Some(member) if member.member_role == ServerMemberRole::Owner => Ok(()),
+            _ => Err(ServiceError::PermissionDenied),
+        }
+    }
+
+    /// The repositories of a new transaction, or the service's own without a database.
+    async fn transaction(&self) -> ServiceResult<(Option<TransactionScope>, ServerRepos)> {
+        let scope = match &self.db {
+            Some(db) => Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(&s.handle()).for_server(),
+            None => self.repos.clone(),
+        };
+        Ok((scope, repos))
+    }
+
+    /// Delete stored files of a deleted workspace; a file already gone or that cannot be deleted
+    /// is logged and left.
+    async fn delete_files(&self, server_id: ServerId, keys: &[String]) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        for key in keys {
+            match storage.delete_file(key).await {
+                Ok(()) | Err(ServiceError::NotFound) => {}
+                Err(e) => {
+                    warn!(server_id = %server_id, key = %key, error = %e, "could not delete a deleted workspace's file")
+                }
+            }
         }
     }
 
@@ -241,5 +310,117 @@ impl ServerService for DefaultServerService {
             .await?;
 
         Ok(servers.into_iter().map(Self::to_dto).collect())
+    }
+
+    #[instrument(name = "server.transfer_ownership", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id))]
+    async fn transfer_ownership(
+        &self,
+        cmd: TransferWorkspaceOwnershipCmd,
+    ) -> ServiceResult<ServerDto> {
+        ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
+        self.ensure_owner(cmd.server_id, cmd.actor.user_id).await?;
+        if cmd.user_id == cmd.actor.user_id {
+            return Err(ServiceError::Validation(
+                "you already own this workspace".to_string(),
+            ));
+        }
+        let target = self
+            .repos
+            .server_member_repo
+            .get_member(cmd.server_id, cmd.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if target.member_role.is_guest() {
+            return Err(ServiceError::Validation(
+                "a guest cannot own a workspace; make them a member first".to_string(),
+            ));
+        }
+
+        let (scope, repos) = self.transaction().await?;
+        repos
+            .server_member_repo
+            .change_member_role(cmd.server_id, cmd.user_id, ServerMemberRole::Owner)
+            .await?;
+        repos
+            .server_member_repo
+            .change_member_role(
+                cmd.server_id,
+                cmd.actor.user_id,
+                ServerMemberRole::Moderator,
+            )
+            .await?;
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+
+        for (user_id, role) in [
+            (cmd.user_id, ServerMemberRole::Owner),
+            (cmd.actor.user_id, ServerMemberRole::Moderator),
+        ] {
+            self.observers.emit(WorkspaceEvent::MemberRoleChanged {
+                workspace_id: cmd.server_id,
+                user_id,
+                role: role.as_str().to_string(),
+            });
+        }
+        info!(
+            target: "audit",
+            event = "workspace.ownership_transferred",
+            server_id = %cmd.server_id,
+            from_user_id = %cmd.actor.user_id,
+            to_user_id = %cmd.user_id,
+            "a workspace's ownership was transferred"
+        );
+        let server = ensure_server_exists(self.repos.server_repo.as_ref(), cmd.server_id).await?;
+        Ok(Self::to_dto(server))
+    }
+
+    #[instrument(name = "server.delete_workspace", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id))]
+    async fn delete_workspace(&self, cmd: DeleteWorkspaceCmd) -> ServiceResult<bool> {
+        ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
+        self.ensure_owner(cmd.server_id, cmd.actor.user_id).await?;
+        let server = ensure_server_exists(self.repos.server_repo.as_ref(), cmd.server_id).await?;
+        if cmd.confirm_name.trim() != server.name.trim() {
+            return Err(ServiceError::Validation(
+                "the name does not match this workspace".to_string(),
+            ));
+        }
+        let members = self
+            .repos
+            .server_member_repo
+            .get_members_for_server(cmd.server_id)
+            .await?;
+
+        let (scope, repos) = self.transaction().await?;
+        let deleted = repos
+            .server_repo
+            .delete_workspaces(&[cmd.server_id])
+            .await?;
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        if deleted.deleted == 0 {
+            return Err(ServiceError::NotFound);
+        }
+
+        self.delete_files(cmd.server_id, &deleted.storage_keys)
+            .await;
+        // Each member's client drops the workspace and their event stream for it ends.
+        for member in &members {
+            self.observers.emit(WorkspaceEvent::MemberLeft {
+                workspace_id: cmd.server_id,
+                user_id: member.user_id,
+            });
+        }
+        info!(
+            target: "audit",
+            event = "workspace.deleted",
+            server_id = %cmd.server_id,
+            user_id = %cmd.actor.user_id,
+            members = members.len(),
+            files = deleted.storage_keys.len(),
+            "a workspace was deleted"
+        );
+        Ok(true)
     }
 }

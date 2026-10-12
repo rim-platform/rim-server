@@ -199,3 +199,69 @@ async fn server_members_query_returns_members() {
     );
     assert!(json["serverMembers"][0]["joinedAt"].is_string());
 }
+
+// ── transferWorkspaceOwnership / deleteWorkspace ──────────────────────
+
+#[tokio::test]
+async fn transfer_workspace_ownership_passes_the_workspace_and_the_new_owner() {
+    let (actor, server_id, new_owner) = (UserId::new(), ServerId::new(), UserId::new());
+    let mut server = MockServerService::new();
+    server
+        .expect_transfer_ownership()
+        .withf(move |cmd| {
+            cmd.actor.user_id == actor && cmd.server_id == server_id && cmd.user_id == new_owner
+        })
+        .times(1)
+        .returning(move |_| {
+            Box::pin(async move {
+                let mut dto = test_server_dto();
+                dto.id = server_id;
+                Ok(dto)
+            })
+        });
+    let schema = schema_with_server_mocks(server, MockServerMemberService::new());
+    let req = authed_request(
+        r#"mutation($s: ID!, $u: ID!) {
+             transferWorkspaceOwnership(input: { serverId: $s, userId: $u }) { id }
+           }"#,
+        actor,
+    )
+    .variables(Variables::from_json(serde_json::json!({
+        "s": server_id.to_string(), "u": new_owner.to_string(),
+    })));
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().unwrap()["transferWorkspaceOwnership"]["id"],
+        serde_json::json!(server_id.to_string())
+    );
+}
+
+#[tokio::test]
+async fn delete_workspace_passes_the_typed_name_and_answers_deleted() {
+    let (actor, server_id) = (UserId::new(), ServerId::new());
+    let mut server = MockServerService::new();
+    server
+        .expect_delete_workspace()
+        .withf(move |cmd| {
+            cmd.actor.user_id == actor && cmd.server_id == server_id && cmd.confirm_name == "Team"
+        })
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(true) }));
+    let schema = schema_with_server_mocks(server, MockServerMemberService::new());
+    let req = authed_request(
+        r#"mutation($s: ID!) {
+             deleteWorkspace(input: { serverId: $s, confirmName: "Team" }) { deleted }
+           }"#,
+        actor,
+    )
+    .variables(Variables::from_json(serde_json::json!({
+        "s": server_id.to_string(),
+    })));
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().unwrap()["deleteWorkspace"]["deleted"],
+        serde_json::json!(true)
+    );
+}

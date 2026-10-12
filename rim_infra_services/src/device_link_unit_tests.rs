@@ -262,6 +262,7 @@ mod tests {
             email: Some(format!("{id}@example.com")),
             timezone: None,
             principal_id,
+            deletion_scheduled_for: None,
         }
     }
 

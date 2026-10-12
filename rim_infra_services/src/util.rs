@@ -563,6 +563,13 @@ mod tests {
         ) -> RepoResult<Option<Server>> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
+
+        async fn delete_workspaces(
+            &self,
+            _ids: &[ServerId],
+        ) -> RepoResult<rim_core::server::model::DeletedWorkspaces> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
     }
 
     struct FakeConversationRepo {

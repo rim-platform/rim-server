@@ -24,6 +24,8 @@ pub struct User {
     /// Key-based principal id (`rimp1_...`) once the account enrolled a key; `None` before.
     /// An account with a principal id signs in with a device key, not its password.
     pub principal_id: Option<String>,
+    /// When the account's pending deletion runs; `None` while no deletion is pending.
+    pub deletion_scheduled_for: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

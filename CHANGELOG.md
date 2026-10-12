@@ -63,6 +63,20 @@ tag `v<version>`, the version every crate in the workspace carries.
   `VALIDATION` naming the minutes left, and `RIM_RATE_PROBATION_MESSAGES_PER_MIN` gives it a
   lower message rate. GraphQL `ServerLimits.probationHours` reports the setting and
   `User.probationEndsAt`, read on `me`, says when the caller's probation ends.
+- GraphQL `transferWorkspaceOwnership(input: { serverId, userId })` hands a workspace to another
+  member, who becomes its one owner while the caller becomes a moderator, and
+  `deleteWorkspace(input: { serverId, confirmName })` (answers `DeleteWorkspacePayload {
+  deleted }`) deletes a workspace with everything in it once its owner types its name.
+- Self-service account deletion: GraphQL `requestAccountDeletion(input: { confirmUsername })`
+  (answers `AccountDeletionSchedule { scheduledFor }`), `cancelAccountDeletion` and
+  `User.deletionScheduledFor`, set on `me` while a deletion is pending. After a grace period
+  (`RIM_ACCOUNT_DELETION_GRACE_DAYS`, default 14, 0 to 30) an hourly job purges the account and
+  leaves a tombstone ("Deleted account") as the author of its encrypted messages; `rim_server
+  account purge [--dry-run]` runs the purge on demand. The only owner of a workspace with other
+  members is refused until they transfer or delete it. The tombstone keeps the key identity id,
+  so `signupWithKey` with a deleted account's identity answers `VALIDATION`. Signups may no
+  longer take usernames starting with `deleted-`. Adds `user.deletion_requested_at`, `deletion_scheduled_for` and
+  `deleted_at`.
 
 ### Changed
 

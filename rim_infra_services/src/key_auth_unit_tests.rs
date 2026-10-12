@@ -73,6 +73,8 @@ mod tests {
         blocked: HashSet<String>,
         /// The terms URL each user accepted, as `record_terms_acceptance` stored it.
         terms: HashMap<UserId, String>,
+        /// Principals of accounts deleted on this server.
+        retired: HashSet<String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -122,6 +124,10 @@ mod tests {
                 .iter()
                 .find(|(_, p)| p.as_str() == principal_id)
                 .map(|(u, _)| *u))
+        }
+
+        async fn principal_retired(&self, principal_id: &str) -> RepoResult<bool> {
+            Ok(self.0.lock().unwrap().retired.contains(principal_id))
         }
 
         async fn list_key_log(&self, user_id: UserId) -> RepoResult<Vec<KeyLogEntry>> {
@@ -487,6 +493,7 @@ mod tests {
                 email: new.email.clone(),
                 timezone: None,
                 principal_id,
+                deletion_scheduled_for: None,
             };
         }
         User {
@@ -503,6 +510,7 @@ mod tests {
             email: Some(format!("{id}@example.com")),
             timezone: None,
             principal_id,
+            deletion_scheduled_for: None,
         }
     }
 
@@ -1973,6 +1981,27 @@ mod tests {
         h.login(&enrolled, enrolled.device_id, &enrolled.device, AUDIENCE)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_the_key_identity_of_a_deleted_account() {
+        let h = harness();
+        let p = h.present(1).await;
+        h.state
+            .lock()
+            .unwrap()
+            .retired
+            .insert(p.state.principal_id.clone());
+        let err = h
+            .svc
+            .signup_with_key(open_cmd(&p, "ada"))
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("deleted")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 0);
     }
 
     #[tokio::test]

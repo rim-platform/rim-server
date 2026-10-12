@@ -123,6 +123,7 @@ mod tests {
             email: Some(format!("{}@local.invalid", username.to_lowercase())),
             timezone: None,
             principal_id: None,
+            deletion_scheduled_for: None,
         }
     }
 
@@ -862,6 +863,7 @@ mod tests {
                 email: Some("taken@local.invalid".to_string()),
                 timezone: None,
                 principal_id: None,
+                deletion_scheduled_for: None,
             }))
         });
         user_repo.expect_create_user().never();
@@ -1746,6 +1748,7 @@ mod tests {
                     email: new.email.clone(),
                     timezone: None,
                     principal_id: None,
+                    deletion_scheduled_for: None,
                 })
             });
 
@@ -1905,6 +1908,7 @@ mod tests {
                     email: new.email.clone(),
                     timezone: None,
                     principal_id: None,
+                    deletion_scheduled_for: None,
                 })
             });
 
@@ -1972,6 +1976,7 @@ mod tests {
                     email: new.email.clone(),
                     timezone: None,
                     principal_id: None,
+                    deletion_scheduled_for: None,
                 })
             });
 

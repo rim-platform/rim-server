@@ -1,3 +1,6 @@
+/// Public for `rim_server`, whose composition root runs the hourly purge and whose
+/// `account purge` command runs it once.
+pub mod account_deletion;
 pub(crate) mod audit;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.

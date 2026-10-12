@@ -321,6 +321,23 @@ on the account when it did and which URL it accepted. Both are commented out in
 `serverInfo`. A notice over 500 characters or a terms URL that is not an absolute http(s) URL
 stops the server at boot. Changing the terms URL does not ask existing accounts to accept again.
 
+## Deleted accounts
+
+People delete their own account from the client. The account is purged once a grace period
+ends, `RIM_ACCOUNT_DELETION_GRACE_DAYS` days after the request (default 14, 0 to 30; 0 purges at
+the next hourly run; commented out in `deploy/.env.example`); until then the person can cancel.
+The purge removes the account's sessions, devices and keys, memberships, plaintext messages with
+their files, its avatar, settings and personal automations, and deletes the workspaces where it
+was the only member. What remains is a tombstone row with the same id, named `deleted-` and the
+start of the id, shown as "Deleted account", with no email, password or key: it cannot sign in,
+shows in no member list or search, and stays the author of the account's encrypted messages
+(their ciphertext is kept), of messages others replied to (shown as deleted), and of the
+workspace pipelines it created. It keeps the account's key identity id, so its revoked devices
+still leave encrypted groups, and the same key identity cannot sign up on this server again.
+Audit rows are kept until audit retention removes them, and the
+purge writes `account.purged` to the audit log. `dc exec rim /app/rim-server account purge
+--dry-run` shows what the next run would remove; without `--dry-run` it runs the purge now.
+
 ## Another proxy
 
 Caddy is an example. Any TLS proxy works if it:

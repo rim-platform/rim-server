@@ -199,7 +199,7 @@ impl HostRepository for SeaOrmHostRepository {
 
     async fn find_user(&self, principal_id: &str) -> RepoResult<Option<(UserId, UserKind)>> {
         self.one::<UserKindRow>(
-            r#"SELECT id, kind FROM "user" WHERE principal_id = $1"#,
+            r#"SELECT id, kind FROM "user" WHERE principal_id = $1 AND deleted_at IS NULL"#,
             vec![principal_id.into()],
         )
         .await?

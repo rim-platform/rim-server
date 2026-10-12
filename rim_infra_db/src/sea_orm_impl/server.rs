@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use entity::{server, server_member};
 use rim_core::repository::error::RepoResult;
-use rim_core::server::model::{Server, ServerId};
+use rim_core::server::model::{DeletedWorkspaces, Server, ServerId};
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    RelationTrait, Set,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, JoinType,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set, Statement,
 };
 
 use crate::DbHandle;
@@ -106,4 +106,85 @@ impl ServerRepository for SeaOrmServerRepository {
             .await
             .map_err(map_db_err)
     }
+
+    async fn delete_workspaces(&self, ids: &[ServerId]) -> RepoResult<DeletedWorkspaces> {
+        delete_workspaces(&self.db, ids).await
+    }
+}
+
+/// The stored files of the workspaces in `$1`: attachments past their upload, custom emoji and
+/// plugin bundles.
+const WORKSPACE_FILES: &[&str] = &[
+    "SELECT a.storage_url AS value FROM message_attachment a \
+     JOIN message m ON m.id = a.message_id \
+     JOIN conversation c ON c.id = m.conversation_id \
+     WHERE c.server_id = ANY($1) AND a.storage_url NOT LIKE 'pending://%'",
+    "SELECT image_url AS value FROM custom_emoji WHERE server_id = ANY($1)",
+    "SELECT storage_key AS value FROM plugin_bundle WHERE server_id = ANY($1)",
+];
+
+#[derive(FromQueryResult)]
+struct FileRow {
+    value: String,
+}
+
+/// Delete the workspaces in `ids` and everything in them; the rows that reference a workspace
+/// go by cascade, its keybinds (which name it without a foreign key) explicitly. The direct
+/// space is left alone. Shared by the workspace deletion and the account purge.
+pub(crate) async fn delete_workspaces(
+    db: &DbHandle,
+    ids: &[ServerId],
+) -> RepoResult<DeletedWorkspaces> {
+    let statement = |sql: &str, values: Vec<sea_orm::Value>| {
+        Statement::from_sql_and_values(DbBackend::Postgres, sql, values)
+    };
+    let ids: Vec<Uuid> = ids.iter().copied().map(Into::into).collect();
+    // Only workspaces: the direct space is filtered out before anything is read or deleted.
+    let ids: Vec<Uuid> = IdRow::find_by_statement(statement(
+        "SELECT id FROM server WHERE id = ANY($1) AND kind = 'workspace'",
+        vec![ids.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(map_db_err)?
+    .into_iter()
+    .map(|r| r.id)
+    .collect();
+    if ids.is_empty() {
+        return Ok(DeletedWorkspaces::default());
+    }
+    let mut storage_keys = Vec::new();
+    for sql in WORKSPACE_FILES {
+        storage_keys.extend(
+            FileRow::find_by_statement(statement(sql, vec![ids.clone().into()]))
+                .all(db)
+                .await
+                .map_err(map_db_err)?
+                .into_iter()
+                .map(|r| r.value),
+        );
+    }
+    db.execute_raw(statement(
+        "DELETE FROM keybind WHERE scope = 'workspace' AND subject_id = ANY($1)",
+        vec![ids.clone().into()],
+    ))
+    .await
+    .map_err(map_db_err)?;
+    let deleted = db
+        .execute_raw(statement(
+            "DELETE FROM server WHERE id = ANY($1)",
+            vec![ids.into()],
+        ))
+        .await
+        .map_err(map_db_err)?
+        .rows_affected();
+    Ok(DeletedWorkspaces {
+        deleted,
+        storage_keys,
+    })
+}
+
+#[derive(FromQueryResult)]
+struct IdRow {
+    id: Uuid,
 }

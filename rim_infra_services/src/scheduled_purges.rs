@@ -1,6 +1,7 @@
 //! Background purges the composition root runs on a timer: stale attachment uploads are marked
-//! failed daily, expired workspace state is deleted hourly. Each runs first a few minutes after
-//! boot and stops when the shutdown signal changes.
+//! failed daily, expired workspace state is deleted hourly, and accounts whose deletion grace
+//! period ended are purged hourly. Each runs first a few minutes after boot and stops when the
+//! shutdown signal changes.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -9,6 +10,8 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
+use rim_services::account_deletion::dto::PurgeRunDto;
+use rim_services::account_deletion::service::AccountDeletionService;
 use rim_services::message_attachment::service::MessageAttachmentService;
 
 use crate::message_attachment::DefaultMessageAttachmentService;
@@ -19,6 +22,8 @@ const FIRST_RUN_DELAY: Duration = Duration::from_secs(5 * 60);
 pub const ATTACHMENT_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Interval of the workspace-state expiry purge.
 pub const WORKSPACE_STATE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Interval of the purge of accounts whose deletion grace period ended.
+pub const ACCOUNT_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Run `job` after [`FIRST_RUN_DELAY`] and then every `interval` until `shutdown` changes. A run
 /// that falls behind delays the next one rather than bunching them.
@@ -73,6 +78,42 @@ pub async fn purge_expired_workspace_state(repo: &dyn WorkspaceStateRepository) 
     }
 }
 
+/// Purge the accounts whose deletion grace period ended by now. The service logs a line per
+/// purged or failed account; this logs the run's totals when it did anything. Returns the run,
+/// `None` when the due accounts could not be read (logged).
+pub async fn purge_deleted_accounts(service: &dyn AccountDeletionService) -> Option<PurgeRunDto> {
+    match service.purge_due(chrono::Utc::now(), false).await {
+        Ok(run) => {
+            if !run.purged.is_empty() || !run.failed.is_empty() {
+                tracing::info!(
+                    purged = run.purged.len(),
+                    failed = run.failed.len(),
+                    "purged accounts whose deletion grace period ended"
+                );
+            }
+            Some(run)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "account purge failed");
+            None
+        }
+    }
+}
+
+/// Run [`purge_deleted_accounts`] hourly until `shutdown` changes.
+pub async fn run_account_purge(
+    service: Arc<dyn AccountDeletionService>,
+    shutdown: watch::Receiver<bool>,
+) {
+    every(ACCOUNT_PURGE_INTERVAL, shutdown, || {
+        let service = Arc::clone(&service);
+        async move {
+            purge_deleted_accounts(service.as_ref()).await;
+        }
+    })
+    .await;
+}
+
 /// Run [`clean_stale_attachments`] daily until `shutdown` changes.
 pub async fn run_attachment_cleanup(
     service: Arc<dyn MessageAttachmentService>,
@@ -106,6 +147,7 @@ mod tests {
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::workspace_state::repository::MockWorkspaceStateRepository;
     use rim_services::ServiceError;
+    use rim_services::account_deletion::service::MockAccountDeletionService;
     use rim_services::message_attachment::service::MockMessageAttachmentService;
 
     use super::*;
@@ -155,6 +197,29 @@ mod tests {
         let (count, got) = recorded(|| block_on(purge_expired_workspace_state(&repo)));
         assert_eq!(count, None);
         assert_eq!(got.counter(WORKSPACE_STATE_PURGED, &[]), 0);
+    }
+
+    #[tokio::test]
+    async fn the_account_purge_runs_for_real_and_returns_the_run() {
+        let mut service = MockAccountDeletionService::new();
+        service
+            .expect_purge_due()
+            .withf(|_, dry_run| !dry_run)
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(PurgeRunDto::default()) }));
+        assert_eq!(
+            purge_deleted_accounts(&service).await,
+            Some(PurgeRunDto::default())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_account_purge_run_returns_nothing() {
+        let mut service = MockAccountDeletionService::new();
+        service
+            .expect_purge_due()
+            .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        assert_eq!(purge_deleted_accounts(&service).await, None);
     }
 
     #[tokio::test]
