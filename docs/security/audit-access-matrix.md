@@ -209,6 +209,7 @@ and then daily; it exports the rows to the data directory before deleting them.
 | Default retention | none: rows are kept forever |
 | Range (operator-configurable) | 1 to 3650 days |
 | Env var | `RIM_AUDIT_RETENTION_DAYS` |
+| Shown to clients | `serverInfo.auditRetentionDays`, null when rows are kept forever |
 
 Source: `rim_infra_services/src/audit_retention.rs`. Operator view, the export format and the
 `audit purge` command: `docs/operations/audit-retention.md`.

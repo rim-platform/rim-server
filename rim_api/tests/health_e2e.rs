@@ -1,6 +1,6 @@
 //! The health probes and `serverInfo` over HTTP on a real server: `/healthz` and `/readyz`
 //! without a session or a matching `Origin`, `/readyz` turning 503 when a key file goes
-//! missing, and `serverInfo` without a session.
+//! missing, and `serverInfo` without a session, carrying the configured audit retention.
 //!
 //! Run with:
 //! ```sh
@@ -24,7 +24,7 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
         .await
         .expect("truncate");
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let node = start(&url, |_| {}).await;
+    let node = start(&url, |config| config.audit_retention_days = Some(90)).await;
     let http = reqwest::Client::new();
     let version = rim_server::config::VERSION;
 
@@ -62,7 +62,7 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
 
     let info: Value = http
         .post(format!("{}/api", node.origin))
-        .json(&json!({ "query": "{ serverInfo { version apiVersion } }" }))
+        .json(&json!({ "query": "{ serverInfo { version apiVersion auditRetentionDays } }" }))
         .send()
         .await
         .expect("serverInfo")
@@ -71,7 +71,11 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
         .expect("serverInfo json");
     assert_eq!(
         info,
-        json!({ "data": { "serverInfo": { "version": version, "apiVersion": 1 } } })
+        json!({ "data": { "serverInfo": {
+            "version": version,
+            "apiVersion": 1,
+            "auditRetentionDays": 90,
+        } } })
     );
 
     std::fs::remove_file(node.data.path().join("franking-key.json")).expect("remove key");

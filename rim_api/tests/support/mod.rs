@@ -386,6 +386,7 @@ fn schema_for(
         observers_arc,
         RegistrationContext {
             registration_mode: Arc::new(registration_mode),
+            audit_retention_days: None,
         },
         None,
     )
