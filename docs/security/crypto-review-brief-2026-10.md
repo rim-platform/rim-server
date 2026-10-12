@@ -16,8 +16,8 @@ repository on the day this brief was written.
 
 | Repository | Commit | Contents |
 |---|---|---|
-| `github.com/dvorakj31/rim-server` | `efdd71d3ce0ac22d1118d8f0a1d09109f2809b9c` | Server, the shared verifier crate `rim_identity`, the specs and decisions |
-| `github.com/dvorakj31/rim-ui` | `c4aadbf9933c2c1a94ccaffa25601ae8985f2d16` | Desktop app (Tauri, Rust), the `rim_mls` crate and its wasm build, the web app (TypeScript) |
+| `github.com/rim-platform/rim-server` | `efdd71d3ce0ac22d1118d8f0a1d09109f2809b9c` | Server, the shared verifier crate `rim_identity`, the specs and decisions |
+| `github.com/rim-platform/rim-ui` | `c4aadbf9933c2c1a94ccaffa25601ae8985f2d16` | Desktop app (Tauri, Rust), the `rim_mls` crate and its wasm build, the web app (TypeScript) |
 
 Paths below are relative to the repository named in the row or section. "server" means
 rim-server, "ui" means rim-ui, and "ui/tauri" means `rim-ui/src-tauri`.
@@ -767,9 +767,9 @@ real devices yet.
 
 ### 5.4 Contact
 
-The project owner is Jakub Dvořák (GitHub `dvorakj31`, repositories above). The reporting
-channel and contact details are in the engagement letter. Please report anything you would rate
-high or critical before the final write-up.
+The project is run by the maintainers of the `rim-platform` organisation on GitHub
+(repositories above). The reporting channel and contact details are in the engagement letter.
+Please report anything you would rate high or critical before the final write-up.
 
 ## 6. Known gaps and open questions
 

@@ -458,9 +458,10 @@ state.
 - **Encrypted channels.** Channels stay plaintext so server search, pipelines and the agent
   keep working there; E2EE covers DMs and private groups.
 
-## Open Decisions (for Jakub)
+## Open decisions
 
-From the 2026-10-08 master plan. Work proceeds on the recommended answer until told otherwise.
+From the 2026-10-08 master plan. Work proceeds on the recommended answer until the maintainer
+says otherwise.
 Decision 1 (go on the first PRs) was answered "go" on 2026-10-08. Since then: 10 is settled (the
 terminal is removed), 11 is settled differently (retention is configurable and keeps rows
 forever unless the operator sets `RIM_AUDIT_RETENTION_DAYS`), 12 is closed (the vertical is

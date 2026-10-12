@@ -3,6 +3,9 @@
 Anyone can contribute. This repository is licensed under the Apache License 2.0 (see `LICENSE`),
 and contributions are accepted under the same license.
 
+Everyone taking part follows the code of conduct in `CODE_OF_CONDUCT.md`. A vulnerability is
+not reported as an issue or a pull request: `SECURITY.md` says how to report it privately.
+
 ## Pull requests
 
 Use whatever tools you like to write the code, including AI assistants. The pull request has to

@@ -168,6 +168,7 @@ turns that into a release.
 
 The normative contracts, for anyone building a client or another server:
 
+- `docs/api.md`: talking to a server over HTTP
 - `docs/specs/key-identity-v1.md`: keys, signed statements, challenge login
 - `docs/specs/device-linking-v1.md`: giving a new device its certified key
 - `docs/specs/e2ee-mls-v1.md`: end-to-end encryption with MLS
@@ -181,4 +182,5 @@ The normative contracts, for anyone building a client or another server:
 ## License
 
 Apache License 2.0, see `LICENSE` and `NOTICE`. The license does not cover the RIM name, so
-forks should use a different name. To contribute, see `CONTRIBUTING.md`.
+forks should use a different name. To contribute, see `CONTRIBUTING.md`. To report a
+vulnerability, follow `SECURITY.md` and never open a public issue.
