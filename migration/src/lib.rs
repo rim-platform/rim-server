@@ -102,9 +102,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20261011_141814_widen_message_text::Migration),
             Box::new(m20261012_142739_add_ip_block::Migration),
             Box::new(m20261012_140916_add_terms_acceptance_to_user::Migration),
+            Box::new(m20261012_174304_add_account_deletion::Migration),
             Box::new(m20261012_173710_add_user_invite_chain::Migration),
             Box::new(m20261012_173711_add_blocked_email::Migration),
-            Box::new(m20261012_174304_add_account_deletion::Migration),
         ]
     }
 }
