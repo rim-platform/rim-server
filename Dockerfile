@@ -129,6 +129,9 @@ USER rim
 #   RIM_RESERVED_NAMES    — comma-separated usernames and display names signups and profile
 #                           edits refuse, also followed by -, _, . or a space (default: none);
 #                           an empty entry stops the server at boot
+#   RIM_PASSWORD_HASH_CONCURRENCY — Argon2 password hashes and checks run at once, 1-64
+#                           (default: the number of CPUs); each holds 64 MiB while it runs, and
+#                           a request that waits over 10 seconds for a turn answers UNAVAILABLE
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

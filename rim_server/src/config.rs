@@ -252,6 +252,12 @@ pub struct RIMConfig {
     /// each followed by `-`, `_`, `.` or a space. Controlled by `RIM_RESERVED_NAMES`; see
     /// [`RIMConfig::reserved_names`].
     pub reserved_names: Option<String>,
+
+    // ── Password hashing ────────────────────────────────────────────────────
+    /// Argon2 hashes and verifications the server runs at once, 1 to 64; default the number
+    /// of CPUs. Controlled by `RIM_PASSWORD_HASH_CONCURRENCY`; see
+    /// [`RIMConfig::password_hash_concurrency`].
+    pub password_hash_concurrency: Option<usize>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -439,6 +445,7 @@ impl Default for RIMConfig {
             rate_probation_messages_per_min: None,
             account_deletion_grace_days: None,
             reserved_names: None,
+            password_hash_concurrency: None,
         }
     }
 }
@@ -825,6 +832,22 @@ impl RIMConfig {
             Some(n) if (1..=MAX_FETCH_CONCURRENCY).contains(&n) => Ok(n),
             Some(n) => Err(format!(
                 "RIM_LINK_PREVIEW_CONCURRENCY={n} is outside 1 to {MAX_FETCH_CONCURRENCY}"
+            )),
+        }
+    }
+
+    /// `RIM_PASSWORD_HASH_CONCURRENCY`: the Argon2 computations run at once; the number of
+    /// CPUs, within 1 to 64, when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is outside 1 to 64.
+    pub fn password_hash_concurrency(&self) -> Result<usize, String> {
+        use rim_infra_services::password_hashing::{MAX_CONCURRENCY, PasswordHashing};
+        match self.password_hash_concurrency {
+            None => Ok(PasswordHashing::default_concurrency()),
+            Some(n) if (1..=MAX_CONCURRENCY).contains(&n) => Ok(n),
+            Some(n) => Err(format!(
+                "RIM_PASSWORD_HASH_CONCURRENCY={n} is outside 1 to {MAX_CONCURRENCY}"
             )),
         }
     }
@@ -1608,6 +1631,26 @@ mod tests {
         };
         let err = config.account_deletion_grace_days().unwrap_err();
         assert!(err.contains("RIM_ACCOUNT_DELETION_GRACE_DAYS"), "{err}");
+    }
+
+    #[test]
+    fn password_hash_concurrency_is_read_from_its_variable_within_1_to_64() {
+        let load = |value: &str| {
+            RIMConfig::load_from(env(&[
+                ("DATABASE_URL", "postgres://localhost/rim"),
+                ("RIM_PASSWORD_HASH_CONCURRENCY", value),
+            ]))
+            .expect("loads")
+            .password_hash_concurrency()
+        };
+        let default = RIMConfig::default().password_hash_concurrency();
+        assert!(matches!(default, Ok(1..=64)), "{default:?}");
+        assert_eq!(load("1"), Ok(1));
+        assert_eq!(load("64"), Ok(64));
+        for outside in ["0", "65"] {
+            let err = load(outside).unwrap_err();
+            assert!(err.contains("RIM_PASSWORD_HASH_CONCURRENCY"), "{err}");
+        }
     }
 
     #[test]

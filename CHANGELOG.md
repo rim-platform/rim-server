@@ -148,5 +148,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   addresses that embed a private IPv4 address through NAT64 (`64:ff9b::/96`) or 6to4
   (`2002::/16`). Server-to-server requests now ignore proxy environment variables, as link
   previews did. `docs/specs/server-to-server-v1.md` lists the refused ranges.
+- Password hashing and verification (signups, password logins, password resets) run off the
+  request workers, at most `RIM_PASSWORD_HASH_CONCURRENCY` at once (default: the number of
+  CPUs, 1 to 64), so a burst of logins no longer stalls other requests. A request that waits
+  over 10 seconds for a turn answers `UNAVAILABLE`.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

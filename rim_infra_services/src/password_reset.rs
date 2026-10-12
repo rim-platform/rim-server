@@ -5,7 +5,6 @@ use chrono::{Duration, Utc};
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 
-use rim_auth::password::hash_password;
 use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::repository::SessionRepository;
 use rim_core::password_reset::model::NewPasswordResetToken;
@@ -19,6 +18,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
+use crate::password_hashing::PasswordHashing;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::url_encode::percent_encode_path_segment;
@@ -45,6 +45,8 @@ pub struct DefaultPasswordResetService {
     public_base_url: Option<String>,
     /// Login's store of recent successful sources; a completed reset forgets the account's.
     known_login_sources: Option<KnownLoginSources>,
+    /// Runs the Argon2 work of a reset.
+    password_hashing: PasswordHashing,
 }
 
 impl DefaultPasswordResetService {
@@ -62,6 +64,7 @@ impl DefaultPasswordResetService {
             email_sender,
             public_base_url,
             known_login_sources: None,
+            password_hashing: PasswordHashing::default(),
         }
     }
 
@@ -69,6 +72,12 @@ impl DefaultPasswordResetService {
     /// attacker signed in from with the old password lose their login-limit exemption.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
         self.known_login_sources = Some(sources);
+        self
+    }
+
+    /// Run hashing through `hashing`, shared with other services.
+    pub(crate) fn with_password_hashing(mut self, hashing: PasswordHashing) -> Self {
+        self.password_hashing = hashing;
         self
     }
 
@@ -250,7 +259,7 @@ impl PasswordResetService for DefaultPasswordResetService {
             ));
         }
 
-        let password_hash = hash_password(&cmd.new_password).map_err(ServiceError::internal)?;
+        let password_hash = self.password_hashing.hash(&cmd.new_password).await?;
 
         // Claim the token, set the password, and cut off every other way back into the account
         // (outstanding reset links, existing sessions) in one transaction when a DB is available.
