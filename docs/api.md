@@ -170,6 +170,11 @@ reports `https`. These mutations set it, and need no session or CSRF header:
   such as a key-only account or one that enrolled an identity key, cannot sign in this way.
 - **Invite signup.** `signupWithInvite` creates a password account and signs it in.
 
+When the server has terms of service (`serverInfo.termsUrl` is set), both signups must accept
+them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup without it, or with
+another URL, answers `VALIDATION`. The server records the acceptance and its time on the
+account. Without terms on the server the field is ignored.
+
 `logout` ends the session and clears both cookies; `logoutOtherSessions` ends every other
 session of the account.
 
@@ -329,6 +334,10 @@ each list.
   that is not enabled and ignores a `key` it does not know (`operations/features.md`).
 - **`auditRetentionDays`**: how many days a command audit row is kept, or null when rows are
   kept forever (`operations/audit-retention.md`).
+- **`instanceNotice`**: a short text from the operator, at most 500 characters, such as who
+  runs the server; null when there is none. A client shows it where people sign up or sign in.
+- **`termsUrl`**: the terms of service a signup accepts, an absolute http(s) URL; null when the
+  server has none. A client links it at signup and sends it back as `acceptedTermsUrl`.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

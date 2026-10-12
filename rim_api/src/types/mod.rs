@@ -108,7 +108,7 @@ pub use remote_workspace::{
     RevocationFanout, RevocationFanoutStatus,
 };
 pub use server_info::{
-    API_VERSION, AuditRetention, ServerFeatureInfo, ServerFeatureState, ServerInfo,
+    API_VERSION, AuditRetention, InstancePolicy, ServerFeatureInfo, ServerFeatureState, ServerInfo,
 };
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};

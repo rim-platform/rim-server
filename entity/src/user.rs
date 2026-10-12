@@ -29,6 +29,11 @@ pub struct Model {
     pub identity_key: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub home_relay: Option<String>,
+    /// When the account accepted the instance's terms at signup.
+    pub terms_accepted_at: Option<DateTimeWithTimeZone>,
+    /// The terms URL the account accepted.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub terms_accepted_url: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

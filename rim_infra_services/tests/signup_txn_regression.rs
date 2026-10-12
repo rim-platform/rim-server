@@ -110,6 +110,7 @@ async fn signup_with_instance_invite_rolls_back_on_conflict() {
             password: "password1234".to_string(),
             email: "new@example.com".to_string(),
             display_name: None,
+            terms_accepted_url: None,
         })
         .await;
 
@@ -191,6 +192,7 @@ async fn signup_with_instance_invite_commits_atomically() {
             password: "password1234".to_string(),
             email: "invited@example.com".to_string(),
             display_name: None,
+            terms_accepted_url: None,
         })
         .await;
 
@@ -249,6 +251,7 @@ async fn signup_open_commits_user_and_session_atomically() {
             remote_ip: "127.0.0.1".to_string(),
             email: "open@example.com".to_string(),
             display_name: None,
+            terms_accepted_url: None,
         })
         .await;
 
@@ -340,7 +343,8 @@ async fn concurrent_instance_invite_revoke_exactly_one_wins() {
 // ---------------------------------------------------------------------------
 
 /// Smoke-test that `accept_invite` (which already used transactional repos for
-/// the session insert before this fix) continues to work correctly.
+/// the session insert before this fix) continues to work correctly, recording the
+/// accepted terms in the same transaction.
 ///
 /// This test guards against regressions introduced while touching the sibling
 /// paths.
@@ -407,6 +411,7 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
             invite_token: raw_token.to_string(),
             username: "accepteduser".to_string(),
             password: "password1234".to_string(),
+            terms_accepted_url: Some("https://rim.example.org/terms".to_string()),
         })
         .await;
 
@@ -436,4 +441,20 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
         .expect("invite query failed")
         .expect("invite must still exist");
     assert_eq!(invite_after.use_count, 1);
+
+    // the accepted terms are on the user row
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT terms_accepted_url, terms_accepted_at IS NOT NULL AS stamped FROM "user" WHERE id = $1"#,
+            [sea_orm::prelude::Uuid::from(user.id).into()],
+        ))
+        .await
+        .expect("user row query failed")
+        .expect("user row must exist");
+    let url: Option<String> = row.try_get("", "terms_accepted_url").expect("url");
+    let stamped: bool = row.try_get("", "stamped").expect("stamped");
+    assert_eq!(url.as_deref(), Some("https://rim.example.org/terms"));
+    assert!(stamped);
 }

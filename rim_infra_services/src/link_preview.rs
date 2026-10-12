@@ -604,4 +604,34 @@ mod tests {
             .expect("serve");
         assert!(served.is_empty());
     }
+
+    /// An enabled feature serves the stored previews from the repository, as without a gate.
+    #[tokio::test]
+    async fn an_enabled_feature_serves_stored_previews() {
+        use rim_core::link_preview::model::{LinkPreview, LinkPreviewId};
+        use rim_core::link_preview::repository::MockLinkPreviewRepository;
+
+        let message_id = MessageId::new();
+        let mut repo = MockLinkPreviewRepository::new();
+        repo.expect_get_for_messages().times(1).returning(move |_| {
+            let preview = LinkPreview {
+                id: LinkPreviewId::new(),
+                message_id,
+                url: "https://example.com/".to_string(),
+                title: Some("Example".to_string()),
+                description: None,
+                image_url: None,
+                site_name: None,
+                fetched_at: chrono::Utc::now(),
+            };
+            Box::pin(async move { Ok(HashMap::from([(message_id, vec![preview])])) })
+        });
+        let gate = crate::feature_gate::InstanceFeatureGate::new(&[], &[]);
+        let svc = DefaultLinkPreviewService::new(Arc::new(repo)).with_feature_gate(Arc::new(gate));
+        let served = svc
+            .get_previews_for_messages(&[message_id])
+            .await
+            .expect("serve");
+        assert_eq!(served[&message_id][0].url, "https://example.com/");
+    }
 }

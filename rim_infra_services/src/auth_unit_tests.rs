@@ -767,6 +767,7 @@ mod tests {
                 invite_token: "token".to_string(),
                 username: "taken".to_string(),
                 password: "password123".to_string(),
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -845,6 +846,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap();
@@ -910,6 +912,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "bob@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await;
         assert!(res.is_ok(), "first use should succeed");
@@ -922,6 +925,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "carol@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -979,6 +983,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "user@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap();
@@ -991,6 +996,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "user4@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1022,6 +1028,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1051,6 +1058,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1094,12 +1102,97 @@ mod tests {
                 remote_ip: "1.2.3.4".to_string(),
                 email: "carol@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap();
 
         assert_eq!(res.user_id, user_id);
         assert!(res.server_id.is_none());
+    }
+
+    const TERMS: &str = "https://rim.example.org/terms";
+
+    /// A user store for one signup that creates `user_id` and expects the acceptance of
+    /// [`TERMS`] recorded on it once.
+    fn user_repo_recording_terms(user_id: UserId) -> MockUserRepository {
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_create_user()
+            .returning(move |new| Ok(make_user(user_id, &new.username)));
+        let before = Utc::now();
+        user_repo
+            .expect_record_terms_acceptance()
+            .withf(move |id, url, at| *id == user_id && url == TERMS && *at >= before)
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        user_repo
+    }
+
+    fn session_repo_creating() -> MockSessionRepository {
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_create_session()
+            .returning(|new| Ok(make_session(SessionId::new(), new.user_id)));
+        session_repo
+    }
+
+    /// The open and instance-invite signups record the terms they accepted on the new account.
+    #[tokio::test]
+    async fn password_signups_record_the_accepted_terms() {
+        let user_id = UserId::new();
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo_recording_terms(user_id),
+            sr,
+            smr,
+            session_repo_creating(),
+            ir,
+            cr,
+            MockInstanceInviteRepository::new(),
+        );
+        svc.signup_open(SignupOpenCmd {
+            username: "carol".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            remote_ip: "1.2.3.4".to_string(),
+            email: "carol@example.com".to_string(),
+            display_name: None,
+            terms_accepted_url: Some(TERMS.to_string()),
+        })
+        .await
+        .expect("open signup");
+
+        let user_id = UserId::new();
+        let invite = make_instance_invite(InstanceInviteId::new(), 1, 0);
+        let mut instance_invite_repo = MockInstanceInviteRepository::new();
+        instance_invite_repo
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(invite.clone())));
+        instance_invite_repo
+            .expect_try_consume()
+            .returning(|_| Ok(true));
+        let (_, sr, smr, _, ir, cr) = repos();
+        let svc = svc_with_registration(
+            user_repo_recording_terms(user_id),
+            sr,
+            smr,
+            session_repo_creating(),
+            ir,
+            cr,
+            instance_invite_repo,
+        );
+        svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
+            instance_invite_token: "raw_token".to_string(),
+            username: "alice".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            email: "alice@example.com".to_string(),
+            display_name: None,
+            terms_accepted_url: Some(TERMS.to_string()),
+        })
+        .await
+        .expect("instance invite signup");
     }
 
     /// Open-mode signup rate-limited after threshold.
@@ -1154,6 +1247,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1181,6 +1275,7 @@ mod tests {
                 password: "short".to_string(), // < 8 chars — validation fires before email check
                 email: "alice@example.com".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1534,6 +1629,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "  Foo@Bar.COM ".to_string(), // whitespace + mixed case
                 display_name: Some("Alice Smith".to_string()),
+                terms_accepted_url: None,
             })
             .await
             .unwrap();
@@ -1576,6 +1672,7 @@ mod tests {
                 // Mixed-case version of the pre-seeded email; normalises to "x@y.zz".
                 email: "X@Y.ZZ".to_string(),
                 display_name: None,
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();
@@ -1619,6 +1716,7 @@ mod tests {
                     password: "s3cur3p4ss!".to_string(),
                     email: bad_email.to_string(),
                     display_name: None,
+                    terms_accepted_url: None,
                 })
                 .await
                 .unwrap_err();
@@ -1689,6 +1787,7 @@ mod tests {
             password: "s3cur3p4ss!".to_string(),
             email: "alice@example.com".to_string(),
             display_name: None,
+            terms_accepted_url: None,
         })
         .await
         .unwrap();
@@ -1755,6 +1854,7 @@ mod tests {
             password: "s3cur3p4ss!".to_string(),
             email: "alice@example.com".to_string(),
             display_name: Some("   ".to_string()), // blank after trim → falls back to username
+            terms_accepted_url: None,
         })
         .await
         .unwrap();
@@ -1782,6 +1882,7 @@ mod tests {
                 password: "s3cur3p4ss!".to_string(),
                 email: "alice@example.com".to_string(),
                 display_name: Some(long_name),
+                terms_accepted_url: None,
             })
             .await
             .unwrap_err();

@@ -20,6 +20,12 @@ pub struct ServerInfo {
     /// Days a command audit row is kept before it is exported and deleted; null keeps rows
     /// forever.
     pub audit_retention_days: Option<u32>,
+    /// A short text the operator shows people on this instance, at most 500 characters; null
+    /// when there is none.
+    pub instance_notice: Option<String>,
+    /// The terms of service a signup accepts, an absolute http(s) URL; null when the instance
+    /// has none. A signup sends it back as `acceptedTermsUrl`.
+    pub terms_url: Option<String>,
 }
 
 /// The configured command audit retention in days, held in the schema data; `None` keeps rows
@@ -27,10 +33,24 @@ pub struct ServerInfo {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuditRetention(pub Option<u32>);
 
+/// What the operator publishes about the instance, held in the schema data: the notice shown
+/// to people and the terms URL every signup accepts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InstancePolicy {
+    /// The instance notice; `None` when there is none.
+    pub notice: Option<String>,
+    /// The terms of service URL; `None` when signups accept no terms.
+    pub terms_url: Option<String>,
+}
+
 impl ServerInfo {
-    /// This build's version and API version, with the features `gate` reports and the audit
-    /// `retention`.
-    pub fn current(gate: &dyn FeatureGate, retention: AuditRetention) -> Self {
+    /// This build's version and API version, with the features `gate` reports, the audit
+    /// `retention` and the instance `policy`.
+    pub fn current(
+        gate: &dyn FeatureGate,
+        retention: AuditRetention,
+        policy: &InstancePolicy,
+    ) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             api_version: API_VERSION,
@@ -40,6 +60,8 @@ impl ServerInfo {
                 .map(|(feature, state)| ServerFeatureInfo::new(feature, &state))
                 .collect(),
             audit_retention_days: retention.0,
+            instance_notice: policy.notice.clone(),
+            terms_url: policy.terms_url.clone(),
         }
     }
 }

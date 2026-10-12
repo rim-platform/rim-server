@@ -1,4 +1,5 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::message::command::{
     DeleteMessageCmd, EditMessageCmd, ReplyToMessageCmd, SendMessageCmd,
@@ -331,7 +332,9 @@ fn spawn_link_preview_fetch(
     text: &str,
 ) -> Result<()> {
     let urls = rim_services::link_preview::extract_urls(text);
-    if urls.is_empty() {
+    if urls.is_empty()
+        || !crate::features::feature_state(ctx, ServerFeature::LinkPreviews)?.is_enabled()
+    {
         return Ok(());
     }
     let link_svc = ctx

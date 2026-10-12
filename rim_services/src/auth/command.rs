@@ -46,6 +46,8 @@ pub struct AcceptInviteCmd {
     pub invite_token: String,
     pub username: String,
     pub password: String,
+    /// The terms URL the person accepted, recorded on the new account; `None` records nothing.
+    pub terms_accepted_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,8 @@ pub struct SignupWithInstanceInviteCmd {
     /// Optional display name (raw input). The service normalises and falls back
     /// to `username` when absent or blank after trim.
     pub display_name: Option<String>,
+    /// The terms URL the person accepted, recorded on the new account; `None` records nothing.
+    pub terms_accepted_url: Option<String>,
 }
 
 /// Command for open-mode signup (no token required).
@@ -93,6 +97,8 @@ pub struct SignupOpenCmd {
     /// Optional display name (raw input). The service normalises and falls back
     /// to `username` when absent or blank after trim.
     pub display_name: Option<String>,
+    /// The terms URL the person accepted, recorded on the new account; `None` records nothing.
+    pub terms_accepted_url: Option<String>,
 }
 
 /// Query to preview a registration token (instance or workspace invite).

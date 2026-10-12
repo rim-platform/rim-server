@@ -157,7 +157,7 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("serverInfo: ServerInfo!"));
     assert!(sdl.contains(
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
-         auditRetentionDays: Int }"
+         auditRetentionDays: Int instanceNotice: String termsUrl: String }"
     ));
     assert!(sdl.contains(
         "type ServerFeatureInfo { key: String! state: ServerFeatureState! reason: String }"
@@ -171,7 +171,7 @@ async fn server_info_needs_no_session() {
     let schema = schema_with_user_mock(MockUserService::new());
     let res = schema
         .execute(Request::new(
-            "{ serverInfo { version apiVersion auditRetentionDays } }",
+            "{ serverInfo { version apiVersion auditRetentionDays instanceNotice termsUrl } }",
         ))
         .await;
     assert_no_errors(&res);
@@ -179,6 +179,8 @@ async fn server_info_needs_no_session() {
     assert_eq!(data["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(data["serverInfo"]["apiVersion"], crate::types::API_VERSION);
     assert!(data["serverInfo"]["auditRetentionDays"].is_null());
+    assert!(data["serverInfo"]["instanceNotice"].is_null());
+    assert!(data["serverInfo"]["termsUrl"].is_null());
 }
 
 /// `serverInfo.auditRetentionDays` reports the configured audit retention.
@@ -194,4 +196,41 @@ async fn server_info_reports_the_audit_retention() {
     assert_no_errors(&res);
     let data = res.data.into_json().expect("json");
     assert_eq!(data["serverInfo"]["auditRetentionDays"], 90);
+}
+
+/// `serverInfo.instanceNotice` and `termsUrl` report the configured instance policy.
+#[tokio::test]
+async fn server_info_reports_the_instance_notice_and_terms() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(
+            Request::new("{ serverInfo { instanceNotice termsUrl } }").data(
+                crate::types::InstancePolicy {
+                    notice: Some("Run by the Example club.".to_string()),
+                    terms_url: Some("https://rim.example.org/terms".to_string()),
+                },
+            ),
+        )
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert_eq!(
+        data["serverInfo"],
+        serde_json::json!({
+            "instanceNotice": "Run by the Example club.",
+            "termsUrl": "https://rim.example.org/terms",
+        })
+    );
+}
+
+/// Both signup inputs end with the optional `acceptedTermsUrl`.
+#[test]
+fn signup_inputs_take_the_accepted_terms_last() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "instanceInviteToken: String workspaceInviteToken: String acceptedTermsUrl: String }",
+        "proofOfWork: String acceptedTermsUrl: String }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
 }

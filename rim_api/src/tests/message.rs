@@ -292,6 +292,65 @@ async fn send_message_mutation_creates_message() {
     );
 }
 
+/// A message with a link starts the preview fetch only while `link_previews` is enabled.
+#[tokio::test]
+async fn send_message_fetches_link_previews_only_while_the_feature_is_enabled() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use rim_core::server_feature::model::ServerFeature;
+
+    let actor = UserId::new();
+    let server_id = ServerId::new();
+    let conversation_id = ConversationId::new();
+    for (disabled, expected) in [(vec![ServerFeature::LinkPreviews], 0), (vec![], 1)] {
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let mut previews = MockLinkPreviewService::new();
+        let counted = Arc::clone(&fetches);
+        previews.expect_fetch_and_store().returning(move |_, _| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Vec::new()) })
+        });
+        let mut msg = MockMessageService::new();
+        msg.expect_send_message().returning(move |_cmd| {
+            Box::pin(async move {
+                let mut dto = test_message_dto();
+                dto.server_id = server_id;
+                dto.conversation_id = conversation_id;
+                dto.author_id = actor;
+                Ok(dto)
+            })
+        });
+        let schema = schema_with_mocks(
+            MockAuthService::new(),
+            MockConversationService::new(),
+            msg,
+            MockMessageAttachmentService::new(),
+            MockThreadService::new(),
+        );
+        let req = authed_request(
+            r#"mutation($sid: ID!, $cid: ID!) { sendMessage(input: { serverId: $sid, conversationId: $cid, text: "see https://example.com/page" }) { id } }"#,
+            actor,
+        )
+        .variables(Variables::from_json(serde_json::json!({
+            "sid": server_id.to_string(),
+            "cid": conversation_id.to_string(),
+        })));
+        let req = with_features_disabled(req, &disabled)
+            .data(Arc::new(previews) as Arc<dyn rim_services::link_preview::LinkPreviewService>);
+
+        let res = schema.execute(req).await;
+        assert_no_errors(&res);
+        // The fetch runs on a spawned task; give it time to start.
+        for _ in 0..50 {
+            if fetches.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), expected, "{disabled:?}");
+    }
+}
+
 // ── editMessage mutation ─────────────────────────────────────────────
 
 #[tokio::test]

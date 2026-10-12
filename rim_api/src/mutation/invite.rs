@@ -51,6 +51,18 @@ pub(crate) fn registration_token(
     Err(async_graphql::Error::new(message).extend_with(|_, e| e.set("code", "VALIDATION")))
 }
 
+/// The terms URL a signup records under the instance's policy: the instance's terms when the
+/// signup accepted them, `None` when the instance has none. Shared by `signupWithInvite` and
+/// `signupWithKey`.
+///
+/// # Errors
+/// `VALIDATION` when the instance has terms and `accepted` is missing or different.
+pub(crate) fn accepted_terms(ctx: &Context<'_>, accepted: Option<&str>) -> Result<Option<String>> {
+    let policy = ctx.data::<crate::types::InstancePolicy>()?;
+    rim_services::auth::terms::accepted_terms(policy.terms_url.as_deref(), accepted)
+        .map_err(map_service_error)
+}
+
 #[Object]
 impl InviteMutations {
     async fn create_invite(
@@ -123,6 +135,7 @@ impl InviteMutations {
             input.instance_invite_token,
             input.workspace_invite_token,
         )?;
+        let terms_accepted_url = accepted_terms(ctx, input.accepted_terms_url.as_deref())?;
 
         // Normalise email at the resolver boundary (trim + lowercase) as
         // defence in depth; the service also validates on the way in.
@@ -137,6 +150,7 @@ impl InviteMutations {
                         password: input.password,
                         email,
                         display_name: input.display_name,
+                        terms_accepted_url,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -154,6 +168,7 @@ impl InviteMutations {
                         invite_token: raw,
                         username: input.username,
                         password: input.password,
+                        terms_accepted_url,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -175,6 +190,7 @@ impl InviteMutations {
                         remote_ip,
                         email,
                         display_name: input.display_name,
+                        terms_accepted_url,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -251,6 +267,10 @@ pub struct SignupWithInviteInput {
     pub password: String,
     pub instance_invite_token: Option<String>,
     pub workspace_invite_token: Option<String>,
+    /// The terms of service the person accepted: `serverInfo.termsUrl`, sent back unchanged.
+    /// Required when the server has terms (`VALIDATION` when missing or different); ignored
+    /// when it has none.
+    pub accepted_terms_url: Option<String>,
 }
 
 #[cfg(test)]

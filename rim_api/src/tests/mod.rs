@@ -86,6 +86,7 @@ fn test_registration_context() -> crate::RegistrationContext {
     crate::RegistrationContext {
         registration_mode: Arc::new(rim_services::auth::dto::RegistrationMode::InviteOnly),
         audit_retention_days: None,
+        instance_policy: Default::default(),
     }
 }
 
