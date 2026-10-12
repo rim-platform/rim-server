@@ -21,6 +21,7 @@ use rim_services::account_deletion::dto::{
 use rim_services::account_deletion::service::AccountDeletionService;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::remote_workspace::service::WorkspaceRelayService;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::storage::service::StorageService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -44,6 +45,8 @@ pub struct DefaultAccountDeletionService {
     /// This server as its users' relay: cancels a purged account's subscriptions at the hosts
     /// holding it. `None` without server-to-server wiring.
     relay_departure: Option<Arc<dyn WorkspaceRelayService>>,
+    /// Told of the sessions a request or a purge ends, so their live connections close.
+    session_revocations: Arc<dyn SessionRevocations>,
 }
 
 impl DefaultAccountDeletionService {
@@ -63,7 +66,14 @@ impl DefaultAccountDeletionService {
             grace: Duration::days(i64::from(DEFAULT_GRACE_DAYS)),
             clock: Arc::new(Utc::now),
             relay_departure: None,
+            session_revocations: crate::session_revocation::unshared(),
         }
+    }
+
+    /// Report the sessions a request or a purge ends to `revocations`.
+    pub fn with_session_revocations(mut self, revocations: Arc<dyn SessionRevocations>) -> Self {
+        self.session_revocations = revocations;
+        self
     }
 
     /// Time between a request and the purge.
@@ -146,6 +156,7 @@ impl DefaultAccountDeletionService {
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
+        self.session_revocations.revoke_user(user_id);
 
         let files = self.delete_files(user_id, &done.storage_keys).await;
         for workspace_id in &done.left_workspaces {
@@ -247,6 +258,8 @@ impl AccountDeletionService for DefaultAccountDeletionService {
             .session_repo
             .revoke_all_for_user_except(user_id, cmd.session_id)
             .await?;
+        self.session_revocations
+            .revoke_user_except(user_id, cmd.session_id);
         info!(
             target: "audit",
             event = "account.deletion_requested",
@@ -308,9 +321,25 @@ mod tests {
     use rim_core::server::model::ServerId;
     use rim_services::events::Broadcaster;
     use rim_services::remote_workspace::service::MockWorkspaceRelayService;
+    use rim_services::session_revocation::{SessionWatch, WatchedSession};
     use rim_services::storage::service::MockStorageService;
 
     use super::*;
+    use crate::session_revocation::InProcessSessionRevocations;
+
+    /// A registry with a live connection of `session_id` for `user_id`, and that connection.
+    fn watching(
+        user_id: UserId,
+        session_id: SessionId,
+    ) -> (Arc<InProcessSessionRevocations>, SessionWatch) {
+        let registry = Arc::new(InProcessSessionRevocations::default());
+        let watch = registry.watch(WatchedSession {
+            session_id,
+            user_id,
+            device_key_id: None,
+        });
+        (registry, watch)
+    }
 
     /// Every event broadcast through it, in order.
     #[derive(Default)]
@@ -424,12 +453,21 @@ mod tests {
             .withf(move |id, keep| *id == user_id && *keep == session_id)
             .times(1)
             .returning(|_, _| Ok(2));
+        let (registry, mut caller) = watching(user_id, session_id);
+        let mut other = registry.watch(WatchedSession {
+            session_id: SessionId::new(),
+            user_id,
+            device_key_id: None,
+        });
 
         let scheduled = service(repo, sessions)
+            .with_session_revocations(registry)
             .request_deletion(request(user_id, session_id, " alice "))
             .await
             .expect("scheduled");
         assert_eq!(scheduled.scheduled_for, fixed_now() + Duration::days(14));
+        assert!(other.has_ended(), "the other session's connection closes");
+        assert!(!caller.has_ended(), "the requesting connection stays");
     }
 
     #[tokio::test]
@@ -656,15 +694,21 @@ mod tests {
             Box::pin(async { Ok(()) })
         });
         let events = Arc::new(Recorder::default());
+        let (registry, mut connection) = watching(user_id, SessionId::new());
         let run = service_with(
             repo,
             MockSessionRepository::new(),
             storage,
             Arc::clone(&events),
         )
+        .with_session_revocations(registry)
         .purge_due(fixed_now(), false)
         .await
         .expect("run");
+        assert!(
+            connection.has_ended(),
+            "the purge closes the account's connections"
+        );
 
         let steps: Vec<&str> = calls.lock().expect("lock").iter().map(|c| c.1).collect();
         assert_eq!(steps, STEPS);
@@ -756,6 +800,7 @@ mod tests {
         let mut relay = MockWorkspaceRelayService::new();
         relay.expect_leave_relay().never();
         let events = Arc::new(Recorder::default());
+        let (registry, mut connection) = watching(user_id, SessionId::new());
         let run = service_with(
             repo,
             MockSessionRepository::new(),
@@ -763,9 +808,11 @@ mod tests {
             Arc::clone(&events),
         )
         .with_relay_departure(Arc::new(relay))
+        .with_session_revocations(registry)
         .purge_due(fixed_now(), true)
         .await
         .expect("run");
+        assert!(!connection.has_ended(), "a dry run closes no connection");
         assert!(run.dry_run);
         assert_eq!(run.purged.len(), 1);
         assert_eq!(run.purged[0].files, 3);

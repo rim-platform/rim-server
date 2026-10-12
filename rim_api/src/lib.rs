@@ -26,6 +26,8 @@ pub mod operation;
 pub mod pagination;
 pub mod query;
 pub mod resolve;
+// pub: rim_server gives each WebSocket connection the session it revalidates.
+pub mod session_guard;
 pub mod subscription;
 // pub: rim_server gives each WebSocket connection its subscription slots.
 pub mod subscription_limit;
@@ -136,6 +138,7 @@ pub fn build_schema(
             registration.audit_retention_days,
         ))
         .extension(crate::subscription_limit::SubscriptionLimit)
+        .extension(crate::session_guard::SessionGuard)
         .extension(crate::subscriptions_only::SubscriptionsOnly)
         .data(registration.instance_policy)
         .data(registration.instance_limits)

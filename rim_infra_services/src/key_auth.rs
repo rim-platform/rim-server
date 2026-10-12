@@ -45,6 +45,7 @@ use rim_services::key_auth::service::KeyAuthService;
 use rim_services::limits::InstanceLimits;
 use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::RevocationFanout;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::quota::Quotas;
@@ -134,6 +135,9 @@ pub struct DefaultKeyAuthService {
     revocation_fanout: Option<Arc<dyn RevocationFanout>>,
     /// Usernames and display names signups may not take.
     reserved_names: ReservedNames,
+    /// Told of the sessions a device revocation or a recovery ends, so their live connections
+    /// close.
+    session_revocations: Arc<dyn SessionRevocations>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -271,6 +275,7 @@ impl DefaultKeyAuthService {
             host_service: None,
             revocation_fanout: None,
             reserved_names: ReservedNames::default(),
+            session_revocations: crate::session_revocation::unshared(),
         }
     }
 
@@ -348,6 +353,12 @@ impl DefaultKeyAuthService {
 
     pub fn with_revocation_fanout(mut self, fanout: Arc<dyn RevocationFanout>) -> Self {
         self.revocation_fanout = Some(fanout);
+        self
+    }
+
+    /// Report the sessions a device revocation or a recovery ends to `revocations`.
+    pub fn with_session_revocations(mut self, revocations: Arc<dyn SessionRevocations>) -> Self {
+        self.session_revocations = revocations;
         self
     }
 
@@ -1182,6 +1193,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .await?;
         let ended_sessions = repos.session_repo.revoke_all_for_device(device.id).await?;
         Self::commit(scope).await?;
+        self.session_revocations.revoke_device(device.id);
         if newly_revoked {
             self.devices_changed(user_id).await;
             self.identity_changed(user_id);
@@ -1287,6 +1299,9 @@ impl KeyAuthService for DefaultKeyAuthService {
             insert_device(&repos, new_device(user_id, cert, device)).await?;
         }
         Self::commit(scope).await?;
+        if signer == RotationSigner::Recovery {
+            self.session_revocations.revoke_user(user_id);
+        }
         if revoked_devices > 0 {
             self.devices_changed(user_id).await;
         }

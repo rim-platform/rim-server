@@ -45,6 +45,7 @@ use rim_services::remote_workspace::service::{
     RevocationFanout, WorkspaceHostService, WorkspaceRelayService,
 };
 use rim_services::s2s::service::{PeerService, S2sClient, S2sNonceService};
+use rim_services::session_revocation::SessionRevocations;
 
 pub struct AppRuntime {
     pub schema: AppSchema,
@@ -65,6 +66,8 @@ pub struct AppRuntime {
     pub shutdown_tx: watch::Sender<bool>,
     /// The IP deny list the edge refuses, kept current by a background task.
     pub(crate) ip_deny_list: Arc<crate::edge::IpDenyList>,
+    /// Where ended sessions are reported; each WebSocket connection watches its session here.
+    pub session_revocations: Arc<dyn SessionRevocations>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -469,6 +472,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn WorkspaceRelayService>),
     )
     .with_link_preview_concurrency(link_preview_concurrency);
+    let session_revocations = service_provider.session_revocations();
+    s2s.workspace_host
+        .set_session_revocations(Arc::clone(&session_revocations));
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(service_provider);
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 
@@ -756,6 +762,16 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    // Background task: end the WebSocket connections of sessions that ended where this
+    // process did not hear of it (another process, expiry, a purge), every interval.
+    if let Some(interval) = config.ws_session_recheck() {
+        tokio::spawn(rim_infra_services::session_revocation::run_recheck(
+            service_provider.request_authenticator(),
+            Arc::clone(&session_revocations),
+            interval,
+            shutdown_tx.subscribe(),
+        ));
+    }
     // Background task: purge the accounts whose deletion grace period ended, hourly.
     tokio::spawn(rim_infra_services::scheduled_purges::run_account_purge(
         service_provider.account_deletion_service(),
@@ -828,6 +844,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         db: raw_db_for_tasks,
         shutdown_tx,
         ip_deny_list,
+        session_revocations,
     })
 }
 

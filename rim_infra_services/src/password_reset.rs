@@ -14,6 +14,7 @@ use rim_infra_db::begin_transaction;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::password_reset::command::{RequestPasswordResetCmd, ResetPasswordCmd};
 use rim_services::password_reset::service::PasswordResetService;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::email::{EmailSender, templates};
@@ -47,6 +48,8 @@ pub struct DefaultPasswordResetService {
     known_login_sources: Option<KnownLoginSources>,
     /// Runs the Argon2 work of a reset.
     password_hashing: PasswordHashing,
+    /// Told of the sessions a completed reset ends, so their live connections close.
+    session_revocations: Arc<dyn SessionRevocations>,
 }
 
 impl DefaultPasswordResetService {
@@ -65,7 +68,17 @@ impl DefaultPasswordResetService {
             public_base_url,
             known_login_sources: None,
             password_hashing: PasswordHashing::default(),
+            session_revocations: crate::session_revocation::unshared(),
         }
+    }
+
+    /// Report the sessions a completed reset ends to `revocations`.
+    pub(crate) fn with_session_revocations(
+        mut self,
+        revocations: Arc<dyn SessionRevocations>,
+    ) -> Self {
+        self.session_revocations = revocations;
+        self
     }
 
     /// Forget the account's recent login sources on each completed reset, so addresses an
@@ -303,6 +316,7 @@ impl PasswordResetService for DefaultPasswordResetService {
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
+        self.session_revocations.revoke_user(record.user_id);
 
         if let Some(sources) = &self.known_login_sources {
             sources.forget(&user.username);
@@ -323,11 +337,14 @@ impl PasswordResetService for DefaultPasswordResetService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_revocation::InProcessSessionRevocations;
+    use rim_core::auth::model::SessionId;
     use rim_core::auth::repository::MockSessionRepository;
     use rim_core::password_reset::model::{PasswordResetToken, PasswordResetTokenId};
     use rim_core::password_reset::repository::MockPasswordResetTokenRepository;
     use rim_core::user::model::{User, UserId};
     use rim_core::user::repository::MockUserRepository;
+    use rim_services::session_revocation::WatchedSession;
 
     fn make_user(id: UserId, username: &str, email: &str) -> User {
         let now = Utc::now();
@@ -703,6 +720,12 @@ mod tests {
         let now = Utc::now();
         known.record("6.6.6.6", "alice", now);
         known.record("1.1.1.1", "bob", now);
+        let registry = Arc::new(InProcessSessionRevocations::default());
+        let mut connection = registry.watch(WatchedSession {
+            session_id: SessionId::new(),
+            user_id,
+            device_key_id: None,
+        });
         let svc = build_service_with_sessions(
             user_repo,
             token_repo,
@@ -710,7 +733,8 @@ mod tests {
             crate::email::MockEmailSender::new(),
             None,
         )
-        .with_known_login_sources(known.clone());
+        .with_known_login_sources(known.clone())
+        .with_session_revocations(registry);
 
         svc.reset_password(ResetPasswordCmd {
             token: "rim_rst_valid".to_string(),
@@ -722,6 +746,10 @@ mod tests {
         assert!(
             !known.is_known("6.6.6.6", "alice", now),
             "a reset must forget the account's login sources"
+        );
+        assert!(
+            connection.has_ended(),
+            "a reset closes the account's connections"
         );
         assert!(known.is_known("1.1.1.1", "bob", now));
     }

@@ -674,6 +674,7 @@ mod tests {
                             user_id: Some(user_id),
                             session_id: Some(SessionId::new()),
                             device_key_id: None,
+                            expires_at: None,
                         }
                     } else {
                         RequestAuthResultDto::default()

@@ -482,6 +482,7 @@ fragment Inner on Mutation {
                         user_id: Some(user_id),
                         session_id: Some(session_id),
                         device_key_id: None,
+                        expires_at: None,
                     })
                 })
             });

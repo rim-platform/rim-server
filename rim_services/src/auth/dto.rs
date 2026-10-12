@@ -55,6 +55,8 @@ pub struct RequestAuthResultDto {
     pub session_id: Option<rim_core::auth::model::SessionId>,
     /// The device the session is bound to.
     pub device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
+    /// When the session expires.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// Result of any signup path (instance invite, workspace invite, open).

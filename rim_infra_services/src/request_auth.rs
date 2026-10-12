@@ -1,20 +1,33 @@
 use async_trait::async_trait;
 
 use rim_auth::session_token::hash_token;
+use rim_core::auth::model::SessionId;
 use rim_services::ServiceResult;
 use rim_services::auth::dto::RequestAuthResultDto;
 use rim_services::auth::service::RequestAuthenticator;
 
 use crate::RequestAuthRepos;
+use crate::clock::Clock;
 
 #[derive(Clone)]
 pub struct DefaultRequestAuthenticator {
     repos: RequestAuthRepos,
+    clock: Clock,
 }
 
 impl DefaultRequestAuthenticator {
     pub fn new(repos: RequestAuthRepos) -> Self {
-        Self { repos }
+        Self {
+            repos,
+            clock: Clock::default(),
+        }
+    }
+
+    /// The authenticator reading the time from `clock`.
+    #[cfg(test)]
+    fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
     }
 }
 
@@ -39,7 +52,7 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             return Ok(RequestAuthResultDto::default());
         };
 
-        if session.revoked_at.is_some() || session.expires_at <= chrono::Utc::now() {
+        if !session.is_live(self.clock.now()) {
             return Ok(RequestAuthResultDto::default());
         }
 
@@ -50,7 +63,18 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             user_id: Some(session.user_id),
             session_id: Some(session.id),
             device_key_id: session.device_key_id,
+            expires_at: Some(session.expires_at),
         })
+    }
+
+    async fn live_sessions(&self, ids: &[SessionId]) -> ServiceResult<Vec<SessionId>> {
+        let now = self.clock.now();
+        let sessions = self.repos.session_repo.get_many(ids).await?;
+        Ok(sessions
+            .into_iter()
+            .filter(|s| s.is_live(now))
+            .map(|s| s.id)
+            .collect())
     }
 }
 
@@ -72,6 +96,7 @@ mod tests {
         impl SessionRepository for SessionRepository {
             async fn get_by_id(&self, id: SessionId) -> RepoResult<Option<Session>>;
             async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Session>>;
+            async fn get_many(&self, ids: &[SessionId]) -> RepoResult<Vec<Session>>;
             async fn create_session(&self, session: NewSession) -> RepoResult<Session>;
             async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
             async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;
@@ -177,5 +202,29 @@ mod tests {
 
         assert_eq!(result.user_id, None);
         assert_eq!(result.session_id, None);
+    }
+
+    /// A session is live until it is revoked or its expiry is reached, read on the injected
+    /// clock; a session the repository no longer has is not live.
+    #[tokio::test]
+    async fn live_sessions_keeps_those_neither_revoked_nor_expired_at_the_clocks_now() {
+        let now = chrono::Utc::now();
+        let mut live = active_session();
+        live.expires_at = now + chrono::Duration::seconds(1);
+        let mut expiring_now = active_session();
+        expiring_now.expires_at = now;
+        let mut revoked = active_session();
+        revoked.revoked_at = Some(now - chrono::Duration::minutes(1));
+        let asked = vec![live.id, expiring_now.id, revoked.id, SessionId::new()];
+        let stored = vec![live.clone(), expiring_now, revoked];
+
+        let mut repo = MockSessionRepository::new();
+        let expected = asked.clone();
+        repo.expect_get_many()
+            .withf(move |ids| ids == expected.as_slice())
+            .return_once(move |_| Ok(stored));
+        let svc = service(repo).with_clock(Clock::fixed(now));
+
+        assert_eq!(svc.live_sessions(&asked).await.unwrap(), vec![live.id]);
     }
 }

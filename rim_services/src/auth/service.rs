@@ -110,4 +110,10 @@ pub trait RequestAuthenticator: Send + Sync {
         &self,
         session_token: Option<&str>,
     ) -> ServiceResult<RequestAuthResultDto>;
+
+    /// The sessions among `ids` that are still signed in: neither revoked nor expired.
+    async fn live_sessions(
+        &self,
+        ids: &[rim_core::auth::model::SessionId],
+    ) -> ServiceResult<Vec<rim_core::auth::model::SessionId>>;
 }

@@ -34,6 +34,7 @@ use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use rim_services::workspace_plugin::service::{PluginBundleService, WorkspacePluginService};
@@ -102,6 +103,7 @@ pub struct DefaultAppServiceProvider {
     plugin_bundle_service: Arc<dyn PluginBundleService>,
     feature_gate: Arc<dyn FeatureGate>,
     account_deletion: DefaultAccountDeletionService,
+    session_revocations: Arc<dyn SessionRevocations>,
 }
 
 impl DefaultAppServiceProvider {
@@ -123,6 +125,9 @@ impl DefaultAppServiceProvider {
         feature_gate: Arc<dyn FeatureGate>,
         limits: InstanceLimits,
     ) -> Self {
+        // Shared so every path that ends sessions closes the connections watching them.
+        let session_revocations: Arc<dyn SessionRevocations> =
+            Arc::new(crate::session_revocation::InProcessSessionRevocations::default());
         // Shared so a password reset can forget the sources login exempts from its backstop.
         let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
         // Shared so password and key-only signups count against one open-mode budget per IP.
@@ -141,7 +146,8 @@ impl DefaultAppServiceProvider {
             .with_signup_rate_limiter(signup_rate_limiter.clone())
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
-            .with_password_hashing(federation.password_hashing.clone()),
+            .with_password_hashing(federation.password_hashing.clone())
+            .with_session_revocations(Arc::clone(&session_revocations)),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -153,7 +159,8 @@ impl DefaultAppServiceProvider {
             Some(db.clone()),
             Arc::clone(&storage_service),
             observers.clone(),
-        );
+        )
+        .with_session_revocations(Arc::clone(&session_revocations));
         let mut key_auth = crate::key_auth::DefaultKeyAuthService::new(
             repos.for_key_auth(),
             Some(db.clone()),
@@ -171,7 +178,8 @@ impl DefaultAppServiceProvider {
         key_auth = key_auth
             .with_quotas(federation.quotas)
             .with_limits(limits)
-            .with_reserved_names(federation.reserved_names.clone());
+            .with_reserved_names(federation.reserved_names.clone())
+            .with_session_revocations(Arc::clone(&session_revocations));
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -287,7 +295,8 @@ impl DefaultAppServiceProvider {
                 public_base_url.clone(),
             )
             .with_known_login_sources(known_login_sources)
-            .with_password_hashing(federation.password_hashing.clone()),
+            .with_password_hashing(federation.password_hashing.clone())
+            .with_session_revocations(Arc::clone(&session_revocations)),
         );
         let pin_service: Arc<dyn PinService> = Arc::new(crate::pin::DefaultPinService::new(
             repos.for_pin(),
@@ -474,7 +483,14 @@ impl DefaultAppServiceProvider {
             plugin_bundle_service,
             feature_gate,
             account_deletion,
+            session_revocations,
         }
+    }
+
+    /// The registry every service here reports ended sessions to; live connections watch their
+    /// session in it.
+    pub fn session_revocations(&self) -> Arc<dyn SessionRevocations> {
+        Arc::clone(&self.session_revocations)
     }
 
     /// Set the time between an account's deletion request and its purge, and the relay whose

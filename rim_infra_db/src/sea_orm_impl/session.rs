@@ -42,6 +42,20 @@ impl SessionRepository for SeaOrmSessionRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn get_many(&self, ids: &[SessionId]) -> RepoResult<Vec<Session>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let models = session::Entity::find()
+            .filter(
+                session::Column::Id.is_in(ids.iter().map(|id| sea_orm::prelude::Uuid::from(*id))),
+            )
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(models.into_iter().map(Into::into).collect())
+    }
+
     async fn create_session(&self, s: NewSession) -> RepoResult<Session> {
         let active_model = session::ActiveModel {
             id: Set(SessionId::new().into()),

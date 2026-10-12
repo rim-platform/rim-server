@@ -61,6 +61,25 @@ subscriptions only: a query or a mutation sent on it answers one error with the 
 completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
 `relayStream`; the schema describes both.
 
+A connection lives no longer than the session it was opened with. When that session ends, the
+server ends every stream on the connection and closes it with code `4401` and reason
+`session ended`; nothing is sent after the close, and the connection's place under
+`RIM_RATE_WS_CONNECTIONS_PER_USER` is free again. A client that sees `4401` signs in again
+before it reconnects. The session ends this way:
+
+- **At once** when this server process ends it: `logout`, `logoutOtherSessions`, a password
+  reset, a requested account deletion (every other session), a device revocation or an identity
+  recovery, and the account purge.
+- **At its expiry**, read when the connection opens.
+- **Within `RIM_WS_SESSION_RECHECK_SECS`** (default 30) when it ended where this process did
+  not hear of it: in another server process, from the command line (`rim_server principal block`,
+  `rim_server account purge`), or in the database. Each server process reads the sessions of
+  its open connections again every interval, in one query per 500 sessions; `0` turns the
+  recheck off.
+- **Before the next operation**: every operation sent on the connection first checks the
+  session again, before the subscriptions-only refusal. An ended session closes the connection
+  with `4401` instead of answering the operation.
+
 ### The schema: `GET /api/sdl`
 
 The whole GraphQL schema of the running build, in SDL, without a session.
@@ -178,7 +197,8 @@ another URL, answers `VALIDATION`. The server records the acceptance and its tim
 account. Without terms on the server the field is ignored.
 
 `logout` ends the session and clears both cookies; `logoutOtherSessions` ends every other
-session of the account.
+session of the account. Either also closes the WebSocket connections of the sessions it ends
+(see "Subscriptions").
 
 A session lasts `RIM_SESSION_TTL_DAYS` days (default 30) from sign-in: the cookie's `Max-Age`
 and the server-side expiry are both set from it, and using the session does not extend it. A

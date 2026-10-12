@@ -12,10 +12,11 @@ use crate::graphql_support::{
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, Either, HttpRequest, HttpResponse, HttpServer, guard, web};
-use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse};
 use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
+use rim_api::session_guard::ConnectionSession;
 use rim_api::subscription_limit::SubscriptionSlots;
 use rim_api::subscriptions_only::WebSocketConnection;
 use tracing::{Instrument, info, info_span};
@@ -23,6 +24,7 @@ use tracing::{Instrument, info, info_span};
 use std::sync::Arc;
 
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::session_revocation::{SessionRevocations, WatchedSession};
 
 use rim_api::auth_context::AuthActorCtx;
 use uuid::Uuid;
@@ -97,6 +99,7 @@ pub async fn serve(
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
     let request_authenticator = runtime.request_authenticator;
+    let session_revocations = runtime.session_revocations;
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
     let message_attachment_service = runtime.message_attachment_service;
@@ -187,6 +190,7 @@ pub async fn serve(
             .app_data(readiness.clone())
             .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
+            .app_data(web::Data::new(Arc::clone(&session_revocations)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
@@ -382,7 +386,7 @@ async fn graphql_ws_handler(
         .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
         .map(|d| Arc::clone(d.get_ref()));
 
-    let auth = match request_authenticator {
+    let auth = match &request_authenticator {
         Some(authenticator) => match extract_auth(&req, authenticator.as_ref()).await {
             Ok(v) => v,
             Err(err) => {
@@ -394,24 +398,42 @@ async fn graphql_ws_handler(
         },
         None => Default::default(),
     };
-    let (actor, session_id) = (auth.user_id, auth.session_id);
 
     // Defense-in-depth: reject unauthenticated users at the transport level
     // so that even if a subscription resolver forgets `require_actor`, the
     // WebSocket connection is never established for anonymous users.
-    let Some(actor) = actor else {
+    let (Some(actor), Some(session_id)) = (auth.user_id, auth.session_id) else {
         return Err(actix_web::error::ErrorUnauthorized(
             "authentication required",
         ));
     };
 
     let actor_ctx =
-        AuthActorCtx::new(Some(actor), session_id).with_device_key_id(auth.device_key_id);
+        AuthActorCtx::new(Some(actor), Some(session_id)).with_device_key_id(auth.device_key_id);
 
     let mut data = async_graphql::Data::default();
     data.insert(actor_ctx);
     // The socket runs subscriptions only; queries and mutations go through POST /api.
     data.insert(WebSocketConnection);
+    // The connection ends with its session: on revocation through the registry, at expiry by
+    // its own timer, and before each operation the session is checked again.
+    let revocations = req
+        .app_data::<web::Data<Arc<dyn SessionRevocations>>>()
+        .map(|d| Arc::clone(d.get_ref()));
+    let watch = revocations.map(|revocations| {
+        if let Some(authenticator) = &request_authenticator {
+            data.insert(ConnectionSession::new(
+                session_id,
+                Arc::clone(authenticator),
+                Arc::clone(&revocations),
+            ));
+        }
+        revocations.watch(WatchedSession {
+            session_id,
+            user_id: actor,
+            device_key_id: auth.device_key_id,
+        })
+    });
     if let Some(edge_limits) = req.app_data::<web::Data<EdgeLimits>>() {
         // The connection slot lives in the connection's data, so it is given back when the
         // connection ends.
@@ -430,9 +452,16 @@ async fn graphql_ws_handler(
         }
     }
 
-    GraphQLSubscription::new(schema.into_inner().as_ref().clone())
-        .with_data(data)
-        .start(&req, payload)
+    crate::ws::start(
+        schema.into_inner().as_ref().clone(),
+        data,
+        crate::ws::SessionBound {
+            watch,
+            expires_at: auth.expires_at,
+        },
+        &req,
+        payload,
+    )
 }
 
 fn request_has_mutation(req: &async_graphql::Request) -> bool {

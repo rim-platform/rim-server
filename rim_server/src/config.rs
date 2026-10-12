@@ -202,6 +202,10 @@ pub struct RIMConfig {
     pub rate_subscriptions_per_connection: Option<u32>,
     /// Most GraphQL requests in one batch. Default 20. Controlled by `RIM_API_MAX_BATCH`.
     pub api_max_batch: Option<usize>,
+    /// Seconds between rechecks of the sessions WebSocket connections run under; unset is
+    /// [`DEFAULT_WS_SESSION_RECHECK_SECS`], 0 turns the recheck off. Controlled by
+    /// `RIM_WS_SESSION_RECHECK_SECS`.
+    pub ws_session_recheck_secs: Option<u64>,
     /// A short text shown to people on this instance, at most 500 characters. Controlled by
     /// `RIM_INSTANCE_NOTICE`; see [`RIMConfig::instance_notice`].
     pub instance_notice: Option<String>,
@@ -433,6 +437,7 @@ impl Default for RIMConfig {
             rate_ws_connections_per_user: None,
             rate_subscriptions_per_connection: None,
             api_max_batch: None,
+            ws_session_recheck_secs: None,
             instance_notice: None,
             terms_url: None,
             limit_workspaces_per_user: None,
@@ -1022,6 +1027,10 @@ fn url_authority(url: &str) -> Option<String> {
 /// Most GraphQL requests in one batch unless `RIM_API_MAX_BATCH` says otherwise.
 pub const DEFAULT_API_MAX_BATCH: usize = 20;
 
+/// Seconds between rechecks of WebSocket sessions unless `RIM_WS_SESSION_RECHECK_SECS` says
+/// otherwise.
+pub const DEFAULT_WS_SESSION_RECHECK_SECS: u64 = 30;
+
 /// The API's request limits; a `None` limit is off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiLimits {
@@ -1045,6 +1054,18 @@ impl RIMConfig {
     /// The API limits from `RIM_RATE_*` and `RIM_API_MAX_BATCH`: each rate off when unset or
     /// 0, the message burst defaulting to the per-minute rate, the batch cap to
     /// [`DEFAULT_API_MAX_BATCH`] and at least 1.
+    /// How often the sessions of WebSocket connections are read again, so a session ended in
+    /// another process or by expiry closes its connections; `None` when turned off.
+    pub fn ws_session_recheck(&self) -> Option<std::time::Duration> {
+        match self
+            .ws_session_recheck_secs
+            .unwrap_or(DEFAULT_WS_SESSION_RECHECK_SECS)
+        {
+            0 => None,
+            secs => Some(std::time::Duration::from_secs(secs)),
+        }
+    }
+
     pub fn api_limits(&self) -> ApiLimits {
         use rim_infra_services::token_bucket::BucketRate;
         let per_minute = |n: Option<u32>| n.and_then(BucketRate::per_minute);
@@ -1796,6 +1817,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.api_limits().messages, BucketRate::new(30, 5));
+    }
+
+    #[test]
+    fn the_websocket_session_recheck_defaults_to_30_seconds_and_0_turns_it_off() {
+        use std::time::Duration;
+        assert_eq!(
+            RIMConfig::default().ws_session_recheck(),
+            Some(Duration::from_secs(DEFAULT_WS_SESSION_RECHECK_SECS))
+        );
+        let read = |value: &str| {
+            RIMConfig::load_from(env(&[
+                ("DATABASE_URL", "postgres://localhost/rim"),
+                ("RIM_WS_SESSION_RECHECK_SECS", value),
+            ]))
+            .expect("loads")
+            .ws_session_recheck()
+        };
+        assert_eq!(read("5"), Some(Duration::from_secs(5)));
+        assert_eq!(read("0"), None);
     }
 
     #[test]
