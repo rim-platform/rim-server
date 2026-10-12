@@ -74,7 +74,7 @@ S-3 and D-7. A database is reassigned only after its previous agent has reported
 | D-6 | rim-ui #57 (+ #58, an incident mutation fix the skew check found) | 2026-10-10 |
 | S-1 | rim-ui #59 | 2026-10-10 |
 | S-2 | rim-ui #60 | 2026-10-10 |
-| S-3 | rim-server #96 (+ #97: 72 audit events now reach the audit log); #149 adds `serverInfo.auditRetentionDays` for the admin audit view (2026-10-12) | 2026-10-10 |
+| S-3 | rim-server #96 (+ #97: 72 audit events now reach the audit log); #149 adds `serverInfo.auditRetentionDays`, rim-ui #80 shows it on the audit log page (2026-10-12) | 2026-10-10 |
 | S-4 | rim-server #95 | 2026-10-10 |
 | D-3, D-4 | rim-server #100 | 2026-10-10 |
 | D-7 | rim-server #104, rim-ui #63 (instance flags only; the workspace toggle went with the incident drop of `cleanup-2026-10-10.md`) | 2026-10-10 |
