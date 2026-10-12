@@ -7,6 +7,7 @@ mod tests {
     use rim_core::command::model::{NewUserCommand, UpdateUserCommand, UserCommand, UserCommandId};
     use rim_core::command::repository::UserCommandRepository;
     use rim_core::repository::error::RepoResult;
+    use rim_core::server_member::model::ServerMemberRole;
     use rim_services::command::dto::{
         CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultStatusDto,
         CommandSourceKindDto, CommandSurfaceDto, UserCommandStepDto,
@@ -59,12 +60,7 @@ mod tests {
         conversation_service: MockConversationService,
         message_service: MockMessageService,
     ) -> DefaultCommandService {
-        service_with_capability(
-            repo,
-            conversation_service,
-            message_service,
-            rim_services::capability::service::MockCapabilityService::new(),
-        )
+        service_with_capability(repo, conversation_service, message_service, full_caps())
     }
 
     fn service_with_capability(
@@ -125,7 +121,9 @@ mod tests {
                     rim_services::read_state::service::MockReadStateService::new(),
                 ),
                 server_member_service: Arc::new(
-                    rim_services::server_member::service::MockServerMemberService::new(),
+                    rim_services::server_member::service::MockServerMemberService::with_own_role(
+                        Some(rim_core::server_member::model::ServerMemberRole::Owner),
+                    ),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(workspace_state_service),
@@ -166,7 +164,7 @@ mod tests {
         let commands = svc
             .list_commands(ListCommandsQuery {
                 actor,
-                context: None,
+                context: Some(workspace_context(rim_core::server::model::ServerId::new())),
                 surface: CommandSurfaceDto::Palette,
             })
             .await
@@ -384,7 +382,11 @@ mod tests {
             ai_command("c.ai", true, &["chat.read"]),
         ];
         let kept = svc
-            .filter_ai_surface_test_only(&actor, None, input)
+            .filter_ai_surface_test_only(
+                &actor,
+                Some(&workspace_context(rim_core::server::model::ServerId::new())),
+                input,
+            )
             .await
             .unwrap();
         let ids: Vec<&str> = kept.iter().map(|c| c.id.as_str()).collect();
@@ -403,7 +405,11 @@ mod tests {
 
         let input = vec![ai_command("write.thing", true, &["chat.write"])];
         let kept = svc
-            .filter_ai_surface_test_only(&actor, None, input)
+            .filter_ai_surface_test_only(
+                &actor,
+                Some(&workspace_context(rim_core::server::model::ServerId::new())),
+                input,
+            )
             .await
             .unwrap();
         assert!(kept.is_empty(), "actor lacking chat.write must be filtered");
@@ -421,7 +427,11 @@ mod tests {
 
         let only_one_held = vec![ai_command("a.partial", true, &["chat.read", "admin.x"])];
         let kept = svc
-            .filter_ai_surface_test_only(&actor, None, only_one_held)
+            .filter_ai_surface_test_only(
+                &actor,
+                Some(&workspace_context(rim_core::server::model::ServerId::new())),
+                only_one_held,
+            )
             .await
             .unwrap();
         assert!(kept.is_empty(), "partial capability hold must filter out");
@@ -434,7 +444,11 @@ mod tests {
         );
         let both = vec![ai_command("a.both", true, &["chat.read", "admin.x"])];
         let kept = svc_all
-            .filter_ai_surface_test_only(&actor, None, both)
+            .filter_ai_surface_test_only(
+                &actor,
+                Some(&workspace_context(rim_core::server::model::ServerId::new())),
+                both,
+            )
             .await
             .unwrap();
         assert_eq!(kept.len(), 1);
@@ -456,7 +470,11 @@ mod tests {
             ai_command("read.thing", true, &["chat.read"]),
         ];
         let kept = svc
-            .filter_ai_surface_test_only(&actor, None, input)
+            .filter_ai_surface_test_only(
+                &actor,
+                Some(&workspace_context(rim_core::server::model::ServerId::new())),
+                input,
+            )
             .await
             .unwrap();
         let ids: std::collections::BTreeSet<&str> = kept.iter().map(|c| c.id.as_str()).collect();
@@ -494,13 +512,13 @@ mod tests {
             repo,
             MockConversationService::new(),
             MockMessageService::new(),
-            rim_services::capability::service::MockCapabilityService::new(),
+            full_caps(),
         );
 
         let palette = svc
             .list_commands(ListCommandsQuery {
                 actor,
-                context: None,
+                context: Some(workspace_context(rim_core::server::model::ServerId::new())),
                 surface: CommandSurfaceDto::Palette,
             })
             .await
@@ -1119,10 +1137,35 @@ mod tests {
         cap: rim_services::capability::service::MockCapabilityService,
         macro_svc: Option<Arc<dyn rim_services::macro_def::service::MacroService>>,
     ) -> DefaultCommandService {
-        let mut repo = MockUserCommandRepository::new();
-        repo.expect_list_for_user().returning(|_| Ok(vec![]));
+        let svc = listing_service(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                ServerMemberRole::Owner,
+            )),
+            cap,
+            vec![],
+        );
+        if let Some(macro_svc) = macro_svc {
+            let _ = svc.set_macro_service(macro_svc);
+        }
+        svc
+    }
 
-        let svc = DefaultCommandService::new(
+    /// A command service for listing: `member` answers the caller's lookup of their own
+    /// membership, `cap` the capability checks, and the caller owns `user_commands`.
+    fn listing_service(
+        member: rim_services::server_member::service::MockServerMemberService,
+        cap: rim_services::capability::service::MockCapabilityService,
+        user_commands: Vec<UserCommand>,
+    ) -> DefaultCommandService {
+        let mut repo = MockUserCommandRepository::new();
+        let listed = user_commands.clone();
+        repo.expect_list_for_user()
+            .returning(move |_| Ok(listed.clone()));
+        repo.expect_get_by_key_for_user().returning(move |_, key| {
+            Ok(user_commands.iter().find(|c| c.command_key == key).cloned())
+        });
+
+        DefaultCommandService::new(
             CommandRepos {
                 user_command_repo: Arc::new(repo),
                 macro_repo: Arc::new(rim_core::macro_def::repository::MockMacroRepository::new()),
@@ -1139,9 +1182,7 @@ mod tests {
                 read_state_service: Arc::new(
                     rim_services::read_state::service::MockReadStateService::new(),
                 ),
-                server_member_service: Arc::new(
-                    rim_services::server_member::service::MockServerMemberService::new(),
-                ),
+                server_member_service: Arc::new(member),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
@@ -1152,11 +1193,7 @@ mod tests {
                     rim_services::notification::service::MockNotificationService::new(),
                 ),
             },
-        );
-        if let Some(macro_svc) = macro_svc {
-            let _ = svc.set_macro_service(macro_svc);
-        }
-        svc
+        )
     }
 
     fn full_caps() -> rim_services::capability::service::MockCapabilityService {
@@ -1178,7 +1215,12 @@ mod tests {
         let svc = service_with_macro(full_caps(), None);
 
         let result = svc
-            .command_discover(&actor, None, None, None)
+            .command_discover(
+                &actor,
+                None,
+                None,
+                Some(rim_core::server::model::ServerId::new()),
+            )
             .await
             .unwrap();
 
@@ -1222,7 +1264,12 @@ mod tests {
         let svc = service_with_macro(cap, None);
 
         let result = svc
-            .command_discover(&actor, None, None, None)
+            .command_discover(
+                &actor,
+                None,
+                None,
+                Some(rim_core::server::model::ServerId::new()),
+            )
             .await
             .unwrap();
 
@@ -1262,7 +1309,12 @@ mod tests {
         let svc = service_with_macro(cap, None);
 
         let result = svc
-            .command_discover(&actor, None, None, None)
+            .command_discover(
+                &actor,
+                None,
+                None,
+                Some(rim_core::server::model::ServerId::new()),
+            )
             .await
             .unwrap();
 
@@ -1358,7 +1410,12 @@ mod tests {
         let svc = service_with_macro(full_caps(), None);
 
         let ranked = svc
-            .command_discover(&actor, Some("post".to_string()), None, None)
+            .command_discover(
+                &actor,
+                Some("post".to_string()),
+                None,
+                Some(rim_core::server::model::ServerId::new()),
+            )
             .await
             .unwrap();
 
@@ -3405,5 +3462,281 @@ mod tests {
             .await
             .expect("the palette runs it");
         assert_eq!(palette.status, CommandResultStatusDto::Success);
+    }
+
+    // ── Command visibility ──
+
+    /// The palette ids `svc` lists to `actor` in `context`.
+    async fn palette_ids(
+        svc: &DefaultCommandService,
+        actor: Actor,
+        context: Option<CommandContextDto>,
+    ) -> std::collections::BTreeSet<String> {
+        svc.list_commands(ListCommandsQuery {
+            actor,
+            context,
+            surface: CommandSurfaceDto::Palette,
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
+    }
+
+    /// The palette builtins the client runs itself.
+    fn client_palette_ids() -> std::collections::BTreeSet<String> {
+        registry::builtin_commands()
+            .into_iter()
+            .filter(|c| {
+                c.visible_in_palette && c.execution_target != CommandExecutionTargetDto::Backend
+            })
+            .map(|c| c.id)
+            .collect()
+    }
+
+    fn no_capability_checks() -> rim_services::capability::service::MockCapabilityService {
+        let mut cap = rim_services::capability::service::MockCapabilityService::new();
+        cap.expect_check_many().never();
+        cap
+    }
+
+    /// A user command `key` owned by `owner` that runs `steps` in order.
+    fn user_command_running(
+        owner: rim_core::user::model::UserId,
+        key: &str,
+        steps: &[&str],
+    ) -> UserCommand {
+        UserCommand {
+            id: UserCommandId::new(),
+            owner_user_id: owner,
+            command_key: key.to_string(),
+            title: key.to_string(),
+            description: String::new(),
+            steps_json: serde_json::Value::Array(
+                steps
+                    .iter()
+                    .map(|step| serde_json::json!({ "command_id": step, "args": null }))
+                    .collect(),
+            ),
+            is_enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_workspace_membership_only_client_commands_are_listed() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let no_workspace = listing_service(
+            rim_services::server_member::service::MockServerMemberService::new(),
+            no_capability_checks(),
+            vec![],
+        );
+        let outsider = listing_service(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(None),
+            no_capability_checks(),
+            vec![],
+        );
+        let workspace = Some(workspace_context(rim_core::server::model::ServerId::new()));
+
+        assert_eq!(
+            palette_ids(&no_workspace, actor, None).await,
+            client_palette_ids()
+        );
+        assert_eq!(
+            palette_ids(&outsider, actor, workspace).await,
+            client_palette_ids()
+        );
+    }
+
+    #[tokio::test]
+    async fn listed_workspace_commands_follow_the_callers_role() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let member_level = [
+            "chat.create_channel",
+            "chat.create_group",
+            "chat.invite_to_conversation",
+            "chat.join_channel",
+        ];
+        let moderator_level = [
+            "admin.ban",
+            "admin.kick",
+            "admin.set_role",
+            "admin.timeout",
+            "admin.unban",
+            "chat.archive_channel",
+            "chat.set_slow_mode",
+            "chat.unarchive_channel",
+        ];
+        let role_bound: Vec<&str> = member_level
+            .iter()
+            .chain(moderator_level.iter())
+            .copied()
+            .chain(["admin.invite_member"])
+            .collect();
+        let expected = |levels: &[&[&str]]| -> std::collections::BTreeSet<String> {
+            levels
+                .iter()
+                .flat_map(|ids| ids.iter().map(|id| id.to_string()))
+                .collect()
+        };
+
+        for (role, sees) in [
+            (ServerMemberRole::Guest, expected(&[])),
+            (ServerMemberRole::Member, expected(&[&member_level])),
+            (
+                ServerMemberRole::Moderator,
+                expected(&[&member_level, &moderator_level]),
+            ),
+            (
+                ServerMemberRole::Owner,
+                expected(&[&member_level, &moderator_level, &["admin.invite_member"]]),
+            ),
+        ] {
+            let svc = listing_service(
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    role,
+                )),
+                full_caps(),
+                vec![],
+            );
+            let ids = palette_ids(
+                &svc,
+                actor,
+                Some(workspace_context(rim_core::server::model::ServerId::new())),
+            )
+            .await;
+
+            let listed_bound: std::collections::BTreeSet<String> = role_bound
+                .iter()
+                .filter(|id| ids.contains(**id))
+                .map(|id| id.to_string())
+                .collect();
+            assert_eq!(listed_bound, sees, "{role}");
+            assert!(ids.contains("chat.post_message"), "{role}");
+            assert!(client_palette_ids().is_subset(&ids), "{role}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_direct_space_guest_sees_the_commands_guests_run_there() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let direct = rim_core::server::model::ServerId::new();
+        let svc = listing_service(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                ServerMemberRole::Guest,
+            )),
+            full_caps(),
+            vec![],
+        )
+        .with_direct_space(direct);
+
+        let ids = palette_ids(&svc, actor, Some(workspace_context(direct))).await;
+
+        for id in [
+            "chat.create_group",
+            "chat.invite_to_conversation",
+            "chat.join_channel",
+            "chat.post_message",
+        ] {
+            assert!(ids.contains(id), "{id}");
+        }
+        for id in ["chat.create_channel", "chat.archive_channel", "admin.kick"] {
+            assert!(!ids.contains(id), "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_user_command_is_listed_only_to_a_role_every_step_admits() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let commands = vec![
+            user_command_running(actor.user_id, "user.greet", &["chat.post_message"]),
+            user_command_running(
+                actor.user_id,
+                "user.kick_and_greet",
+                &["chat.post_message", "admin.kick"],
+            ),
+            user_command_running(actor.user_id, "user.wrapped", &["user.kick_and_greet"]),
+        ];
+
+        for (role, sees_kick) in [
+            (ServerMemberRole::Member, false),
+            (ServerMemberRole::Moderator, true),
+        ] {
+            let svc = listing_service(
+                rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                    role,
+                )),
+                full_caps(),
+                commands.clone(),
+            );
+            let ids = palette_ids(
+                &svc,
+                actor,
+                Some(workspace_context(rim_core::server::model::ServerId::new())),
+            )
+            .await;
+
+            assert!(ids.contains("user.greet"), "{role}");
+            assert_eq!(ids.contains("user.kick_and_greet"), sees_kick, "{role}");
+            assert_eq!(ids.contains("user.wrapped"), sees_kick, "{role}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_membership_lookup_fails_the_listing() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let mut member = rim_services::server_member::service::MockServerMemberService::new();
+        member
+            .expect_get_member()
+            .returning(|_| Box::pin(async { Err(ServiceError::Internal(None)) }));
+        let svc = listing_service(member, no_capability_checks(), vec![]);
+
+        let err = svc
+            .list_commands(ListCommandsQuery {
+                actor,
+                context: Some(workspace_context(rim_core::server::model::ServerId::new())),
+                surface: CommandSurfaceDto::Palette,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::Internal(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn command_discover_leaves_out_what_the_callers_role_cannot_run() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let svc = listing_service(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                ServerMemberRole::Member,
+            )),
+            full_caps(),
+            vec![],
+        );
+
+        let ids: Vec<String> = svc
+            .command_discover(
+                &actor,
+                None,
+                Some(100),
+                Some(rim_core::server::model::ServerId::new()),
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+
+        assert!(ids.contains(&"chat.post_message".to_string()));
+        for id in [
+            "admin.timeout",
+            "chat.archive_channel",
+            "chat.set_slow_mode",
+            "chat.unarchive_channel",
+        ] {
+            assert!(!ids.contains(&id.to_string()), "{id}");
+        }
     }
 }

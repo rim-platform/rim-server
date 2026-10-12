@@ -14,6 +14,17 @@ pub(crate) struct CommandQueries;
 
 #[Object]
 impl CommandQueries {
+    /// The commands the caller may run on `surface` (default `PALETTE`), sorted by id.
+    ///
+    /// A command the server runs is listed only when `commandContext.workspaceId` names a
+    /// workspace the caller is a member of, their role there may run it, and they hold each of
+    /// its required capabilities. The commands the client runs itself are listed in every
+    /// context. A listed command is one `executeCommand` runs for the caller in that context,
+    /// apart from a confirmation, a timeout in force and the arguments given. Naming the direct
+    /// space makes the caller a guest of it.
+    ///
+    /// `AI` lists only the AI-callable commands, plus the caller's AI-callable macros of the
+    /// workspace, and fails with `FEATURE_DISABLED` while the AI command surface is off.
     async fn commands(
         &self,
         ctx: &Context<'_>,
@@ -43,6 +54,12 @@ impl CommandQueries {
     }
 
     /// The AI-callable commands the caller may run, for an AI agent to discover its tools.
+    ///
+    /// Filtered as `commands` filters: a command the server runs is listed only when
+    /// `workspaceId` names a workspace the caller is a member of, their role there may run it,
+    /// and they hold each of its required capabilities; the commands the client runs itself are
+    /// always listed. A listed command is one `executeCommand` runs for the caller in that
+    /// workspace, apart from a confirmation, a timeout in force and the arguments given.
     ///
     /// With `intentPhrase` the commands are ranked by how well the phrase matches their
     /// intent samples, title and natural-language description. `limit` defaults to 50 and is

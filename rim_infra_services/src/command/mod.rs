@@ -7,6 +7,7 @@ mod rate_limiter;
 pub(crate) mod registry;
 mod surface;
 mod user_commands;
+mod visibility;
 
 // Re-export the startup AI-callable inventory audit so `rim_server::app` can wire
 // it without exposing the rest of the registry internals.
@@ -90,6 +91,9 @@ pub struct DefaultCommandService {
     /// and until the provider wires it. When set, `list_commands(Surface::Ai)`
     /// delegates macro synthesis to `MacroService::synthesize_command_definitions`.
     pub(super) macro_service: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<dyn MacroService>>>,
+    /// This server's direct space, where a guest may run some commands that elsewhere need a
+    /// member.
+    pub(super) direct_space_id: Option<rim_core::server::model::ServerId>,
     /// Extra command definitions injected by tests. Empty in production.
     #[cfg(test)]
     pub(super) extra_builtins: Vec<CommandDefinitionDto>,
@@ -116,9 +120,16 @@ impl DefaultCommandService {
             confirmation_store,
             rate_limiter: rate_limiter::RateLimiter::new(),
             macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
+            direct_space_id: None,
             #[cfg(test)]
             extra_builtins: vec![],
         }
+    }
+
+    /// Names this server's direct space.
+    pub fn with_direct_space(mut self, direct_space_id: rim_core::server::model::ServerId) -> Self {
+        self.direct_space_id = Some(direct_space_id);
+        self
     }
 
     /// Test-only constructor that injects synthetic command definitions into
@@ -135,6 +146,7 @@ impl DefaultCommandService {
             confirmation_store: shared_in_memory_store(),
             rate_limiter: rate_limiter::RateLimiter::new(),
             macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
+            direct_space_id: None,
             extra_builtins,
         }
     }
@@ -196,10 +208,19 @@ impl CommandService for DefaultCommandService {
             .repos
             .user_command_repo
             .list_for_user(query.actor.user_id)
-            .await?;
+            .await?
+            .into_iter()
+            .map(Self::parse_user_command)
+            .collect::<ServiceResult<Vec<_>>>()?;
+        let user_steps: visibility::UserCommandSteps = user_commands
+            .iter()
+            .map(|dto| {
+                let steps = dto.steps.iter().map(|s| s.command_id.clone()).collect();
+                (dto.command_key.clone(), steps)
+            })
+            .collect();
 
-        for user_command in user_commands {
-            let dto = Self::parse_user_command(user_command)?;
+        for dto in user_commands {
             if dto.is_enabled {
                 commands.push(
                     self.derive_user_command_definition(
@@ -230,12 +251,15 @@ impl CommandService for DefaultCommandService {
             }
 
             commands = self
-                .filter_ai_surface(&query.actor, context, commands)
+                .filter_ai_surface(&query.actor, context, commands, &user_steps)
                 .await?;
         } else {
             commands.retain(|definition| {
                 Self::command_matches_surface(definition, query.surface, context)
             });
+            commands = self
+                .retain_runnable(&query.actor, context, commands, &user_steps)
+                .await?;
         }
         commands.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(commands)

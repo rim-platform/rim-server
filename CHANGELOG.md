@@ -41,6 +41,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   every compose command; `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` still name other images.
 - The packaged desktop app's origins (`tauri://localhost`, `http://tauri.localhost` and
   `https://tauri.localhost`) are accepted by every server without `RIM_CORS_ALLOWED_ORIGIN`.
+- GraphQL `commands` and `commandDiscover` list only the commands the caller may run. A command
+  the server runs needs a context workspace the caller is a member of, a role there that may run
+  it and its capabilities: a non-member, or a call without a workspace, sees only the commands
+  the client runs itself, and the moderation and owner commands are listed only to the roles
+  that run them. Naming the direct space makes the caller a guest of it.
 
 ### Fixed
 

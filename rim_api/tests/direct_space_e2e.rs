@@ -207,14 +207,29 @@ async fn resolved_keybinds_answer_on_first_use() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn commands_list_without_joining_the_direct_space() {
+async fn commands_list_what_a_guest_runs_on_first_use() {
     let n = Newcomer::new().await;
     let data = n
         .ok("query($s: ID!) { commands(commandContext: { workspaceId: $s }) { id } }")
         .await;
-    assert!(!data["commands"].as_array().expect("commands").is_empty());
-    assert_eq!(n.role_of(&n.person).await, None);
-    n.node.stop().await;
+    let ids: Vec<&str> = data["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .map(|c| c["id"].as_str().expect("id"))
+        .collect();
+    for id in [
+        "chat.post_message",
+        "chat.create_group",
+        "chat.invite_to_conversation",
+        "workspace.open_settings",
+    ] {
+        assert!(ids.contains(&id), "{id} missing: {ids:?}");
+    }
+    for id in ["chat.create_channel", "chat.archive_channel", "admin.kick"] {
+        assert!(!ids.contains(&id), "{id} listed: {ids:?}");
+    }
+    n.joined_as_guest().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

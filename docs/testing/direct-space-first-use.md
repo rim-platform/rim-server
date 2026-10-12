@@ -29,7 +29,7 @@ are refused as before.
 | `workspaceEvents` (subscription) | FORBIDDEN | guest, subscribed |
 | `createConversation` | guest, both members | unchanged |
 | `inboxConversations` | guest | unchanged, now through the shared gate |
-| `commands` | answers, joins nobody | unchanged |
+| `commands` | answers, joins nobody | guest, the commands a guest runs there |
 | `myMlsKeyPackageStatus`, `myMlsWelcomes` | answer, join nobody | unchanged |
 
 Not tested here: roots that take a conversation id (`conversation`, `messages`, `channelLenses`,

@@ -2,43 +2,24 @@ use rim_services::command::dto::{CommandContextDto, CommandDefinitionDto, Comman
 use rim_services::{Actor, ServiceResult};
 
 use super::DefaultCommandService;
+use super::visibility::UserCommandSteps;
 
 impl DefaultCommandService {
-    /// Filters `commands` to only those that are `ai_callable` and for which
-    /// the actor passes the capability check on every `required_capabilities`
-    /// entry.
+    /// Keeps the `ai_callable` commands among `commands` that the actor may run in `context`.
     pub(super) async fn filter_ai_surface(
         &self,
         actor: &Actor,
         context: Option<&CommandContextDto>,
         commands: Vec<CommandDefinitionDto>,
+        user_steps: &UserCommandSteps,
     ) -> ServiceResult<Vec<CommandDefinitionDto>> {
-        let mut ai_commands: Vec<CommandDefinitionDto> =
+        let ai_commands: Vec<CommandDefinitionDto> =
             commands.into_iter().filter(|c| c.ai_callable).collect();
         if ai_commands.is_empty() {
             return Ok(ai_commands);
         }
-
-        let cap_union: Vec<String> = ai_commands
-            .iter()
-            .flat_map(|c| c.required_capabilities.iter().cloned())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let workspace_id = context.and_then(|c| c.workspace_id);
-        let cap_results = self
-            .services
-            .capability_service
-            .check_many(actor, workspace_id, &cap_union)
-            .await?;
-
-        ai_commands.retain(|c| {
-            c.required_capabilities
-                .iter()
-                .all(|cap| cap_results.get(cap).copied().unwrap_or(false))
-        });
-        Ok(ai_commands)
+        self.retain_runnable(actor, context, ai_commands, user_steps)
+            .await
     }
 
     /// Test-only seam exposing [`Self::filter_ai_surface`] to integration tests.
@@ -49,7 +30,8 @@ impl DefaultCommandService {
         context: Option<&CommandContextDto>,
         commands: Vec<CommandDefinitionDto>,
     ) -> ServiceResult<Vec<CommandDefinitionDto>> {
-        self.filter_ai_surface(actor, context, commands).await
+        self.filter_ai_surface(actor, context, commands, &UserCommandSteps::new())
+            .await
     }
 }
 

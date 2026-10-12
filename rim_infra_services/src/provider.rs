@@ -308,13 +308,16 @@ impl DefaultAppServiceProvider {
             moderation_service: Arc::clone(&moderation_service),
             notification_service: Arc::clone(&notification_service),
         };
-        let command_service_concrete = Arc::new(
+        let mut command_service_concrete =
             crate::command::DefaultCommandService::with_confirmation_store(
                 repos.for_command(),
                 command_services_args(),
                 Arc::clone(&confirmation_store),
-            ),
-        );
+            );
+        if let Some(direct_space_id) = federation.direct_space_id {
+            command_service_concrete = command_service_concrete.with_direct_space(direct_space_id);
+        }
+        let command_service_concrete = Arc::new(command_service_concrete);
         let command_service: Arc<dyn CommandService> =
             Arc::clone(&command_service_concrete) as Arc<dyn CommandService>;
         let keybind_service: Arc<dyn KeybindService> =
