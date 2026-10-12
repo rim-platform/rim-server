@@ -10,6 +10,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::user::repository::MockUserRepository;
     use rim_services::events::Observers;
     use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
     use rim_services::server::service::ServerService;
@@ -69,6 +70,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             noop_observers(),
@@ -289,12 +291,27 @@ mod tests {
         conversation_repo: MockConversationRepository,
         limits: rim_services::limits::InstanceLimits,
     ) -> DefaultServerService {
+        limited_service_for(
+            server_repo,
+            conversation_repo,
+            MockUserRepository::new(),
+            limits,
+        )
+    }
+
+    fn limited_service_for(
+        server_repo: MockServerRepository,
+        conversation_repo: MockConversationRepository,
+        user_repo: MockUserRepository,
+        limits: rim_services::limits::InstanceLimits,
+    ) -> DefaultServerService {
         DefaultServerService::new(
             ServerRepos {
                 server_repo: Arc::new(server_repo),
                 server_member_repo: Arc::new(accepting_member_repo()),
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                user_repo: Arc::new(user_repo),
             },
             None,
             noop_observers(),
@@ -351,6 +368,40 @@ mod tests {
                 },
             );
             create(&svc, actor_id).await.expect("created");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_in_probation_cannot_create_a_workspace_until_it_ends() {
+        let created = chrono::Utc::now();
+        let probation = rim_services::limits::InstanceLimits {
+            probation_hours: Some(24),
+            ..Default::default()
+        };
+        for (now, refusal) in [
+            (
+                created + chrono::Duration::minutes(30),
+                Some("a new account can create a workspace in 1410 minutes"),
+            ),
+            (created + chrono::Duration::hours(24), None),
+        ] {
+            let actor_id = UserId::new();
+            let svc = limited_service_for(
+                creatable_server_repo(actor_id, None),
+                conversation_repo_creating(None),
+                crate::probation_fixtures::users(vec![crate::probation_fixtures::account(
+                    actor_id, created, None,
+                )]),
+                probation,
+            )
+            .with_clock(crate::clock::Clock::fixed(now));
+            match (create(&svc, actor_id).await, refusal) {
+                (Ok(()), None) => {}
+                (Err(ServiceError::Validation(message)), Some(expected)) => {
+                    assert_eq!(message, expected)
+                }
+                (other, expected) => panic!("expected {expected:?}, got {other:?}"),
+            }
         }
     }
 }

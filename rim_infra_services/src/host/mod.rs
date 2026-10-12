@@ -37,6 +37,7 @@ use rim_services::host::dto::{
     HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
 };
 use rim_services::host::service::{DelegationCheck, HostService, RemoteKeyPackages};
+use rim_services::limits::InstanceLimits;
 use rim_services::relay::dto::{
     ClaimConversation, Claimer, DeliverItem, IdentityDocument, OutboxPage, PeerClaimRequest,
     PeerClaimResponse,
@@ -45,6 +46,7 @@ use rim_services::s2s::dto::{S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
+use crate::clock::Clock;
 use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{IdentityStore, Stored, store_remote, verify_identity};
@@ -98,6 +100,9 @@ pub struct DefaultHostService {
     /// Invites each user sends to people on other servers who are not their contacts, per
     /// day.
     dm_invites: DailyCounter,
+    /// The probation of new accounts, during which they send no DM request to a stranger.
+    limits: InstanceLimits,
+    clock: Clock,
 }
 
 fn upstream(server_id: &str) -> ServiceError {
@@ -126,6 +131,8 @@ impl DefaultHostService {
             e2ee_service: OnceLock::new(),
             delegations: None,
             dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
+            limits: InstanceLimits::default(),
+            clock: Clock::default(),
         }
     }
 
@@ -133,6 +140,65 @@ impl DefaultHostService {
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
         self.dm_invites = DailyCounter::per_day(quotas.dm_requests_per_day);
         self
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// `Validation` while `actor`'s account is in probation and the holder of one of
+    /// `principal_ids` is a stranger to them: neither their contact nor in a workspace with
+    /// them.
+    async fn refuse_strangers_in_probation(
+        &self,
+        actor: Actor,
+        principal_ids: &[String],
+    ) -> ServiceResult<()> {
+        if self.limits.probation_hours.is_none() || principal_ids.is_empty() {
+            return Ok(());
+        }
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(actor.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        let now = self.clock.now();
+        if self
+            .limits
+            .probation_ends_at(user.created_at, now)
+            .is_none()
+        {
+            return Ok(());
+        }
+        for principal_id in principal_ids {
+            let known = user.principal_id.as_ref() == Some(principal_id)
+                || self
+                    .repos
+                    .relay_repo
+                    .is_contact(actor.user_id, principal_id)
+                    .await?
+                || self
+                    .repos
+                    .host_repo
+                    .shares_workspace(actor.user_id, principal_id)
+                    .await?;
+            if !known {
+                return self.limits.ensure_out_of_probation(
+                    user.created_at,
+                    now,
+                    "send a DM request to a stranger",
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Let workspace delegations authorize forwarded requests too.
@@ -516,6 +582,11 @@ impl HostService for DefaultHostService {
             Some((user_id, UserKind::Local)) => (user_id, false),
             existing => {
                 check_relay_urls(&member.relay_urls)?;
+                self.refuse_strangers_in_probation(
+                    actor,
+                    std::slice::from_ref(&member.principal_id),
+                )
+                .await?;
                 self.count_dm_invite(actor, &member.principal_id).await?;
                 let fetched = fetch_from_relays(
                     self.peers.as_ref(),
@@ -811,6 +882,26 @@ impl HostService for DefaultHostService {
                 .purge_request_seen(now, REQUEST_SEQ_WINDOW)
                 .await?,
         })
+    }
+
+    async fn ensure_may_request(&self, actor: Actor, user_ids: Vec<UserId>) -> ServiceResult<()> {
+        if self.limits.probation_hours.is_none() {
+            return Ok(());
+        }
+        let others: Vec<UserId> = user_ids
+            .into_iter()
+            .filter(|id| *id != actor.user_id)
+            .collect();
+        let principal_ids: Vec<String> = self
+            .repos
+            .user_repo
+            .get_by_ids(&others)
+            .await?
+            .into_iter()
+            .filter_map(|user| user.principal_id)
+            .collect();
+        self.refuse_strangers_in_probation(actor, &principal_ids)
+            .await
     }
 }
 

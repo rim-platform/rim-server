@@ -915,6 +915,21 @@ mod tests {
         slow_mode_seconds: i32,
         last_sent_ago: chrono::Duration,
     ) -> (DefaultMessageService, ServerId, ConversationId) {
+        slow_mode_service_with_users(
+            role,
+            slow_mode_seconds,
+            last_sent_ago,
+            MockUserRepository::new(),
+        )
+    }
+
+    /// [`slow_mode_service`] whose user repository is `user_repo`.
+    fn slow_mode_service_with_users(
+        role: rim_core::server_member::model::ServerMemberRole,
+        slow_mode_seconds: i32,
+        last_sent_ago: chrono::Duration,
+        user_repo: MockUserRepository,
+    ) -> (DefaultMessageService, ServerId, ConversationId) {
         let server_id = ServerId::new();
         let mut conv = conversation(server_id);
         conv.slow_mode_seconds = slow_mode_seconds;
@@ -982,7 +997,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(thread_repo),
                 server_member_repo: Arc::new(server_member_repo),
-                user_repo: Arc::new(MockUserRepository::new()),
+                user_repo: Arc::new(user_repo),
             },
             None,
             test_observers(),
@@ -1174,6 +1189,51 @@ mod tests {
             Err(ServiceError::Validation(m)) if m == "this instance allows 16 bytes of text per message"
         ));
         assert!(svc.ensure_ciphertext_bytes(96 * 1024, 0).is_ok());
+    }
+
+    /// An account in probation draws on the probation rate instead of the normal one, and
+    /// moves to the normal one once probation ends; without probation the normal rate applies.
+    #[tokio::test]
+    async fn an_account_in_probation_sends_at_the_probation_rate() {
+        use rim_core::server_member::model::ServerMemberRole;
+        let created = chrono::Utc::now();
+        let budget = |probation_hours, now| {
+            let author = UserId::new();
+            let (svc, server_id, conv_id) = slow_mode_service_with_users(
+                ServerMemberRole::Owner,
+                0,
+                chrono::Duration::seconds(1),
+                crate::probation_fixtures::users(vec![crate::probation_fixtures::account(
+                    author, created, None,
+                )]),
+            );
+            let cmd = SendMessageCmd {
+                actor: Actor::new(author),
+                ..send(server_id, conv_id)
+            };
+            let svc = svc
+                .with_message_budget(crate::token_bucket::BucketRate::new(10, 3).expect("rate"))
+                .with_probation_budget(crate::token_bucket::BucketRate::new(1, 1).expect("rate"))
+                .with_limits(rim_services::limits::InstanceLimits {
+                    probation_hours,
+                    ..Default::default()
+                })
+                .with_clock(crate::clock::Clock::fixed(now));
+            (svc, cmd)
+        };
+        let sent_before_limited = |(svc, cmd): (DefaultMessageService, SendMessageCmd)| async move {
+            let mut sent = 0;
+            while svc.send_message(cmd.clone()).await.is_ok() {
+                sent += 1;
+                assert!(sent < 10, "never limited");
+            }
+            sent
+        };
+        let in_probation = created + chrono::Duration::minutes(10);
+        assert_eq!(sent_before_limited(budget(Some(1), in_probation)).await, 1);
+        let after = created + chrono::Duration::hours(1);
+        assert_eq!(sent_before_limited(budget(Some(1), after)).await, 3);
+        assert_eq!(sent_before_limited(budget(None, in_probation)).await, 3);
     }
 
     #[tokio::test]

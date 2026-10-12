@@ -270,6 +270,16 @@ and `serverInfo.limits` reports that number, so `devicesPerUser` and `dmRequests
 never null. A DM request past the daily number stays `RATE_LIMITED` with `retryAfterSeconds`,
 as the quota answered before.
 
+`RIM_PROBATION_HOURS` puts new accounts on probation for that many hours after their creation;
+unset or 0 turns it off, and an account older than the setting is judged by its age like any
+other. During probation an account cannot create a workspace or send a DM request to a stranger,
+someone neither its contact nor in a workspace with it, and both answer `VALIDATION` saying when
+it can, in minutes rounded up ("a new account can create a workspace in 42 minutes"). Its
+messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a burst of the same size, instead
+of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate applies. The `probationHours`
+of `serverInfo.limits` reports the setting, null when off, and `me { probationEndsAt }` tells
+the signed-in caller when theirs ends, null once it has.
+
 An operator can also block an address or range (`rim_server ip block`). A blocked address is
 answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,
 the readiness probe, discovery and `/s2s/v1/...`. The address is found the same way as for the
@@ -363,7 +373,8 @@ each list.
   runs the server; null when there is none. A client shows it where people sign up or sign in.
 - **`termsUrl`**: the terms of service a signup accepts, an absolute http(s) URL; null when the
   server has none. A client links it at signup and sends it back as `acceptedTermsUrl`.
-- **`limits`**: the instance's caps ("Limits"), each an integer or null when there is none.
+- **`limits`**: the instance's caps ("Limits"), each an integer or null when there is none,
+  and `probationHours`, the probation of new accounts.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

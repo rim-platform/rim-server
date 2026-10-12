@@ -1,6 +1,8 @@
 //! The instance limits on a real server: one node capping workspaces per user, channels per
 //! workspace, devices per user and message bytes refuses the write past each cap with
-//! `VALIDATION` naming it, and allows the writes within it.
+//! `VALIDATION` naming it, and allows the writes within it. With a one-hour probation, a new
+//! account creates no workspace and sends no DM request to a stranger, and `me` says when its
+//! probation ends.
 //!
 //! Run with:
 //! ```sh
@@ -14,7 +16,11 @@ use sea_orm::ConnectionTrait;
 use serde_json::json;
 use uuid::Uuid;
 
+use rim_core::server::model::ServerId;
+use rim_core::server_member::model::ServerMemberRole;
+use rim_core::server_member::repository::ServerMemberRepository;
 use rim_identity::testing::signing_key;
+use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use support::graphql::{exec_err, exec_ok};
 use support::identity::statement;
 use support::nodes::{S2S_TABLES, start};
@@ -25,7 +31,10 @@ const CREATE_SERVER: &str =
 const CREATE_CHANNEL: &str = "mutation($s: ID!, $title: String!) { createConversation(input: \
      { serverId: $s, isChannel: true, title: $title }) { id } }";
 const CHANNELS: &str =
-    "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 100) { items { title } } }";
+    "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 100) { items { id title } } }";
+const CREATE_DM: &str = "mutation($s: ID!, $u: ID!) { createConversation(input: \
+     { serverId: $s, otherUserId: $u }) { id } }";
+const PROBATION_ENDS: &str = "{ me { probationEndsAt } }";
 const SEND: &str = "mutation($s: ID!, $c: ID!, $text: String!) { sendMessage(input: \
      { serverId: $s, conversationId: $c, text: $text }) { id } }";
 const ADD_DEVICE: &str =
@@ -45,6 +54,7 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         config.limit_channels_per_workspace = Some(1);
         config.limit_devices_per_user = Some(1);
         config.limit_message_bytes = Some(16);
+        config.probation_hours = Some(1);
     })
     .await;
     let schema = &node.schema;
@@ -53,8 +63,17 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         assert_eq!(message, expected);
     };
 
-    // Workspaces per user: the first is allowed, the second refused.
+    // Ada's account is two hours old, past its probation.
     let ada = ctx.enrolled(schema, "ada", 1).await;
+    ctx.conn
+        .execute_unprepared(&format!(
+            "UPDATE \"user\" SET created_at = now() - interval '2 hours' WHERE id = '{}'",
+            ada.user.id
+        ))
+        .await
+        .expect("age ada");
+
+    // Workspaces per user: the first is allowed, the second refused.
     let server_id = exec_ok(
         schema,
         ada.caller
@@ -81,10 +100,10 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         ada.caller.request(CHANNELS, json!({ "s": server_id })),
     )
     .await;
-    assert_eq!(
-        channels["channels"]["items"],
-        json!([{ "title": "general" }])
-    );
+    let items = channels["channels"]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["title"], "general");
+    let general = items[0]["id"].as_str().expect("general").to_string();
     refused(
         exec_err(
             schema,
@@ -96,17 +115,6 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
     );
 
     // Message bytes: 16 bytes are sent, 17 refused, counted in bytes rather than characters.
-    let general = exec_ok(
-        schema,
-        ada.caller.request(
-            "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 100) { items { id } } }",
-            json!({ "s": server_id }),
-        ),
-    )
-    .await["channels"]["items"][0]["id"]
-        .as_str()
-        .expect("general")
-        .to_string();
     let send = |text: String| {
         ada.caller
             .request(SEND, json!({ "s": server_id, "c": general, "text": text }))
@@ -132,6 +140,57 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         .await,
         "this instance allows 1 devices per user; revoke one first",
     );
+
+    // Probation: a new account creates no workspace and says when its probation ends; Ada's
+    // has ended.
+    let newcomer = ctx.create_user("newcomer").await;
+    let fresh = ctx.caller(&newcomer).await;
+    let in_probation = |(code, message): (String, String), action: &str| {
+        assert_eq!(code, "VALIDATION", "{message}");
+        let prefix = format!("a new account can {action} in ");
+        let minutes = message
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(" minutes"))
+            .unwrap_or_else(|| panic!("{message}"));
+        assert!(
+            (59..=60).contains(&minutes.parse::<u32>().expect("minutes")),
+            "{message}"
+        );
+    };
+    in_probation(
+        exec_err(
+            schema,
+            fresh.request(CREATE_SERVER, json!({ "name": "mine" })),
+        )
+        .await,
+        "create a workspace",
+    );
+    let ends = exec_ok(schema, fresh.request(PROBATION_ENDS, json!({}))).await;
+    assert!(ends["me"]["probationEndsAt"].is_string(), "{ends}");
+    let ended = exec_ok(schema, ada.caller.request(PROBATION_ENDS, json!({}))).await;
+    assert!(ended["me"]["probationEndsAt"].is_null(), "{ended}");
+
+    // A DM in the direct space to Ada, a stranger, is refused; once both are in Ada's
+    // workspace she is no stranger and the DM is allowed.
+    let dm = || {
+        fresh.request(
+            CREATE_DM,
+            json!({ "s": node.s2s.direct_space_id.to_string(), "u": ada.user.id.to_string() }),
+        )
+    };
+    in_probation(
+        exec_err(schema, dm()).await,
+        "send a DM request to a stranger",
+    );
+    SeaOrmServerMemberRepository::new(ctx.db.clone())
+        .add_member(
+            ServerId::from(Uuid::parse_str(&server_id).expect("uuid")),
+            newcomer.id,
+            ServerMemberRole::Member,
+        )
+        .await
+        .expect("join");
+    exec_ok(schema, dm()).await;
 
     node.stop().await;
 }

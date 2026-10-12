@@ -58,6 +58,10 @@ pub struct ServerLimits {
     pub invite_max_uses: Option<u32>,
     /// Bytes of one message's text.
     pub message_bytes: Option<u32>,
+    /// Hours after its creation during which an account cannot create a workspace or send a
+    /// DM request to a stranger, and sends messages at a lower rate; `me.probationEndsAt` says
+    /// when the caller's ends.
+    pub probation_hours: Option<u32>,
 }
 
 impl From<&InstanceLimits> for ServerLimits {
@@ -74,6 +78,7 @@ impl From<&InstanceLimits> for ServerLimits {
             invites_per_user_per_day: limits.invites_per_user_per_day,
             invite_max_uses: limits.invite_max_uses,
             message_bytes: limits.message_bytes,
+            probation_hours: limits.probation_hours,
         }
     }
 }

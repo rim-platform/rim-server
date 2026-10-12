@@ -16,6 +16,8 @@ async fn me_query_returns_current_user() {
             Ok(dto)
         })
     });
+    // Asked only when `probationEndsAt` is selected.
+    user.expect_probation_ends_at().never();
 
     let schema = schema_with_user_mock(user);
 
@@ -27,6 +29,32 @@ async fn me_query_returns_current_user() {
     assert_eq!(json["me"]["id"], serde_json::json!(actor.to_string()));
     assert_eq!(json["me"]["username"], serde_json::json!("alice"));
     assert_eq!(json["me"]["displayName"], serde_json::json!("Alice"));
+}
+
+#[tokio::test]
+async fn me_reports_when_the_callers_probation_ends() {
+    let actor = UserId::new();
+    let ends_at = chrono::DateTime::parse_from_rfc3339("2026-10-13T08:30:00Z")
+        .expect("time")
+        .with_timezone(&chrono::Utc);
+    let mut user = MockUserService::new();
+    user.expect_get_me()
+        .returning(|_| Box::pin(async { Ok(test_user_dto()) }));
+    user.expect_probation_ends_at()
+        .withf(move |q| q.actor.user_id == actor)
+        .times(1)
+        .returning(move |_| Box::pin(async move { Ok(Some(ends_at)) }));
+    let schema = schema_with_user_mock(user);
+
+    let res = schema
+        .execute(authed_request(r#"query { me { probationEndsAt } }"#, actor))
+        .await;
+    assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(
+        json["me"]["probationEndsAt"],
+        serde_json::json!("2026-10-13T08:30:00+00:00")
+    );
 }
 
 #[tokio::test]

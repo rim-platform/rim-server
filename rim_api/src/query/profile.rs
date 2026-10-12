@@ -21,7 +21,16 @@ impl ProfileQueries {
             })
             .await
             .map_err(crate::errors::map_service_error)?;
+        let mut me = User::from(dto);
+        if ctx.look_ahead().field("probationEndsAt").exists() {
+            me.probation_ends_at = svc
+                .probation_ends_at(GetMeQuery {
+                    actor: Actor::new(actor),
+                })
+                .await
+                .map_err(crate::errors::map_service_error)?;
+        }
 
-        Ok(dto.into())
+        Ok(me)
     }
 }

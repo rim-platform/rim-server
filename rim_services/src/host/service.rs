@@ -94,6 +94,11 @@ pub trait HostService: Send + Sync {
 
     /// Delete outbox rows older than 7 days and accepted request `seq`s that left the window.
     async fn cleanup(&self) -> ServiceResult<HostCleanup>;
+
+    /// `Validation` naming the time left while `actor`'s account is in probation and one of
+    /// `user_ids` is a stranger to them, someone neither their contact nor in a workspace with
+    /// them, whom a conversation in the direct space would send a DM request.
+    async fn ensure_may_request(&self, actor: Actor, user_ids: Vec<UserId>) -> ServiceResult<()>;
 }
 
 /// Claims key packages of remote users' devices from their relays.

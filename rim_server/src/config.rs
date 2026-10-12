@@ -231,6 +231,16 @@ pub struct RIMConfig {
     pub limit_invite_max_uses: Option<u32>,
     /// Bytes of one message's text, at most 65536. Controlled by `RIM_LIMIT_MESSAGE_BYTES`.
     pub limit_message_bytes: Option<u32>,
+
+    // ── Probation of new accounts ───────────────────────────────────────────
+    /// Hours after its creation during which an account cannot create a workspace or send a
+    /// DM request to a stranger; unset or 0 turns probation off. Controlled by
+    /// `RIM_PROBATION_HOURS`.
+    pub probation_hours: Option<u32>,
+    /// Messages an account in probation sends per minute, with a burst of the same size,
+    /// instead of the normal message rate; unset or 0 keeps the normal rate. Controlled by
+    /// `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
+    pub rate_probation_messages_per_min: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -407,6 +417,8 @@ impl Default for RIMConfig {
             limit_invites_per_user_per_day: None,
             limit_invite_max_uses: None,
             limit_message_bytes: None,
+            probation_hours: None,
+            rate_probation_messages_per_min: None,
         }
     }
 }
@@ -486,6 +498,7 @@ impl RIMConfig {
                 cap(self.limit_dm_requests_per_day),
             ),
             messages: self.api_limits().messages,
+            probation_messages: self.api_limits().probation_messages,
         }
     }
 
@@ -922,6 +935,8 @@ pub struct ApiLimits {
     pub mutations_per_session: Option<rim_infra_services::token_bucket::BucketRate>,
     /// Messages per user.
     pub messages: Option<rim_infra_services::token_bucket::BucketRate>,
+    /// Messages per account in probation, instead of `messages`.
+    pub probation_messages: Option<rim_infra_services::token_bucket::BucketRate>,
     /// Open WebSocket connections per user.
     pub ws_connections_per_user: Option<u32>,
     /// Active subscriptions per WebSocket connection.
@@ -944,6 +959,7 @@ impl RIMConfig {
             messages: self
                 .rate_messages_per_min_per_user
                 .and_then(|rate| BucketRate::new(rate, self.rate_messages_burst.unwrap_or(rate))),
+            probation_messages: per_minute(self.rate_probation_messages_per_min),
             ws_connections_per_user: cap(self.rate_ws_connections_per_user),
             subscriptions_per_connection: cap(self.rate_subscriptions_per_connection),
             max_batch: self.api_max_batch.unwrap_or(DEFAULT_API_MAX_BATCH).max(1),
@@ -1002,6 +1018,7 @@ impl RIMConfig {
             invites_per_user_per_day: cap(self.limit_invites_per_user_per_day),
             invite_max_uses: cap(self.limit_invite_max_uses),
             message_bytes,
+            probation_hours: cap(self.probation_hours),
         })
     }
 }
@@ -1584,6 +1601,7 @@ mod tests {
                 requests_per_ip: None,
                 mutations_per_session: None,
                 messages: None,
+                probation_messages: None,
                 ws_connections_per_user: None,
                 subscriptions_per_connection: None,
                 max_batch: DEFAULT_API_MAX_BATCH,
@@ -1783,6 +1801,7 @@ mod tests {
                 invites_per_user_per_day: Some(5),
                 invite_max_uses: Some(5),
                 message_bytes: Some(8192),
+                probation_hours: None,
             })
         );
     }
@@ -1850,5 +1869,40 @@ mod tests {
             config.instance_limits().map(|l| l.plugins_per_workspace),
             Ok(Some(100))
         );
+    }
+
+    #[test]
+    fn probation_is_off_when_unset_or_zero_and_read_with_its_message_rate() {
+        use rim_infra_services::token_bucket::BucketRate;
+        assert_eq!(
+            RIMConfig::default()
+                .instance_limits()
+                .map(|l| l.probation_hours),
+            Ok(None)
+        );
+        assert_eq!(RIMConfig::default().quotas().probation_messages, None);
+        let load = |hours: &str, rate: &str| {
+            RIMConfig::load_from(env(&[
+                ("DATABASE_URL", "postgres://localhost/rim"),
+                ("RIM_PROBATION_HOURS", hours),
+                ("RIM_RATE_PROBATION_MESSAGES_PER_MIN", rate),
+            ]))
+        };
+        let off = load("0", "0").expect("loads");
+        assert_eq!(off.instance_limits().map(|l| l.probation_hours), Ok(None));
+        assert_eq!(off.quotas().probation_messages, None);
+        let on = load("24", "5").expect("loads");
+        assert_eq!(
+            on.instance_limits().map(|l| l.probation_hours),
+            Ok(Some(24))
+        );
+        assert_eq!(on.quotas().probation_messages, BucketRate::new(5, 5));
+        for bad in ["-1", "a day"] {
+            assert!(load(bad, "5").is_err(), "RIM_PROBATION_HOURS={bad}");
+            assert!(
+                load("24", bad).is_err(),
+                "RIM_RATE_PROBATION_MESSAGES_PER_MIN={bad}"
+            );
+        }
     }
 }

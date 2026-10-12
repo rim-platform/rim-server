@@ -58,6 +58,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   `VALIDATION` naming it. GraphQL `ServerInfo.limits` (type `ServerLimits`, one nullable `Int`
   per cap) reports them; for devices and DM requests it reports the stricter of the cap and the
   relay quota, which is what applies. `docs/api.md` ("Limits") lists them.
+- Probation for new accounts: `RIM_PROBATION_HOURS` (off unless set) keeps an account younger
+  than that from creating a workspace or sending a DM request to a stranger, answered
+  `VALIDATION` naming the minutes left, and `RIM_RATE_PROBATION_MESSAGES_PER_MIN` gives it a
+  lower message rate. GraphQL `ServerLimits.probationHours` reports the setting and
+  `User.probationEndsAt`, read on `me`, says when the caller's probation ends.
 
 ### Changed
 

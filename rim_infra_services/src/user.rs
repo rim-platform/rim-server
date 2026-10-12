@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 
 use rim_core::user::model::UpdateProfilePatch;
+use rim_services::limits::InstanceLimits;
 use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::UserRepos;
+use crate::clock::Clock;
 
 /// Strip control characters (except newline/tab in bio) from a string.
 fn strip_control_chars(s: &str) -> String {
@@ -23,11 +25,29 @@ fn strip_control_chars_single_line(s: &str) -> String {
 #[derive(Clone)]
 pub struct DefaultUserService {
     repos: UserRepos,
+    /// The probation of new accounts.
+    limits: InstanceLimits,
+    clock: Clock,
 }
 
 impl DefaultUserService {
     pub fn new(repos: UserRepos) -> Self {
-        Self { repos }
+        Self {
+            repos,
+            limits: InstanceLimits::default(),
+            clock: Clock::default(),
+        }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
     }
 
     fn convert_to_dto(user: rim_core::user::model::User) -> UserDto {
@@ -54,6 +74,24 @@ impl UserService for DefaultUserService {
             .ok_or(ServiceError::NotFound)?;
 
         Ok(Self::convert_to_dto(user))
+    }
+
+    async fn probation_ends_at(
+        &self,
+        query: GetMeQuery,
+    ) -> ServiceResult<Option<chrono::DateTime<chrono::Utc>>> {
+        if self.limits.probation_hours.is_none() {
+            return Ok(None);
+        }
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(query.actor.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        Ok(self
+            .limits
+            .probation_ends_at(user.created_at, self.clock.now()))
     }
 
     async fn get_users_by_ids(

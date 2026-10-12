@@ -299,6 +299,12 @@ requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and
 `RIM_RELAY_DM_REQUESTS_PER_DAY`: the stricter number applies. A negative or non-numeric value,
 or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot.
 
+`RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
+an account cannot create a workspace or send a DM request to someone it shares no workspace
+with and has not added as a contact, and with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends
+messages at that lower rate. Existing accounts are judged by their age, so turning it on does
+not hold back anyone older than the setting.
+
 ## Optional features
 
 Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface

@@ -118,6 +118,10 @@ USER rim
 #   RIM_LIMIT_INVITE_MAX_USES — the uses one invite may have
 #   RIM_LIMIT_MESSAGE_BYTES — bytes of a message's text, at most 65536; more stops the server
 #                           at boot
+#   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace
+#                           and sends no DM request to a stranger (default: off)
+#   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,
+#                           instead of the normal rate (default: the normal rate)
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

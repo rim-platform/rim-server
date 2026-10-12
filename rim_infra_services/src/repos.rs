@@ -117,6 +117,8 @@ pub struct ServerRepos {
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    /// Reads the creator's account age for probation.
+    pub user_repo: Arc<dyn UserRepository>,
 }
 
 #[derive(Clone)]
@@ -281,6 +283,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 

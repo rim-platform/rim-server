@@ -68,6 +68,28 @@ pub(crate) fn direct_space<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationCon
     Ok(federation)
 }
 
+/// `VALIDATION` while the caller's account is in probation and a conversation in the direct
+/// space would send a DM request to a stranger among `user_ids`. Elsewhere, and on a server
+/// without the direct space, it allows everything.
+pub(crate) async fn ensure_may_request(
+    ctx: &Context<'_>,
+    actor: UserId,
+    server_id: rim_core::server::model::ServerId,
+    user_ids: Vec<UserId>,
+) -> Result<(), Error> {
+    let Ok(federation) = ctx.data::<FederationContext>() else {
+        return Ok(());
+    };
+    if server_id != federation.host.direct_space_id() || user_ids.is_empty() {
+        return Ok(());
+    }
+    federation
+        .host
+        .ensure_may_request(rim_services::Actor::new(actor), user_ids)
+        .await
+        .map_err(map_service_error)
+}
+
 /// `FORBIDDEN` on a server that runs only the relay role: it creates no workspaces.
 pub(crate) fn ensure_may_create_workspace(ctx: &Context<'_>) -> Result<(), Error> {
     match ctx.data::<FederationContext>() {

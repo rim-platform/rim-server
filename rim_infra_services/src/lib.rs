@@ -7,11 +7,14 @@ pub mod audit_retention;
 pub mod auth;
 pub mod capability;
 pub(crate) mod channel_lens;
+pub(crate) mod clock;
 pub mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
+#[cfg(test)]
+mod probation_fixtures;
 // Public: the composition root (rim_server/src/app.rs) constructs
 // EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig directly.
 pub mod email;

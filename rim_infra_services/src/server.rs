@@ -16,6 +16,7 @@ use rim_services::server::service::ServerService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
+use crate::clock::Clock;
 use crate::repos::AppRepos;
 use crate::util::{add_workspace_member, ensure_server_exists, ensure_server_member};
 
@@ -24,8 +25,10 @@ pub struct DefaultServerService {
     repos: ServerRepos,
     db: Option<DatabaseConnection>,
     observers: Observers,
-    /// Caps on workspaces per owner and on the default channels.
+    /// Caps on workspaces per owner and on the default channels, and the probation of new
+    /// accounts.
     limits: InstanceLimits,
+    clock: Clock,
 }
 
 impl DefaultServerService {
@@ -35,12 +38,34 @@ impl DefaultServerService {
             db,
             observers,
             limits: InstanceLimits::default(),
+            clock: Clock::default(),
         }
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// `Validation` while the creator's account is in probation.
+    async fn ensure_out_of_probation(&self, user_id: UserId) -> ServiceResult<()> {
+        if self.limits.probation_hours.is_none() {
+            return Ok(());
+        }
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        self.limits
+            .ensure_out_of_probation(user.created_at, self.clock.now(), "create a workspace")
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {
@@ -134,6 +159,7 @@ impl ServerService for DefaultServerService {
                 existing.name
             )));
         }
+        self.ensure_out_of_probation(cmd.actor.user_id).await?;
         if self.limits.workspaces_per_user.is_some() {
             let owned = self
                 .repos

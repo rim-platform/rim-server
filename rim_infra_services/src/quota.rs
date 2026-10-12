@@ -26,6 +26,9 @@ pub struct Quotas {
     pub dm_requests_per_day: u32,
     /// Messages a user sends per minute, with their burst; `None` sets no limit.
     pub messages: Option<crate::token_bucket::BucketRate>,
+    /// Messages an account in probation sends per minute, instead of `messages`; `None` keeps
+    /// it on `messages`.
+    pub probation_messages: Option<crate::token_bucket::BucketRate>,
 }
 
 /// Largest card the statement rules allow.
@@ -41,6 +44,7 @@ impl Default for Quotas {
             forwards_per_user_per_day: 50_000,
             dm_requests_per_day: 20,
             messages: None,
+            probation_messages: None,
         }
     }
 }
@@ -106,6 +110,7 @@ mod tests {
         assert_eq!(q.forwards_per_user_per_day, 50_000);
         assert_eq!(q.dm_requests_per_day, 20);
         assert_eq!(q.messages, None);
+        assert_eq!(q.probation_messages, None);
     }
 
     #[test]

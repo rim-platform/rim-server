@@ -201,6 +201,9 @@ impl DefaultAppServiceProvider {
         if let Some(rate) = federation.quotas.messages {
             message_concrete = message_concrete.with_message_budget(rate);
         }
+        if let Some(rate) = federation.quotas.probation_messages {
+            message_concrete = message_concrete.with_probation_budget(rate);
+        }
         let message_service: Arc<dyn MessageService> = Arc::new(message_concrete);
         let mut e2ee_concrete = crate::e2ee::DefaultE2eeService::new(
             repos.for_e2ee(),
@@ -288,7 +291,7 @@ impl DefaultAppServiceProvider {
         let thread_service: Arc<dyn ThreadService> =
             Arc::new(crate::thread::DefaultThreadService::new(repos.for_thread()));
         let user_service: Arc<dyn UserService> =
-            Arc::new(crate::user::DefaultUserService::new(repos.for_user()));
+            Arc::new(crate::user::DefaultUserService::new(repos.for_user()).with_limits(limits));
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(
                 repos.for_workspace_state(),

@@ -11,6 +11,9 @@ pub struct User {
     /// Key-based principal id (`rimp1_...`) once the account enrolled a key; null before. Plugins
     /// see this id, and the host maps a provisional `rimp0_` id to it once.
     pub principal_id: Option<String>,
+    /// When the account leaves probation, while it is in it. Read on `me` only; null for
+    /// everyone else and once probation is over.
+    pub probation_ends_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -23,6 +26,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             status_text: value.status_text,
             bio: value.bio,
             principal_id: value.principal_id,
+            probation_ends_at: None,
         }
     }
 }

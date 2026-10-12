@@ -76,6 +76,7 @@ pub(crate) fn slow_mode_retry_after(
 }
 
 use crate::MessageRepos;
+use crate::clock::Clock;
 use crate::e2ee::aad::{ApplicationAad, parse_application};
 use crate::e2ee::franking::{ReceiptFields, receipt, sent_at_us};
 use crate::e2ee::{
@@ -135,8 +136,12 @@ pub struct DefaultMessageService {
     /// Messages each user may send per minute, across every way of creating one. `None` sets
     /// no limit.
     message_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
-    /// The cap on a message's text in bytes.
+    /// Messages each account in probation may send per minute, instead of `message_budget`.
+    /// `None` keeps them on `message_budget`.
+    probation_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
+    /// The cap on a message's text in bytes, and the probation of new accounts.
     limits: InstanceLimits,
+    clock: Clock,
 }
 
 impl DefaultMessageService {
@@ -150,8 +155,41 @@ impl DefaultMessageService {
             e2ee: None,
             moderation_repo: None,
             message_budget: None,
+            probation_budget: None,
             limits: InstanceLimits::default(),
+            clock: Clock::default(),
         }
+    }
+
+    /// The message rate of accounts in probation.
+    pub fn with_probation_budget(mut self, rate: BucketRate) -> Self {
+        self.probation_budget = Some(Arc::new(TokenBucketLimiter::new(rate)));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The budget `author`'s messages draw on: the probation one while their account is in
+    /// probation, else the normal one.
+    async fn budget_for(
+        &self,
+        author: UserId,
+    ) -> ServiceResult<Option<&Arc<TokenBucketLimiter<UserId>>>> {
+        if let Some(probation) = &self.probation_budget
+            && self.limits.probation_hours.is_some()
+            && let Some(user) = self.repos.user_repo.get_by_id(author).await?
+            && self
+                .limits
+                .probation_ends_at(user.created_at, self.clock.now())
+                .is_some()
+        {
+            return Ok(Some(probation));
+        }
+        Ok(self.message_budget.as_ref())
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
@@ -189,8 +227,8 @@ impl DefaultMessageService {
     }
 
     /// `RateLimited` once `author` has used their message budget.
-    fn ensure_message_budget(&self, author: UserId) -> ServiceResult<()> {
-        let Some(budget) = &self.message_budget else {
+    async fn ensure_message_budget(&self, author: UserId) -> ServiceResult<()> {
+        let Some(budget) = self.budget_for(author).await? else {
             return Ok(());
         };
         match budget.check(&author, std::time::Instant::now()) {
@@ -904,7 +942,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
@@ -1023,7 +1061,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         // 1. Validate access (membership, archive, timeout) and slow mode
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
@@ -1654,7 +1692,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         let access_repos = ConversationAccessRepos::from_arcs(
             &self.repos.server_member_repo,
             &self.repos.conversation_repo,
@@ -1864,7 +1902,7 @@ impl MessageService for DefaultMessageService {
         &self,
         cmd: SendEncryptedMessageCmd,
     ) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.caller.actor.user_id)?;
+        self.ensure_message_budget(cmd.caller.actor.user_id).await?;
         let e2ee = self.e2ee()?;
         require_device(&cmd.caller)?;
         let author = cmd.caller.actor.user_id;

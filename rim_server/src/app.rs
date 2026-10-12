@@ -261,6 +261,7 @@ async fn build_s2s(
             config.s2s_device_rate_per_min(),
         )
         .with_quotas(config.quotas())
+        .with_limits(config.instance_limits().map_err(std::io::Error::other)?)
         .with_delegations(Arc::new(RepoDelegationCheck::new(Arc::clone(
             &repos.delegation_repo,
         )))),
