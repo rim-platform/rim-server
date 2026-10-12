@@ -17,6 +17,7 @@ use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
 use rim_api::subscription_limit::SubscriptionSlots;
+use rim_api::subscriptions_only::WebSocketConnection;
 use tracing::{Instrument, info, info_span};
 
 use std::sync::Arc;
@@ -409,6 +410,8 @@ async fn graphql_ws_handler(
 
     let mut data = async_graphql::Data::default();
     data.insert(actor_ctx);
+    // The socket runs subscriptions only; queries and mutations go through POST /api.
+    data.insert(WebSocketConnection);
     if let Some(edge_limits) = req.app_data::<web::Data<EdgeLimits>>() {
         // The connection slot lives in the connection's data, so it is given back when the
         // connection ends.

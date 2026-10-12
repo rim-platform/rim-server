@@ -136,5 +136,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` charges every mutation field a request runs: fields
   in nested fragments count, and a fragment spread twice counts twice. Before, fields more than
   one fragment deep were not charged.
+- `/api/ws` runs subscriptions only. A query or a mutation sent on it answers one `VALIDATION`
+  error, "only subscriptions over the WebSocket", and runs nothing. Before, a mutation sent
+  there ran without the CSRF check, the mutation budget or the refusal of account mutations
+  for people from another server. Clients send queries and mutations to `POST /api`.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

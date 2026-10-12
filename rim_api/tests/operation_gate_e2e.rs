@@ -1,5 +1,5 @@
 //! The checks that classify a GraphQL operation, on a real server: a protected mutation hidden
-//! in nested fragments still needs the CSRF header.
+//! in nested fragments still needs the CSRF header, and `/api/ws` runs subscriptions only.
 //!
 //! Run with:
 //! ```sh
@@ -9,11 +9,17 @@
 
 mod support;
 
+use std::time::Duration;
+
+use rim_api::broadcast::{Broadcaster, InMemoryBroadcaster, WorkspaceEvent};
+use rim_core::server::model::Server;
+use rim_core::user::model::User;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 
 use support::nodes::{Node, S2S_TABLES, start};
 use support::sessions::{LOGIN, PASSWORD};
+use support::ws::Socket;
 
 /// A mutation exempt from CSRF in sight, `updateMyProfile` two named fragments down.
 const NESTED_PROTECTED: &str = r#"mutation {
@@ -27,12 +33,14 @@ fragment Inner on Mutation {
 
 const STATUS_TEXT: &str = "{ me { statusText } }";
 
-/// A server, and a password user signed in to it over HTTP.
+/// A server, and a password user signed in to it over HTTP who owns one workspace.
 struct SignedIn {
     node: Node,
     http: reqwest::Client,
     session: String,
     csrf: String,
+    user: User,
+    workspace: Server,
 }
 
 impl SignedIn {
@@ -42,7 +50,9 @@ impl SignedIn {
             .execute_unprepared(S2S_TABLES)
             .await
             .expect("truncate");
-        ctx.create_password_user("gatekeeper").await;
+        let user = ctx.create_password_user("gatekeeper").await;
+        let workspace = ctx.create_server("gate").await;
+        ctx.add_owner(&workspace, &user).await;
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
         let node = start(&url, |_| {}).await;
         let http = reqwest::Client::new();
@@ -71,6 +81,8 @@ impl SignedIn {
             http,
             session,
             csrf,
+            user,
+            workspace,
         }
     }
 
@@ -120,6 +132,78 @@ async fn a_protected_mutation_in_nested_fragments_needs_the_csrf_header() {
     let ran = signed_in.post(NESTED_PROTECTED, true).await;
     assert!(ran.get("errors").is_none(), "{ran}");
     assert_eq!(signed_in.status_text().await, "changed without CSRF");
+
+    signed_in.node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_socket_refuses_queries_and_mutations_and_runs_subscriptions() {
+    let signed_in = SignedIn::new().await;
+    let mut socket = Socket::connect(&signed_in.node.origin, &signed_in.session).await;
+
+    for (id, query) in [
+        (
+            "mutation",
+            r#"mutation { updateMyProfile(input: { statusText: "changed over WS" }) { id } }"#,
+        ),
+        ("query", "{ me { id } }"),
+    ] {
+        socket.subscribe(id, query, json!({})).await;
+        let answer = socket.receive().await;
+        assert_eq!(answer["type"], "next", "{answer}");
+        assert_eq!(answer["id"], id, "{answer}");
+        let errors = answer["payload"]["errors"].as_array().expect("errors");
+        assert_eq!(errors.len(), 1, "{answer}");
+        assert_eq!(
+            errors[0]["message"],
+            "only subscriptions over the WebSocket"
+        );
+        assert_eq!(errors[0]["extensions"]["code"], "VALIDATION");
+        assert!(answer["payload"]["data"].is_null(), "{answer}");
+        assert_eq!(
+            socket.receive().await,
+            json!({ "type": "complete", "id": id })
+        );
+    }
+    assert_eq!(signed_in.status_text().await, Value::Null);
+
+    socket
+        .subscribe(
+            "events",
+            "subscription ($id: ID!) { workspaceEvents(workspaceId: $id) }",
+            json!({ "id": signed_in.workspace.id.to_string() }),
+        )
+        .await;
+    let broadcaster = signed_in
+        .node
+        .schema
+        .data::<InMemoryBroadcaster>()
+        .expect("broadcaster");
+    // The subscription starts listening some time after `subscribe`; broadcast until it hears.
+    let marker = "socket-gate-marker";
+    let mut event = None;
+    for _ in 0..50 {
+        broadcaster.broadcast(WorkspaceEvent::PresenceChanged {
+            workspace_id: signed_in.workspace.id,
+            user_id: signed_in.user.id,
+            status: marker.to_string(),
+        });
+        let Some(answer) = socket.receive_within(Duration::from_millis(200)).await else {
+            continue;
+        };
+        assert_eq!(answer["type"], "next", "{answer}");
+        assert_eq!(answer["id"], "events", "{answer}");
+        assert!(answer["payload"].get("errors").is_none(), "{answer}");
+        let text = answer["payload"]["data"]["workspaceEvents"]
+            .as_str()
+            .expect("an event");
+        if text.contains(marker) {
+            event = Some(text.to_string());
+            break;
+        }
+    }
+    let event = event.expect("the subscription delivers the event");
+    assert!(event.contains("PresenceChanged"), "{event}");
 
     signed_in.node.stop().await;
 }

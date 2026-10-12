@@ -26,6 +26,8 @@ pub mod roles;
 pub mod roots;
 #[allow(dead_code)] // Only the suites that sign in with a password use it.
 pub mod sessions;
+#[allow(dead_code)] // Only the suites that open a WebSocket use it.
+pub mod ws;
 
 use std::env;
 use std::path::PathBuf;
