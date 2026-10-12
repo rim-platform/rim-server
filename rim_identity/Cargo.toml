@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 # `zeroize` wipes the GHASH key; `aes` is listed only to turn on its `zeroize` feature, which
 # wipes the AES round keys.
-aes = { version = "0.8.4", features = ["zeroize"] }
+aes = { version = "0.9.3", features = ["zeroize"] }
 aes-gcm = { version = "0.10.3", features = ["zeroize"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["serde"] }
