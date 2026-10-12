@@ -560,15 +560,21 @@ async fn revocation_fan_outs_are_due_retried_and_acknowledged() {
 async fn the_migration_refuses_down_while_delegations_or_subscriptions_exist() {
     let ctx = support::TestCtx::new().await;
     let conn = support::db_conn().await;
-    let names: Vec<String> = Migrator::migrations()
-        .iter()
-        .map(|m| m.name().to_string())
-        .collect();
-    let index = names
-        .iter()
-        .position(|n| n == MIGRATION_NAME)
-        .expect("migration must be registered");
-    let steps = u32::try_from(names.len() - index).expect("steps fit u32");
+    // Steps from the newest applied migration down to and including this one, read from what is
+    // applied right now: a refused `down` leaves the newer migrations rolled back.
+    async fn steps_to_here(conn: &sea_orm::DatabaseConnection) -> u32 {
+        let applied: Vec<String> = Migrator::get_applied_migrations(conn)
+            .await
+            .expect("applied migrations")
+            .iter()
+            .map(|m| m.name().to_string())
+            .collect();
+        let index = applied
+            .iter()
+            .position(|n| n == MIGRATION_NAME)
+            .expect("migration must be applied");
+        u32::try_from(applied.len() - index).expect("steps fit u32")
+    }
 
     let user = ctx.create_key_only_user("alice", "rimp1_alice").await.id;
     SeaOrmSubscriptionRepository::new(ctx.db.clone())
@@ -581,6 +587,7 @@ async fn the_migration_refuses_down_while_delegations_or_subscriptions_exist() {
         )
         .await
         .unwrap();
+    let steps = steps_to_here(&conn).await;
     assert!(
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a subscription blocks the down migration"
@@ -591,6 +598,7 @@ async fn the_migration_refuses_down_while_delegations_or_subscriptions_exist() {
         .await
         .unwrap();
 
+    let steps = steps_to_here(&conn).await;
     Migrator::down(&conn, Some(steps)).await.expect("down");
     for table in [
         "host_delegation",
