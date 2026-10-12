@@ -1148,3 +1148,115 @@ async fn forwarded_requests_are_limited_per_device() {
         Err(ForwardRefusal::RateLimited { .. })
     ));
 }
+
+// ── Probation of new accounts ────────────────────────────────────────────────────────────
+
+/// A host with a one-hour probation, read at `now`, where `ada` holds `CONTACT_ID` as a
+/// contact and shares a workspace with the holder of `COWORKER_ID`; `accounts` are the users
+/// it knows.
+fn probation_host(
+    ada: UserId,
+    accounts: Vec<rim_core::user::model::User>,
+    now: chrono::DateTime<Utc>,
+) -> DefaultHostService {
+    let contact = TestIdentity::new(61).principal_id();
+    let coworker = TestIdentity::new(62).principal_id();
+    let mut relay = MockRelayRepository::new();
+    relay.expect_is_contact().returning(move |user, principal| {
+        let known = user == ada && principal == contact;
+        Box::pin(async move { Ok(known) })
+    });
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    host.expect_shares_workspace()
+        .returning(move |user, principal| {
+            let shared = user == ada && principal == coworker;
+            Box::pin(async move { Ok(shared) })
+        });
+    DefaultHostService::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(relay),
+            key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(crate::probation_fixtures::users(accounts)),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+        },
+        None,
+        identity(41),
+        Arc::new(MockPeerService::new()),
+        Arc::new(MockS2sClient::new()),
+        ServerId::new(),
+        120,
+    )
+    .with_limits(rim_services::limits::InstanceLimits {
+        probation_hours: Some(1),
+        ..Default::default()
+    })
+    .with_clock(crate::clock::Clock::fixed(now))
+}
+
+#[tokio::test]
+async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
+    use crate::probation_fixtures::account;
+    let created = Utc::now();
+    let in_probation = created + Duration::minutes(20);
+    let (ada, contact, coworker, stranger) =
+        (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    let stranger_principal = TestIdentity::new(63).principal_id();
+    let accounts = vec![
+        account(ada, created, Some(&TestIdentity::new(60).principal_id())),
+        account(
+            contact,
+            created,
+            Some(&TestIdentity::new(61).principal_id()),
+        ),
+        account(
+            coworker,
+            created,
+            Some(&TestIdentity::new(62).principal_id()),
+        ),
+        account(stranger, created, Some(&stranger_principal)),
+    ];
+    let refusal = "a new account can send a DM request to a stranger in 40 minutes";
+    let refused = |result: Result<(), ServiceError>| match result {
+        Err(ServiceError::Validation(message)) => assert_eq!(message, refusal),
+        other => panic!("expected the probation refusal, got {other:?}"),
+    };
+
+    let host = probation_host(ada, accounts.clone(), in_probation);
+    host.ensure_may_request(Actor::new(ada), vec![ada, contact, coworker])
+        .await
+        .expect("contacts and coworkers are no strangers");
+    refused(
+        host.ensure_may_request(Actor::new(ada), vec![contact, stranger])
+            .await,
+    );
+    refused(
+        host.ensure_remote_member(
+            Actor::new(ada),
+            rim_services::host::dto::RemoteMemberRef {
+                principal_id: TestIdentity::new(64).principal_id(),
+                relay_urls: vec!["https://relay.example".to_string()],
+            },
+        )
+        .await
+        .map(|_| ()),
+    );
+
+    let later = probation_host(ada, accounts.clone(), created + Duration::hours(1));
+    later
+        .ensure_may_request(Actor::new(ada), vec![stranger])
+        .await
+        .expect("probation is over");
+    let off = probation_host(ada, accounts, in_probation)
+        .with_limits(rim_services::limits::InstanceLimits::default());
+    off.ensure_may_request(Actor::new(ada), vec![stranger])
+        .await
+        .expect("no probation on this instance");
+}

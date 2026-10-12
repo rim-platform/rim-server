@@ -239,6 +239,7 @@ pub(crate) async fn claim_token(
     repos: &SignupRepos,
     token: &CheckedToken,
     user_id: UserId,
+    max_members: Option<u32>,
 ) -> ServiceResult<Option<ServerId>> {
     match token {
         CheckedToken::InstanceInvite(invite) => {
@@ -259,6 +260,7 @@ pub(crate) async fn claim_token(
                 invite.server_id,
                 user_id,
                 invite.role,
+                max_members,
             )
             .await?;
             if !repos.invite_repo.try_consume(invite.id).await? {
@@ -625,7 +627,7 @@ mod tests {
             let mut r = repos();
             r.instance_invite_repo = Arc::new(repo);
             let token = CheckedToken::InstanceInvite(instance_invite(Duration::minutes(5), false));
-            let res = claim_token(&r, &token, UserId::new()).await;
+            let res = claim_token(&r, &token, UserId::new(), None).await;
             if consumed {
                 assert_eq!(res.unwrap(), None);
             } else {
@@ -672,7 +674,7 @@ mod tests {
         r.server_member_repo = Arc::new(members);
         r.conversation_repo = Arc::new(conversations);
         r.invite_repo = Arc::new(invites);
-        let res = claim_token(&r, &CheckedToken::WorkspaceInvite(invite), user_id).await;
+        let res = claim_token(&r, &CheckedToken::WorkspaceInvite(invite), user_id, None).await;
         assert_eq!(res.unwrap(), Some(server_id));
     }
 
@@ -685,7 +687,7 @@ mod tests {
         let mut r = repos();
         r.moderation_repo = Arc::new(moderation);
         let token = CheckedToken::WorkspaceInvite(workspace_invite(None, false));
-        assert!(claim_token(&r, &token, UserId::new()).await.is_err());
+        assert!(claim_token(&r, &token, UserId::new(), None).await.is_err());
     }
 
     #[test]

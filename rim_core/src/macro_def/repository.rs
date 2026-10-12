@@ -26,4 +26,6 @@ pub trait MacroRepository: Send + Sync {
     async fn create(&self, new_macro: NewMacroDef) -> RepoResult<MacroDef>;
     async fn update(&self, id: MacroId, update: UpdateMacroDef) -> RepoResult<MacroDef>;
     async fn delete(&self, id: MacroId) -> RepoResult<()>;
+    /// How many macros `server_id` holds, of every user.
+    async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
 }

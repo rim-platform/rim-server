@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_graphql::*;
 use rim_services::feature::service::FeatureGate;
+use rim_services::limits::InstanceLimits;
 
 use crate::types::{AuditRetention, InstancePolicy, ServerInfo};
 
@@ -10,12 +11,18 @@ pub(crate) struct ServerInfoQueries;
 
 #[Object]
 impl ServerInfoQueries {
-    /// The server's release version, API version, features, audit retention, instance notice
-    /// and terms URL. Readable without a session.
+    /// The server's release version, API version, features, audit retention, instance notice,
+    /// terms URL and limits. Readable without a session.
     async fn server_info(&self, ctx: &Context<'_>) -> Result<ServerInfo> {
         let gate = ctx.data::<Arc<dyn FeatureGate>>()?;
         let retention = ctx.data::<AuditRetention>()?;
         let policy = ctx.data::<InstancePolicy>()?;
-        Ok(ServerInfo::current(gate.as_ref(), *retention, policy))
+        let limits = ctx.data::<InstanceLimits>()?;
+        Ok(ServerInfo::current(
+            gate.as_ref(),
+            *retention,
+            policy,
+            limits,
+        ))
     }
 }

@@ -50,4 +50,7 @@ pub trait ServerMemberRepository: Send + Sync {
         server_id: ServerId,
         user_id: UserId,
     ) -> RepoResult<Option<MemberStanding>>;
+
+    /// How many members `server_id` has, guests included.
+    async fn count_members(&self, server_id: ServerId) -> RepoResult<u64>;
 }

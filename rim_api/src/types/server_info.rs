@@ -3,6 +3,7 @@
 use async_graphql::*;
 use rim_core::server_feature::model::{FeatureState, ServerFeature};
 use rim_services::feature::service::FeatureGate;
+use rim_services::limits::InstanceLimits;
 
 /// The major version of this GraphQL API. Raised when a field or argument is removed or
 /// changes meaning, so a client can tell it is older than the server it talks to.
@@ -26,6 +27,60 @@ pub struct ServerInfo {
     /// The terms of service a signup accepts, an absolute http(s) URL; null when the instance
     /// has none. A signup sends it back as `acceptedTermsUrl`.
     pub terms_url: Option<String>,
+    /// The instance-wide caps, so a client can show "5 of 5" before it tries.
+    pub limits: ServerLimits,
+}
+
+/// The instance-wide caps; each is null when this instance sets none, but devices and DM
+/// requests always have one. Creating one more past a cap answers `VALIDATION` naming it.
+#[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerLimits {
+    /// Workspaces one user owns.
+    pub workspaces_per_user: Option<u32>,
+    /// Members of one workspace; the direct space has no cap.
+    pub members_per_workspace: Option<u32>,
+    /// Channels of one workspace, public and private.
+    pub channels_per_workspace: Option<u32>,
+    /// Devices on one account: the stricter of the instance cap and the relay quota.
+    pub devices_per_user: Option<u32>,
+    /// DM requests one user sends to strangers per day: the stricter of the instance cap and
+    /// the relay quota.
+    pub dm_requests_per_day: Option<u32>,
+    /// Macros of one workspace.
+    pub macros_per_workspace: Option<u32>,
+    /// Pipelines of one workspace.
+    pub pipelines_per_workspace: Option<u32>,
+    /// Plugins of one workspace's registry.
+    pub plugins_per_workspace: Option<u32>,
+    /// Invites one user creates per day.
+    pub invites_per_user_per_day: Option<u32>,
+    /// Uses one invite may have.
+    pub invite_max_uses: Option<u32>,
+    /// Bytes of one message's text.
+    pub message_bytes: Option<u32>,
+    /// Hours after its creation during which an account cannot create a workspace or send a
+    /// DM request to a stranger, and sends messages at a lower rate; `me.probationEndsAt` says
+    /// when the caller's ends.
+    pub probation_hours: Option<u32>,
+}
+
+impl From<&InstanceLimits> for ServerLimits {
+    fn from(limits: &InstanceLimits) -> Self {
+        Self {
+            workspaces_per_user: limits.workspaces_per_user,
+            members_per_workspace: limits.members_per_workspace,
+            channels_per_workspace: limits.channels_per_workspace,
+            devices_per_user: limits.devices_per_user,
+            dm_requests_per_day: limits.dm_requests_per_day,
+            macros_per_workspace: limits.macros_per_workspace,
+            pipelines_per_workspace: limits.pipelines_per_workspace,
+            plugins_per_workspace: limits.plugins_per_workspace,
+            invites_per_user_per_day: limits.invites_per_user_per_day,
+            invite_max_uses: limits.invite_max_uses,
+            message_bytes: limits.message_bytes,
+            probation_hours: limits.probation_hours,
+        }
+    }
 }
 
 /// The configured command audit retention in days, held in the schema data; `None` keeps rows
@@ -45,11 +100,12 @@ pub struct InstancePolicy {
 
 impl ServerInfo {
     /// This build's version and API version, with the features `gate` reports, the audit
-    /// `retention` and the instance `policy`.
+    /// `retention`, the instance `policy` and its `limits`.
     pub fn current(
         gate: &dyn FeatureGate,
         retention: AuditRetention,
         policy: &InstancePolicy,
+        limits: &InstanceLimits,
     ) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -62,6 +118,7 @@ impl ServerInfo {
             audit_retention_days: retention.0,
             instance_notice: policy.notice.clone(),
             terms_url: policy.terms_url.clone(),
+            limits: limits.into(),
         }
     }
 }

@@ -1,7 +1,7 @@
 //! The health probes and `serverInfo` over HTTP on a real server: `/healthz` and `/readyz`
 //! without a session or a matching `Origin`, `/readyz` turning 503 when a key file goes
 //! missing, and `serverInfo` without a session, carrying the configured audit retention,
-//! instance notice and terms URL.
+//! instance notice, terms URL and limits.
 //!
 //! Run with:
 //! ```sh
@@ -29,6 +29,9 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
         config.audit_retention_days = Some(90);
         config.instance_notice = Some("Run by the Example club.".to_string());
         config.terms_url = Some("https://rim.example.org/terms".to_string());
+        config.limit_workspaces_per_user = Some(5);
+        config.limit_channels_per_workspace = Some(30);
+        config.limit_message_bytes = Some(8192);
     })
     .await;
     let http = reqwest::Client::new();
@@ -69,7 +72,9 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
     let info: Value = http
         .post(format!("{}/api", node.origin))
         .json(&json!({
-            "query": "{ serverInfo { version apiVersion auditRetentionDays instanceNotice termsUrl } }"
+            "query": "{ serverInfo { version apiVersion auditRetentionDays instanceNotice termsUrl \
+                      limits { workspacesPerUser membersPerWorkspace channelsPerWorkspace \
+                      messageBytes } } }"
         }))
         .send()
         .await
@@ -85,6 +90,12 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
             "auditRetentionDays": 90,
             "instanceNotice": "Run by the Example club.",
             "termsUrl": "https://rim.example.org/terms",
+            "limits": {
+                "workspacesPerUser": 5,
+                "membersPerWorkspace": null,
+                "channelsPerWorkspace": 30,
+                "messageBytes": 8192,
+            },
         } } })
     );
 

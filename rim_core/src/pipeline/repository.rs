@@ -34,4 +34,6 @@ pub trait PipelineRepository: Send + Sync {
         id: PipelineId,
         fired_at: chrono::DateTime<chrono::Utc>,
     ) -> RepoResult<()>;
+    /// How many pipelines `server_id` holds, of every user.
+    async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
 }

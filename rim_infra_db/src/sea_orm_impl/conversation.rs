@@ -565,4 +565,15 @@ impl ConversationRepository for SeaOrmConversationRepository {
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(updated.into())
     }
+
+    async fn count_channels(&self, server_id: ServerId) -> RepoResult<u64> {
+        let channel: entity::sea_orm_active_enums::ConversationType =
+            ConversationType::Channel.into();
+        conversation::Entity::find()
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(conversation::Column::ConversationType.eq(channel))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
+    }
 }

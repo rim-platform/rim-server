@@ -200,6 +200,47 @@ pub struct RIMConfig {
     /// The terms of service every signup accepts, an absolute http(s) URL. Controlled by
     /// `RIM_TERMS_URL`; see [`RIMConfig::terms_url`].
     pub terms_url: Option<String>,
+
+    // ── Instance limits (RIM_LIMIT_*) ───────────────────────────────────────
+    //
+    // Each caps one thing across the instance; unset or 0 sets no cap. See
+    // [`RIMConfig::instance_limits`].
+    /// Workspaces one user owns. Controlled by `RIM_LIMIT_WORKSPACES_PER_USER`.
+    pub limit_workspaces_per_user: Option<u32>,
+    /// Members of one workspace; the direct space has no cap. Controlled by
+    /// `RIM_LIMIT_MEMBERS_PER_WORKSPACE`.
+    pub limit_members_per_workspace: Option<u32>,
+    /// Channels of one workspace, public and private. Controlled by
+    /// `RIM_LIMIT_CHANNELS_PER_WORKSPACE`.
+    pub limit_channels_per_workspace: Option<u32>,
+    /// Devices on one account; the stricter of this and `RIM_RELAY_DEVICES_PER_USER` applies.
+    /// Controlled by `RIM_LIMIT_DEVICES_PER_USER`.
+    pub limit_devices_per_user: Option<u32>,
+    /// DM requests one user sends to strangers per day; the stricter of this and
+    /// `RIM_RELAY_DM_REQUESTS_PER_DAY` applies. Controlled by `RIM_LIMIT_DM_REQUESTS_PER_DAY`.
+    pub limit_dm_requests_per_day: Option<u32>,
+    /// Macros of one workspace. Controlled by `RIM_LIMIT_MACROS_PER_WORKSPACE`.
+    pub limit_macros_per_workspace: Option<u32>,
+    /// Pipelines of one workspace. Controlled by `RIM_LIMIT_PIPELINES_PER_WORKSPACE`.
+    pub limit_pipelines_per_workspace: Option<u32>,
+    /// Plugins of one workspace's registry. Controlled by `RIM_LIMIT_PLUGINS_PER_WORKSPACE`.
+    pub limit_plugins_per_workspace: Option<u32>,
+    /// Invites one user creates per day. Controlled by `RIM_LIMIT_INVITES_PER_USER_PER_DAY`.
+    pub limit_invites_per_user_per_day: Option<u32>,
+    /// Uses one invite may have. Controlled by `RIM_LIMIT_INVITE_MAX_USES`.
+    pub limit_invite_max_uses: Option<u32>,
+    /// Bytes of one message's text, at most 65536. Controlled by `RIM_LIMIT_MESSAGE_BYTES`.
+    pub limit_message_bytes: Option<u32>,
+
+    // ── Probation of new accounts ───────────────────────────────────────────
+    /// Hours after its creation during which an account cannot create a workspace or send a
+    /// DM request to a stranger; unset or 0 turns probation off. Controlled by
+    /// `RIM_PROBATION_HOURS`.
+    pub probation_hours: Option<u32>,
+    /// Messages an account in probation sends per minute, with a burst of the same size,
+    /// instead of the normal message rate; unset or 0 keeps the normal rate. Controlled by
+    /// `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
+    pub rate_probation_messages_per_min: Option<u32>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -304,6 +345,7 @@ impl fmt::Debug for RIMConfig {
             .field("api_limits", &self.api_limits())
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
+            .field("instance_limits", &self.instance_limits())
             .finish()
     }
 }
@@ -364,6 +406,19 @@ impl Default for RIMConfig {
             api_max_batch: None,
             instance_notice: None,
             terms_url: None,
+            limit_workspaces_per_user: None,
+            limit_members_per_workspace: None,
+            limit_channels_per_workspace: None,
+            limit_devices_per_user: None,
+            limit_dm_requests_per_day: None,
+            limit_macros_per_workspace: None,
+            limit_pipelines_per_workspace: None,
+            limit_plugins_per_workspace: None,
+            limit_invites_per_user_per_day: None,
+            limit_invite_max_uses: None,
+            limit_message_bytes: None,
+            probation_hours: None,
+            rate_probation_messages_per_min: None,
         }
     }
 }
@@ -412,7 +467,7 @@ impl RIMConfig {
 
     /// What each local user may hold and send, from `RIM_RELAY_*`,
     /// `RIM_S2S_DEVICE_RATE_PER_MIN` and the message rate, each kept within what the protocol
-    /// allows.
+    /// allows; devices and DM requests also within their `RIM_LIMIT_*` cap.
     pub fn quotas(&self) -> rim_infra_services::quota::Quotas {
         use rim_infra_services::quota::{MAX_CARD_BYTES, Quotas};
         let defaults = Quotas::default();
@@ -425,20 +480,25 @@ impl RIMConfig {
                 .relay_key_packages_per_device
                 .unwrap_or(defaults.key_packages_per_device)
                 .clamp(1, 1000),
-            devices_per_user: self
-                .relay_devices_per_user
-                .map_or(defaults.devices_per_user, |n| n as usize)
-                .clamp(1, 64),
+            devices_per_user: stricter(
+                self.relay_devices_per_user
+                    .map_or(defaults.devices_per_user, |n| n as usize)
+                    .clamp(1, 64),
+                cap(self.limit_devices_per_user).map(|n| n as usize),
+            ),
             forwards_per_device_per_min: self.s2s_device_rate_per_min(),
             forwards_per_user_per_day: self
                 .relay_forwards_per_user_per_day
                 .unwrap_or(defaults.forwards_per_user_per_day)
                 .max(1),
-            dm_requests_per_day: self
-                .relay_dm_requests_per_day
-                .unwrap_or(defaults.dm_requests_per_day)
-                .max(1),
+            dm_requests_per_day: stricter(
+                self.relay_dm_requests_per_day
+                    .unwrap_or(defaults.dm_requests_per_day)
+                    .max(1),
+                cap(self.limit_dm_requests_per_day),
+            ),
             messages: self.api_limits().messages,
+            probation_messages: self.api_limits().probation_messages,
         }
     }
 
@@ -875,6 +935,8 @@ pub struct ApiLimits {
     pub mutations_per_session: Option<rim_infra_services::token_bucket::BucketRate>,
     /// Messages per user.
     pub messages: Option<rim_infra_services::token_bucket::BucketRate>,
+    /// Messages per account in probation, instead of `messages`.
+    pub probation_messages: Option<rim_infra_services::token_bucket::BucketRate>,
     /// Open WebSocket connections per user.
     pub ws_connections_per_user: Option<u32>,
     /// Active subscriptions per WebSocket connection.
@@ -897,10 +959,67 @@ impl RIMConfig {
             messages: self
                 .rate_messages_per_min_per_user
                 .and_then(|rate| BucketRate::new(rate, self.rate_messages_burst.unwrap_or(rate))),
+            probation_messages: per_minute(self.rate_probation_messages_per_min),
             ws_connections_per_user: cap(self.rate_ws_connections_per_user),
             subscriptions_per_connection: cap(self.rate_subscriptions_per_connection),
             max_batch: self.api_max_batch.unwrap_or(DEFAULT_API_MAX_BATCH).max(1),
         }
+    }
+}
+
+/// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
+pub const MAX_LIMIT_MESSAGE_BYTES: u32 = rim_services::e2ee::MAX_CONTENT_BYTES as u32;
+
+/// A `RIM_LIMIT_*` value as a cap: `None` when unset or 0.
+fn cap(n: Option<u32>) -> Option<u32> {
+    n.filter(|n| *n > 0)
+}
+
+/// `quota` lowered to `limit` when that is smaller.
+fn stricter<T: Ord>(quota: T, limit: Option<T>) -> T {
+    match limit {
+        Some(limit) => quota.min(limit),
+        None => quota,
+    }
+}
+
+impl RIMConfig {
+    /// The instance limits from `RIM_LIMIT_*`, each off when unset or 0. Devices and DM
+    /// requests report the stricter of their cap and relay quota, which is what applies.
+    ///
+    /// # Errors
+    /// A message naming `RIM_LIMIT_MESSAGE_BYTES` when it is above
+    /// [`MAX_LIMIT_MESSAGE_BYTES`].
+    pub fn instance_limits(&self) -> Result<rim_services::limits::InstanceLimits, String> {
+        let message_bytes = cap(self.limit_message_bytes);
+        if let Some(bytes) = message_bytes
+            && bytes > MAX_LIMIT_MESSAGE_BYTES
+        {
+            return Err(format!(
+                "RIM_LIMIT_MESSAGE_BYTES={bytes} is above {MAX_LIMIT_MESSAGE_BYTES}, the largest \
+                 message"
+            ));
+        }
+        let quotas = self.quotas();
+        Ok(rim_services::limits::InstanceLimits {
+            workspaces_per_user: cap(self.limit_workspaces_per_user),
+            members_per_workspace: cap(self.limit_members_per_workspace),
+            channels_per_workspace: cap(self.limit_channels_per_workspace),
+            devices_per_user: u32::try_from(quotas.devices_per_user).ok(),
+            dm_requests_per_day: Some(quotas.dm_requests_per_day),
+            macros_per_workspace: cap(self.limit_macros_per_workspace),
+            pipelines_per_workspace: cap(self.limit_pipelines_per_workspace),
+            plugins_per_workspace: cap(self.limit_plugins_per_workspace).map(|n| {
+                n.min(
+                    u32::try_from(rim_core::workspace_plugin::model::MAX_WORKSPACE_PLUGINS)
+                        .unwrap_or(u32::MAX),
+                )
+            }),
+            invites_per_user_per_day: cap(self.limit_invites_per_user_per_day),
+            invite_max_uses: cap(self.limit_invite_max_uses),
+            message_bytes,
+            probation_hours: cap(self.probation_hours),
+        })
     }
 }
 
@@ -1482,6 +1601,7 @@ mod tests {
                 requests_per_ip: None,
                 mutations_per_session: None,
                 messages: None,
+                probation_messages: None,
                 ws_connections_per_user: None,
                 subscriptions_per_connection: None,
                 max_batch: DEFAULT_API_MAX_BATCH,
@@ -1620,5 +1740,169 @@ mod tests {
                 terms_url: Some("https://rim.example.org/terms".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn instance_limits_are_off_when_unset_or_zero_but_devices_and_dm_requests_keep_their_quota() {
+        use rim_services::limits::InstanceLimits;
+        let relay_only = InstanceLimits {
+            devices_per_user: Some(32),
+            dm_requests_per_day: Some(20),
+            ..Default::default()
+        };
+        assert_eq!(RIMConfig::default().instance_limits(), Ok(relay_only));
+        let zero = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_LIMIT_WORKSPACES_PER_USER", "0"),
+            ("RIM_LIMIT_MEMBERS_PER_WORKSPACE", "0"),
+            ("RIM_LIMIT_CHANNELS_PER_WORKSPACE", "0"),
+            ("RIM_LIMIT_DEVICES_PER_USER", "0"),
+            ("RIM_LIMIT_DM_REQUESTS_PER_DAY", "0"),
+            ("RIM_LIMIT_MACROS_PER_WORKSPACE", "0"),
+            ("RIM_LIMIT_PIPELINES_PER_WORKSPACE", "0"),
+            ("RIM_LIMIT_PLUGINS_PER_WORKSPACE", "0"),
+            ("RIM_LIMIT_INVITES_PER_USER_PER_DAY", "0"),
+            ("RIM_LIMIT_INVITE_MAX_USES", "0"),
+            ("RIM_LIMIT_MESSAGE_BYTES", "0"),
+        ]))
+        .expect("loads");
+        assert_eq!(zero.instance_limits(), Ok(relay_only));
+        assert_eq!(zero.quotas(), RIMConfig::default().quotas());
+    }
+
+    #[test]
+    fn instance_limits_are_read_from_their_variables() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_LIMIT_WORKSPACES_PER_USER", "5"),
+            ("RIM_LIMIT_MEMBERS_PER_WORKSPACE", "50"),
+            ("RIM_LIMIT_CHANNELS_PER_WORKSPACE", "30"),
+            ("RIM_LIMIT_DEVICES_PER_USER", "5"),
+            ("RIM_LIMIT_DM_REQUESTS_PER_DAY", "20"),
+            ("RIM_LIMIT_MACROS_PER_WORKSPACE", "50"),
+            ("RIM_LIMIT_PIPELINES_PER_WORKSPACE", "50"),
+            ("RIM_LIMIT_PLUGINS_PER_WORKSPACE", "50"),
+            ("RIM_LIMIT_INVITES_PER_USER_PER_DAY", "5"),
+            ("RIM_LIMIT_INVITE_MAX_USES", "5"),
+            ("RIM_LIMIT_MESSAGE_BYTES", "8192"),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.instance_limits(),
+            Ok(rim_services::limits::InstanceLimits {
+                workspaces_per_user: Some(5),
+                members_per_workspace: Some(50),
+                channels_per_workspace: Some(30),
+                devices_per_user: Some(5),
+                dm_requests_per_day: Some(20),
+                macros_per_workspace: Some(50),
+                pipelines_per_workspace: Some(50),
+                plugins_per_workspace: Some(50),
+                invites_per_user_per_day: Some(5),
+                invite_max_uses: Some(5),
+                message_bytes: Some(8192),
+                probation_hours: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_negative_or_non_numeric_limit_refuses_to_load() {
+        for value in ["-1", "five", "1.5"] {
+            for name in [
+                "RIM_LIMIT_WORKSPACES_PER_USER",
+                "RIM_LIMIT_DEVICES_PER_USER",
+                "RIM_LIMIT_MESSAGE_BYTES",
+            ] {
+                let loaded = RIMConfig::load_from(env(&[
+                    ("DATABASE_URL", "postgres://localhost/rim"),
+                    (name, value),
+                ]));
+                assert!(loaded.is_err(), "{name}={value}");
+            }
+        }
+    }
+
+    #[test]
+    fn message_bytes_above_the_largest_message_refuses_to_start() {
+        let bytes = |n| RIMConfig {
+            limit_message_bytes: Some(n),
+            ..Default::default()
+        };
+        assert_eq!(
+            bytes(65_536).instance_limits().map(|l| l.message_bytes),
+            Ok(Some(65_536))
+        );
+        let err = bytes(65_537).instance_limits().unwrap_err();
+        assert!(err.contains("RIM_LIMIT_MESSAGE_BYTES"), "{err}");
+    }
+
+    #[test]
+    fn the_stricter_of_a_limit_and_its_relay_quota_applies_and_is_reported() {
+        for (limit, quota, effective) in [(Some(5), 32, 5), (Some(50), 10, 10), (None, 10, 10)] {
+            let config = RIMConfig {
+                limit_devices_per_user: limit,
+                relay_devices_per_user: Some(quota),
+                limit_dm_requests_per_day: limit,
+                relay_dm_requests_per_day: Some(quota),
+                ..Default::default()
+            };
+            let quotas = config.quotas();
+            assert_eq!(
+                quotas.devices_per_user, effective as usize,
+                "{limit:?} {quota}"
+            );
+            assert_eq!(quotas.dm_requests_per_day, effective, "{limit:?} {quota}");
+            let limits = config.instance_limits().expect("limits");
+            assert_eq!(limits.devices_per_user, Some(effective));
+            assert_eq!(limits.dm_requests_per_day, Some(effective));
+        }
+    }
+
+    #[test]
+    fn plugins_per_workspace_stays_within_the_built_in_registry_cap() {
+        let config = RIMConfig {
+            limit_plugins_per_workspace: Some(500),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.instance_limits().map(|l| l.plugins_per_workspace),
+            Ok(Some(100))
+        );
+    }
+
+    #[test]
+    fn probation_is_off_when_unset_or_zero_and_read_with_its_message_rate() {
+        use rim_infra_services::token_bucket::BucketRate;
+        assert_eq!(
+            RIMConfig::default()
+                .instance_limits()
+                .map(|l| l.probation_hours),
+            Ok(None)
+        );
+        assert_eq!(RIMConfig::default().quotas().probation_messages, None);
+        let load = |hours: &str, rate: &str| {
+            RIMConfig::load_from(env(&[
+                ("DATABASE_URL", "postgres://localhost/rim"),
+                ("RIM_PROBATION_HOURS", hours),
+                ("RIM_RATE_PROBATION_MESSAGES_PER_MIN", rate),
+            ]))
+        };
+        let off = load("0", "0").expect("loads");
+        assert_eq!(off.instance_limits().map(|l| l.probation_hours), Ok(None));
+        assert_eq!(off.quotas().probation_messages, None);
+        let on = load("24", "5").expect("loads");
+        assert_eq!(
+            on.instance_limits().map(|l| l.probation_hours),
+            Ok(Some(24))
+        );
+        assert_eq!(on.quotas().probation_messages, BucketRate::new(5, 5));
+        for bad in ["-1", "a day"] {
+            assert!(load(bad, "5").is_err(), "RIM_PROBATION_HOURS={bad}");
+            assert!(
+                load("24", bad).is_err(),
+                "RIM_RATE_PROBATION_MESSAGES_PER_MIN={bad}"
+            );
+        }
     }
 }

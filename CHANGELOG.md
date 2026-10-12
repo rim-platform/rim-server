@@ -49,6 +49,20 @@ tag `v<version>`, the version every crate in the workspace carries.
   `signupWithInvite` and `signupWithKey` require `acceptedTermsUrl` (a new optional field of
   `SignupWithInviteInput` and `SignupWithKeyInput`) equal to the terms URL and answer
   `VALIDATION` otherwise; the acceptance is stored on the account.
+- Instance limits, each off unless set: `RIM_LIMIT_WORKSPACES_PER_USER`,
+  `RIM_LIMIT_MEMBERS_PER_WORKSPACE`, `RIM_LIMIT_CHANNELS_PER_WORKSPACE`,
+  `RIM_LIMIT_DEVICES_PER_USER`, `RIM_LIMIT_DM_REQUESTS_PER_DAY`,
+  `RIM_LIMIT_MACROS_PER_WORKSPACE`, `RIM_LIMIT_PIPELINES_PER_WORKSPACE`,
+  `RIM_LIMIT_PLUGINS_PER_WORKSPACE`, `RIM_LIMIT_INVITES_PER_USER_PER_DAY`,
+  `RIM_LIMIT_INVITE_MAX_USES` and `RIM_LIMIT_MESSAGE_BYTES`. Creating one more past a cap answers
+  `VALIDATION` naming it. GraphQL `ServerInfo.limits` (type `ServerLimits`, one nullable `Int`
+  per cap) reports them; for devices and DM requests it reports the stricter of the cap and the
+  relay quota, which is what applies. `docs/api.md` ("Limits") lists them.
+- Probation for new accounts: `RIM_PROBATION_HOURS` (off unless set) keeps an account younger
+  than that from creating a workspace or sending a DM request to a stranger, answered
+  `VALIDATION` naming the minutes left, and `RIM_RATE_PROBATION_MESSAGES_PER_MIN` gives it a
+  lower message rate. GraphQL `ServerLimits.probationHours` reports the setting and
+  `User.probationEndsAt`, read on `me`, says when the caller's probation ends.
 
 ### Changed
 

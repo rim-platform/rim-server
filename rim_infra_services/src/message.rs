@@ -33,6 +33,7 @@ use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::e2ee::wire::{MlsContentType, MlsWire};
 use rim_services::e2ee::{MAX_ENVELOPE_BYTES, MlsCommitRequiredReason};
 use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
+use rim_services::limits::{InstanceLimits, limit_reached};
 use rim_services::message::command::{
     DeleteMessageCmd, EditEncryptedMessageCmd, EditMessageCmd, ForwardMessageCmd, GetMessageQuery,
     ListMessageChangesQuery, ListMessagesQuery, ListThreadMessagesQuery, ReplyToMessageCmd,
@@ -50,6 +51,10 @@ use rim_services::{ServiceError, ServiceResult};
 
 /// Maximum allowed length (in characters) for message text.
 const MAX_MESSAGE_TEXT_LENGTH: usize = 10_000;
+
+/// Bytes an encrypted message's ciphertext may carry beyond the instance's message-bytes cap:
+/// the MLS framing, signature and tag, and the client's content structure around the text.
+const ENCRYPTED_FRAMING_ALLOWANCE: usize = 4096;
 
 /// Seconds a member must still wait under slow mode, or `None` when they may send now: the
 /// interval minus the time since `last_sent_at`, rounded up (never less than 1 while waiting).
@@ -71,6 +76,7 @@ pub(crate) fn slow_mode_retry_after(
 }
 
 use crate::MessageRepos;
+use crate::clock::Clock;
 use crate::e2ee::aad::{ApplicationAad, parse_application};
 use crate::e2ee::franking::{ReceiptFields, receipt, sent_at_us};
 use crate::e2ee::{
@@ -130,6 +136,12 @@ pub struct DefaultMessageService {
     /// Messages each user may send per minute, across every way of creating one. `None` sets
     /// no limit.
     message_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
+    /// Messages each account in probation may send per minute, instead of `message_budget`.
+    /// `None` keeps them on `message_budget`.
+    probation_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
+    /// The cap on a message's text in bytes, and the probation of new accounts.
+    limits: InstanceLimits,
+    clock: Clock,
 }
 
 impl DefaultMessageService {
@@ -143,6 +155,69 @@ impl DefaultMessageService {
             e2ee: None,
             moderation_repo: None,
             message_budget: None,
+            probation_budget: None,
+            limits: InstanceLimits::default(),
+            clock: Clock::default(),
+        }
+    }
+
+    /// The message rate of accounts in probation.
+    pub fn with_probation_budget(mut self, rate: BucketRate) -> Self {
+        self.probation_budget = Some(Arc::new(TokenBucketLimiter::new(rate)));
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The budget `author`'s messages draw on: the probation one while their account is in
+    /// probation, else the normal one.
+    async fn budget_for(
+        &self,
+        author: UserId,
+    ) -> ServiceResult<Option<&Arc<TokenBucketLimiter<UserId>>>> {
+        if let Some(probation) = &self.probation_budget
+            && self.limits.probation_hours.is_some()
+            && let Some(user) = self.repos.user_repo.get_by_id(author).await?
+            && self
+                .limits
+                .probation_ends_at(user.created_at, self.clock.now())
+                .is_some()
+        {
+            return Ok(Some(probation));
+        }
+        Ok(self.message_budget.as_ref())
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// `Validation` when `text` is longer than the instance allows, in bytes.
+    fn ensure_text_bytes(&self, text: &str) -> ServiceResult<()> {
+        match self.limits.message_bytes {
+            Some(cap) if text.len() > cap as usize => {
+                Err(limit_reached(cap, "bytes of text per message"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// `Validation` when an encrypted message's ciphertext, its envelope less the
+    /// authenticated data, is longer than the instance's text cap plus
+    /// [`ENCRYPTED_FRAMING_ALLOWANCE`].
+    pub(crate) fn ensure_ciphertext_bytes(&self, envelope: usize, aad: usize) -> ServiceResult<()> {
+        match self.limits.message_bytes {
+            Some(cap)
+                if envelope.saturating_sub(aad) > cap as usize + ENCRYPTED_FRAMING_ALLOWANCE =>
+            {
+                Err(limit_reached(cap, "bytes of text per message"))
+            }
+            _ => Ok(()),
         }
     }
 
@@ -152,8 +227,8 @@ impl DefaultMessageService {
     }
 
     /// `RateLimited` once `author` has used their message budget.
-    fn ensure_message_budget(&self, author: UserId) -> ServiceResult<()> {
-        let Some(budget) = &self.message_budget else {
+    async fn ensure_message_budget(&self, author: UserId) -> ServiceResult<()> {
+        let Some(budget) = self.budget_for(author).await? else {
             return Ok(());
         };
         match budget.check(&author, std::time::Instant::now()) {
@@ -630,6 +705,7 @@ impl DefaultMessageService {
         let e2ee = self.e2ee()?;
         let bytes = decode_b64("envelope", envelope, MAX_ENVELOPE_BYTES)?;
         let header = read_private_message(e2ee.wire.as_ref(), &bytes, MlsContentType::Application)?;
+        self.ensure_ciphertext_bytes(bytes.len(), header.authenticated_data.len())?;
         let aad = parse_application(&header.authenticated_data)?;
         if aad.message_id != uuid::Uuid::from(message_id) {
             return Err(ServiceError::Validation(
@@ -866,7 +942,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
@@ -902,6 +978,9 @@ impl MessageService for DefaultMessageService {
                 "message text too long (max {} characters)",
                 MAX_MESSAGE_TEXT_LENGTH
             )));
+        }
+        if let Some(ref t) = text {
+            self.ensure_text_bytes(t)?;
         }
 
         let parent_message_id = match cmd.parent_message_id {
@@ -982,7 +1061,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         // 1. Validate access (membership, archive, timeout) and slow mode
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
@@ -1028,6 +1107,7 @@ impl MessageService for DefaultMessageService {
                 MAX_MESSAGE_TEXT_LENGTH
             )));
         }
+        self.ensure_text_bytes(&text)?;
 
         // 4. Begin transaction
         let (repos, scope) = self.begin_write().await?;
@@ -1539,6 +1619,7 @@ impl MessageService for DefaultMessageService {
                 MAX_MESSAGE_TEXT_LENGTH
             )));
         }
+        self.ensure_text_bytes(new_text)?;
 
         // Run validation + update inside a transaction.
         let (repos, scope) = self.begin_write().await?;
@@ -1611,7 +1692,7 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.actor.user_id)?;
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         let access_repos = ConversationAccessRepos::from_arcs(
             &self.repos.server_member_repo,
             &self.repos.conversation_repo,
@@ -1821,7 +1902,7 @@ impl MessageService for DefaultMessageService {
         &self,
         cmd: SendEncryptedMessageCmd,
     ) -> ServiceResult<MessageDto> {
-        self.ensure_message_budget(cmd.caller.actor.user_id)?;
+        self.ensure_message_budget(cmd.caller.actor.user_id).await?;
         let e2ee = self.e2ee()?;
         require_device(&cmd.caller)?;
         let author = cmd.caller.actor.user_id;

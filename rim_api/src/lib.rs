@@ -40,6 +40,8 @@ pub struct RegistrationContext {
     pub audit_retention_days: Option<u32>,
     /// The instance notice and the terms URL signups accept.
     pub instance_policy: crate::types::InstancePolicy,
+    /// The instance-wide caps `serverInfo.limits` reports.
+    pub instance_limits: rim_services::limits::InstanceLimits,
 }
 
 /// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
@@ -129,6 +131,7 @@ pub fn build_schema(
         ))
         .extension(crate::subscription_limit::SubscriptionLimit)
         .data(registration.instance_policy)
+        .data(registration.instance_limits)
         .limit_depth(10)
         .limit_complexity(200);
     match federation {

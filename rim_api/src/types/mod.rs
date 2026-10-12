@@ -109,6 +109,7 @@ pub use remote_workspace::{
 };
 pub use server_info::{
     API_VERSION, AuditRetention, InstancePolicy, ServerFeatureInfo, ServerFeatureState, ServerInfo,
+    ServerLimits,
 };
 pub use thread::Thread;
 pub use user::{PresenceStatus, User, UserPresenceGql};

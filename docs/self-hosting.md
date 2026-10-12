@@ -287,6 +287,24 @@ that; each block and unblock is written to the audit log as `ip.block` or `ip.un
 Caddy the address is the client's, since `RIM_TRUST_FORWARDED_HEADERS` is on; behind another
 proxy it must replace `X-Forwarded-For` (next sections), or one forged header unblocks a client.
 
+### Instance limits
+
+A public instance can also cap how much each person holds: workspaces per user, members and
+channels per workspace, devices per account, DM requests to strangers per day, macros,
+pipelines and plugins per workspace, invites per user per day, uses per invite and the bytes
+of a message. Each is a `RIM_LIMIT_*` variable, off until set (the "Instance limits" block of
+`deploy/.env.example` has values for a small test instance); past one a write is refused with
+a message naming the cap, and clients read every cap from `serverInfo.limits`. Devices and DM
+requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and
+`RIM_RELAY_DM_REQUESTS_PER_DAY`: the stricter number applies. A negative or non-numeric value,
+or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot.
+
+`RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
+an account cannot create a workspace or send a DM request to someone it shares no workspace
+with and has not added as a contact, and with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends
+messages at that lower rate. Existing accounts are judged by their age, so turning it on does
+not hold back anyone older than the setting.
+
 ## Optional features
 
 Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface

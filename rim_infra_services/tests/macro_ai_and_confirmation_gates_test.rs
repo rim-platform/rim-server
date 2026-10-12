@@ -60,6 +60,7 @@ mockall::mock! {
     TestMacroRepository {}
     #[async_trait]
     impl MacroRepository for TestMacroRepository {
+        async fn count_for_server(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
         async fn get_by_id(&self, id: MacroId) -> RepoResult<Option<MacroDef>>;
         async fn find_by_name(
             &self,
@@ -87,6 +88,7 @@ mockall::mock! {
     TestServerMemberRepository {}
     #[async_trait]
     impl ServerMemberRepository for TestServerMemberRepository {
+        async fn count_members(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
         async fn get_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<Option<ServerMember>>;
         async fn add_member(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<ServerMember>;
         async fn change_member_role(&self, server_id: ServerId, user_id: UserId, role: ServerMemberRole) -> RepoResult<()>;

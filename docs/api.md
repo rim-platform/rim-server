@@ -245,6 +245,41 @@ process, so a restart forgets them and two processes behind one proxy each allow
 amount. `/healthz`, `/readyz`, discovery and `/s2s/v1/...` are outside the per-address limit;
 server-to-server traffic has its own, `RIM_S2S_PEER_RATE_PER_MIN`.
 
+An operator can also cap how much of each thing the instance holds. Every cap is off unless its
+variable is set to a number above 0; `serverInfo.limits` reports each one, so a client can show
+"5 of 5" before it tries. Creating one more past a cap answers `VALIDATION`, with a message
+naming the cap, such as "this instance allows 5 workspaces per user".
+
+| Variable | `serverInfo.limits` | Caps |
+|---|---|---|
+| `RIM_LIMIT_WORKSPACES_PER_USER` | `workspacesPerUser` | Workspaces one user owns. |
+| `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `membersPerWorkspace` | Members of a workspace, by invite or signup; the direct space has none. |
+| `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. |
+| `RIM_LIMIT_DEVICES_PER_USER` | `devicesPerUser` | Devices on one account. |
+| `RIM_LIMIT_DM_REQUESTS_PER_DAY` | `dmRequestsPerDay` | DM requests one user sends to strangers per day. |
+| `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. |
+| `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace. |
+| `RIM_LIMIT_PLUGINS_PER_WORKSPACE` | `pluginsPerWorkspace` | Plugins of a workspace's registry, at most the built-in 100. |
+| `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours. |
+| `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
+| `RIM_LIMIT_MESSAGE_BYTES` | `messageBytes` | A message's text in UTF-8 bytes, at most 65536. An encrypted message's ciphertext may exceed it by 4096 bytes of framing. |
+
+Devices and DM requests also have a relay quota, `RIM_RELAY_DEVICES_PER_USER` (default 32) and
+`RIM_RELAY_DM_REQUESTS_PER_DAY` (default 20). The stricter of the cap and the quota applies,
+and `serverInfo.limits` reports that number, so `devicesPerUser` and `dmRequestsPerDay` are
+never null. A DM request past the daily number stays `RATE_LIMITED` with `retryAfterSeconds`,
+as the quota answered before.
+
+`RIM_PROBATION_HOURS` puts new accounts on probation for that many hours after their creation;
+unset or 0 turns it off, and an account older than the setting is judged by its age like any
+other. During probation an account cannot create a workspace or send a DM request to a stranger,
+someone neither its contact nor in a workspace with it, and both answer `VALIDATION` saying when
+it can, in minutes rounded up ("a new account can create a workspace in 42 minutes"). Its
+messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a burst of the same size, instead
+of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate applies. The `probationHours`
+of `serverInfo.limits` reports the setting, null when off, and `me { probationEndsAt }` tells
+the signed-in caller when theirs ends, null once it has.
+
 An operator can also block an address or range (`rim_server ip block`). A blocked address is
 answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,
 the readiness probe, discovery and `/s2s/v1/...`. The address is found the same way as for the
@@ -338,6 +373,8 @@ each list.
   runs the server; null when there is none. A client shows it where people sign up or sign in.
 - **`termsUrl`**: the terms of service a signup accepts, an absolute http(s) URL; null when the
   server has none. A client links it at signup and sends it back as `acceptedTermsUrl`.
+- **`limits`**: the instance's caps ("Limits"), each an integer or null when there is none,
+  and `probationHours`, the probation of new accounts.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

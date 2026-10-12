@@ -158,4 +158,40 @@ mod tests {
             .unwrap();
         assert_eq!(dto.display_name, Some("Alice".to_string()));
     }
+
+    #[tokio::test]
+    async fn probation_ends_at_is_set_while_the_account_is_in_probation() {
+        let id = UserId::new();
+        let created = chrono::Utc::now();
+        let service = |hours: Option<u32>, now| {
+            DefaultUserService::new(UserRepos {
+                user_repo: Arc::new(crate::probation_fixtures::users(vec![
+                    crate::probation_fixtures::account(id, created, None),
+                ])),
+            })
+            .with_limits(rim_services::limits::InstanceLimits {
+                probation_hours: hours,
+                ..Default::default()
+            })
+            .with_clock(crate::clock::Clock::fixed(now))
+        };
+        let me = || GetMeQuery {
+            actor: Actor::new(id),
+        };
+        for (hours, now, expected) in [
+            (
+                Some(24),
+                created + chrono::Duration::hours(1),
+                Some(created + chrono::Duration::hours(24)),
+            ),
+            (Some(24), created + chrono::Duration::hours(24), None),
+            (None, created, None),
+        ] {
+            assert_eq!(
+                service(hours, now).probation_ends_at(me()).await.unwrap(),
+                expected,
+                "{hours:?}"
+            );
+        }
+    }
 }

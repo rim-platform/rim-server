@@ -42,6 +42,7 @@ use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
 };
 use rim_services::key_auth::service::KeyAuthService;
+use rim_services::limits::InstanceLimits;
 use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::RevocationFanout;
 use rim_services::{ServiceError, ServiceResult};
@@ -124,6 +125,8 @@ pub struct DefaultKeyAuthService {
     server_id: Option<String>,
     /// Devices and card size per user.
     quotas: Quotas,
+    /// The cap on workspace members a signup with a workspace invite joins under.
+    limits: InstanceLimits,
     /// Refreshes a remote user's identity from their relays before they sign in directly.
     host_service: Option<Arc<dyn HostService>>,
     /// Sends a revoked device's revocation to every host holding its person.
@@ -261,6 +264,7 @@ impl DefaultKeyAuthService {
             relay_service: None,
             server_id: None,
             quotas: Quotas::default(),
+            limits: InstanceLimits::default(),
             host_service: None,
             revocation_fanout: None,
         }
@@ -274,6 +278,11 @@ impl DefaultKeyAuthService {
 
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
         self.quotas = quotas;
+        self
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -1016,7 +1025,15 @@ impl KeyAuthService for DefaultKeyAuthService {
         )
         .await?;
         let server_id = match &token {
-            Some(token) => signup::claim_token(&repos.signup, token, user.id).await?,
+            Some(token) => {
+                signup::claim_token(
+                    &repos.signup,
+                    token,
+                    user.id,
+                    self.limits.members_per_workspace,
+                )
+                .await?
+            }
             None => None,
         };
         let (session, session_token, csrf_token) = signup::create_session(
@@ -1091,7 +1108,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .count();
         if active >= self.quotas.devices_per_user {
             return Err(ServiceError::Validation(format!(
-                "an account keeps at most {} devices; revoke one first",
+                "this instance allows {} devices per user; revoke one first",
                 self.quotas.devices_per_user
             )));
         }

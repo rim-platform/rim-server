@@ -173,4 +173,12 @@ impl PipelineRepository for SeaOrmPipelineRepository {
         active.update(&self.db).await.map_err(map_db_err)?;
         Ok(())
     }
+
+    async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64> {
+        pipeline::Entity::find()
+            .filter(pipeline::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
+    }
 }

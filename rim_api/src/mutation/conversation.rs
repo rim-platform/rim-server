@@ -55,6 +55,16 @@ impl ConversationMutations {
             ids.extend(remote_ids);
             rim_services::conversation::types::ConversationParticipants::Group { member_ids: ids }
         };
+        let others = match &participants {
+            rim_services::conversation::types::ConversationParticipants::DirectMessage {
+                other_user_id,
+            } => vec![*other_user_id],
+            rim_services::conversation::types::ConversationParticipants::Group { member_ids } => {
+                member_ids.clone()
+            }
+            rim_services::conversation::types::ConversationParticipants::Channel => Vec::new(),
+        };
+        crate::federation::ensure_may_request(ctx, actor, server_id, others).await?;
 
         let conv = svc
             .create_conversation(CreateConversationCmd {
@@ -174,6 +184,7 @@ impl ConversationMutations {
         for id in &user_ids {
             ids.push(parse_uuid_id::<rim_core::user::model::UserId>(id)?);
         }
+        crate::federation::ensure_may_request(ctx, actor, server_id, ids.clone()).await?;
 
         let conv = svc
             .add_conversation_members(AddConversationMembersCmd {

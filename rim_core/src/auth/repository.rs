@@ -40,6 +40,12 @@ pub trait InviteRepository: Send + Sync {
     /// Returns `true` if the invite was consumed (use_count incremented), `false` if it was
     /// already exhausted or missing.
     async fn try_consume(&self, id: InviteId) -> RepoResult<bool>;
+    /// How many invites `user_id` created at or after `since`.
+    async fn count_created_since(
+        &self,
+        user_id: UserId,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<u64>;
 }
 
 /// Repository for instance invites — admin-issued multi-use tokens for account creation.

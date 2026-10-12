@@ -128,4 +128,12 @@ impl MacroRepository for SeaOrmMacroRepository {
         active.delete(&self.db).await.map_err(map_db_err)?;
         Ok(())
     }
+
+    async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64> {
+        macro_def::Entity::find()
+            .filter(macro_def::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
+    }
 }

@@ -390,6 +390,7 @@ fn schema_for(
             registration_mode: Arc::new(registration_mode),
             audit_retention_days: None,
             instance_policy: Default::default(),
+            instance_limits: Default::default(),
         },
         None,
     )
@@ -607,6 +608,7 @@ pub fn build_test_provider_with_gate(
         ),
         rim_infra_services::FederationHooks::default(),
         Arc::new(gate),
+        rim_services::limits::InstanceLimits::default(),
     ));
 
     (service_provider, observers)

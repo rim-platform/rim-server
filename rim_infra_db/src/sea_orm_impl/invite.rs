@@ -1,13 +1,14 @@
 use async_trait::async_trait;
 use entity::invite;
 use sea_orm::prelude::{Expr, Uuid};
-use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, PaginatorTrait, QueryFilter, Set};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
 use rim_core::auth::model::{Invite, InviteId, NewInvite};
 use rim_core::auth::repository::InviteRepository;
 use rim_core::repository::error::RepoResult;
+use rim_core::user::model::UserId;
 
 /// SeaORM-backed implementation of [`InviteRepository`] (workspace invites).
 pub struct SeaOrmInviteRepository {
@@ -76,5 +77,19 @@ impl InviteRepository for SeaOrmInviteRepository {
                 .map_err(map_db_err)?;
 
         Ok(res.rows_affected == 1)
+    }
+
+    async fn count_created_since(
+        &self,
+        user_id: UserId,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<u64> {
+        let since: sea_orm::prelude::DateTimeWithTimeZone = since.into();
+        invite::Entity::find()
+            .filter(invite::Column::CreatedByUserId.eq::<Uuid>(user_id.into()))
+            .filter(invite::Column::CreatedAt.gte(since))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
     }
 }

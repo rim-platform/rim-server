@@ -15,4 +15,11 @@ pub trait UserService: Send + Sync {
     async fn get_users_by_ids(&self, ids: &[UserId]) -> ServiceResult<Vec<UserDto>>;
 
     async fn update_my_profile(&self, cmd: UpdateMyProfileCmd) -> ServiceResult<UserDto>;
+
+    /// When the caller's account leaves probation; `None` once it has, or when the instance
+    /// has no probation.
+    async fn probation_ends_at(
+        &self,
+        query: GetMeQuery,
+    ) -> ServiceResult<Option<chrono::DateTime<chrono::Utc>>>;
 }

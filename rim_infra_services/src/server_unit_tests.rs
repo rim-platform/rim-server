@@ -10,6 +10,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
+    use rim_core::user::repository::MockUserRepository;
     use rim_services::events::Observers;
     use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
     use rim_services::server::service::ServerService;
@@ -19,30 +20,38 @@ mod tests {
     use crate::server::DefaultServerService;
 
     fn mock_conversation_repo() -> MockConversationRepository {
+        conversation_repo_creating(None)
+    }
+
+    /// A conversation repository that creates channels, exactly `times` of them when set.
+    fn conversation_repo_creating(times: Option<usize>) -> MockConversationRepository {
         let mut repo = MockConversationRepository::new();
         // New workspace members auto-join public channels; none exist in these fixtures.
         repo.expect_list_public_channel_ids()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
-        repo.expect_create_conversation_with_members()
-            .returning(|conv, _member_ids| {
-                Box::pin(async move {
-                    let now = chrono::Utc::now();
-                    Ok(Conversation {
-                        id: ConversationId::new(),
-                        conversation_type: conv.conversation_type,
-                        title: conv.title,
-                        topic: None,
-                        created_at: now,
-                        last_activity_at: now,
-                        server_id: conv.server_id,
-                        is_private: conv.is_private,
-                        archived_at: None,
-                        created_by: conv.created_by,
-                        slow_mode_seconds: 0,
-                        encrypted_at: None,
-                    })
+        let creates = repo.expect_create_conversation_with_members();
+        if let Some(times) = times {
+            creates.times(times);
+        }
+        creates.returning(|conv, _member_ids| {
+            Box::pin(async move {
+                let now = chrono::Utc::now();
+                Ok(Conversation {
+                    id: ConversationId::new(),
+                    conversation_type: conv.conversation_type,
+                    title: conv.title,
+                    topic: None,
+                    created_at: now,
+                    last_activity_at: now,
+                    server_id: conv.server_id,
+                    is_private: conv.is_private,
+                    archived_at: None,
+                    created_by: conv.created_by,
+                    slow_mode_seconds: 0,
+                    encrypted_at: None,
                 })
-            });
+            })
+        });
         repo
     }
 
@@ -61,6 +70,7 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_repo: Arc::new(mock_conversation_repo()),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             None,
             noop_observers(),
@@ -227,5 +237,171 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.len(), 2);
+    }
+
+    // ── Instance limits ──
+
+    /// A server repository that lets `actor_id` create a workspace while owning `owned`;
+    /// `None` expects the owned workspaces never to be counted.
+    fn creatable_server_repo(actor_id: UserId, owned: Option<u64>) -> MockServerRepository {
+        let mut server_repo = MockServerRepository::new();
+        server_repo
+            .expect_find_owned_by_name()
+            .returning(|_, _| Ok(None));
+        match owned {
+            Some(owned) => {
+                server_repo
+                    .expect_count_owned()
+                    .withf(move |owner| *owner == actor_id)
+                    .returning(move |_| Ok(owned));
+            }
+            None => {
+                server_repo.expect_count_owned().never();
+            }
+        }
+        server_repo.expect_create_server().returning(|name| {
+            let now = chrono::Utc::now();
+            Ok(Server {
+                id: ServerId::new(),
+                name: name.to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+        });
+        server_repo
+    }
+
+    /// A member repository that accepts the owner's membership.
+    fn accepting_member_repo() -> MockServerMemberRepository {
+        let mut repo = MockServerMemberRepository::new();
+        repo.expect_add_member().returning(|sid, uid, role| {
+            Ok(ServerMember {
+                id: ServerMemberId::new(),
+                server_id: sid,
+                user_id: uid,
+                member_role: role,
+                joined_at: chrono::Utc::now(),
+            })
+        });
+        repo
+    }
+
+    fn limited_service(
+        server_repo: MockServerRepository,
+        conversation_repo: MockConversationRepository,
+        limits: rim_services::limits::InstanceLimits,
+    ) -> DefaultServerService {
+        limited_service_for(
+            server_repo,
+            conversation_repo,
+            MockUserRepository::new(),
+            limits,
+        )
+    }
+
+    fn limited_service_for(
+        server_repo: MockServerRepository,
+        conversation_repo: MockConversationRepository,
+        user_repo: MockUserRepository,
+        limits: rim_services::limits::InstanceLimits,
+    ) -> DefaultServerService {
+        DefaultServerService::new(
+            ServerRepos {
+                server_repo: Arc::new(server_repo),
+                server_member_repo: Arc::new(accepting_member_repo()),
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                user_repo: Arc::new(user_repo),
+            },
+            None,
+            noop_observers(),
+        )
+        .with_limits(limits)
+    }
+
+    async fn create(svc: &DefaultServerService, actor_id: UserId) -> Result<(), ServiceError> {
+        svc.create_server(CreateServerCmd {
+            actor: Actor::new(actor_id),
+            name: "Limited".to_string(),
+        })
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn creating_a_workspace_follows_the_workspaces_per_user_cap() {
+        for (cap, owned, allowed) in [
+            (Some(5), Some(4), true),
+            (Some(5), Some(5), false),
+            (None, None, true),
+        ] {
+            let actor_id = UserId::new();
+            let svc = limited_service(
+                creatable_server_repo(actor_id, owned),
+                conversation_repo_creating(None),
+                rim_services::limits::InstanceLimits {
+                    workspaces_per_user: cap,
+                    ..Default::default()
+                },
+            );
+            match create(&svc, actor_id).await {
+                Ok(()) => assert!(allowed, "{cap:?} {owned:?}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{cap:?} {owned:?}");
+                    assert_eq!(message, "this instance allows 5 workspaces per user");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_workspace_gets_only_the_default_channels_its_cap_allows() {
+        for (cap, channels) in [(Some(1), 1), (Some(2), 2), (None, 2)] {
+            let actor_id = UserId::new();
+            let svc = limited_service(
+                creatable_server_repo(actor_id, None),
+                conversation_repo_creating(Some(channels)),
+                rim_services::limits::InstanceLimits {
+                    channels_per_workspace: cap,
+                    ..Default::default()
+                },
+            );
+            create(&svc, actor_id).await.expect("created");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_in_probation_cannot_create_a_workspace_until_it_ends() {
+        let created = chrono::Utc::now();
+        let probation = rim_services::limits::InstanceLimits {
+            probation_hours: Some(24),
+            ..Default::default()
+        };
+        for (now, refusal) in [
+            (
+                created + chrono::Duration::minutes(30),
+                Some("a new account can create a workspace in 1410 minutes"),
+            ),
+            (created + chrono::Duration::hours(24), None),
+        ] {
+            let actor_id = UserId::new();
+            let svc = limited_service_for(
+                creatable_server_repo(actor_id, None),
+                conversation_repo_creating(None),
+                crate::probation_fixtures::users(vec![crate::probation_fixtures::account(
+                    actor_id, created, None,
+                )]),
+                probation,
+            )
+            .with_clock(crate::clock::Clock::fixed(now));
+            match (create(&svc, actor_id).await, refusal) {
+                (Ok(()), None) => {}
+                (Err(ServiceError::Validation(message)), Some(expected)) => {
+                    assert_eq!(message, expected)
+                }
+                (other, expected) => panic!("expected {expected:?}, got {other:?}"),
+            }
+        }
     }
 }

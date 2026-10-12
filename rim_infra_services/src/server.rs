@@ -9,12 +9,14 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
+use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::server::command::{CreateServerCmd, GetServerQuery, ListMyServersQuery};
 use rim_services::server::dto::ServerDto;
 use rim_services::server::service::ServerService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
+use crate::clock::Clock;
 use crate::repos::AppRepos;
 use crate::util::{add_workspace_member, ensure_server_exists, ensure_server_member};
 
@@ -23,6 +25,10 @@ pub struct DefaultServerService {
     repos: ServerRepos,
     db: Option<DatabaseConnection>,
     observers: Observers,
+    /// Caps on workspaces per owner and on the default channels, and the probation of new
+    /// accounts.
+    limits: InstanceLimits,
+    clock: Clock,
 }
 
 impl DefaultServerService {
@@ -31,7 +37,35 @@ impl DefaultServerService {
             repos,
             db,
             observers,
+            limits: InstanceLimits::default(),
+            clock: Clock::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// `Validation` while the creator's account is in probation.
+    async fn ensure_out_of_probation(&self, user_id: UserId) -> ServiceResult<()> {
+        if self.limits.probation_hours.is_none() {
+            return Ok(());
+        }
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        self.limits
+            .ensure_out_of_probation(user.created_at, self.clock.now(), "create a workspace")
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {
@@ -42,7 +76,8 @@ impl DefaultServerService {
     }
 }
 
-/// Create default #general and #random channels for a newly created server.
+/// Create default #general and #random channels for a newly created server, as many of them
+/// as `max_channels` allows.
 ///
 /// If channel creation fails, a warning is logged but the error is **not**
 /// propagated — we never want a default-channel failure to abort server
@@ -52,8 +87,10 @@ async fn create_default_channels(
     observers: &Observers,
     server_id: ServerId,
     creator_id: UserId,
+    max_channels: Option<u32>,
 ) {
-    for channel_name in &["general", "random"] {
+    let allowed = max_channels.map_or(usize::MAX, |n| n as usize);
+    for channel_name in ["general", "random"].iter().take(allowed) {
         match conversation_repo
             .create_conversation_with_members(
                 NewConversation {
@@ -122,6 +159,19 @@ impl ServerService for DefaultServerService {
                 existing.name
             )));
         }
+        self.ensure_out_of_probation(cmd.actor.user_id).await?;
+        if self.limits.workspaces_per_user.is_some() {
+            let owned = self
+                .repos
+                .server_repo
+                .count_owned(cmd.actor.user_id)
+                .await?;
+            ensure_below(
+                self.limits.workspaces_per_user,
+                owned,
+                "workspaces per user",
+            )?;
+        }
 
         // Run create + add_member inside a transaction when DB is available.
         let scope = if let Some(db) = &self.db {
@@ -148,6 +198,7 @@ impl ServerService for DefaultServerService {
             server.id,
             cmd.actor.user_id,
             ServerMemberRole::Owner,
+            None,
         )
         .await?;
 
@@ -157,6 +208,7 @@ impl ServerService for DefaultServerService {
             &self.observers,
             server.id,
             cmd.actor.user_id,
+            self.limits.channels_per_workspace,
         )
         .await;
 

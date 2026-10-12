@@ -9,8 +9,8 @@ use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 
 use crate::DbHandle;
@@ -175,5 +175,13 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
             role: member.member_role,
             timed_out_until: timeout.map(|t| t.until.into()),
         }))
+    }
+
+    async fn count_members(&self, server_id: ServerId) -> RepoResult<u64> {
+        server_member::Entity::find()
+            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)
     }
 }

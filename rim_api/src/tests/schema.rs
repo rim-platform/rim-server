@@ -157,12 +157,28 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("serverInfo: ServerInfo!"));
     assert!(sdl.contains(
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
-         auditRetentionDays: Int instanceNotice: String termsUrl: String }"
+         auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! }"
+    ));
+    assert!(sdl.contains(
+        "type ServerLimits { workspacesPerUser: Int membersPerWorkspace: Int \
+         channelsPerWorkspace: Int devicesPerUser: Int dmRequestsPerDay: Int \
+         macrosPerWorkspace: Int pipelinesPerWorkspace: Int pluginsPerWorkspace: Int \
+         invitesPerUserPerDay: Int inviteMaxUses: Int messageBytes: Int probationHours: Int }"
     ));
     assert!(sdl.contains(
         "type ServerFeatureInfo { key: String! state: ServerFeatureState! reason: String }"
     ));
     assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
+}
+
+/// `User` ends with the caller's probation end.
+#[test]
+fn user_sdl_ends_with_the_probation_end() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    assert!(
+        sdl.contains("principalId: String probationEndsAt: DateTime }"),
+        "User must end with probationEndsAt"
+    );
 }
 
 /// `serverInfo` answers without a session.
@@ -219,6 +235,50 @@ async fn server_info_reports_the_instance_notice_and_terms() {
         serde_json::json!({
             "instanceNotice": "Run by the Example club.",
             "termsUrl": "https://rim.example.org/terms",
+        })
+    );
+}
+
+/// `serverInfo.limits` reports the configured caps, null where none is set.
+#[tokio::test]
+async fn server_info_reports_the_instance_limits() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(
+            Request::new(
+                "{ serverInfo { limits { workspacesPerUser membersPerWorkspace \
+                 channelsPerWorkspace devicesPerUser dmRequestsPerDay macrosPerWorkspace \
+                 pipelinesPerWorkspace pluginsPerWorkspace invitesPerUserPerDay inviteMaxUses \
+                 messageBytes probationHours } } }",
+            )
+            .data(rim_services::limits::InstanceLimits {
+                workspaces_per_user: Some(5),
+                channels_per_workspace: Some(30),
+                devices_per_user: Some(5),
+                dm_requests_per_day: Some(20),
+                message_bytes: Some(8192),
+                probation_hours: Some(24),
+                ..Default::default()
+            }),
+        )
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert_eq!(
+        data["serverInfo"]["limits"],
+        serde_json::json!({
+            "workspacesPerUser": 5,
+            "membersPerWorkspace": null,
+            "channelsPerWorkspace": 30,
+            "devicesPerUser": 5,
+            "dmRequestsPerDay": 20,
+            "macrosPerWorkspace": null,
+            "pipelinesPerWorkspace": null,
+            "pluginsPerWorkspace": null,
+            "invitesPerUserPerDay": null,
+            "inviteMaxUses": null,
+            "messageBytes": 8192,
+            "probationHours": 24,
         })
     );
 }

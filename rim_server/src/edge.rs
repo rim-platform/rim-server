@@ -334,6 +334,7 @@ mod tests {
             ),
             mutations_per_session: None,
             messages: None,
+            probation_messages: None,
             ws_connections_per_user: None,
             subscriptions_per_connection: None,
             max_batch: crate::config::DEFAULT_API_MAX_BATCH,
