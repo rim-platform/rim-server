@@ -13,7 +13,7 @@ use rim_services::keybind::service::KeybindService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::KeybindRepos;
-use crate::util::{ensure_server_member, ensure_server_owner};
+use crate::util::{ensure_server_member, ensure_server_owner, ensure_workspace_features};
 
 #[derive(Clone)]
 pub struct KeybindServices {
@@ -24,6 +24,8 @@ pub struct KeybindServices {
 pub struct DefaultKeybindService {
     repos: KeybindRepos,
     services: KeybindServices,
+    /// The relay's direct space, which has no keybinds of its own.
+    direct_space_id: Option<rim_core::server::model::ServerId>,
 }
 
 impl DefaultKeybindService {
@@ -35,7 +37,20 @@ impl DefaultKeybindService {
     const VALID_MODIFIERS: &'static [&'static str] = &["Ctrl", "Shift", "Alt", "Meta"];
 
     pub fn new(repos: KeybindRepos, services: KeybindServices) -> Self {
-        Self { repos, services }
+        Self {
+            repos,
+            services,
+            direct_space_id: None,
+        }
+    }
+
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(
+        mut self,
+        direct_space_id: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     fn validate_keystroke(keystroke: &str) -> ServiceResult<()> {
@@ -121,6 +136,7 @@ impl DefaultKeybindService {
                 }
             }
             KeybindSubject::Workspace(workspace_id) => {
+                ensure_workspace_features(self.direct_space_id, workspace_id)?;
                 ensure_server_owner(
                     self.repos.server_member_repo.as_ref(),
                     workspace_id,
@@ -301,6 +317,9 @@ impl DefaultKeybindService {
         &self,
         query: ResolveKeybindsQuery,
     ) -> ServiceResult<std::collections::BTreeMap<(String, String), KeybindDto>> {
+        if let Some(workspace_id) = query.workspace_id {
+            ensure_workspace_features(self.direct_space_id, workspace_id)?;
+        }
         let mut effective = std::collections::BTreeMap::new();
 
         for keybind in Self::default_keybinds() {

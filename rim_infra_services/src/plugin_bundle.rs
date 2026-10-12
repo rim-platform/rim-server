@@ -51,6 +51,8 @@ pub struct DefaultPluginBundleService {
     storage: Arc<dyn StorageService>,
     /// Uploads per user.
     upload_rate_limiter: RegistrationRateLimiter,
+    /// The relay's direct space, which has no plugins.
+    direct_space_id: Option<ServerId>,
 }
 
 #[derive(Deserialize)]
@@ -154,7 +156,14 @@ impl DefaultPluginBundleService {
             repos,
             storage,
             upload_rate_limiter: RegistrationRateLimiter::new(3600, 20),
+            direct_space_id: None,
         }
+    }
+
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     /// Replace the limiter of uploads per user.
@@ -248,6 +257,7 @@ impl PluginBundleService for DefaultPluginBundleService {
     async fn upload(&self, cmd: UploadPluginBundleCmd) -> ServiceResult<UploadedPluginBundleDto> {
         let actor_id = cmd.actor.user_id;
         let server_id = cmd.server_id;
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
         self.limit(actor_id)?;
         let member = self
             .repos
@@ -307,6 +317,7 @@ impl PluginBundleService for DefaultPluginBundleService {
 
     #[instrument(name = "plugin_bundle.download", skip_all, fields(actor_id = %query.actor.user_id))]
     async fn download(&self, query: DownloadPluginBundleQuery) -> ServiceResult<Vec<u8>> {
+        crate::util::ensure_workspace_features(self.direct_space_id, query.server_id)?;
         self.repos
             .server_member_repo
             .get_member(query.server_id, query.actor.user_id)

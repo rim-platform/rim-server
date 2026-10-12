@@ -41,6 +41,8 @@ pub struct DefaultPipelineService {
     broadcaster: Arc<dyn Broadcaster>,
     cooldowns: Arc<DashMap<PipelineId, Instant>>,
     rate_limits: Arc<DashMap<PipelineId, (u32, Instant)>>,
+    /// The relay's direct space, which has no pipelines.
+    direct_space_id: Option<ServerId>,
 }
 
 impl DefaultPipelineService {
@@ -55,10 +57,19 @@ impl DefaultPipelineService {
             broadcaster,
             cooldowns: Arc::new(DashMap::new()),
             rate_limits: Arc::new(DashMap::new()),
+            direct_space_id: None,
         }
     }
 
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
+    }
+
+    /// `Validation` in the direct space, else `PermissionDenied` for a non-member.
     async fn ensure_member(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
         crate::util::ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             server_id,
@@ -70,6 +81,7 @@ impl DefaultPipelineService {
     /// The pipeline's creator, or an Owner or Moderator of its workspace, may change it; any
     /// other member or a non-member gets `PermissionDenied`.
     async fn ensure_can_manage(&self, pipeline: &Pipeline, user_id: UserId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, pipeline.server_id)?;
         let standing = crate::util::member_standing(
             self.repos.server_member_repo.as_ref(),
             pipeline.server_id,

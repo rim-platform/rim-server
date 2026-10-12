@@ -2,6 +2,7 @@
 //! joined anything and never read `relayInfo` with its session. A workspace-scoped root is a
 //! first use: it makes the caller a guest of the direct space and answers as it does for any
 //! guest, an empty list where they have nothing yet. Roots that need no membership join nobody.
+//! Workspace-only features answer `VALIDATION` there and join nobody either.
 //!
 //! Run with:
 //! ```sh
@@ -16,6 +17,7 @@ use std::time::Duration;
 use async_graphql::Request;
 use futures_util::StreamExt;
 use rim_api::auth_context::AuthActorCtx;
+use rim_services::NOT_IN_DIRECT_SPACE;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -68,6 +70,21 @@ impl Newcomer {
     /// Run `query` with `$s` bound to the direct space; panics on errors.
     async fn ok(&self, query: &str) -> Value {
         self.person.ok(query, json!({ "s": self.direct })).await
+    }
+
+    /// Run `query` with `$s` bound to the direct space; asserts it is refused as a workspace-only
+    /// feature.
+    async fn refused(&self, query: &str) {
+        let body = self.person.post(query, json!({ "s": self.direct })).await;
+        let error = &body["errors"][0];
+        assert_eq!(error["extensions"]["code"], "VALIDATION", "{body}");
+        assert_eq!(error["message"], NOT_IN_DIRECT_SPACE, "{body}");
+    }
+
+    /// Assert the newcomer joined nothing, then stop the relay.
+    async fn joined_nothing(self) {
+        assert_eq!(self.role_of(&self.person).await, None);
+        self.node.stop().await;
     }
 
     /// Assert the newcomer became a guest of the direct space, then stop the relay.
@@ -177,33 +194,40 @@ async fn server_members_list_only_the_caller_on_first_use() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn channels_are_empty_browsed_or_joined_on_first_use() {
+async fn channels_are_refused_in_the_direct_space() {
     let n = Newcomer::new().await;
-    let data = n
-        .ok("query($s: ID!) { \
-             browse: channels(serverId: $s, dir: AFTER, limit: 100) { items { id } } \
-             joined: channels(serverId: $s, dir: AFTER, limit: 100, filter: { joinedOnly: true }) { items { id } } }")
+    n.refused("query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 100) { items { id } } }")
         .await;
-    assert_eq!(data["browse"]["items"], json!([]));
-    assert_eq!(data["joined"]["items"], json!([]));
-    n.joined_as_guest().await;
+    n.refused(
+        "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 100, \
+         filter: { joinedOnly: true }) { items { id } } }",
+    )
+    .await;
+    n.refused(
+        "mutation($s: ID!) { createConversation(input: { serverId: $s, isChannel: true, \
+         title: \"general\" }) { id } }",
+    )
+    .await;
+    n.refused(&format!(
+        "mutation($s: ID!) {{ joinChannel(serverId: $s, conversationId: \"{}\") {{ id }} }}",
+        Uuid::now_v7()
+    ))
+    .await;
+    n.joined_nothing().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn resolved_keybinds_answer_on_first_use() {
+async fn workspace_keybinds_are_refused_in_the_direct_space() {
     let n = Newcomer::new().await;
-    let data = n
-        .ok("query($s: ID!) { resolvedKeybinds(workspaceId: $s) { workspaceId } }")
+    n.refused("query($s: ID!) { resolvedKeybinds(workspaceId: $s) { workspaceId } }")
         .await;
-    assert!(
-        data["resolvedKeybinds"]
-            .as_array()
-            .expect("keybinds")
-            .iter()
-            .all(|k| k["workspaceId"].is_null()),
-        "the direct space has no keybinds of its own: {data}"
-    );
-    n.joined_as_guest().await;
+    n.refused(
+        "mutation($s: ID!) { createKeybind(input: { scope: WORKSPACE, workspaceId: $s, \
+         keystroke: \"Ctrl+J\", commandId: \"workspace.open_command_palette\", \
+         context: GLOBAL }) { id } }",
+    )
+    .await;
+    n.joined_nothing().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -233,23 +257,97 @@ async fn commands_list_what_a_guest_runs_on_first_use() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn custom_emojis_are_empty_on_first_use() {
+async fn custom_emojis_are_refused_in_the_direct_space() {
     let n = Newcomer::new().await;
-    let data = n
-        .ok("query($s: ID!) { customEmojis(serverId: $s) { id } }")
+    n.refused("query($s: ID!) { customEmojis(serverId: $s) { id } }")
         .await;
-    assert_eq!(data["customEmojis"], json!([]));
-    n.joined_as_guest().await;
+    n.refused(
+        "mutation($s: ID!) { createCustomEmoji(input: { serverId: $s, name: \"wave\", \
+         imageBase64: \"iVBORw0KGgo=\" }) { id } }",
+    )
+    .await;
+    let emoji = Uuid::now_v7();
+    let user: Uuid = user_id(&n.node, &n.person.principal()).await.into();
+    let direct: Uuid = n.direct.parse().expect("uuid");
+    n.node
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "INSERT INTO custom_emoji (id, server_id, name, image_url, uploaded_by, created_at) \
+             VALUES ($1, $2, 'wave', 'emoji/wave.png', $3, now())",
+            [emoji.into(), direct.into(), user.into()],
+        ))
+        .await
+        .expect("insert");
+    n.refused(&format!(
+        "mutation {{ deleteCustomEmoji(emojiId: \"{emoji}\") }}"
+    ))
+    .await;
+    n.joined_nothing().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn workspace_plugins_are_empty_on_first_use() {
+async fn plugins_pipelines_and_workspace_state_are_refused_in_the_direct_space() {
     let n = Newcomer::new().await;
-    let data = n
-        .ok("query($s: ID!) { workspacePlugins(serverId: $s) { id } }")
+    n.refused("query($s: ID!) { workspacePlugins(serverId: $s) { id } }")
         .await;
-    assert_eq!(data["workspacePlugins"], json!([]));
-    n.joined_as_guest().await;
+    n.refused(
+        "mutation($s: ID!) { addWorkspacePlugin(input: { serverId: $s, \
+         statement: { payload: \"e30\", signature: \"AA\" }, status: RECOMMENDED }) { id } }",
+    )
+    .await;
+    n.refused(
+        "mutation($s: ID!) { updateWorkspacePlugin(input: { serverId: $s, \
+         pluginId: \"example\", status: REQUIRED }) { id } }",
+    )
+    .await;
+    n.refused("mutation($s: ID!) { removeWorkspacePlugin(serverId: $s, pluginId: \"example\") }")
+        .await;
+    let upload = n
+        .person
+        .http
+        .post(format!("{}/api/plugin-bundles/{}", n.node.origin, n.direct))
+        .header(
+            "cookie",
+            format!("rim_session={}; rim_csrf={}", n.person.session, n.person.csrf),
+        )
+        .header("x-csrf-token", &n.person.csrf)
+        .header("content-type", "application/vnd.rim.plugin-bundle+json")
+        .body(r#"{"format":"rim-plugin-bundle","v":1,"files":[{"path":"rim-plugin.json","text":"{}"}]}"#)
+        .send()
+        .await
+        .expect("upload");
+    assert_eq!(upload.status(), 400);
+    let body: Value = upload.json().await.expect("json");
+    assert_eq!(body["error"], NOT_IN_DIRECT_SPACE);
+
+    n.refused("query($s: ID!) { pipelines(serverId: $s) { id } }")
+        .await;
+    n.refused(
+        "mutation($s: ID!) { createPipeline(input: { serverId: $s, name: \"echo\", \
+         trigger: { kind: NEW_MESSAGE }, actions: [{ commandId: \"chat.echo\" }] }) { id } }",
+    )
+    .await;
+
+    n.refused(
+        "query($s: ID!) { workspaceState(serverId: $s, key: \"poll\", scope: SERVER) { key } }",
+    )
+    .await;
+    n.refused(
+        "query($s: ID!) { workspaceStateList(serverId: $s, prefix: \"poll\", scope: SERVER) { key } }",
+    )
+    .await;
+    n.refused(
+        "mutation($s: ID!) { setWorkspaceState(input: { serverId: $s, key: \"poll\", \
+         value: 1, scope: SERVER }) { key } }",
+    )
+    .await;
+    n.refused(
+        "mutation($s: ID!) { deleteWorkspaceState(input: { serverId: $s, key: \"poll\", \
+         scope: SERVER }) }",
+    )
+    .await;
+    n.joined_nothing().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

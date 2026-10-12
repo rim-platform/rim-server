@@ -40,11 +40,23 @@ pub struct WorkspaceStateRepos {
 pub struct DefaultWorkspaceStateService {
     repos: WorkspaceStateRepos,
     broadcaster: Arc<dyn Broadcaster>,
+    /// The relay's direct space, which has no workspace state.
+    direct_space_id: Option<ServerId>,
 }
 
 impl DefaultWorkspaceStateService {
     pub fn new(repos: WorkspaceStateRepos, broadcaster: Arc<dyn Broadcaster>) -> Self {
-        Self { repos, broadcaster }
+        Self {
+            repos,
+            broadcaster,
+            direct_space_id: None,
+        }
+    }
+
+    /// The relay's direct space, or `None` where none is wired.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     fn validate_key(key: &str) -> ServiceResult<()> {
@@ -89,7 +101,9 @@ impl DefaultWorkspaceStateService {
         }
     }
 
+    /// `Validation` in the direct space, else `PermissionDenied` for a non-member.
     async fn ensure_member(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
         crate::util::ensure_server_member(
             self.repos.server_member_repo.as_ref(),
             server_id,
