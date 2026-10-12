@@ -36,18 +36,17 @@ Not tested here: roots that take a conversation id (`conversation`, `messages`, 
 `markAsRead`, `claimMlsKeyPackages`, `submitMlsCommit`, `mlsCommits`). A newcomer belongs to no
 conversation, so these still refuse, as they do in any workspace.
 
-## Open for Jakub
+## Decided (2026-10-12)
 
-1. **Reads join too.** A read such as `unreadCounts` makes the caller a guest, as a signed-in
-   `relayInfo` already does for every local user. The alternative is answering empty without
-   joining, which needs an empty-answer path in each service.
-2. **`commands` ignores membership.** It lists every command, admin ones included, for a caller
-   who is not a member of the space in `commandContext`, in every workspace. Pinned by a test.
-   The alternative is filtering by the caller's membership and role, the same question as
-   `commandDiscover` filtering by capability rather than role.
-3. **Workspace-only features in the direct space.** Custom emojis, plugins, keybinds, pipelines,
-   workspace state and channels answer empty there. The alternative is refusing them in the
-   direct space and having the client stop sending them there.
-4. **Client gaps.** The client still sends workspace-only queries for the direct space, and it
-   fetches the direct space's unread counts, notifications and events only once Direct messages
-   is opened, so DM badges are missing at sign-in.
+1. **Reads join too.** Kept: a read such as `unreadCounts` makes the caller a guest, as a
+   signed-in `relayInfo` already does for every local user.
+2. **`commands` filters by membership and role.** A caller who is not a member of the space in
+   `commandContext` sees no commands; a member sees the commands their role may run, and
+   `commandDiscover` filters by capability the same way. The test that pins the unfiltered list
+   changes with it.
+3. **Workspace-only features are refused in the direct space.** Custom emojis, plugins,
+   keybinds, pipelines, workspace state and channels answer `VALIDATION` there instead of empty,
+   once the client no longer sends them.
+4. **Client.** The client subscribes to the direct space's unread counts, notifications and
+   events at sign-in, so DM badges show without opening Direct messages, and stops sending
+   workspace-only queries for the direct space. This ships before 3.
