@@ -143,8 +143,8 @@ The server reads its configuration from the environment, or from an untracked `.
 development. `DATABASE_URL` is the only variable without the `RIM_` prefix; the log filter comes
 from `RUST_LOG` (default `info`). The comment block above `ENV` in the `Dockerfile` lists the
 variables with their defaults, and `deploy/.env.example` lists the ones the compose stack sets.
-`rim_server/src/config.rs` is the source of truth. Four more are set by `deploy/compose.yml` or
-needed rarely:
+`rim_server/src/config.rs` is the source of truth. Four of them are set by `deploy/compose.yml`
+or needed rarely:
 
 | Variable | Effect |
 |---|---|

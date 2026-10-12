@@ -31,7 +31,12 @@ pub struct RIMConfig {
 
     pub data_dir: String,
 
+    /// Directory of uploaded files (attachments, custom emoji, plugin bundles), created when
+    /// missing; unset uses `files` under `RIM_DATA_DIR`. Controlled by `RIM_STORAGE_LOCAL_PATH`.
     pub storage_local_path: Option<String>,
+    /// Bytes one workspace may store: its attachments, uploads in progress included, and its
+    /// plugin bundles; an upload past it is refused. Default 1 GiB (1073741824). Controlled by
+    /// `RIM_MAX_WORKSPACE_STORAGE_BYTES`.
     pub max_workspace_storage_bytes: Option<u64>,
 
     /// Set `RIM_OPEN_REGISTRATION=true` to enable open signup.

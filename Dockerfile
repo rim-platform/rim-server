@@ -56,6 +56,17 @@ USER rim
 #   RIM_CORS_ALLOWED_ORIGIN — one browser origin accepted besides the server's own (optional);
 #                           the own origin is RIM_PUBLIC_BASE_URL's, else the request's Host
 #   RIM_DATA_DIR          — Data directory (default: ./data)
+#   RIM_STORAGE_LOCAL_PATH — Directory of uploaded files (default: $RIM_DATA_DIR/files; this
+#                           image sets /app/data/uploads)
+#   RIM_MAX_WORKSPACE_STORAGE_BYTES — Bytes of attachments and plugin bundles one workspace may
+#                           store (default: 1073741824)
+#   RIM_DATABASE_MAX_CONNECTIONS — Size of the PostgreSQL pool (default: 10)
+#   RIM_TRUST_FORWARDED_HEADERS — Read the client address from X-Forwarded-For / Forwarded when
+#                           true; only behind a reverse proxy that is the sole way in
+#                           (default: false)
+#   RIM_FORCE_SECURE_COOKIES — Mark session and CSRF cookies Secure whatever the request scheme
+#                           when true (default: false)
+#   RIM_AUDIT_LOG_PATH    — Directory of audit.log (default: the working directory)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
 #   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the
 #                           data directory on a volume, the key is the server's identity
@@ -66,7 +77,17 @@ USER rim
 #   RIM_KEY_LOGIN_AUDIENCES — comma-separated host[:port] clients reach this server at
 #   RIM_ROLE              — relay, host or both (default: both)
 #   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
-#   RIM_RELAY_*           — per-user quotas of a relay; deploy/compose.relay.yml lists them
+#   Per-user quotas of a relay:
+#   RIM_RELAY_QUEUE_BYTES_PER_USER — bytes queued per local user before the oldest items are
+#                           dropped, at least 1048576 (default: 268435456)
+#   RIM_RELAY_RETENTION_DAYS — days queued items and DM requests are kept, 1-365 (default: 30)
+#   RIM_RELAY_CARD_MAX_BYTES — largest profile card, 1024-131072 (default: 131072)
+#   RIM_RELAY_KEY_PACKAGES_PER_DEVICE — unclaimed key packages per device, 1-1000 (default: 100)
+#   RIM_RELAY_DEVICES_PER_USER — devices per user that are not revoked, 1-64 (default: 32)
+#   RIM_RELAY_FORWARDS_PER_USER_PER_DAY — requests a user sends through /api/remote per day
+#                           (default: 50000)
+#   RIM_RELAY_DM_REQUESTS_PER_DAY — DM requests one sender files here, and invites a local user
+#                           sends to other servers, per day (default: 20)
 #   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
 #   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
 #   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
