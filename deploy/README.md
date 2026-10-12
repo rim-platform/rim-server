@@ -24,10 +24,12 @@ The relay's working name, `relay.rim.chat`, is not a registered domain. Use your
    cat > deploy/.env <<EOF
    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')
    RIM_DOMAIN=relay.example.org
+   RIM_VERSION=0.1.0
    EOF
    chmod 600 deploy/.env
    ```
 
+   `RIM_VERSION` is the release you run, the tag this checkout is at without its `v`.
    `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. Every other setting has the public relay's value
    in the compose files; set it in `.env` to change it (the quotas are listed in the runbook).
    Without `POSTGRES_PASSWORD` or `RIM_DOMAIN` every compose command stops and names it.
@@ -39,13 +41,15 @@ The relay's working name, `relay.rim.chat`, is not a registered domain. Use your
    dc config --services          # postgres, migrate, rim, caddy: no web client
    ```
 
-   The relay builds only `rim-server:local` (or uses `RIM_SERVER_IMAGE`); it needs no rim-ui
-   checkout.
+   The relay runs only `ghcr.io/rim-platform/rim-server:<RIM_VERSION>` (or
+   `RIM_SERVER_IMAGE`). Verify it as `docs/self-hosting.md`, "Verify the images", says. To
+   build it from this checkout instead, add `-f deploy/compose.dev.yml` to the alias and use
+   `up --build`; the relay needs no rim-ui checkout either way.
 
 ## Start
 
 ```sh
-dc up -d --build
+dc up -d
 dc logs -f rim
 ```
 
@@ -84,8 +88,9 @@ Update as `docs/self-hosting.md`, "Updates", says, with the relay's files named 
 
 ```sh
 COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh
-git pull
-dc up -d --build
+git fetch --tags && git checkout v<version>
+$EDITOR deploy/.env          # RIM_VERSION=<version>
+dc pull && dc up -d
 ```
 
 The operator's commands (`/app/rim-server` inside the `rim` container: invites that skip the

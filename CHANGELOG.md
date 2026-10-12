@@ -24,12 +24,21 @@ tag `v<version>`, the version every crate in the workspace carries.
 ### Added
 
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
+- Release images: every release tag publishes `ghcr.io/rim-platform/rim-server:<version>`
+  (also `<major>.<minor>`, `sha-<short sha>` and `latest`), signed with cosign keyless by the
+  release workflow and with an SPDX SBOM attested to it and attached to the GitHub release.
+  `docs/self-hosting.md`, "Verify the images", checks the signature.
 - GraphQL `ServerInfo.auditRetentionDays`: the days command audit rows are kept before they are
   exported and deleted, null when they are kept forever. Readable without a session, like the
   rest of `serverInfo`.
 
 ### Changed
 
+- **Upgrade:** `deploy/compose.yml` runs the published images `ghcr.io/rim-platform/rim-server`
+  and `ghcr.io/rim-platform/rim-web` at `RIM_VERSION` (default `latest`) instead of building
+  them. Set `RIM_VERSION` in `deploy/.env` to the release you run, and run `pull` then `up -d`
+  where you ran `up -d --build`. Operators who build locally add `-f deploy/compose.dev.yml` to
+  every compose command; `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` still name other images.
 - The packaged desktop app's origins (`tauri://localhost`, `http://tauri.localhost` and
   `https://tauri.localhost`) are accepted by every server without `RIM_CORS_ALLOWED_ORIGIN`.
 

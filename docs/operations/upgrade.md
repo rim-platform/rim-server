@@ -5,7 +5,10 @@ short form for `deploy/compose.yml`; this page adds what to read first, the roll
 works. The commands use the `dc` alias from `docs/self-hosting.md` (a relay: the alias in
 `deploy/README.md`), from the repository root.
 
-A release is the git tag `v<version>`. `CHANGELOG.md` lists what each release changes, and a
+A release is the git tag `v<version>` and the images `ghcr.io/rim-platform/rim-server:<version>`
+and `ghcr.io/rim-platform/rim-web:<version>` its release workflows publish. rim-server and
+rim-ui release under the same version, so `RIM_VERSION` in `deploy/.env` names both images.
+`CHANGELOG.md` lists what each release changes, and a
 line starting with **Upgrade:** is something the operator does before or after the upgrade.
 
 ## Before
@@ -25,18 +28,22 @@ line starting with **Upgrade:** is something the operator does before or after t
 ```sh
 deploy/backup.sh
 git fetch --tags && git checkout v<version>
-git -C ../rim-ui checkout <rim-ui tag>        # FILL: how a rim-ui tag is matched to a server release
-dc build                                      # with published images: set the tags in deploy/.env, then dc pull
+$EDITOR deploy/.env                           # RIM_VERSION=<version>
+dc pull                                       # pulls the new images; verify them next
 dc run --rm migrate                           # applies the new migrations, then exits
 dc up -d
 dc logs -f rim
 ```
 
+Between `dc pull` and the migrations, verify the new images' signatures as
+`docs/self-hosting.md`, "Verify the images", says. With `deploy/compose.dev.yml`, which builds
+the images from checkouts, check out rim-ui's `v<version>` next to this repository and run
+`dc build` in place of `dc pull`.
+
 `dc run --rm migrate` runs `/app/migration up` from the new image against the database while the
 old server is still serving; that is safe because a release's migrations only add (below). `dc up
 -d` alone also runs it before it starts the new server; running it first shows the migrations
-succeed before anything restarts. Published images are named by **FILL** (the registry and its
-image names); `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in `deploy/.env` point at them.
+succeed before anything restarts.
 
 Check the new server:
 
@@ -67,15 +74,15 @@ and `rim` waits for `migrate` to succeed. So start the old server without its de
 
 ```sh
 git checkout v<previous version>
-git -C ../rim-ui checkout <its rim-ui tag>
-dc build                                      # with published images: the previous tags in deploy/.env, then dc pull
+$EDITOR deploy/.env                           # RIM_VERSION=<previous version>
+dc pull rim web
 dc up -d --no-deps rim web
 ```
 
-A relay has no web client: `dc up -d --no-deps rim`. The old server's `/readyz` passes: it
-counts only the migrations it knows as pending. Until the next upgrade, a plain `dc up -d` stops
-at the failing `migrate`; use `--no-deps` as above. When you upgrade again there is no migration
-left to run.
+A relay has no web client: `dc pull rim` and `dc up -d --no-deps rim`. The old server's
+`/readyz` passes: it counts only the migrations it knows as pending. Until the next upgrade, a
+plain `dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again
+there is no migration left to run.
 
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.

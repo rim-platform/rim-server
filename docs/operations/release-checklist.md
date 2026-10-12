@@ -1,9 +1,10 @@
 # Release checklist
 
 The steps that cut a rim-server release `v<version>`, in order. Copy the list into the release
-pull request and tick it there. Steps marked **FILL** wait for the decisions about the
-organisation's registry, release workflows and updater key; until then they are done by hand or
-skipped, and the pull request says which.
+pull request and tick it there. Steps marked **FILL** wait for decisions not taken yet, such as
+the desktop release workflow and the updater key; until then they are done by hand or skipped,
+and the pull request says which. Only the maintainer tags and publishes;
+`CONTRIBUTING.md`, "Who can merge and publish", lists the repository settings that enforce it.
 
 The gates run locally on the release commit. CI counts only when it ran on that same commit.
 
@@ -48,7 +49,8 @@ docker build -t rim-server:release-check .
 
 ## 4. Test the upgrade and the rollback
 
-On a scratch host or compose project, never the production one:
+On a scratch host or compose project, never the production one. The release is not published
+yet, so the new images are built from the release commits with `deploy/compose.dev.yml`:
 
 - [ ] Start the previous release (`docs/self-hosting.md`), sign up, write messages in a channel
       and an encrypted conversation, upload a file, and take a backup with `deploy/backup.sh`.
@@ -73,8 +75,10 @@ On a scratch host or compose project, never the production one:
 
 - [ ] Set `version` under `[workspace.package]` in the root `Cargo.toml` and run
       `cargo build --workspace` so `Cargo.lock` follows.
-- [ ] Set rim-ui's version (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`).
-      FILL: whether rim-ui's version follows the server's or has its own.
+- [ ] Set rim-ui's version to the same `<version>` (`package.json`, `src-tauri/tauri.conf.json`,
+      `src-tauri/Cargo.toml`): the compose files run both images at one `RIM_VERSION`, and
+      rim-ui's release workflow refuses a tag that differs from `package.json`. Its
+      `CHANGELOG.md` gets the same section rename as below.
 - [ ] In `CHANGELOG.md`, rename `Unreleased` to `[<version>] - <YYYY-MM-DD>`, start a new empty
       `Unreleased` above it, and set the links at the bottom:
 
@@ -91,36 +95,49 @@ On a scratch host or compose project, never the production one:
 
 ```sh
 git checkout master && git pull
-git tag -s v<version> -m "rim-server <version>"       # FILL: who signs release tags, with which key
+git tag -s v<version> -m "rim-server <version>"       # FILL: the key that signs release tags
 git push origin v<version>
 ```
 
 - [ ] The tag points at the merged release commit, and `rim-server --version` built from it
-      prints `<version>`.
-- [ ] rim-ui is tagged at its release commit. FILL: rim-ui's tag name.
+      prints `<version>`. Only the maintainer can push a `v*` tag.
+- [ ] rim-ui is tagged `v<version>` at its release commit the same way.
 
 ## 8. Publish
 
-- [ ] Server image: FILL the registry and image name, and the release workflow that builds and
-      pushes it on the tag. Until that workflow exists, build from the tag and push by hand:
+Pushing the tag starts `.github/workflows/release.yaml` in each repository. Its
+`build-and-publish` job waits in the `release` environment until the maintainer approves it. The
+job checks the tag against the version in `Cargo.toml` (rim-ui: `package.json`) and the
+changelog's section for it, builds the image for `linux/amd64`, pushes the tags `<version>`,
+`<major>.<minor>`, `sha-<short sha>` and `latest` (a pre-release such as `0.2.0-rc.1` gets only
+`<version>` and `sha-…`), signs the digest with cosign keyless and attests an SPDX SBOM to it.
+The next job creates the GitHub release with the changelog section and the SBOM.
+
+- [ ] Approve the run of both repositories on its page ("Review deployments", environment
+      `release`), after checking that it ran for the tag just pushed.
+- [ ] Both runs pass. One that fails before "Build and push" published nothing: fix the cause,
+      delete the tag and push it again. Once an image is pushed the version is spent, and a fix
+      goes out as the next patch.
+- [ ] Verify the signatures. The certificate must name each repository's release workflow at
+      the tag; any other identity fails:
 
       ```sh
-      docker build -t <FILL registry>/rim-server:<version> .
-      docker push <FILL registry>/rim-server:<version>
+      v=<version>
+      cosign verify ghcr.io/rim-platform/rim-server:$v \
+        --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      cosign verify ghcr.io/rim-platform/rim-web:$v \
+        --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com
       ```
 
-- [ ] Web client image from rim-ui's tag: FILL the image name and workflow.
+      The digest cosign prints matches the one in the GitHub release notes, and
+      `cosign verify-attestation --type spdxjson` with the same flags passes.
+- [ ] The first release only: set both packages public (package settings on GitHub), as
+      `CONTRIBUTING.md`, "Who can merge and publish", lists.
 - [ ] Desktop builds: FILL the rim-ui release workflow. The updater stays off until
       `src-tauri/updater.json` in rim-ui has the endpoint and the public key: FILL the updater
       endpoint, and where the signing key lives and who holds it.
-- [ ] Release notes: the changelog section, published as a GitHub release on the tag:
-
-      ```sh
-      gh release create v<version> --repo rim-platform/rim-server \
-        --title "rim-server <version>" --notes-file <the changelog section>
-      ```
-
-      The repositories are private: FILL whether releases wait until they are public.
 
 ## 9. After
 

@@ -8,34 +8,34 @@ stay inside the compose network.
 A public relay is the same file with `deploy/compose.relay.yml` on top; `deploy/README.md`
 covers it.
 
-Everything marked **FILL** waits for the decision about the organisation and its image
-registry.
+Everything marked **FILL** is the operator's choice, recorded here once made.
 
 ## Before the first start
 
 1. A Linux host with Docker (Compose v2.20 or later), ports 80 and 443 reachable from the
    internet, and DNS `A`/`AAAA` records of your domain pointing at it. Caddy gets the
    certificate from Let's Encrypt on the first request.
-2. The images. Until they are published (**FILL**: the registry and image names), they are
-   built on the host from two checkouts side by side:
+2. This repository at the release you run. The compose files, the Caddyfile and the backup
+   scripts come from the checkout; the images are pulled:
 
    ```sh
-   git clone <rim-server repository> rim-server     # FILL: the repository URL
-   git clone <rim-ui repository> rim-ui             # FILL: the repository URL
+   git clone https://github.com/rim-platform/rim-server.git
    cd rim-server
+   git checkout v<version>
    ```
 
-   `up --build` builds `rim-server:local` from this repository and `rim-web:local` from
-   `../rim-ui`. With published images, set `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in
-   `deploy/.env` to them and use `pull` instead of `--build`; the rim-ui checkout is then not
-   needed.
+   The compose files run `ghcr.io/rim-platform/rim-server` and `ghcr.io/rim-platform/rim-web`
+   at `RIM_VERSION` from `deploy/.env`; set it to the same `<version>`. Left unset it is
+   `latest`, which moves with every release. To build both images on the host instead, check
+   out rim-ui next to this repository and add `-f deploy/compose.dev.yml` to every compose
+   command (the alias below) with `up --build`.
 3. `deploy/.env` from the example, filled in:
 
    ```sh
    cp deploy/.env.example deploy/.env
    chmod 600 deploy/.env
    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')|" deploy/.env
-   $EDITOR deploy/.env          # RIM_DOMAIN, and SMTP for password resets and invites
+   $EDITOR deploy/.env          # RIM_VERSION, RIM_DOMAIN, and SMTP for password resets and invites
    ```
 
    Every variable the compose files read is in `.env.example` with what it does. Without
@@ -49,11 +49,34 @@ registry.
 
 The commands below use that alias, from the repository root.
 
+### Verify the images
+
+The release workflows sign every image with [cosign](https://docs.sigstore.dev) keyless. The
+certificate names the repository's release workflow and the tag it ran for, so an image built or
+signed anywhere else does not verify. Before the first start and after every upgrade:
+
+```sh
+v=0.1.0                                      # your RIM_VERSION
+dc pull
+cosign verify ghcr.io/rim-platform/rim-server:$v \
+  --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/rim-platform/rim-web:$v \
+  --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+cosign prints the digest it verified, which is also in the GitHub release notes. Setting
+`RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in `deploy/.env` to `…@sha256:<digest>` makes compose run
+exactly those images. Each release also carries the image's SBOM (SPDX JSON), attested to the
+image: `cosign verify-attestation --type spdxjson` with the same flags checks it.
+
 ### The web client's endpoint
 
 The web client finds the API through `VITE_GRAPHQL_ENDPOINT`, baked in when its image is built.
-The compose file passes `RIM_WEB_GRAPHQL_ENDPOINT`, default `/api`: the client resolves it
-against the page's own address, so one image serves any domain and needs no CORS. The image's
+The published image is built with `/api`, and `deploy/compose.dev.yml` passes
+`RIM_WEB_GRAPHQL_ENDPOINT`, default `/api`: the client resolves it against the page's own
+address, so one image serves any domain and needs no CORS. The image's
 content security policy allows `connect-src 'self'`, which covers the API and its WebSocket on
 that origin; the browser console notes that it ignores the extra `/api` source the image adds.
 `https://<your domain>/api` gives the same result without that note and ties the image to the
@@ -72,7 +95,7 @@ example.
 ## First start
 
 ```sh
-dc up -d --build
+dc up -d
 dc logs -f rim
 ```
 
@@ -136,8 +159,10 @@ Take a backup first (below): migrations only go forward, so a backup is the way 
 
 ```sh
 deploy/backup.sh
-git pull && git -C ../rim-ui pull            # FILL: or set the new image tags in deploy/.env
-dc up -d --build                             # with published images: dc pull && dc up -d
+git fetch --tags && git checkout v<version>
+$EDITOR deploy/.env                          # RIM_VERSION=<version>
+dc pull                                      # then verify them, as above
+dc up -d
 dc logs -f rim
 ```
 
