@@ -2826,8 +2826,19 @@ mod tests {
         args: serde_json::Value,
         context: Option<CommandContextDto>,
     ) -> Result<rim_services::command::dto::CommandResultDto, ServiceError> {
+        run_confirmed_as(svc, new_actor(), command_id, args, context).await
+    }
+
+    /// [`run_confirmed`] as `actor`.
+    async fn run_confirmed_as(
+        svc: &DefaultCommandService,
+        actor: Actor,
+        command_id: &str,
+        args: serde_json::Value,
+        context: Option<CommandContextDto>,
+    ) -> Result<rim_services::command::dto::CommandResultDto, ServiceError> {
         let cmd = ExecuteCommandCmd {
-            actor: new_actor(),
+            actor,
             command_id: command_id.to_string(),
             args: Some(args),
             context,
@@ -3738,5 +3749,205 @@ mod tests {
         ] {
             assert!(!ids.contains(&id.to_string()), "{id}");
         }
+    }
+
+    // ── Execution role gate ──
+
+    /// `moderating(expect)` with the caller holding `role` in every workspace.
+    fn moderating_as(
+        role: ServerMemberRole,
+        expect: impl FnOnce(&mut rim_services::moderation::service::MockModerationService),
+    ) -> DefaultCommandService {
+        let mut svc = moderating(expect);
+        svc.services.server_member_service = Arc::new(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                role,
+            )),
+        );
+        svc
+    }
+
+    /// An auth service whose `create_invite` is never called.
+    fn no_invites() -> Arc<rim_services::auth::service::MockAuthService> {
+        let mut auth = rim_services::auth::service::MockAuthService::new();
+        auth.expect_create_invite().never();
+        Arc::new(auth)
+    }
+
+    /// Asserts `result` is a `Forbidden` refusal naming `command_id`.
+    fn assert_forbidden<T: std::fmt::Debug>(result: Result<T, ServiceError>, command_id: &str) {
+        match result {
+            Err(ServiceError::Forbidden(msg)) => {
+                assert!(
+                    msg.contains(&format!("`{command_id}`")),
+                    "{command_id}: {msg}"
+                )
+            }
+            other => panic!("{command_id}: expected Forbidden, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_builtin_above_the_callers_role_is_refused_before_its_service_runs() {
+        let args = serde_json::json!({
+            "user_id": rim_core::user::model::UserId::new().to_string(),
+            "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
+            "minutes": 10,
+            "seconds": 10,
+            "role": "member",
+        });
+        let mut member_refused: Vec<&str> = ADMIN_TARGET_COMMANDS.to_vec();
+        member_refused.extend(["chat.set_slow_mode", "admin.invite_member"]);
+
+        for (role, refused) in [
+            (ServerMemberRole::Member, member_refused),
+            (ServerMemberRole::Moderator, vec!["admin.invite_member"]),
+        ] {
+            let mut svc = moderating_as(role, |moderation| {
+                moderation.expect_kick().never();
+                moderation.expect_ban().never();
+                moderation.expect_unban().never();
+                moderation.expect_timeout().never();
+                moderation.expect_set_member_role().never();
+                moderation.expect_set_slow_mode().never();
+            });
+            svc.services.auth_service = no_invites();
+
+            for command_id in refused {
+                let result = run_confirmed(
+                    &svc,
+                    command_id,
+                    args.clone(),
+                    Some(workspace_context(rim_core::server::model::ServerId::new())),
+                )
+                .await;
+                assert_forbidden(result, command_id);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_direct_space_guest_is_refused_a_member_builtin_before_its_service_runs() {
+        let direct = rim_core::server::model::ServerId::new();
+        let mut conversation = MockConversationService::new();
+        conversation.expect_create_conversation().never();
+        let mut svc = moderating_as(ServerMemberRole::Guest, |moderation| {
+            moderation.expect_kick().never();
+        })
+        .with_direct_space(direct);
+        svc.services.conversation_service = Arc::new(conversation);
+        let args = serde_json::json!({
+            "name": "general",
+            "user_id": rim_core::user::model::UserId::new().to_string(),
+        });
+
+        for command_id in ["chat.create_channel", "admin.kick"] {
+            let result = run_confirmed(
+                &svc,
+                command_id,
+                args.clone(),
+                Some(workspace_context(direct)),
+            )
+            .await;
+            assert_forbidden(result, command_id);
+        }
+    }
+
+    /// The role is the one held in the workspace the command acts on: the `server_id` arg
+    /// over the context's workspace.
+    #[tokio::test]
+    async fn an_owner_runs_the_owner_only_builtin_in_the_workspace_they_own() {
+        let owned = rim_core::server::model::ServerId::new();
+        let other = rim_core::server::model::ServerId::new();
+        let mut member = rim_services::server_member::service::MockServerMemberService::new();
+        member.expect_get_member().returning(move |query| {
+            let role = if query.server_id == owned {
+                ServerMemberRole::Owner
+            } else {
+                ServerMemberRole::Member
+            };
+            Box::pin(async move {
+                Ok(rim_services::server_member::dto::ServerMemberDto {
+                    server_id: query.server_id,
+                    user_id: query.user_id,
+                    username: "member".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                    timeout_until: None,
+                    principal_id: None,
+                })
+            })
+        });
+        let mut auth = rim_services::auth::service::MockAuthService::new();
+        auth.expect_create_invite()
+            .withf(move |cmd| cmd.server_id == owned)
+            .times(1)
+            .returning(|cmd| {
+                Box::pin(async move {
+                    Ok(rim_services::auth::dto::CreateInviteResultDto {
+                        invite: rim_services::auth::dto::InviteDto {
+                            id: rim_core::auth::model::InviteId::new(),
+                            server_id: cmd.server_id,
+                            created_by_user_id: cmd.actor.user_id,
+                            expires_at: None,
+                            max_uses: cmd.max_uses,
+                            use_count: 0,
+                            revoked_at: None,
+                            role: cmd.role,
+                        },
+                        invite_token: "token".to_string(),
+                    })
+                })
+            });
+        let mut svc = moderating(|_| {});
+        svc.services.server_member_service = Arc::new(member);
+        svc.services.auth_service = Arc::new(auth);
+
+        let invited = run_confirmed(
+            &svc,
+            "admin.invite_member",
+            serde_json::json!({ "server_id": owned.to_string() }),
+            Some(workspace_context(other)),
+        )
+        .await
+        .expect("the owner invites");
+        assert_eq!(invited.status, CommandResultStatusDto::Success);
+
+        let refused = run_confirmed(
+            &svc,
+            "admin.invite_member",
+            serde_json::json!({ "server_id": other.to_string() }),
+            Some(workspace_context(owned)),
+        )
+        .await;
+        assert_forbidden(refused, "admin.invite_member");
+    }
+
+    #[tokio::test]
+    async fn a_user_command_step_above_the_callers_role_is_refused_before_its_service_runs() {
+        let actor = new_actor();
+        let mut svc = moderating_as(ServerMemberRole::Member, |moderation| {
+            moderation.expect_kick().never();
+        });
+        svc.repos.user_command_repo = Arc::new(repo_with(vec![user_command_running(
+            actor.user_id,
+            "user.kick",
+            &["admin.kick"],
+        )]));
+
+        let result = run_confirmed_as(
+            &svc,
+            actor,
+            "user.kick",
+            serde_json::json!({}),
+            Some(workspace_context(rim_core::server::model::ServerId::new())),
+        )
+        .await;
+
+        assert_forbidden(result, "admin.kick");
     }
 }
