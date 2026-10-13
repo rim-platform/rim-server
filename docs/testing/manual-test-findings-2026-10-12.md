@@ -15,11 +15,11 @@ as reported. Step numbers refer to that plan._
 
 | # | Step | Area | Repo | Severity | Title | Status |
 |---|---|---|---|---|---|---|
-| F-1 | 2.x | Direct messages | both | major | Own account can be added as a contact; DM with it fails with the group message | fixed (rim-server #187) |
-| F-2 | 1.x | Arrival | rim-ui | major | Web: opening an invite link while signed in shows the sign-up form | triaged |
+| F-1 | 2.x | Direct messages | both | major | Own account can be added as a contact; DM with it fails with the group message | fixed (rim-server #187, rim-ui #109) |
+| F-2 | 1.x | Arrival | rim-ui | major | Web: opening an invite link while signed in shows the sign-up form | fixed (rim-ui #109) |
 | F-3 | 0.x | Connectivity | rim-server | minor | Desktop shows the server offline in tauri dev | closed (configuration) |
-| F-4 | 8 | Messaging | both | minor | Typing indicator reads 'undefined is typing...' | triaged (fixes in progress on both repos) |
-| F-5 | 8 | Search | rim-ui | minor | Search: no suggestions after from:@ or in:# | in progress (rim-ui) |
+| F-4 | 8 | Messaging | both | minor | Typing indicator reads 'undefined is typing...' | fixed (rim-server #186, rim-ui #110) |
+| F-5 | 8 | Search | rim-ui | minor | Search: no suggestions after from:@ or in:# | fixed (rim-ui #111) |
 | F-6 | 1 | Arrival | rim-ui | major | Web: a workspace joined from an invite appears in the rail only after a reload | in progress (rim-ui) |
 | F-7 | 8 | Unread state | rim-ui | major | Unread badge on Inbox stays after everything is read; no unread badge on workspace icons | in progress (rim-ui) |
 
@@ -62,7 +62,7 @@ exists), **minor** (cosmetic or wording). Status: **open**, **triaged**, **in pr
   `VALIDATION` "cannot add yourself as a contact", and `createConversation` with `remoteMembers`
   naming only the caller answers `VALIDATION` "cannot create DM with yourself", the wording of
   the in-workspace DM check. A group naming the caller among others is still created. The
-  rim-ui half (the contact picker hides the viewer) ships separately. A notes-to-self
+  rim-ui half (the contact picker hides the viewer) shipped as rim-ui #109. A notes-to-self
   conversation is a possible later feature.
 
 ### F-2: Web: opening an invite link while signed in shows the sign-up form
