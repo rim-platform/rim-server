@@ -145,6 +145,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   steps and pipe stages are checked the same way.
 - On a server with terms of service, every signup path refuses an account that did not accept
   them, not only the `signupWithInvite` and `signupWithKey` resolvers.
+- `addContact` refuses the caller's own principal, and `createConversation` with `remoteMembers`
+  naming only the caller answers "cannot create DM with yourself" instead of the group message.
 
 ### Security
 
