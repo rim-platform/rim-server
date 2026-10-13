@@ -63,6 +63,8 @@ pub struct FederationHooks {
         Option<Arc<dyn rim_services::remote_workspace::service::RevocationFanout>>,
     /// Usernames and display names signups and profile edits refuse.
     pub reserved_names: crate::reserved_names::ReservedNames,
+    /// Runs Argon2 hashing and verification for signups, logins and password resets.
+    pub password_hashing: crate::password_hashing::PasswordHashing,
 }
 
 #[derive(Clone)]
@@ -138,7 +140,8 @@ impl DefaultAppServiceProvider {
             .with_known_login_sources(known_login_sources.clone())
             .with_signup_rate_limiter(signup_rate_limiter.clone())
             .with_limits(limits)
-            .with_reserved_names(federation.reserved_names.clone()),
+            .with_reserved_names(federation.reserved_names.clone())
+            .with_password_hashing(federation.password_hashing.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -283,7 +286,8 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&email_sender),
                 public_base_url.clone(),
             )
-            .with_known_login_sources(known_login_sources),
+            .with_known_login_sources(known_login_sources)
+            .with_password_hashing(federation.password_hashing.clone()),
         );
         let pin_service: Arc<dyn PinService> = Arc::new(crate::pin::DefaultPinService::new(
             repos.for_pin(),

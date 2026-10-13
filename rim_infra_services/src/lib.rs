@@ -55,6 +55,8 @@ pub(crate) mod moderation;
 pub mod notification;
 pub(crate) mod notification_preference;
 pub(crate) mod outbound;
+/// Public for `rim_server`, whose composition root sizes the hasher from its configuration.
+pub mod password_hashing;
 pub(crate) mod password_reset;
 pub(crate) mod pin;
 pub(crate) mod pipeline;

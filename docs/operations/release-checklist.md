@@ -39,12 +39,12 @@ cargo test --workspace -- --test-threads=1
 cargo test -p rim_infra_db --features db-tests -- --test-threads=1
 cargo test -p rim_api --features e2e-tests -- --test-threads=1
 cargo test -p rim_infra_services --features infra-db-tests -- --test-threads=1
-cargo audit
+cargo audit --deny unsound
 docker build -t rim-server:release-check .
 ```
 
-- [ ] Every command above passes. `cargo audit` findings are fixed or listed in the release pull
-      request with the reason they do not apply.
+- [ ] Every command above passes. `cargo audit` findings are fixed or listed in
+      `.cargo/audit.toml` with the reason they do not apply and when the entry comes out.
 - [ ] rim-ui's gates pass on its release commit (FILL: rim-ui's own checklist, once it has one).
 
 ## 4. Test the upgrade and the rollback

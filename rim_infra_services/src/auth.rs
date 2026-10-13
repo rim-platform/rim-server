@@ -5,7 +5,6 @@ use sea_orm::DatabaseConnection;
 use std::sync::OnceLock;
 use tracing::{info, instrument, warn};
 
-use rim_auth::password::{hash_password, verify_dummy_password, verify_password};
 use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::NewInvite;
 use rim_core::server_member::model::ServerMemberRole;
@@ -30,6 +29,7 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use crate::AuthRepos;
 use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
+use crate::password_hashing::PasswordHashing;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
 use crate::reserved_names::ReservedNames;
@@ -61,6 +61,8 @@ pub struct DefaultAuthService {
     limits: InstanceLimits,
     /// Usernames and display names signups may not take.
     reserved_names: ReservedNames,
+    /// Runs the Argon2 work of signups and logins.
+    password_hashing: PasswordHashing,
 }
 
 impl DefaultAuthService {
@@ -95,6 +97,7 @@ impl DefaultAuthService {
             public_base_url,
             limits: InstanceLimits::default(),
             reserved_names: ReservedNames::default(),
+            password_hashing: PasswordHashing::default(),
         }
     }
 
@@ -170,6 +173,12 @@ impl DefaultAuthService {
         self
     }
 
+    /// Run hashing and verification through `hashing`, shared with other services.
+    pub(crate) fn with_password_hashing(mut self, hashing: PasswordHashing) -> Self {
+        self.password_hashing = hashing;
+        self
+    }
+
     /// Share the store of recent successful login sources, so other services (password
     /// reset) can forget an account's sources.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
@@ -205,6 +214,7 @@ impl DefaultAuthService {
             public_base_url,
             limits: InstanceLimits::default(),
             reserved_names: ReservedNames::default(),
+            password_hashing: PasswordHashing::default(),
         }
     }
 
@@ -280,7 +290,7 @@ impl DefaultAuthService {
         let Some(user) = self.repos.user_repo.find_by_username(username).await? else {
             // Pay the same Argon2 cost as a wrong password, so response time doesn't reveal
             // whether the username exists.
-            verify_dummy_password(password).map_err(ServiceError::internal)?;
+            self.password_hashing.verify_dummy(password).await?;
             // Audit: failed login (user not found).
             tracing::info!(
                 target: "audit",
@@ -295,7 +305,7 @@ impl DefaultAuthService {
         // A key-only account has no password: pay the same Argon2 cost as a wrong password,
         // so neither the answer nor its timing tells it apart.
         let Some(password_hash) = user.password_hash.as_deref() else {
-            verify_dummy_password(password).map_err(ServiceError::internal)?;
+            self.password_hashing.verify_dummy(password).await?;
             tracing::info!(
                 target: "audit",
                 event = "login_failure",
@@ -306,7 +316,10 @@ impl DefaultAuthService {
             );
             return Err(ServiceError::Unauthenticated);
         };
-        let ok = verify_password(password, password_hash).map_err(ServiceError::internal)?;
+        let ok = self
+            .password_hashing
+            .verify(password, password_hash)
+            .await?;
         if !ok {
             // Audit: wrong password.
             tracing::info!(
@@ -659,7 +672,7 @@ impl AuthService for DefaultAuthService {
         let server_id = inv.server_id;
         let token = signup::CheckedToken::WorkspaceInvite(inv);
 
-        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
+        let password_hash = self.password_hashing.hash(password).await?;
 
         // Run all writes inside a single transaction when DB is available.
         let scope = if let Some(db) = &self.db {
@@ -867,7 +880,7 @@ impl AuthService for DefaultAuthService {
             .await?,
         );
 
-        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
+        let password_hash = self.password_hashing.hash(password).await?;
 
         let scope = if let Some(db) = &self.db {
             Some(
@@ -942,7 +955,7 @@ impl AuthService for DefaultAuthService {
             signup::normalize_display_name(display_name.as_deref(), username)?;
         signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
 
-        let password_hash = hash_password(password).map_err(ServiceError::internal)?;
+        let password_hash = self.password_hashing.hash(password).await?;
 
         let scope = if let Some(db) = &self.db {
             Some(

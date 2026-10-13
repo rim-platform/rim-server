@@ -49,7 +49,12 @@ request.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo audit --deny unsound
 ```
+
+`cargo audit --deny unsound` fails on a known vulnerability or an unsoundness advisory in
+`Cargo.lock`. An advisory that cannot be fixed yet goes in `.cargo/audit.toml` with why it does
+not apply and when the entry comes out.
 
 `cargo test --workspace` includes `cargo test -p migration`, which checks that every migration
 file is registered in `migration/src/lib.rs` and that every migration has a `down` that undoes

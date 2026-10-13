@@ -93,9 +93,10 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # Prebuilt binary: compiling cargo-audit from source took ~4 minutes per run.
       - uses: taiki-e/install-action@cargo-audit
-      # Blocking: ignored advisories (each with a justification) live in .cargo/audit.toml.
+      # Blocking: vulnerabilities and unsound advisories fail the job; ignored advisories (each
+      # with a justification and a removal condition) live in .cargo/audit.toml.
       - name: Cargo Audit
-        run: cargo audit
+        run: cargo audit --deny unsound
 
   docker_build:
     name: Docker Build

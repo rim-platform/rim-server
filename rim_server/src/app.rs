@@ -331,6 +331,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let link_preview_concurrency = config
         .link_preview_concurrency()
         .map_err(std::io::Error::other)?;
+    let password_hashing = rim_infra_services::password_hashing::PasswordHashing::new(
+        config
+            .password_hash_concurrency()
+            .map_err(std::io::Error::other)?,
+    );
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -454,6 +459,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             host_service: Some(Arc::clone(&s2s.host) as Arc<dyn HostService>),
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
             reserved_names,
+            password_hashing,
         },
         Arc::clone(&feature_gate),
         instance_limits,
