@@ -20,8 +20,8 @@ as reported. Step numbers refer to that plan._
 | F-3 | 0.x | Connectivity | rim-server | minor | Desktop shows the server offline in tauri dev | closed (configuration) |
 | F-4 | 8 | Messaging | both | minor | Typing indicator reads 'undefined is typing...' | fixed (rim-server #186, rim-ui #110) |
 | F-5 | 8 | Search | rim-ui | minor | Search: no suggestions after from:@ or in:# | fixed (rim-ui #111) |
-| F-6 | 1 | Arrival | rim-ui | major | Web: a workspace joined from an invite appears in the rail only after a reload | in progress (rim-ui) |
-| F-7 | 8 | Unread state | rim-ui | major | Unread badge on Inbox stays after everything is read; no unread badge on workspace icons | in progress (rim-ui) |
+| F-6 | 1 | Arrival | rim-ui | major | Web: a workspace joined from an invite appears in the rail only after a reload | fixed (rim-ui #112) |
+| F-7 | 8 | Unread state | rim-ui | major | Unread badge on Inbox stays after everything is read; no unread badge on workspace icons | fixed (rim-ui #112) |
 
 Severity: **blocker** (the scenario cannot continue), **major** (wrong result, workaround
 exists), **minor** (cosmetic or wording). Status: **open**, **triaged**, **in progress**,
