@@ -23,6 +23,12 @@ use support::graphql::{
 use support::roles::{Roles, create_channel};
 use support::{RecordingBroadcaster, TestCtx, unknown_id};
 
+const CREATE_CONVERSATION: &str = r#"
+mutation Create($input: CreateConversationInput!) {
+  conversation: createConversation(input: $input) { id }
+}
+"#;
+
 const SET_ARCHIVED: &str = r#"
 mutation Archive($serverId: ID!, $conversationId: ID!) {
   conversation: setConversationArchived(serverId: $serverId, conversationId: $conversationId,
@@ -118,6 +124,36 @@ impl Fixture {
 
     fn typing_vars(&self, conversation_id: &str) -> Value {
         json!({ "serverId": self.ws.server_id, "conversationId": conversation_id })
+    }
+
+    /// Create a conversation in the workspace as `who` from the participant fields of
+    /// `CreateConversationInput` and return its id.
+    async fn create_conversation(&self, who: &Caller, participants: Value) -> String {
+        let mut input = json!({ "serverId": self.ws.server_id });
+        input.as_object_mut().expect("input object").extend(
+            participants
+                .as_object()
+                .expect("participants object")
+                .clone(),
+        );
+        let data = exec_ok(
+            &self.schema,
+            who.request(CREATE_CONVERSATION, json!({ "input": input })),
+        )
+        .await;
+        data["conversation"]["id"]
+            .as_str()
+            .expect("conversation id")
+            .to_string()
+    }
+
+    async fn start_typing(&self, who: &Caller, conversation_id: &str) -> Value {
+        exec_ok(
+            &self.schema,
+            who.request(START_TYPING, self.typing_vars(conversation_id)),
+        )
+        .await["startTyping"]
+            .clone()
     }
 
     async fn typing_code(&self, who: &Caller, conversation_id: &str) -> String {
@@ -300,9 +336,9 @@ async fn heartbeat_inside_the_rate_limit_window_keeps_the_first_status() {
     assert_eq!(f.presence_changes().len(), 1);
 }
 
-/// `startTyping` answers `true` and emits one typing event naming the workspace, conversation
-/// and typist by id, username and display name; a repeat inside the throttle window answers
-/// `true` and emits nothing.
+/// In a direct conversation `startTyping` answers `true` and emits one typing event naming the
+/// workspace, conversation and typist by id, username and display name; a repeat inside the
+/// throttle window answers `false` and emits nothing.
 #[tokio::test]
 async fn start_typing_emits_one_event_per_throttle_window() {
     let f = setup().await;
@@ -314,25 +350,45 @@ async fn start_typing_emits_one_event_per_throttle_window() {
         ),
     )
     .await;
-    for _ in 0..2 {
-        let data = exec_ok(
-            &f.schema,
-            f.ws.bob.request(START_TYPING, f.typing_vars(&f.channel_id)),
+    let dm = f
+        .create_conversation(
+            &f.ws.bob,
+            json!({ "otherUserId": f.ws.alice.user_id.to_string() }),
         )
         .await;
-        assert_eq!(data["startTyping"], json!(true));
-    }
+    assert_eq!(f.start_typing(&f.ws.bob, &dm).await, json!(true));
+    assert_eq!(f.start_typing(&f.ws.bob, &dm).await, json!(false));
     assert_eq!(
         f.typing_events(),
         vec![json!({
             "type": "TypingStarted",
             "workspace_id": f.ws.server_id,
-            "conversation_id": f.channel_id,
+            "conversation_id": dm,
             "user_id": f.ws.bob.user_id.to_string(),
             "username": "presence-bob",
             "display_name": "Bob B",
         })]
     );
+}
+
+/// Typing is announced in direct conversations only: `startTyping` in a channel or a group
+/// answers `false` and emits nothing.
+#[tokio::test]
+async fn start_typing_announces_nothing_outside_direct_conversations() {
+    let f = setup().await;
+    let group = f
+        .create_conversation(
+            &f.ws.bob,
+            json!({ "memberIds": [f.ws.alice.user_id.to_string(), f.ws.carol.user_id.to_string()] }),
+        )
+        .await;
+    for conversation_id in [&f.channel_id, &group] {
+        assert_eq!(
+            f.start_typing(&f.ws.bob, conversation_id).await,
+            json!(false)
+        );
+    }
+    assert!(f.typing_events().is_empty());
 }
 
 /// `startTyping` answers `NOT_FOUND` for a conversation that does not exist, one in another

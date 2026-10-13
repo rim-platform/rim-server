@@ -130,6 +130,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   plugins and plugin bundles (`POST /api/plugin-bundles/{server_id}` answers 400), keybinds
   scoped to a workspace, pipelines, workspace state and channels. The caller's own keybinds,
   asked without a workspace id, still answer.
+- Typing is announced in direct conversations only. `startTyping` in a channel or a group
+  answers `false` and emits no `TypingStarted`; it also answers `false` on a repeat inside the
+  throttle window, and `true` only when it emitted the event.
 - The dependency audit in CI and in the release gates is `cargo audit --deny unsound`: an
   unsoundness advisory fails it like a vulnerability. Each advisory it accepts is listed in
   `.cargo/audit.toml` with why it does not apply and when the entry comes out.
