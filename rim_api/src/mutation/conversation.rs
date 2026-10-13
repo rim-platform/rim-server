@@ -420,9 +420,10 @@ struct UnmuteConversationInput {
 }
 
 /// The users for a new conversation's `remoteMembers`: each a user of this server or fetched
-/// from their relays, and made a member of the direct space. They need the direct space and a
-/// caller with a published profile card, which the request inbox shows; a conversation with
-/// someone on another relay is created encrypted only.
+/// from their relays, and made a member of the direct space. The caller is left out, and members
+/// naming nobody but the caller are refused. They need the direct space and a caller with a
+/// published profile card, which the request inbox shows; a conversation with someone on another
+/// relay is created encrypted only.
 async fn remote_member_ids(
     ctx: &Context<'_>,
     actor: rim_core::user::model::UserId,
@@ -470,6 +471,11 @@ async fn remote_member_ids(
         if resolved.user_id != actor && !ids.contains(&resolved.user_id) {
             ids.push(resolved.user_id);
         }
+    }
+    if ids.is_empty() {
+        return Err(map_service_error(rim_services::ServiceError::Validation(
+            "cannot create DM with yourself".to_string(),
+        )));
     }
     ensure_encrypted_across_servers(any_remote, input.encrypted.unwrap_or(false))
         .map_err(map_service_error)?;

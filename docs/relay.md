@@ -251,7 +251,8 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
   principal id, each certificate against the log and the card against the head.
 - `contacts`, `addContact(principalId, relayUrls)`, `removeContact(principalId)`: the contact list
   the request inbox filters by. Relay URLs are 1 to 8 of 1 to 256 bytes of printable ASCII
-  without `?`, `#` or `@`.
+  without `?`, `#` or `@`. The caller's own principal is refused (`VALIDATION`, "cannot add
+  yourself as a contact").
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A
@@ -259,8 +260,10 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
   "conversations with people on other servers are encrypted"), and
   every member needs an MLS-active device. Any
   `memberIds`, or more than one remote member, makes a group. The caller needs a published profile
-  card: their relays show it in the request inbox. `predecessor: { hostServerId, conversationId }`
-  records the conversation a successor replaces, and `Conversation.predecessor` returns it.
+  card: their relays show it in the request inbox. Remote members that name nobody but the caller
+  are refused (`VALIDATION`, "cannot create DM with yourself"). `predecessor: { hostServerId,
+  conversationId }` records the conversation a successor replaces, and `Conversation.predecessor`
+  returns it.
 - On a relay in `pow` registration mode (`registrationMode` is `POW`; the difficulty is the
   discovery document's `registration.powBits`), `signupWithKey` takes `proofOfWork`: count from
   0, hash as in "The public relay" with the counter as the 8-byte big-endian nonce, and send the

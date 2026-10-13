@@ -751,6 +751,17 @@ impl RelayService for DefaultRelayService {
     ) -> ServiceResult<ContactDto> {
         check_principal(&principal_id)?;
         check_relay_urls(&relay_urls)?;
+        let user = self
+            .repos
+            .user_repo
+            .get_by_id(actor.user_id)
+            .await?
+            .ok_or(ServiceError::Unauthenticated)?;
+        if user.principal_id.as_deref() == Some(principal_id.as_str()) {
+            return Err(ServiceError::Validation(
+                "cannot add yourself as a contact".to_string(),
+            ));
+        }
         let contact = self
             .repos
             .relay_repo

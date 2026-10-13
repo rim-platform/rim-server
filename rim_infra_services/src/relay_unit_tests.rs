@@ -1,5 +1,5 @@
 //! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), its
-//! queue cap, identity fetches and remote server lookups, and the host's checks of forwarded
+//! queue cap, contacts, identity fetches and remote server lookups, and the host's checks of forwarded
 //! device requests (the device, its signature, the forwarded body, the `seq` window, and which
 //! relay may carry a user's traffic).
 
@@ -16,7 +16,7 @@ use rim_core::host::model::{SeqDecision, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
 use rim_core::key_identity::model::{DeviceKey, DeviceKeyId, StoredProfileCard};
 use rim_core::key_identity::repository::MockKeyIdentityRepository;
-use rim_core::relay::model::{CachedIdentity, DroppedSpace};
+use rim_core::relay::model::{CachedIdentity, Contact, DroppedSpace};
 use rim_core::relay::repository::{
     MockRelayAbuseRepository, MockRelayRepository, MockSubscriptionRepository,
 };
@@ -586,6 +586,56 @@ async fn an_envelope_at_an_unconfirmed_or_retired_key_is_refused() {
         assert_eq!(response.refused[0].reason, "invalid_envelope");
         assert_eq!(response.acked_through, "1");
     }
+}
+
+// ── Contacts ─────────────────────────────────────────────────────────────────────────────
+
+/// A caller cannot add their own principal as a contact; another principal is stored.
+#[tokio::test]
+async fn the_callers_own_principal_is_not_a_contact() {
+    let caller = UserId::new();
+    let own = TestIdentity::new(70).principal_id();
+    let other = TestIdentity::new(71).principal_id();
+    let stored = other.clone();
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_upsert_contact()
+        .withf(move |_, principal, _| principal == stored)
+        .times(1)
+        .returning(|_, principal, relay_urls| {
+            let contact = Contact {
+                principal_id: principal.to_string(),
+                relay_urls,
+                added_at: Utc::now(),
+            };
+            Box::pin(async move { Ok(contact) })
+        });
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            user_repo: Arc::new(crate::probation_fixtures::users(vec![
+                crate::probation_fixtures::account(caller, Utc::now(), Some(&own)),
+            ])),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    );
+    let relays = vec![PEER_ORIGIN.to_string()];
+
+    let err = svc
+        .add_contact(Actor::new(caller), own, relays.clone())
+        .await
+        .expect_err("the caller's own principal");
+    assert!(
+        matches!(&err, ServiceError::Validation(m) if m == "cannot add yourself as a contact"),
+        "{err:?}"
+    );
+    let contact = svc
+        .add_contact(Actor::new(caller), other.clone(), relays)
+        .await
+        .expect("another principal");
+    assert_eq!(contact.principal_id, other);
 }
 
 // ── Identity fetches ─────────────────────────────────────────────────────────────────────

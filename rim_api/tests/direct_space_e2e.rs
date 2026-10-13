@@ -409,6 +409,57 @@ async fn a_dm_between_two_newcomers_makes_both_guests() {
     n.joined_as_guest().await;
 }
 
+/// The caller's own principal is neither a contact nor a DM partner; a group naming the caller
+/// among others is still created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_newcomer_cannot_add_themselves_or_start_a_dm_with_themselves() {
+    let n = Newcomer::new().await;
+    let me = json!({ "principalId": n.person.principal(), "relayUrls": [n.node.origin] });
+    let refused = |body: Value, message: &str| {
+        let error = &body["errors"][0];
+        assert_eq!(error["extensions"]["code"], "VALIDATION", "{body}");
+        assert_eq!(error["message"], message, "{body}");
+    };
+
+    let body = n
+        .person
+        .post(
+            "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+            json!({ "p": n.person.principal(), "r": [n.node.origin] }),
+        )
+        .await;
+    refused(body, "cannot add yourself as a contact");
+    let contacts = n
+        .person
+        .ok("query { contacts { principalId } }", json!({}))
+        .await;
+    assert_eq!(contacts["contacts"], json!([]));
+
+    let body = n
+        .person
+        .post(
+            CREATE,
+            json!({ "input": { "serverId": n.direct, "encrypted": true, "remoteMembers": [me] } }),
+        )
+        .await;
+    refused(body, "cannot create DM with yourself");
+
+    let other = sign_up(&n.node, "other", 2).await;
+    let created = n
+        .person
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": n.direct,
+                "encrypted": true,
+                "remoteMembers": [me, { "principalId": other.principal(), "relayUrls": [n.node.origin] }],
+            } }),
+        )
+        .await;
+    assert!(created["createConversation"]["id"].is_string());
+    n.joined_as_guest().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn key_package_roots_answer_without_joining_the_direct_space() {
     let n = Newcomer::new().await;
