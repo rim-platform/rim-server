@@ -130,6 +130,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `executeCommand` refuses a builtin whose required role the caller does not hold in its
   workspace, with `FORBIDDEN` naming the command, before the service behind it runs; user command
   steps and pipe stages are checked the same way.
+- On a server with terms of service, every signup path refuses an account that did not accept
+  them, not only the `signupWithInvite` and `signupWithKey` resolvers.
 
 ### Security
 

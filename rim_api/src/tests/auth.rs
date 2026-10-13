@@ -220,58 +220,23 @@ async fn query_id_parsing_error_is_reported() {
     // Don't assert exact message, just that it fails before hitting the service.
 }
 
-const TERMS: &str = "https://rim.example.org/terms";
-
-/// A signup request on an instance whose terms are `terms_url`.
-fn signup_request(query: &str, terms_url: Option<&str>) -> Request {
-    Request::new(query).data(crate::types::InstancePolicy {
-        notice: None,
-        terms_url: terms_url.map(str::to_string),
-    })
-}
-
 fn invite_signup(accepted: &str) -> String {
     format!(
         r#"mutation {{ signupWithInvite(input: {{ username: "alice", email: "alice@example.com", password: "s3cur3p4ss!", instanceInviteToken: "t"{accepted} }}) {{ userId }} }}"#
     )
 }
 
-/// Without the server's terms accepted, both signups answer `VALIDATION` before reaching a
-/// service: the auth mocks are unprimed and would panic.
-#[tokio::test]
-async fn signups_without_the_servers_terms_are_refused() {
-    let schema = schema_with_mocks(
-        MockAuthService::new(),
-        MockConversationService::new(),
-        MockMessageService::new(),
-        MockMessageAttachmentService::new(),
-        MockThreadService::new(),
-    );
-    let key_signup = r#"mutation { signupWithKey(input: { username: "alice", keyLog: [{ payload: "p", signature: "s" }], device: { payload: "p", signature: "s" }, proof: { payload: "p", signature: "s" }, instanceInviteToken: "t" }) { userId } }"#;
-    for query in [
-        invite_signup(""),
-        invite_signup(r#", acceptedTermsUrl: "https://rim.example.org/old-terms""#),
-        key_signup.to_string(),
-    ] {
-        let res = schema.execute(signup_request(&query, Some(TERMS))).await;
-        let err = res.errors.first().expect("refused");
-        assert_eq!(
-            err.extensions.as_ref().and_then(|e| e.get("code")),
-            Some(&Value::from("VALIDATION")),
-            "{query}"
-        );
-        assert!(err.message.contains("terms"), "{}", err.message);
-    }
-}
-
-/// The accepted terms reach the service when they match the server's, and are dropped on a
-/// server without terms.
+/// The accepted terms reach the service as sent; the service applies the instance's terms.
 #[tokio::test]
 async fn signup_passes_the_accepted_terms_to_the_service() {
-    for (server_terms, recorded) in [(Some(TERMS), Some(TERMS)), (None, None)] {
+    const TERMS: &str = "https://rim.example.org/terms";
+    for (accepted, sent) in [
+        (format!(r#", acceptedTermsUrl: "{TERMS}""#), Some(TERMS)),
+        (String::new(), None),
+    ] {
         let mut auth = MockAuthService::new();
         auth.expect_signup_with_instance_invite()
-            .withf(move |cmd| cmd.terms_accepted_url.as_deref() == recorded)
+            .withf(move |cmd| cmd.terms_accepted_url.as_deref() == sent)
             .times(1)
             .returning(|_| {
                 Box::pin(async {
@@ -296,8 +261,7 @@ async fn signup_passes_the_accepted_terms_to_the_service() {
             MockMessageAttachmentService::new(),
             MockThreadService::new(),
         );
-        let query = invite_signup(&format!(r#", acceptedTermsUrl: "{TERMS}""#));
-        let res = schema.execute(signup_request(&query, server_terms)).await;
+        let res = schema.execute(Request::new(invite_signup(&accepted))).await;
         assert_no_errors(&res);
     }
 }

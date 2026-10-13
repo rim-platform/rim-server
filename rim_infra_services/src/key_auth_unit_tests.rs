@@ -2074,11 +2074,32 @@ mod tests {
             .expect("a name that only starts with the letters");
     }
 
+    /// On an instance with terms, a key signup that did not accept them is refused before it
+    /// creates an account, and one that did has them recorded. Without instance terms nothing
+    /// is recorded, whatever the signup sent.
     #[tokio::test]
-    async fn signup_with_key_records_the_accepted_terms_only_when_given() {
-        let h = harness();
+    async fn signup_with_key_requires_and_records_the_instance_terms() {
+        use rim_services::auth::terms::TERMS_NOT_ACCEPTED;
+
         let terms = "https://rim.example.org/terms";
+        let mut h = harness();
+        h.svc = h.svc.with_terms_url(Some(terms.to_string()));
         let p = h.present(1).await;
+        for sent in [None, Some("https://rim.example.org/old-terms")] {
+            let err = h
+                .svc
+                .signup_with_key(SignupWithKeyCmd {
+                    terms_accepted_url: sent.map(str::to_string),
+                    ..open_cmd(&p, "ada")
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == TERMS_NOT_ACCEPTED),
+                "{sent:?}: {err:?}"
+            );
+        }
+        assert_eq!(h.user_count(), 0);
         let accepted = h
             .svc
             .signup_with_key(SignupWithKeyCmd {
@@ -2087,19 +2108,27 @@ mod tests {
             })
             .await
             .expect("signup");
-        let p = h.present(2).await;
-        let without = h
-            .svc
-            .signup_with_key(open_cmd(&p, "grace"))
-            .await
-            .expect("signup");
-
-        let s = h.state.lock().unwrap();
         assert_eq!(
-            s.terms.get(&accepted.user_id).map(String::as_str),
+            h.state
+                .lock()
+                .unwrap()
+                .terms
+                .get(&accepted.user_id)
+                .map(String::as_str),
             Some(terms)
         );
-        assert!(!s.terms.contains_key(&without.user_id));
+
+        let h = harness();
+        let p = h.present(1).await;
+        let ignored = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                terms_accepted_url: Some(terms.to_string()),
+                ..open_cmd(&p, "grace")
+            })
+            .await
+            .expect("signup");
+        assert!(!h.state.lock().unwrap().terms.contains_key(&ignored.user_id));
     }
 
     #[tokio::test]
