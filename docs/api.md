@@ -354,6 +354,32 @@ answered 403 with `{"error":"blocked"}` and nothing else on every route but `/he
 the readiness probe, discovery and `/s2s/v1/...`. The address is found the same way as for the
 limits.
 
+## Instance moderation
+
+An instance operator runs the server's moderation queue from the app: the abuse reports, the
+principals the server refuses and the IP deny list. The server's operator makes an account an
+instance operator with `rim_server operator grant <username>` and takes the role back with
+`operator revoke`; a blocked account or one scheduled for deletion cannot be granted it.
+`me { instanceOperator }` tells the signed-in caller whether they hold it (false on every other
+user).
+
+| Root | Does what the command line does |
+|---|---|
+| `instanceReports(openOnly: true)` | `abuse-reports list [--open]`, oldest first |
+| `instanceResolveReport(id)` | `abuse-reports resolve`; `NOT_FOUND` for no such report |
+| `instancePrincipalBlocks` | `principal list`, newest first |
+| `instanceBlockPrincipal(principalId, reason, cascade: false)` | `principal block [--cascade]` |
+| `instanceUnblockPrincipal(principalId)` | `principal unblock` |
+| `instanceIpBlocks` | `ip list` |
+| `instanceBlockIp(cidr, reason, expiresInDays)` | `ip block [--expires-in-days]` |
+| `instanceUnblockIp(cidr)` | `ip unblock` |
+
+Reports and blocks name the local account holding a principal (`subjectUsername`, `username`),
+null when no account here holds it. Each root needs a session and the mutations the CSRF
+header. Anyone but an instance operator gets `FORBIDDEN`, an app or bot acting for one too.
+Each change writes the same audit line as its command, with the operator's user id as
+`actor_id` (`cli` for the command line).
+
 ## Errors
 
 ### GraphQL error codes

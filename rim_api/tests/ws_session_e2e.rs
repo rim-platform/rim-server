@@ -17,7 +17,10 @@ use serde_json::{Value, json};
 
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
+use rim_core::user::model::{NewUser, UserId};
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_server::config::RIMConfig;
 use support::nodes::{Node, S2S_TABLES, start};
 use support::ws::Socket;
@@ -35,7 +38,7 @@ const CLOSE_WAIT: Duration = Duration::from_secs(5);
 /// A node with `tweak` applied, where `ada` owns workspace `workspace`.
 struct World {
     node: Node,
-    ada: rim_core::user::model::UserId,
+    ada: UserId,
     workspace: String,
 }
 
@@ -65,10 +68,15 @@ struct Session {
 impl World {
     /// A new session of `ada`, stored as a sign-in stores it, with its cookies.
     async fn sign_in(&self) -> Session {
+        self.sign_in_as(self.ada).await
+    }
+
+    /// A new session of `user_id`, stored as a sign-in stores it, with its cookies.
+    async fn sign_in_as(&self, user_id: UserId) -> Session {
         let token = rim_auth::session_token::generate_session_token();
         SeaOrmSessionRepository::new(self.node.db.clone().into())
             .create_session(NewSession {
-                user_id: self.ada,
+                user_id,
                 token_hash: rim_auth::session_token::hash_token(&token),
                 expires_at: chrono::Utc::now() + chrono::Duration::days(1),
                 user_agent: None,
@@ -224,6 +232,62 @@ async fn a_new_operation_on_a_revoked_session_closes_the_websocket() {
         .await
         .expect("revoke the session");
     socket.subscribe("1", "{ me { id } }", json!({})).await;
+    expect_session_ended(&mut socket).await;
+    w.node.stop().await;
+}
+
+/// An instance operator blocking an account in the app closes the account's open socket at
+/// once, with the recheck off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_blocking_an_account_in_the_app_closes_its_websocket() {
+    const PRINCIPAL: &str = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
+    let w = world(|config| config.ws_session_recheck_secs = Some(0)).await;
+    w.node
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"UPDATE "user" SET principal_id = $1, identity_key = 'ed25519:e2e' WHERE id = $2"#,
+            [PRINCIPAL.into(), uuid::Uuid::from(w.ada).into()],
+        ))
+        .await
+        .expect("hold a principal");
+    let opal = SeaOrmUserRepository::new(w.node.db.clone().into())
+        .create_user(NewUser {
+            username: "opal".to_string(),
+            password: Some("$argon2id$v=invalid$test_only".to_string()),
+            email: Some("opal@test.example.com".to_string()),
+            display_name: None,
+            key_identity: None,
+        })
+        .await
+        .expect("operator account");
+    let config = RIMConfig {
+        database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        ..Default::default()
+    };
+    let granted = rim_server::operator_cmd::run_with(
+        &config,
+        ["grant", "opal"].into_iter().map(str::to_string),
+    )
+    .await
+    .expect("grant");
+    assert_eq!(granted, "opal is now an instance operator\n");
+
+    let desktop = w.sign_in().await;
+    let mut socket = w.open(&desktop).await.expect("open");
+    socket
+        .subscribe("1", WORKSPACE_EVENTS, json!({ "w": w.workspace }))
+        .await;
+    let operator = w.sign_in_as(opal.id).await;
+    let data = w
+        .post(
+            &operator,
+            "mutation($p: String!) { instanceBlockPrincipal(principalId: $p, reason: \"spam\") \
+             { endedSessions } }",
+            json!({ "p": PRINCIPAL }),
+        )
+        .await;
+    assert_eq!(data["instanceBlockPrincipal"][0]["endedSessions"], json!(1));
     expect_session_ended(&mut socket).await;
     w.node.stop().await;
 }

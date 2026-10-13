@@ -9,6 +9,7 @@ use crate::conversation::service::ConversationService;
 use crate::custom_emoji::service::CustomEmojiService;
 use crate::device_link::service::DeviceLinkService;
 use crate::feature::service::FeatureGate;
+use crate::ip_block::service::IpBlockService;
 use crate::key_auth::service::KeyAuthService;
 use crate::keybind::service::KeybindService;
 use crate::link_preview::service::LinkPreviewService;
@@ -19,10 +20,12 @@ use crate::message_attachment::service::MessageAttachmentService;
 use crate::message_reaction::service::MessageReactionService;
 use crate::message_thread::service::ThreadService;
 use crate::notification_preference::service::NotificationPreferenceService;
+use crate::operator::InstanceOperatorService;
 use crate::password_reset::service::PasswordResetService;
 use crate::pin::service::PinService;
 use crate::pipeline::service::PipelineService;
 use crate::read_state::service::ReadStateService;
+use crate::relay::service::RelayAbuseService;
 use crate::server::service::ServerService;
 use crate::server_member::service::ServerMemberService;
 use crate::user::service::UserService;
@@ -67,4 +70,10 @@ pub trait AppServiceProvider: Send + Sync {
     /// The instance's feature switches.
     fn feature_gate(&self) -> Arc<dyn FeatureGate>;
     fn account_deletion_service(&self) -> Arc<dyn AccountDeletionService>;
+    /// The instance operator's abuse tools: principal blocks and abuse reports.
+    fn relay_abuse_service(&self) -> Arc<dyn RelayAbuseService>;
+    /// The instance operator's IP deny list.
+    fn ip_block_service(&self) -> Arc<dyn IpBlockService>;
+    /// Who is an instance operator.
+    fn instance_operator_service(&self) -> Arc<dyn InstanceOperatorService>;
 }

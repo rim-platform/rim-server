@@ -15,6 +15,7 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
+pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
 pub(crate) mod keybind;
@@ -64,6 +65,10 @@ pub use e2ee::{
     MlsPendingDevice, MlsReaddRequest, MlsWelcome, PrincipalDevice, PrincipalDevices,
     ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
     SubmitMlsCommitInput,
+};
+pub use instance_moderation::{
+    InstanceAbuseReport, InstanceAccount, InstanceIpBlock, InstanceIpBlockOutcome,
+    InstancePrincipalBlock, InstancePrincipalBlockOutcome, InstancePrincipalUnblockOutcome,
 };
 pub use invite::{
     InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql,

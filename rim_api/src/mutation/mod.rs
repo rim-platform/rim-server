@@ -28,6 +28,7 @@ pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod e2ee;
+pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
 pub(crate) mod keybind;
@@ -116,4 +117,5 @@ pub(crate) struct MutationGroup8(
     remote_workspace::RemoteWorkspaceMutations,
     workspace::WorkspaceOwnerMutations,
     account::AccountMutations,
+    instance_moderation::InstanceModerationMutations,
 );

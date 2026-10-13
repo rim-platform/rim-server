@@ -22,6 +22,7 @@ use rim_core::relay::model::AbuseReportId;
 use rim_infra_db::DbHandle;
 use rim_infra_services::AppRepos;
 use rim_infra_services::relay::abuse::DefaultRelayAbuseService;
+use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
     AbuseReportDto, AccountSummaryDto, FileAbuseReport, PrincipalBlockOutcome, PrincipalRecordDto,
 };
@@ -30,6 +31,9 @@ use sea_orm::Database;
 use uuid::Uuid;
 
 use crate::config::RIMConfig;
+
+/// The commands run as the operator at the command line.
+const CLI: OperatorCaller = OperatorCaller::CommandLine;
 
 const USAGE: &str = "usage: rim_server principal block <principal-id> --reason <text> \
      [--cascade] | principal unblock <principal-id> | principal show <principal-id> | \
@@ -379,7 +383,7 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
             cascade,
         } => {
             let outcomes = service
-                .block_principal(principal_id, reason, cascade)
+                .block_principal(CLI, principal_id, reason, cascade)
                 .await
                 .map_err(|e| e.to_string())?;
             for (index, outcome) in outcomes.iter().enumerate() {
@@ -391,7 +395,7 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         }
         Command::Unblock { principal_id } => {
             let outcome = service
-                .unblock_principal(principal_id.clone())
+                .unblock_principal(CLI, principal_id.clone())
                 .await
                 .map_err(|e| e.to_string())?;
             if outcome.lifted {
@@ -405,14 +409,14 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         }
         Command::Show { principal_id } => {
             let record = service
-                .principal_record(principal_id)
+                .principal_record(CLI, principal_id)
                 .await
                 .map_err(|e| e.to_string())?;
             describe_record(&mut out, &record);
         }
         Command::ListBlocks => {
             for block in service
-                .principal_blocks()
+                .principal_blocks(CLI)
                 .await
                 .map_err(|e| e.to_string())?
             {
@@ -427,7 +431,7 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         }
         Command::ListReports { open_only } => {
             for report in service
-                .reports(open_only)
+                .reports(CLI, open_only)
                 .await
                 .map_err(|e| e.to_string())?
             {
@@ -436,14 +440,14 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         }
         Command::AddReport(report) => {
             let stored = service
-                .file_report(report)
+                .file_report(CLI, report)
                 .await
                 .map_err(|e| e.to_string())?;
             describe_report(&mut out, &stored);
         }
         Command::Resolve { id } => {
             match service
-                .resolve_report(AbuseReportId::from(id))
+                .resolve_report(CLI, AbuseReportId::from(id))
                 .await
                 .map_err(|e| e.to_string())?
             {

@@ -9,20 +9,26 @@ use tracing::{info, instrument, warn};
 
 use rim_core::ip_block::model::{IpBlock, IpRange, NewIpBlock};
 use rim_core::ip_block::repository::IpBlockRepository;
+use rim_core::user::repository::UserRepository;
 use rim_services::ip_block::dto::{BlockIpCmd, IpBlockDto, IpBlockOutcome};
 use rim_services::ip_block::service::{IpBlockService, MAX_BLOCK_DAYS};
+use rim_services::operator::OperatorCaller;
 use rim_services::{ServiceError, ServiceResult};
+
+use crate::operator::require_operator;
 
 /// Longest block reason, in characters.
 const MAX_REASON_CHARS: usize = 1000;
 
 pub struct DefaultIpBlockService {
     repo: Arc<dyn IpBlockRepository>,
+    /// Who is an instance operator.
+    user_repo: Arc<dyn UserRepository>,
 }
 
 impl DefaultIpBlockService {
-    pub fn new(repo: Arc<dyn IpBlockRepository>) -> Self {
-        Self { repo }
+    pub fn new(repo: Arc<dyn IpBlockRepository>, user_repo: Arc<dyn UserRepository>) -> Self {
+        Self { repo, user_repo }
     }
 }
 
@@ -61,7 +67,8 @@ fn to_dto(block: IpBlock) -> Option<IpBlockDto> {
 #[async_trait]
 impl IpBlockService for DefaultIpBlockService {
     #[instrument(name = "ip_block.block", skip_all)]
-    async fn block(&self, cmd: BlockIpCmd) -> ServiceResult<IpBlockOutcome> {
+    async fn block(&self, by: OperatorCaller, cmd: BlockIpCmd) -> ServiceResult<IpBlockOutcome> {
+        require_operator(self.user_repo.as_ref(), by).await?;
         let range = parse_range(&cmd.cidr)?;
         let reason = check_reason(&cmd.reason)?;
         let expires_at = match cmd.expires_in_days {
@@ -87,6 +94,7 @@ impl IpBlockService for DefaultIpBlockService {
             target: "audit",
             event = "ip.block",
             scope = "server",
+            actor_id = %by,
             cidr = %range,
             reason = %stored.reason,
             expires_at = ?stored.expires_at,
@@ -105,7 +113,8 @@ impl IpBlockService for DefaultIpBlockService {
     }
 
     #[instrument(name = "ip_block.unblock", skip_all)]
-    async fn unblock(&self, cidr: String) -> ServiceResult<bool> {
+    async fn unblock(&self, by: OperatorCaller, cidr: String) -> ServiceResult<bool> {
+        require_operator(self.user_repo.as_ref(), by).await?;
         let range = parse_range(&cidr)?;
         let lifted = self.repo.delete(&range.to_string()).await?;
         if lifted {
@@ -113,6 +122,7 @@ impl IpBlockService for DefaultIpBlockService {
                 target: "audit",
                 event = "ip.unblock",
                 scope = "server",
+                actor_id = %by,
                 cidr = %range,
                 "an operator unblocked an IP address or range"
             );
@@ -120,7 +130,8 @@ impl IpBlockService for DefaultIpBlockService {
         Ok(lifted)
     }
 
-    async fn list(&self) -> ServiceResult<Vec<IpBlockDto>> {
+    async fn list(&self, by: OperatorCaller) -> ServiceResult<Vec<IpBlockDto>> {
+        require_operator(self.user_repo.as_ref(), by).await?;
         Ok(self
             .repo
             .list()
@@ -149,8 +160,16 @@ impl IpBlockService for DefaultIpBlockService {
 mod tests {
     use rim_core::ip_block::model::IpBlockId;
     use rim_core::ip_block::repository::MockIpBlockRepository;
+    use rim_core::user::repository::MockUserRepository;
 
     use super::*;
+
+    const CLI: OperatorCaller = OperatorCaller::CommandLine;
+
+    /// The service over `repo`, for callers the user repository is never asked about.
+    fn service(repo: MockIpBlockRepository) -> DefaultIpBlockService {
+        DefaultIpBlockService::new(Arc::new(repo), Arc::new(MockUserRepository::new()))
+    }
 
     fn stored(new: &NewIpBlock) -> IpBlock {
         IpBlock {
@@ -184,10 +203,10 @@ mod tests {
             })
             .times(1)
             .returning(|new| Box::pin(async move { Ok((stored(&new), true)) }));
-        let service = DefaultIpBlockService::new(Arc::new(repo));
+        let service = service(repo);
 
         let outcome = service
-            .block(cmd("203.0.113.77/24", "  scraping ", Some(7)))
+            .block(CLI, cmd("203.0.113.77/24", "  scraping ", Some(7)))
             .await
             .expect("blocked");
         assert!(outcome.newly_blocked);
@@ -200,7 +219,7 @@ mod tests {
         let mut repo = MockIpBlockRepository::new();
         repo.expect_upsert().never();
         repo.expect_delete().never();
-        let service = DefaultIpBlockService::new(Arc::new(repo));
+        let service = service(repo);
         for bad in [
             cmd("not-an-ip", "spam", None),
             cmd("192.0.2.0/33", "spam", None),
@@ -211,14 +230,14 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    service.block(bad.clone()).await,
+                    service.block(CLI, bad.clone()).await,
                     Err(ServiceError::Validation(_))
                 ),
                 "{bad:?}"
             );
         }
         assert!(matches!(
-            service.unblock("192.0.2".to_string()).await,
+            service.unblock(CLI, "192.0.2".to_string()).await,
             Err(ServiceError::Validation(_))
         ));
     }
@@ -234,9 +253,14 @@ mod tests {
             .withf(|cidr| cidr == "192.0.2.1/32")
             .times(1)
             .returning(|_| Box::pin(async { Ok(false) }));
-        let service = DefaultIpBlockService::new(Arc::new(repo));
-        assert!(service.unblock("2001:DB8::1/32".to_string()).await.unwrap());
-        assert!(!service.unblock("192.0.2.1".to_string()).await.unwrap());
+        let service = service(repo);
+        assert!(
+            service
+                .unblock(CLI, "2001:DB8::1/32".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(!service.unblock(CLI, "192.0.2.1".to_string()).await.unwrap());
     }
 
     #[tokio::test]
@@ -256,9 +280,38 @@ mod tests {
                     .collect())
             })
         });
-        let service = DefaultIpBlockService::new(Arc::new(repo));
+        let service = service(repo);
         let active = service.active().await.unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].range.to_string(), "198.51.100.0/24");
+    }
+
+    #[tokio::test]
+    async fn a_user_who_is_not_an_operator_cannot_touch_the_deny_list() {
+        let mut repo = MockIpBlockRepository::new();
+        repo.expect_upsert().never();
+        repo.expect_delete().never();
+        repo.expect_list().never();
+        let mut users = MockUserRepository::new();
+        users.expect_is_instance_operator().returning(|_| Ok(false));
+        let service = DefaultIpBlockService::new(Arc::new(repo), Arc::new(users));
+        let member = OperatorCaller::User(rim_services::Actor::new(
+            rim_core::user::model::UserId::new(),
+        ));
+
+        let refusals = [
+            service
+                .block(member, cmd("192.0.2.1", "spam", None))
+                .await
+                .err(),
+            service.unblock(member, "192.0.2.1".to_string()).await.err(),
+            service.list(member).await.err(),
+        ];
+        for refusal in refusals {
+            assert!(
+                matches!(refusal, Some(ServiceError::Forbidden(_))),
+                "{refusal:?}"
+            );
+        }
     }
 }

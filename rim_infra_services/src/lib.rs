@@ -2,6 +2,8 @@
 /// `account purge` command runs it once.
 pub mod account_deletion;
 pub(crate) mod audit;
+#[cfg(test)]
+mod audit_capture;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.
 pub mod audit_retention;
@@ -54,6 +56,8 @@ pub(crate) mod moderation;
 // by the composition root (rim_server/src/app.rs).
 pub mod notification;
 pub(crate) mod notification_preference;
+/// Public for `rim_server`, whose `operator` command grants and revokes the role.
+pub mod operator;
 pub(crate) mod outbound;
 /// Public for `rim_server`, whose composition root sizes the hasher from its configuration.
 pub mod password_hashing;

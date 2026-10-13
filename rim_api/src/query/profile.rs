@@ -1,5 +1,6 @@
 use async_graphql::*;
 use rim_services::Actor;
+use rim_services::operator::InstanceOperatorService;
 use rim_services::user::command::GetMeQuery;
 use rim_services::user::service::UserService;
 
@@ -27,6 +28,14 @@ impl ProfileQueries {
                 .probation_ends_at(GetMeQuery {
                     actor: Actor::new(actor),
                 })
+                .await
+                .map_err(crate::errors::map_service_error)?;
+        }
+
+        if ctx.look_ahead().field("instanceOperator").exists() {
+            me.instance_operator = ctx
+                .data::<std::sync::Arc<dyn InstanceOperatorService>>()?
+                .is_operator(Actor::new(actor))
                 .await
                 .map_err(crate::errors::map_service_error)?;
         }

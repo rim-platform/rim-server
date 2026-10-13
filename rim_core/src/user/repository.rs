@@ -85,4 +85,13 @@ pub trait UserRepository: Send + Sync {
 
     /// Whether `email` is blocked, compared case-insensitively.
     async fn is_email_blocked(&self, email: &str) -> RepoResult<bool>;
+
+    /// Whether the account `id` is an instance operator; a purged account never is.
+    async fn is_instance_operator(&self, id: UserId) -> RepoResult<bool>;
+
+    /// Make the account `id` an instance operator or not. Returns whether that changed it.
+    async fn set_instance_operator(&self, id: UserId, operator: bool) -> RepoResult<bool>;
+
+    /// The instance operators, by username.
+    async fn instance_operators(&self) -> RepoResult<Vec<User>>;
 }
