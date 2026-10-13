@@ -107,6 +107,7 @@ fn is_mime_allowed(content_type: &str, allowed: &[&str]) -> bool {
 
 /// Refuse a route of a feature that is not enabled on this instance: 403 with the
 /// `FEATURE_DISABLED` code.
+#[allow(clippy::result_large_err)]
 pub(crate) fn require_feature(
     features: &dyn FeatureGate,
     feature: ServerFeature,
@@ -117,6 +118,7 @@ pub(crate) fn require_feature(
 }
 
 /// Enforce CSRF validation for REST endpoints. Returns 403 on failure.
+#[allow(clippy::result_large_err)]
 pub(crate) fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
     validate_csrf_header(req)
         .map_err(|msg| HttpResponse::Forbidden().json(serde_json::json!({"error": msg})))
