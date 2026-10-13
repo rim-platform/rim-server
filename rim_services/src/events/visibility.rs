@@ -384,6 +384,8 @@ mod tests {
                 workspace_id,
                 conversation_id,
                 user_id: UserId::new(),
+                username: "sam".to_string(),
+                display_name: None,
                 conversation_type: t.clone(),
                 member_user_ids: m.clone(),
                 is_private,
@@ -483,6 +485,32 @@ mod tests {
         let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["conversation_id", "type", "workspace_id"]);
+    }
+
+    /// A typing event names the typist by username and display name, `null` when unset, and
+    /// still keeps the server-only fields off the wire.
+    #[test]
+    fn typing_started_wire_shape() {
+        let typing = conversation_scoped_events("Channel", true, vec![UserId::new()])
+            .into_iter()
+            .find(|e| matches!(e, WorkspaceEvent::TypingStarted { .. }))
+            .expect("TypingStarted");
+        let json = serde_json::to_value(&typing).expect("serialize");
+        let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "conversation_id",
+                "display_name",
+                "type",
+                "user_id",
+                "username",
+                "workspace_id"
+            ]
+        );
+        assert_eq!(json["username"], serde_json::json!("sam"));
+        assert_eq!(json["display_name"], serde_json::Value::Null);
     }
 
     // ── Guests and the directory events ──

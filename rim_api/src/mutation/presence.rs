@@ -1,6 +1,8 @@
 use async_graphql::*;
 use rim_services::Actor;
 use rim_services::conversation::service::ConversationService;
+use rim_services::user::command::GetMeQuery;
+use rim_services::user::service::UserService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
@@ -44,6 +46,13 @@ impl PresenceMutations {
             let conversation_type = conversation.conversation_type.as_str().to_owned();
             let is_private = conversation.is_private;
             let member_user_ids = conversation.member_ids;
+            let typist = ctx
+                .data::<std::sync::Arc<dyn UserService>>()?
+                .get_me(GetMeQuery {
+                    actor: Actor::new(actor),
+                })
+                .await
+                .map_err(map_service_error)?;
 
             let observers = ctx.data::<std::sync::Arc<rim_services::events::Observers>>()?;
             use rim_services::events::EventObserver;
@@ -51,6 +60,8 @@ impl PresenceMutations {
                 workspace_id: server_id,
                 conversation_id,
                 user_id: actor,
+                username: typist.username,
+                display_name: typist.display_name,
                 conversation_type,
                 member_user_ids,
                 is_private,

@@ -59,7 +59,8 @@ is refused with 429 and `{"error":"too_many_connections"}`. A subscription start
 subscriptions only: a query or a mutation sent on it answers one error with the code
 `VALIDATION` and the message "only subscriptions over the WebSocket", runs nothing, and
 completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
-`relayStream`; the schema describes both.
+`relayStream`; the schema describes both. A `TypingStarted` event names the typing user by
+`user_id`, `username` and `display_name`, which is `null` when they have none.
 
 A connection lives no longer than the session it was opened with. When that session ends, the
 server ends every stream on the connection and closes it with code `4401` and reason

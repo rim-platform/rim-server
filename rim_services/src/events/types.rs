@@ -172,10 +172,15 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing, default)]
         is_private: bool,
     },
+    /// A member started typing; names them so the client can show who without a lookup.
     TypingStarted {
         workspace_id: ServerId,
         conversation_id: ConversationId,
         user_id: UserId,
+        /// The typing user's username.
+        username: String,
+        /// The typing user's display name, `null` when they have none.
+        display_name: Option<String>,
         #[serde(skip_serializing)]
         conversation_type: String,
         #[serde(skip_serializing)]

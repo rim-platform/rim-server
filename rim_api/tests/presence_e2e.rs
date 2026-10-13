@@ -55,6 +55,12 @@ mutation Typing($serverId: ID!, $conversationId: ID!) {
 }
 "#;
 
+const SET_DISPLAY_NAME: &str = r#"
+mutation Profile($input: UpdateMyProfileInput!) {
+  updateMyProfile(input: $input) { id }
+}
+"#;
+
 const WORKSPACE_PRESENCE: &str = r#"
 query Presence($workspaceId: ID!) {
   workspacePresence(workspaceId: $workspaceId) { userId status lastSeenAt }
@@ -136,24 +142,13 @@ impl Fixture {
             .collect()
     }
 
-    /// `(workspace, conversation, user)` of every typing event emitted so far.
-    fn typing_events(&self) -> Vec<(String, String, String)> {
+    /// The wire JSON of every typing event emitted so far.
+    fn typing_events(&self) -> Vec<Value> {
         self.events
             .events()
             .into_iter()
-            .filter_map(|e| match e {
-                WorkspaceEvent::TypingStarted {
-                    workspace_id,
-                    conversation_id,
-                    user_id,
-                    ..
-                } => Some((
-                    workspace_id.to_string(),
-                    conversation_id.to_string(),
-                    user_id.to_string(),
-                )),
-                _ => None,
-            })
+            .filter(|e| matches!(e, WorkspaceEvent::TypingStarted { .. }))
+            .map(|e| serde_json::to_value(e).expect("serialize"))
             .collect()
     }
 }
@@ -306,10 +301,19 @@ async fn heartbeat_inside_the_rate_limit_window_keeps_the_first_status() {
 }
 
 /// `startTyping` answers `true` and emits one typing event naming the workspace, conversation
-/// and typist; a repeat inside the throttle window answers `true` and emits nothing.
+/// and typist by id, username and display name; a repeat inside the throttle window answers
+/// `true` and emits nothing.
 #[tokio::test]
 async fn start_typing_emits_one_event_per_throttle_window() {
     let f = setup().await;
+    exec_ok(
+        &f.schema,
+        f.ws.bob.request(
+            SET_DISPLAY_NAME,
+            json!({ "input": { "displayName": "Bob B" } }),
+        ),
+    )
+    .await;
     for _ in 0..2 {
         let data = exec_ok(
             &f.schema,
@@ -320,11 +324,14 @@ async fn start_typing_emits_one_event_per_throttle_window() {
     }
     assert_eq!(
         f.typing_events(),
-        vec![(
-            f.ws.server_id.clone(),
-            f.channel_id.clone(),
-            f.ws.bob.user_id.to_string()
-        )]
+        vec![json!({
+            "type": "TypingStarted",
+            "workspace_id": f.ws.server_id,
+            "conversation_id": f.channel_id,
+            "user_id": f.ws.bob.user_id.to_string(),
+            "username": "presence-bob",
+            "display_name": "Bob B",
+        })]
     );
 }
 
