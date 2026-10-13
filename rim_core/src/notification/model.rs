@@ -36,7 +36,8 @@ impl std::error::Error for ParseNotificationEnumError {}
 pub enum NotificationLevel {
     /// Every message.
     All,
-    /// Direct messages, mentions, keyword hits and replies in the user's threads.
+    /// Direct messages, mentions, keyword hits, replies in the user's threads and reactions to
+    /// the user's messages.
     Mentions,
     /// Nothing at all, mentions included.
     None,
@@ -84,7 +85,8 @@ impl FromStr for NotificationLevel {
 }
 
 /// Why a user was notified. Persisted in the Postgres enum `notification_reason`. When several
-/// apply, the highest [`Self::priority`] wins (one row per user and message).
+/// apply, the highest [`Self::priority`] wins (one row per user and message); a reaction never
+/// replaces a row that exists for another reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NotificationReason {
     /// A message in a direct conversation.
@@ -97,6 +99,8 @@ pub enum NotificationReason {
     ThreadReply,
     /// Any other message (level `ALL` only).
     All,
+    /// Someone reacted to the user's message.
+    Reaction,
 }
 
 impl NotificationReason {
@@ -107,10 +111,11 @@ impl NotificationReason {
             NotificationReason::Keyword => "keyword",
             NotificationReason::ThreadReply => "thread_reply",
             NotificationReason::All => "all",
+            NotificationReason::Reaction => "reaction",
         }
     }
 
-    /// Lower is stronger: direct > mention > keyword > thread_reply > all.
+    /// Lower is stronger: direct > mention > keyword > thread_reply > all > reaction.
     pub fn priority(&self) -> u8 {
         match self {
             NotificationReason::Direct => 0,
@@ -118,6 +123,7 @@ impl NotificationReason {
             NotificationReason::Keyword => 2,
             NotificationReason::ThreadReply => 3,
             NotificationReason::All => 4,
+            NotificationReason::Reaction => 5,
         }
     }
 }
@@ -138,6 +144,7 @@ impl FromStr for NotificationReason {
             "keyword" => Ok(NotificationReason::Keyword),
             "thread_reply" => Ok(NotificationReason::ThreadReply),
             "all" => Ok(NotificationReason::All),
+            "reaction" => Ok(NotificationReason::Reaction),
             other => Err(ParseNotificationEnumError {
                 kind: "notification reason",
                 input: other.to_string(),
@@ -258,6 +265,8 @@ pub struct UserNotificationSettings {
     pub dnd_pause: DndPause,
     pub digest: DigestFrequency,
     pub updated_at: DateTime<Utc>,
+    /// Whether reactions to the user's messages notify them.
+    pub reactions: bool,
 }
 
 /// Most keywords a user may set per workspace.
@@ -267,7 +276,7 @@ pub const KEYWORD_LEN: std::ops::RangeInclusive<usize> = 2..=40;
 
 impl UserNotificationSettings {
     /// The settings of a user who never saved any: level `ALL`, no keywords, no do-not-disturb,
-    /// no digest.
+    /// no digest, reactions on.
     pub fn defaults(user_id: UserId, server_id: ServerId, now: DateTime<Utc>) -> Self {
         Self {
             user_id,
@@ -278,6 +287,7 @@ impl UserNotificationSettings {
             dnd_pause: DndPause::Off,
             digest: DigestFrequency::Off,
             updated_at: now,
+            reactions: true,
         }
     }
 
@@ -299,8 +309,20 @@ pub struct UserNotification {
     pub created_at: DateTime<Utc>,
     pub read_at: Option<DateTime<Utc>>,
     pub emailed_at: Option<DateTime<Utc>>,
+    /// The latest reaction, set exactly when `reason` is [`NotificationReason::Reaction`].
+    pub reaction: Option<NotificationReaction>,
 }
 
+/// The reaction a [`NotificationReason::Reaction`] notification is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationReaction {
+    pub emoji: String,
+    /// The reactor.
+    pub by: UserId,
+}
+
+/// A new notification about a message. Reaction notifications are stored with
+/// [`NewReactionNotification`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUserNotification {
     pub user_id: UserId,
@@ -308,6 +330,16 @@ pub struct NewUserNotification {
     pub conversation_id: ConversationId,
     pub message_id: MessageId,
     pub reason: NotificationReason,
+}
+
+/// A reaction notification for the author of `message_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewReactionNotification {
+    pub user_id: UserId,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    pub reaction: NotificationReaction,
 }
 
 /// A `(user, workspace)` that has unread, un-emailed notifications and a digest frequency other
@@ -360,6 +392,7 @@ mod tests {
             NotificationReason::Keyword,
             NotificationReason::ThreadReply,
             NotificationReason::All,
+            NotificationReason::Reaction,
         ] {
             assert_eq!(reason.as_str().parse::<NotificationReason>(), Ok(reason));
         }
@@ -376,13 +409,14 @@ mod tests {
     }
 
     #[test]
-    fn reason_priority_is_direct_mention_keyword_thread_all() {
+    fn reason_priority_is_direct_mention_keyword_thread_all_reaction() {
         let ordered = [
             NotificationReason::Direct,
             NotificationReason::Mention,
             NotificationReason::Keyword,
             NotificationReason::ThreadReply,
             NotificationReason::All,
+            NotificationReason::Reaction,
         ];
         for pair in ordered.windows(2) {
             assert!(pair[0].priority() < pair[1].priority(), "{pair:?}");
@@ -392,7 +426,14 @@ mod tests {
     #[test]
     fn levels_admit_reasons() {
         use NotificationReason as R;
-        for reason in [R::Direct, R::Mention, R::Keyword, R::ThreadReply, R::All] {
+        for reason in [
+            R::Direct,
+            R::Mention,
+            R::Keyword,
+            R::ThreadReply,
+            R::All,
+            R::Reaction,
+        ] {
             assert!(NotificationLevel::All.admits(reason));
             assert!(!NotificationLevel::None.admits(reason));
             assert_eq!(NotificationLevel::Mentions.admits(reason), reason != R::All);
@@ -449,6 +490,12 @@ mod tests {
         assert!(!settings.is_quiet_at(now));
         settings.dnd = Some(window((11, 0), (13, 0), "UTC"));
         assert!(settings.is_quiet_at(now));
+    }
+
+    #[test]
+    fn defaults_notify_about_reactions() {
+        let settings = UserNotificationSettings::defaults(UserId::new(), ServerId::new(), at(9, 0));
+        assert!(settings.reactions);
     }
 
     #[test]

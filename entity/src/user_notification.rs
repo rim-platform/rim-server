@@ -18,6 +18,9 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     pub read_at: Option<DateTimeWithTimeZone>,
     pub emailed_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub reaction_emoji: Option<String>,
+    pub reaction_by: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

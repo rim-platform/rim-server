@@ -43,6 +43,7 @@ impl From<sea_orm_active_enums::NotificationReason> for NotificationReason {
             sea_orm_active_enums::NotificationReason::ThreadReply => {
                 NotificationReason::ThreadReply
             }
+            sea_orm_active_enums::NotificationReason::Reaction => NotificationReason::Reaction,
         }
     }
 }
@@ -57,6 +58,7 @@ impl From<NotificationReason> for sea_orm_active_enums::NotificationReason {
             NotificationReason::ThreadReply => {
                 sea_orm_active_enums::NotificationReason::ThreadReply
             }
+            NotificationReason::Reaction => sea_orm_active_enums::NotificationReason::Reaction,
         }
     }
 }

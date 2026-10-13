@@ -6,8 +6,8 @@ use mockall::automock;
 use crate::conversation::model::ConversationId;
 use crate::message::model::MessageId;
 use crate::notification::model::{
-    DigestCandidate, NewUserNotification, UserNotification, UserNotificationId,
-    UserNotificationSettings,
+    DigestCandidate, NewReactionNotification, NewUserNotification, UserNotification,
+    UserNotificationId, UserNotificationSettings,
 };
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
@@ -65,6 +65,16 @@ pub trait NotificationRepository: Send + Sync {
         notifications: &[NewUserNotification],
         created_at: DateTime<Utc>,
     ) -> RepoResult<Vec<UserNotification>>;
+
+    /// Store a reaction notification for `(user_id, message_id)`: insert it, or, when a reaction
+    /// notification for the pair exists, replace its reaction, mark it unread and move its
+    /// `created_at` to `created_at`. A row for the pair with another reason is left alone and
+    /// `None` returned.
+    async fn upsert_reaction_notification(
+        &self,
+        notification: NewReactionNotification,
+        created_at: DateTime<Utc>,
+    ) -> RepoResult<Option<UserNotification>>;
 
     /// A user's notifications in one workspace, ordered `created_at DESC, id DESC`, with the
     /// standard cursor semantics (DESC endpoint).
@@ -132,7 +142,8 @@ pub trait NotificationRepository: Send + Sync {
     /// notification is at least one digest interval old (hourly: created at or before
     /// `hourly_cutoff`; daily: at or before `daily_cutoff`) and whose last digest, if any, is at
     /// least as old. One row per `(user, workspace)`. Users without an email address (key-only
-    /// accounts) are left out: there is nowhere to send their digest.
+    /// accounts) are left out: there is nowhere to send their digest. Reaction notifications
+    /// never count: digests list messages only.
     async fn list_digest_candidates(
         &self,
         hourly_cutoff: DateTime<Utc>,
@@ -140,6 +151,7 @@ pub trait NotificationRepository: Send + Sync {
     ) -> RepoResult<Vec<DigestCandidate>>;
 
     /// Unread, un-emailed notifications of a user in a workspace, oldest first, at most `limit`.
+    /// Reaction notifications are left out.
     async fn list_pending_digest(
         &self,
         user_id: UserId,

@@ -21,6 +21,7 @@ pub struct Model {
     pub dnd_paused_until: Option<DateTimeWithTimeZone>,
     pub digest: DigestFrequency,
     pub updated_at: DateTimeWithTimeZone,
+    pub reactions: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

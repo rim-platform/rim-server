@@ -63,6 +63,8 @@ pub enum NotificationReason {
     All,
     #[sea_orm(string_value = "thread_reply")]
     ThreadReply,
+    #[sea_orm(string_value = "reaction")]
+    Reaction,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "server_member_role")]

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 
-use rim_core::message::model::MessageId;
+use rim_core::message::model::{Message, MessageId};
 use rim_core::message_reaction::model::NewMessageReaction;
 use rim_infra_db::TransactionScope;
 use rim_infra_db::begin_transaction;
@@ -13,6 +14,8 @@ use rim_services::message_reaction::command::{
 };
 use rim_services::message_reaction::dto::ReactionGroupDto;
 use rim_services::message_reaction::service::MessageReactionService;
+use rim_services::notification::command::NotifyForReactionCmd;
+use rim_services::notification::service::NotificationService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::ReactionRepos;
@@ -27,6 +30,9 @@ pub struct DefaultMessageReactionService {
     repos: ReactionRepos,
     db: Option<DatabaseConnection>,
     observers: Observers,
+    /// Tells a message's author about a reaction, best-effort. `None` in unit tests that are not
+    /// about notifications; the composition root wires it.
+    notification_service: Option<Arc<dyn NotificationService>>,
 }
 
 impl DefaultMessageReactionService {
@@ -35,6 +41,27 @@ impl DefaultMessageReactionService {
             repos,
             db,
             observers,
+            notification_service: None,
+        }
+    }
+
+    pub fn with_notification_service(
+        mut self,
+        notification_service: Arc<dyn NotificationService>,
+    ) -> Self {
+        self.notification_service = Some(notification_service);
+        self
+    }
+
+    /// Best-effort notification of the author about an added reaction: a failure is logged and
+    /// never fails the reaction.
+    async fn notify_author(&self, cmd: NotifyForReactionCmd) {
+        let Some(notification_service) = &self.notification_service else {
+            return;
+        };
+        let message_id = cmd.message.id;
+        if let Err(e) = notification_service.notify_for_reaction(cmd).await {
+            tracing::warn!(error = %e, message_id = %message_id, "failed to notify about a reaction");
         }
     }
 
@@ -99,7 +126,7 @@ impl DefaultMessageReactionService {
         conversation_id: rim_core::conversation::model::ConversationId,
         message_id: rim_core::message::model::MessageId,
         actor_user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<Message> {
         ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
@@ -129,7 +156,7 @@ impl DefaultMessageReactionService {
             ));
         }
 
-        Ok(())
+        Ok(message)
     }
 }
 
@@ -149,13 +176,14 @@ impl MessageReactionService for DefaultMessageReactionService {
             return Err(ServiceError::Validation("emoji too long".to_string()));
         }
 
-        self.ensure_actor_can_react(
-            cmd.server_id,
-            cmd.conversation_id,
-            cmd.message_id,
-            cmd.actor.user_id,
-        )
-        .await?;
+        let message = self
+            .ensure_actor_can_react(
+                cmd.server_id,
+                cmd.conversation_id,
+                cmd.message_id,
+                cmd.actor.user_id,
+            )
+            .await?;
 
         // Run find + add/remove atomically inside a transaction.
         let (repos, scope) = self.begin_write().await?;
@@ -165,19 +193,20 @@ impl MessageReactionService for DefaultMessageReactionService {
             .find_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
             .await?;
 
-        if existing.is_some() {
-            repos
-                .message_reaction_repo
-                .remove_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
-                .await?;
-        } else {
+        let added = existing.is_none();
+        if added {
             repos
                 .message_reaction_repo
                 .add_reaction(NewMessageReaction {
                     message_id: cmd.message_id,
                     user_id: cmd.actor.user_id,
-                    emoji,
+                    emoji: emoji.clone(),
                 })
+                .await?;
+        } else {
+            repos
+                .message_reaction_repo
+                .remove_reaction(cmd.message_id, cmd.actor.user_id, &emoji)
                 .await?;
         }
 
@@ -208,7 +237,7 @@ impl MessageReactionService for DefaultMessageReactionService {
             conversation_id: cmd.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
             is_private: conv.is_private,
-            member_user_ids,
+            member_user_ids: member_user_ids.clone(),
             message_id: cmd.message_id,
             reactions: groups
                 .iter()
@@ -219,6 +248,18 @@ impl MessageReactionService for DefaultMessageReactionService {
                 })
                 .collect(),
         });
+
+        if added && message.sent_by != cmd.actor.user_id {
+            self.notify_author(NotifyForReactionCmd {
+                server_id: cmd.server_id,
+                conversation: conv,
+                message,
+                member_user_ids,
+                emoji,
+                by: cmd.actor.user_id,
+            })
+            .await;
+        }
 
         Ok(groups)
     }

@@ -7,6 +7,8 @@ const DOWN_NO_OP_ALLOWED: &[&str] = &[
     // Drops the incident module's tables with their rows; recreating them empty would bring
     // nothing back, so the way back is commit 77846eb.
     "m20261010_184831_drop_incident_module",
+    // Adds a value to the `notification_reason` enum; Postgres cannot drop an enum value.
+    "m20261017_195236_add_reaction_notification_reason",
 ];
 
 /// Every migration defines its own `down` (the trait's default only returns an error), and that

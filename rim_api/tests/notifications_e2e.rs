@@ -3,8 +3,8 @@
 //! Every assertion goes through GraphQL: resolver → `NotificationService` / `MessageService` /
 //! `ReadStateService` / `CommandService` → SeaORM repositories → Postgres. Notifications are
 //! created synchronously after a message commits, so they are visible as soon as `sendMessage`
-//! returns. The `NotificationDue` event's `quiet` flag is covered by unit tests (the e2e schema
-//! uses a no-op broadcaster); here the stored row is checked.
+//! returns. The schema records every event, so `NotificationDue` is checked where it carries
+//! more than the stored row (reactions); its `quiet` flag is covered by unit tests.
 //!
 //! Run with:
 //! ```sh
@@ -35,14 +35,14 @@ use rim_infra_services::notification::{
 };
 use rim_infra_services::presence::PresenceManager;
 use rim_services::auth::dto::RegistrationMode;
-use rim_services::events::{NoopBroadcaster, Observers};
+use rim_services::events::{NoopBroadcaster, Observers, WorkspaceEvent};
 
 use support::graphql::{
     Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
 };
 use support::roles::create_channel;
 use support::roots::{CONVERSATION_NOTIFICATION_ROOTS, Targets};
-use support::{TestCtx, unknown_id};
+use support::{RecordingBroadcaster, TestCtx, unknown_id};
 
 const CREATE_CONVERSATION: &str = r#"
 mutation Create($input: CreateConversationInput!) {
@@ -136,6 +136,7 @@ const SETTINGS: &str = r#"
 query Settings($serverId: ID!) {
   settings: myNotificationSettings(serverId: $serverId) {
     serverId defaultLevel keywords dnd { start end timezone } dndPaused dndPausedUntil digest
+    reactions
   }
 }
 "#;
@@ -144,6 +145,7 @@ const UPDATE_SETTINGS: &str = r#"
 mutation Update($serverId: ID!, $input: UpdateNotificationSettingsInput!) {
   settings: updateNotificationSettings(serverId: $serverId, input: $input) {
     serverId defaultLevel keywords dnd { start end timezone } dndPaused dndPausedUntil digest
+    reactions
   }
 }
 "#;
@@ -165,6 +167,7 @@ query Notifications($serverId: ID!, $unreadOnly: Boolean, $dir: PageDir,
       id conversationId messageId reason createdAt readAt
       conversation { id title }
       message { id text author { username } }
+      reactionEmoji reactedBy { id username }
     }
     next { createdAt notificationId }
     prev { createdAt notificationId }
@@ -183,6 +186,10 @@ mutation MarkNotificationsRead($serverId: ID!, $ids: [ID!], $allBefore: DateTime
 }
 "#;
 
+const TOGGLE_REACTION: &str = r#"
+mutation React($input: ToggleReactionInput!) { toggleReaction(input: $input) { emoji } }
+"#;
+
 const EXECUTE: &str = r#"
 mutation Exec($commandId: String!, $args: JSON, $context: CommandContextInput) {
   result: executeCommand(input: { commandId: $commandId, args: $args, commandContext: $context }) {
@@ -194,6 +201,8 @@ mutation Exec($commandId: String!, $args: JSON, $context: CommandContextInput) {
 struct Fixture {
     ctx: TestCtx,
     schema: AppSchema,
+    /// Every event the services emitted.
+    events: Arc<RecordingBroadcaster>,
     server_id: String,
     /// Workspace owner.
     alice: Caller,
@@ -214,13 +223,14 @@ async fn setup() -> Fixture {
         .await;
     ctx.add_member(&server, &carol_user, ServerMemberRole::Member)
         .await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let (schema, _provider, events) = ctx.build_recording(RegistrationMode::InviteOnly);
     let mut f = Fixture {
         alice: ctx.caller(&alice_user).await,
         bob: ctx.caller(&bob_user).await,
         carol: ctx.caller(&carol_user).await,
         server_id: server.id.to_string(),
         schema,
+        events,
         ctx,
         general: String::new(),
     };
@@ -275,6 +285,44 @@ impl Fixture {
         )
         .await;
         data["msg"]["id"].as_str().expect("id").to_string()
+    }
+
+    async fn react(&self, who: &Caller, conversation_id: &str, message_id: &str, emoji: &str) {
+        exec_ok(
+            &self.schema,
+            who.request(
+                TOGGLE_REACTION,
+                json!({ "input": {
+                    "serverId": self.server_id, "conversationId": conversation_id,
+                    "messageId": message_id, "emoji": emoji,
+                } }),
+            ),
+        )
+        .await;
+    }
+
+    /// `(recipient, reason, reaction_emoji, reaction_by)` of every `NotificationDue` emitted so
+    /// far, in order.
+    fn notification_events(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
+        self.events
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                WorkspaceEvent::NotificationDue {
+                    user_id,
+                    reason,
+                    reaction_emoji,
+                    reaction_by,
+                    ..
+                } => Some((
+                    user_id.to_string(),
+                    reason,
+                    reaction_emoji,
+                    reaction_by.map(|by| by.to_string()),
+                )),
+                _ => None,
+            })
+            .collect()
     }
 
     async fn notifications_page(&self, who: &Caller, vars: Value) -> Value {
@@ -689,7 +737,7 @@ async fn settings_defaults_and_validation() {
         settings,
         json!({
             "serverId": f.server_id, "defaultLevel": "ALL", "keywords": [], "dnd": null,
-            "dndPaused": false, "dndPausedUntil": null, "digest": "OFF",
+            "dndPaused": false, "dndPausedUntil": null, "digest": "OFF", "reactions": true,
         })
     );
 
@@ -1184,4 +1232,92 @@ async fn muted_conversations_stay_in_their_workspace() {
             json!([{ "conversationId": muted, "mutedUntil": null }])
         );
     }
+}
+
+/// Alice reacting to bob's message tells bob: a `NotificationDue` with the emoji and the
+/// reactor, and one `REACTION` entry. Carol's later reaction re-surfaces that same entry unread
+/// with her emoji. Removing a reaction and reacting to one's own message tell nobody.
+#[tokio::test]
+async fn reactions_notify_the_author_with_one_resurfacing_entry() {
+    let f = setup().await;
+    let msg = f.send(&f.bob, &f.general, "shipped the release").await;
+    let before = f.notification_events().len();
+
+    f.react(&f.alice, &f.general, &msg, "\u{1f44d}").await;
+    let bob_id = f.bob.user_id.to_string();
+    assert_eq!(
+        f.notification_events()[before..],
+        [(
+            bob_id.clone(),
+            "reaction".to_string(),
+            Some("\u{1f44d}".to_string()),
+            Some(f.alice.user_id.to_string()),
+        )]
+    );
+    let entries = f.notifications(&f.bob).await;
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry["messageId"], msg.as_str());
+    assert_eq!(entry["reason"], "REACTION");
+    assert_eq!(entry["reactionEmoji"], "\u{1f44d}");
+    assert_eq!(entry["reactedBy"]["id"], f.alice.user_id.to_string());
+    assert_eq!(entry["reactedBy"]["username"], "nt-alice");
+    assert_eq!(entry["message"]["text"], "shipped the release");
+    let entry_id = entry["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        f.mark_read(&f.bob, Some(vec![entry_id.clone()]), None)
+            .await,
+        1
+    );
+    assert_eq!(f.unread_count(&f.bob).await, 0);
+
+    f.react(&f.carol, &f.general, &msg, "\u{1f389}").await;
+    let entries = f.notifications(&f.bob).await;
+    assert_eq!(entries.len(), 1, "one entry per message");
+    assert_eq!(entries[0]["id"], entry_id.as_str());
+    assert_eq!(entries[0]["readAt"], Value::Null);
+    assert_eq!(entries[0]["reactionEmoji"], "\u{1f389}");
+    assert_eq!(entries[0]["reactedBy"]["username"], "nt-carol");
+    assert_eq!(f.unread_count(&f.bob).await, 1);
+
+    // Message notifications carry no reaction.
+    let alice_entries = f.notifications(&f.alice).await;
+    assert_eq!(alice_entries[0]["reason"], "ALL");
+    assert_eq!(alice_entries[0]["reactionEmoji"], Value::Null);
+    assert_eq!(alice_entries[0]["reactedBy"], Value::Null);
+
+    let before = f.notification_events().len();
+    f.react(&f.alice, &f.general, &msg, "\u{1f44d}").await;
+    f.react(&f.bob, &f.general, &msg, "\u{1f680}").await;
+    assert!(
+        f.notification_events()[before..].is_empty(),
+        "a removed reaction and an own reaction notify nobody"
+    );
+    assert_eq!(f.notifications(&f.bob).await.len(), 1);
+    assert_eq!(f.unread_count(&f.bob).await, 1);
+}
+
+/// With `reactions: false` a reaction stores and announces nothing; leaving the field out of a
+/// later update keeps it off.
+#[tokio::test]
+async fn reactions_setting_off_yields_nothing() {
+    let f = setup().await;
+    let saved = f
+        .update_settings(
+            &f.bob,
+            json!({ "defaultLevel": "ALL", "keywords": [], "dnd": null, "digest": "OFF",
+                    "reactions": false }),
+        )
+        .await;
+    assert_eq!(saved["reactions"], false);
+    let kept = f
+        .update_settings(&f.bob, settings_input("MENTIONS", &[], "OFF"))
+        .await;
+    assert_eq!(kept["reactions"], false);
+
+    let msg = f.send(&f.bob, &f.general, "quiet please").await;
+    let before = f.notification_events().len();
+    f.react(&f.alice, &f.general, &msg, "\u{1f44d}").await;
+    assert!(f.notification_events()[before..].is_empty());
+    assert!(f.notifications(&f.bob).await.is_empty());
 }

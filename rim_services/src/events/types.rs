@@ -251,8 +251,10 @@ pub enum WorkspaceEvent {
     /// The server decided to notify `user_id` about a message: emitted once per
     /// recipient after the notification row is stored. Delivered to that user only
     /// (`member_user_ids == [user_id]`). `reason` is the snake_case notification reason
-    /// (`direct`, `mention`, `keyword`, `thread_reply`, `all`); `quiet` is true inside the
-    /// user's do-not-disturb window or pause, so clients record it without a toast or sound.
+    /// (`direct`, `mention`, `keyword`, `thread_reply`, `all`, `reaction`); `quiet` is true
+    /// inside the user's do-not-disturb window or pause, so clients record it without a toast
+    /// or sound. `reaction_emoji` and `reaction_by` (the reactor) are present for `reaction`
+    /// only.
     NotificationDue {
         workspace_id: ServerId,
         user_id: UserId,
@@ -261,6 +263,10 @@ pub enum WorkspaceEvent {
         message_id: MessageId,
         reason: String,
         quiet: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reaction_emoji: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reaction_by: Option<UserId>,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },

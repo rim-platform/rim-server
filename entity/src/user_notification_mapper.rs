@@ -1,5 +1,5 @@
 use crate::user_notification;
-use rim_core::notification::model::UserNotification;
+use rim_core::notification::model::{NotificationReaction, UserNotification};
 
 impl From<user_notification::Model> for UserNotification {
     fn from(m: user_notification::Model) -> Self {
@@ -13,6 +13,14 @@ impl From<user_notification::Model> for UserNotification {
             created_at: m.created_at.into(),
             read_at: m.read_at.map(Into::into),
             emailed_at: m.emailed_at.map(Into::into),
+            // The CHECK constraint sets both columns exactly for reaction notifications.
+            reaction: match (m.reaction_emoji, m.reaction_by) {
+                (Some(emoji), Some(by)) => Some(NotificationReaction {
+                    emoji,
+                    by: by.into(),
+                }),
+                _ => None,
+            },
         }
     }
 }

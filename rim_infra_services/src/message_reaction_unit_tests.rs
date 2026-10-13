@@ -698,4 +698,78 @@ mod tests {
         assert_eq!(heart.count, 1);
         assert!(!heart.reacted_by_me);
     }
+
+    /// Adding a reaction to someone else's message notifies its author once; removing a
+    /// reaction or reacting to one's own message notifies nobody.
+    #[tokio::test]
+    async fn toggle_notifies_the_author_only_when_adding_to_someone_elses_message() {
+        for (own_message, already_reacted, notifies) in [
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+        ] {
+            let server_id = ServerId::new();
+            let conversation_id = ConversationId::new();
+            let message_id = MessageId::new();
+            let actor_id = UserId::new();
+            let author = if own_message { actor_id } else { UserId::new() };
+
+            let (smr, cr, cmr, _) =
+                setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
+            let mut message_repo = MockMessageRepository::new();
+            let msg = message(message_id, conversation_id, author);
+            message_repo
+                .expect_get_by_id()
+                .returning(move |_id| Ok(Some(msg.clone())));
+
+            let mut reaction_repo = MockMessageReactionRepository::new();
+            let existing = already_reacted.then(|| reaction(message_id, actor_id, "\u{1f44d}"));
+            reaction_repo
+                .expect_find_reaction()
+                .returning(move |_, _, _| Ok(existing.clone()));
+            reaction_repo
+                .expect_add_reaction()
+                .returning(move |new| Ok(reaction(new.message_id, new.user_id, &new.emoji)));
+            reaction_repo
+                .expect_remove_reaction()
+                .returning(|_, _, _| Ok(()));
+            reaction_repo
+                .expect_get_reactions_for_message()
+                .returning(|_| Ok(vec![]));
+
+            let mut notifications =
+                rim_services::notification::service::MockNotificationService::new();
+            notifications
+                .expect_notify_for_reaction()
+                .withf(move |cmd| {
+                    cmd.server_id == server_id
+                        && cmd.conversation.id == conversation_id
+                        && cmd.message.id == message_id
+                        && cmd.message.sent_by == author
+                        && cmd.member_user_ids == vec![actor_id]
+                        && cmd.emoji == "\u{1f44d}"
+                        && cmd.by == actor_id
+                })
+                .times(usize::from(notifies))
+                .returning(|_| Box::pin(async { Err(ServiceError::Unavailable) }));
+
+            let svc = DefaultMessageReactionService::new(
+                make_repos(smr, cr, cmr, message_repo, reaction_repo),
+                None,
+                test_observers(),
+            )
+            .with_notification_service(Arc::new(notifications));
+
+            // A failing notification never fails the reaction.
+            svc.toggle_reaction(ToggleReactionCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id,
+                message_id,
+                emoji: " \u{1f44d} ".to_string(),
+            })
+            .await
+            .expect("toggle");
+        }
+    }
 }

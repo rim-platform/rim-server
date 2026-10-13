@@ -227,7 +227,8 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
 
 ## Notification Rules
 
-The server decides, once per message, who is told about it.
+The server decides, once per message, who is told about it, and tells a message's author when
+someone reacts to it.
 For every recipient it stores a notification (the inbox, the bell badge and the email digest) and
 sends that user a private `NotificationDue` event; clients only render what the server decided.
 Sound and preview stay device-local client settings.
@@ -242,7 +243,9 @@ Sound and preview stay device-local client settings.
   workspace: `defaultLevel` (default `ALL`), `keywords` (at most 20, each 2 to 40 characters after
   trimming, stored lower-cased and deduplicated), a daily do-not-disturb window `dnd`
   (`start`/`end` as `"HH:MM"` in an IANA `timezone`; crosses midnight when `end < start`; `start`
-  must differ from `end`), and `digest` (`OFF`, `HOURLY`, `DAILY`; `docs/email.md`).
+  must differ from `end`), `digest` (`OFF`, `HOURLY`, `DAILY`; `docs/email.md`), and
+  `reactions` (default `true`: reactions to the user's messages notify them; null in
+  `updateNotificationSettings` keeps the stored value).
 - **Do-not-disturb pause** (`setDoNotDisturb`, command `notifications.dnd`): on until turned off,
   or until an instant (`dndPaused`, `dndPausedUntil`). It is separate from the daily window and
   `updateNotificationSettings` leaves it alone.
@@ -268,6 +271,26 @@ Sound and preview stay device-local client settings.
 6. Inside the do-not-disturb window (in the user's timezone) or pause the notification is still
    stored, but the event carries `quiet: true` so clients neither toast nor play a sound.
 
+### Reactions
+
+A reaction added to a message (`toggleReaction` that adds, not one that removes) tells its author,
+with reason `reaction`:
+
+1. Never about their own reaction or a deleted message, and only while the author is still a
+   member of the conversation.
+2. A timed mute in effect, effective level `NONE`, or the `reactions` setting off yields nothing.
+   `MENTIONS` and `ALL` admit it.
+3. Inside do-not-disturb it is stored and the event is `quiet`, as for messages.
+4. The author has at most one reaction notification per message. The first reaction inserts it;
+   each later one replaces its emoji and reactor, marks it unread and moves its `createdAt` to
+   now, so the entry surfaces again. A notification the message already has for another reason
+   (a mention, say) is left as it is, and no event is sent.
+5. Best-effort, after the reaction commits: a failure is logged and never fails the reaction.
+
+Digest emails list messages only: reaction notifications never trigger, nor appear in, a
+digest. Reading the conversation (`markAsRead`) marks them read like any other notification of
+its messages.
+
 One message yields at most one notification per user (unique `(user, message)`). Notifications
 are created after the message commits (`sendMessage`, `replyToMessage`, and forwards into the
 target conversation) and best-effort: a failure is logged and never fails the send. Edits do not
@@ -279,7 +302,8 @@ notify again. Deleting a message deletes its unread notifications (read ones sta
 - `myNotifications(serverId, unreadOnly, dir, cursor, limit)`: newest first (`createdAt DESC,
   id DESC`, standard cursors; `AFTER` goes to older ones). Each item has `reason`, `createdAt`,
   `readAt` and nested `conversation` / `message`, which are null once the viewer can no longer
-  read the conversation.
+  read the conversation. A `REACTION` item also has `reactionEmoji` and `reactedBy` (the latest
+  reaction); both are null for every other reason.
 - `myUnreadNotificationCount(serverId)`; `markNotificationsRead(serverId, ids | allBefore)`
   (exactly one; returns how many changed; ids of other users are ignored).
 - `markAsRead` on a conversation also marks its notifications for messages sent up to `readAt`
@@ -293,9 +317,18 @@ notify again. Deleting a message deletes its unread notifications (read ones sta
  "conversation_id": "…", "message_id": "…", "reason": "mention", "quiet": false}
 ```
 
-`reason` is `direct`, `mention`, `keyword`, `thread_reply` or `all`. The event is delivered only
-to `user_id` (the server-side scope list is `[user_id]`), guests included; it is a new variant and
-no existing event changed.
+`reason` is `direct`, `mention`, `keyword`, `thread_reply`, `all` or `reaction`. A `reaction`
+event adds `reaction_emoji` and `reaction_by` (the reactor's user id); the two keys are absent
+from every other event:
+
+```json
+{"type": "NotificationDue", "workspace_id": "…", "user_id": "…", "notification_id": "…",
+ "conversation_id": "…", "message_id": "…", "reason": "reaction", "quiet": false,
+ "reaction_emoji": "👍", "reaction_by": "…"}
+```
+
+The event is delivered only to `user_id` (the server-side scope list is `[user_id]`), guests
+included.
 
 ## Titles
 

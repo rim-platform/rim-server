@@ -22,6 +22,8 @@ as reported. Step numbers refer to that plan._
 | F-5 | 8 | Search | rim-ui | minor | Search: no suggestions after from:@ or in:# | fixed (rim-ui #111) |
 | F-6 | 1 | Arrival | rim-ui | major | Web: a workspace joined from an invite appears in the rail only after a reload | fixed (rim-ui #112) |
 | F-7 | 8 | Unread state | rim-ui | major | Unread badge on Inbox stays after everything is read; no unread badge on workspace icons | fixed (rim-ui #112) |
+| F-8 | 8 | Notifications | both | major | A reaction on my message gives no notification | in progress (server #PR; client follows) |
+| F-9 | 8 | Messaging | rim-ui | minor | 'is typing' stays after the message was sent | in progress (rim-ui) |
 
 Severity: **blocker** (the scenario cannot continue), **major** (wrong result, workaround
 exists), **minor** (cosmetic or wording). Status: **open**, **triaged**, **in progress**,
@@ -143,6 +145,28 @@ exists), **minor** (cosmetic or wording). Status: **open**, **triaged**, **in pr
   divider is dismissed, which exists only after a watermark was set. Counts loaded from the
   server have no watermark, so the server is never told and every refetch restores the badge.
   Workspace badges: counts are fetched for the open workspace and the direct space only.
+
+### F-8: A reaction on my message gives no notification
+
+- **Step:** 8
+- **Repo:** both
+- **Severity:** major
+- **Did:** Another account reacted to the viewer's message.
+- **Expected:** A notification in the inbox and, outside do-not-disturb, a toast.
+- **Saw:** Nothing.
+- **Evidence:**
+- **Notes:** Reactions were not a notification reason; the server notified per message only.
+
+### F-9: 'is typing' stays after the message was sent
+
+- **Step:** 8
+- **Repo:** rim-ui
+- **Severity:** minor
+- **Did:** Watched the other person type and send.
+- **Expected:** The indicator disappears when their message arrives.
+- **Saw:** It stays until its five-second expiry.
+- **Evidence:**
+- **Notes:** The client never cleared the typing entry on the author's message.
 
 ## Questions and suggestions
 
