@@ -22,6 +22,7 @@ use rim_services::auth::dto::{
 use rim_services::auth::service::AuthService;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::limits::{InstanceLimits, ensure_below, limit_reached};
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
@@ -63,6 +64,8 @@ pub struct DefaultAuthService {
     reserved_names: ReservedNames,
     /// Runs the Argon2 work of signups and logins.
     password_hashing: PasswordHashing,
+    /// Told of every session a logout ends, so the session's live connections close.
+    session_revocations: std::sync::Arc<dyn SessionRevocations>,
 }
 
 impl DefaultAuthService {
@@ -98,6 +101,7 @@ impl DefaultAuthService {
             limits: InstanceLimits::default(),
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
+            session_revocations: crate::session_revocation::unshared(),
         }
     }
 
@@ -179,6 +183,15 @@ impl DefaultAuthService {
         self
     }
 
+    /// Report the sessions a logout ends to `revocations`.
+    pub(crate) fn with_session_revocations(
+        mut self,
+        revocations: std::sync::Arc<dyn SessionRevocations>,
+    ) -> Self {
+        self.session_revocations = revocations;
+        self
+    }
+
     /// Share the store of recent successful login sources, so other services (password
     /// reset) can forget an account's sources.
     pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
@@ -215,6 +228,7 @@ impl DefaultAuthService {
             limits: InstanceLimits::default(),
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
+            session_revocations: crate::session_revocation::unshared(),
         }
     }
 
@@ -551,6 +565,7 @@ impl AuthService for DefaultAuthService {
         }
 
         self.repos.session_repo.revoke_session(session_id).await?;
+        self.session_revocations.revoke(&[session_id]);
 
         Ok(())
     }
@@ -575,6 +590,8 @@ impl AuthService for DefaultAuthService {
             .session_repo
             .revoke_all_for_user_except(actor.user_id, session_id)
             .await?;
+        self.session_revocations
+            .revoke_user_except(actor.user_id, session_id);
 
         info!(
             target: "audit",

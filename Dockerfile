@@ -122,6 +122,8 @@ USER rim
 #   RIM_RATE_MESSAGES_BURST — messages a user may send at once (default: the per-minute number)
 #   RIM_RATE_WS_CONNECTIONS_PER_USER — open WebSocket connections per user (default: off)
 #   RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION — subscriptions per WebSocket connection (default: off)
+#   RIM_WS_SESSION_RECHECK_SECS — seconds between rechecks of the sessions WebSocket connections
+#                           run under, closing those that ended elsewhere (default: 30, 0 = off)
 #   RIM_API_MAX_BATCH     — GraphQL requests in one batch (default: 20)
 #   RIM_INSTANCE_NOTICE   — a short text shown to people on this instance, at most 500
 #                           characters (default: none); longer stops the server at boot

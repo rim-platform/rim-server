@@ -42,6 +42,7 @@ use rim_services::remote_workspace::dto::{
 };
 use rim_services::remote_workspace::service::WorkspaceHostService;
 use rim_services::s2s::service::PeerService;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::host::DefaultHostService;
@@ -79,6 +80,7 @@ struct Later {
     presence: OnceLock<Arc<dyn PresenceService>>,
     e2ee: OnceLock<Arc<dyn E2eeService>>,
     audit: OnceLock<Arc<dyn AuditLogService>>,
+    session_revocations: OnceLock<Arc<dyn SessionRevocations>>,
 }
 
 pub struct DefaultWorkspaceHost {
@@ -174,6 +176,12 @@ impl DefaultWorkspaceHost {
         let _ = self.later.presence.set(presence);
         let _ = self.later.e2ee.set(e2ee);
         let _ = self.later.audit.set(audit);
+    }
+
+    /// Report the sessions an applied device revocation ends to `revocations`, so their live
+    /// connections close.
+    pub fn set_session_revocations(&self, revocations: Arc<dyn SessionRevocations>) {
+        let _ = self.later.session_revocations.set(revocations);
     }
 
     fn own_id(&self) -> String {
@@ -874,6 +882,9 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             .session_repo
             .revoke_all_for_device(device.id)
             .await?;
+        if let Some(revocations) = self.later.session_revocations.get() {
+            revocations.revoke_device(device.id);
+        }
         if newly
             && let Some(e2ee) = self.later.e2ee.get()
             && let Err(e) = e2ee.devices_changed(user_id).await

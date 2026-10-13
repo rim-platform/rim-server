@@ -24,6 +24,7 @@ mod tests {
         PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
+    use rim_services::session_revocation::{SessionRevocations, WatchedSession};
     use rim_services::{Actor, ServiceError};
 
     use rim_services::events::{NoopBroadcaster, Observers};
@@ -31,6 +32,7 @@ mod tests {
     use crate::AuthRepos;
     use crate::auth::DefaultAuthService;
     use crate::registration_rate_limiter::RegistrationRateLimiter;
+    use crate::session_revocation::InProcessSessionRevocations;
 
     fn noop_observers() -> Observers {
         Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
@@ -283,8 +285,12 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(2));
         session_repo.expect_revoke_all_for_user().never();
+        let registry = Arc::new(InProcessSessionRevocations::default());
+        let mut caller = registry.watch(watched(session_id, user_id));
+        let mut other = registry.watch(watched(SessionId::new(), user_id));
 
         let ended = svc_with_sessions(session_repo)
+            .with_session_revocations(registry)
             .logout_other_sessions(LogoutOtherSessionsCmd {
                 actor: Actor::new(user_id),
                 session_id,
@@ -292,6 +298,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ended, 2);
+        assert!(other.has_ended(), "the other session's connection closes");
+        assert!(!caller.has_ended(), "the caller's connection stays");
+    }
+
+    /// The live connection of a session for `user_id`.
+    fn watched(session_id: SessionId, user_id: UserId) -> WatchedSession {
+        WatchedSession {
+            session_id,
+            user_id,
+            device_key_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn logout_ends_the_live_connections_of_the_calling_session_only() {
+        let user_id = UserId::new();
+        let session_id = SessionId::new();
+        let mut session_repo = MockSessionRepository::new();
+        session_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(make_session(id, user_id))));
+        session_repo
+            .expect_revoke_session()
+            .withf(move |id| *id == session_id)
+            .times(1)
+            .returning(|_| Ok(()));
+        let registry = Arc::new(InProcessSessionRevocations::default());
+        let mut caller = registry.watch(watched(session_id, user_id));
+        let mut other = registry.watch(watched(SessionId::new(), user_id));
+
+        svc_with_sessions(session_repo)
+            .with_session_revocations(registry)
+            .logout(LogoutCmd {
+                actor: Actor::new(user_id),
+                session_id,
+            })
+            .await
+            .unwrap();
+        assert!(caller.has_ended());
+        assert!(!other.has_ended());
     }
 
     #[tokio::test]

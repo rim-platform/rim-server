@@ -155,5 +155,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   request workers, at most `RIM_PASSWORD_HASH_CONCURRENCY` at once (default: the number of
   CPUs, 1 to 64), so a burst of logins no longer stalls other requests. A request that waits
   over 10 seconds for a turn answers `UNAVAILABLE`.
+- A WebSocket connection on `/api/ws` no longer outlives its session. When the session is
+  signed out (`logout`, `logoutOtherSessions`), reset, revoked with its device, ended by an
+  identity recovery, a requested account deletion, a block or the purge, or reaches its expiry,
+  the server ends the connection's streams and closes it with code `4401` ("session ended").
+  Every operation on a connection checks the session first. A session ended in another server
+  process or from the command line closes its connections within
+  `RIM_WS_SESSION_RECHECK_SECS` (default 30, 0 turns the recheck off). `docs/api.md`
+  ("Subscriptions") describes it; a client that sees `4401` signs in again before reconnecting.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

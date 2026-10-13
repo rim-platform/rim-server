@@ -23,6 +23,7 @@ use rim_services::relay::dto::{
     PrincipalUnblockOutcome,
 };
 use rim_services::relay::service::RelayAbuseService;
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::AppRepos;
@@ -45,11 +46,23 @@ pub struct DefaultRelayAbuseService {
     repos: RelayAbuseRepos,
     /// Runs a ban in one transaction; without it (unit tests) the repositories run as given.
     db: Option<DatabaseConnection>,
+    /// Told of the accounts a block signs out, so their live connections close.
+    session_revocations: Arc<dyn SessionRevocations>,
 }
 
 impl DefaultRelayAbuseService {
     pub fn new(repos: RelayAbuseRepos) -> Self {
-        Self { repos, db: None }
+        Self {
+            repos,
+            db: None,
+            session_revocations: crate::session_revocation::unshared(),
+        }
+    }
+
+    /// Report the accounts a block signs out to `revocations`.
+    pub fn with_session_revocations(mut self, revocations: Arc<dyn SessionRevocations>) -> Self {
+        self.session_revocations = revocations;
+        self
     }
 
     pub fn with_db(mut self, db: DatabaseConnection) -> Self {
@@ -293,6 +306,9 @@ impl RelayAbuseService for DefaultRelayAbuseService {
                 }
             }
         }
+        for account in outcomes.iter().filter_map(|o| o.account.as_ref()) {
+            self.session_revocations.revoke_user(account.user_id);
+        }
         for (index, outcome) in outcomes.iter().enumerate() {
             info!(
                 target: "audit",
@@ -502,14 +518,17 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use rim_core::auth::model::SessionId;
     use rim_core::auth::repository::MockSessionRepository;
     use rim_core::key_identity::repository::MockKeyIdentityRepository;
     use rim_core::relay::model::{AbuseReport, PrincipalBlock};
     use rim_core::relay::repository::MockRelayAbuseRepository;
     use rim_core::user::model::{CreatedInvite, InviteChain};
     use rim_core::user::repository::MockUserRepository;
+    use rim_services::session_revocation::WatchedSession;
 
     use super::*;
+    use crate::session_revocation::InProcessSessionRevocations;
 
     const ADA: &str = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
     const BOB: &str = "rimp1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
@@ -730,11 +749,23 @@ mod tests {
     #[tokio::test]
     async fn a_ban_blocks_ends_sessions_revokes_invites_blocks_the_email_and_files_a_report() {
         let w = World::new();
+        let registry = Arc::new(InProcessSessionRevocations::default());
+        let connection = |user_id| {
+            registry.watch(WatchedSession {
+                session_id: SessionId::new(),
+                user_id,
+                device_key_id: None,
+            })
+        };
+        let (mut ada, mut bob) = (connection(w.ada.id), connection(w.bob.id));
         let outcomes = w
             .service()
+            .with_session_revocations(Arc::clone(&registry) as Arc<dyn SessionRevocations>)
             .block_principal(ADA.to_string(), "  spam wave ".to_string(), false)
             .await
             .expect("blocked");
+        assert!(ada.has_ended(), "the blocked account's connections close");
+        assert!(!bob.has_ended());
         assert_eq!(
             w.calls(),
             vec![

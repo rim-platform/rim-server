@@ -15,6 +15,8 @@ use crate::user::model::UserId;
 pub trait SessionRepository: Send + Sync {
     async fn get_by_id(&self, id: SessionId) -> RepoResult<Option<Session>>;
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Session>>;
+    /// The sessions among `ids` that exist, revoked and expired ones included.
+    async fn get_many(&self, ids: &[SessionId]) -> RepoResult<Vec<Session>>;
     async fn create_session(&self, session: NewSession) -> RepoResult<Session>;
     async fn touch_last_seen_at(&self, id: SessionId) -> RepoResult<()>;
     async fn revoke_session(&self, id: SessionId) -> RepoResult<()>;

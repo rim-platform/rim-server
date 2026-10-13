@@ -5065,10 +5065,14 @@ dependencies = [
 name = "rim_server"
 version = "0.1.0"
 dependencies = [
+ "actix",
  "actix-cors",
+ "actix-http",
  "actix-multipart",
  "actix-web",
+ "actix-web-actors",
  "anyhow",
+ "async-channel",
  "async-graphql",
  "async-graphql-actix-web",
  "async-graphql-parser",

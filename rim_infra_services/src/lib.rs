@@ -80,6 +80,8 @@ pub mod scheduled_purges;
 pub(crate) mod secret_file;
 pub(crate) mod server;
 pub(crate) mod server_member;
+// pub: rim_server builds the registry, watches connections with it and runs the recheck.
+pub mod session_revocation;
 pub(crate) mod signup;
 pub mod storage;
 pub(crate) mod thread;

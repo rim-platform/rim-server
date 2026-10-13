@@ -24,6 +24,13 @@ pub struct Session {
     pub device_key_id: Option<crate::key_identity::model::DeviceKeyId>,
 }
 
+impl Session {
+    /// Whether the session still signs its holder in at `now`: not revoked and not expired.
+    pub fn is_live(&self, now: DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.expires_at > now
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSession {
     pub user_id: UserId,

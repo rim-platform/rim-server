@@ -41,10 +41,12 @@ mod tests {
         RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
     };
     use rim_services::key_auth::service::KeyAuthService;
+    use rim_services::session_revocation::{SessionRevocations, SessionWatch, WatchedSession};
     use rim_services::{Actor, ServiceError};
 
     use crate::key_auth::{DefaultKeyAuthService, KeyAuthRepos};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
+    use crate::session_revocation::InProcessSessionRevocations;
     use crate::signup::SignupRepos;
 
     const AUDIENCE: &str = "rim.example.com";
@@ -380,6 +382,18 @@ mod tests {
                 .map(|(s, _)| s.clone()))
         }
 
+        async fn get_many(&self, ids: &[SessionId]) -> RepoResult<Vec<Session>> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .sessions
+                .iter()
+                .filter(|(s, _)| ids.contains(&s.id))
+                .map(|(s, _)| s.clone())
+                .collect())
+        }
+
         async fn create_session(&self, new: NewSession) -> RepoResult<Session> {
             let session = Session {
                 id: SessionId::new(),
@@ -473,6 +487,7 @@ mod tests {
     struct Harness {
         state: Shared,
         svc: DefaultKeyAuthService,
+        revocations: Arc<InProcessSessionRevocations>,
     }
 
     fn user_row(s: &State, id: UserId) -> User {
@@ -624,7 +639,13 @@ mod tests {
             RegistrationRateLimiter::new(3600, limits.challenge),
             RegistrationRateLimiter::new(3600, limits.failure),
         );
-        Harness { state, svc }
+        let revocations = Arc::new(InProcessSessionRevocations::default());
+        let svc = svc.with_session_revocations(Arc::clone(&revocations) as _);
+        Harness {
+            state,
+            svc,
+            revocations,
+        }
     }
 
     /// Operator blocks as `State::blocked` holds them.
@@ -806,6 +827,21 @@ mod tests {
                 .sessions
                 .iter()
                 .any(|(s, _)| s.id == id && s.revoked_at.is_some())
+        }
+
+        /// A live connection of session `id`, watching it as the WebSocket layer does.
+        fn connection(&self, id: SessionId) -> SessionWatch {
+            let state = self.state.lock().unwrap();
+            let (session, device) = state
+                .sessions
+                .iter()
+                .find(|(s, _)| s.id == id)
+                .expect("a stored session");
+            self.revocations.watch(WatchedSession {
+                session_id: id,
+                user_id: session.user_id,
+                device_key_id: device.or(session.device_key_id),
+            })
         }
     }
 
@@ -1320,6 +1356,7 @@ mod tests {
         let h = harness();
         let e = h.enroll(1).await;
         let key_session = h.login(&e, e.device_id, &e.device, AUDIENCE).await.unwrap();
+        let mut connections = [h.connection(key_session), h.connection(e.session)];
 
         let revocation = e.id.revoke_device(&e.state, e.device_id);
         let dto = h
@@ -1334,6 +1371,7 @@ mod tests {
         assert!(h.session_revoked(key_session));
         // The enrolling password session was bound to the device too.
         assert!(h.session_revoked(e.session));
+        assert!(connections.iter_mut().all(SessionWatch::has_ended));
 
         let err = h
             .login(&e, e.device_id, &e.device, AUDIENCE)
@@ -1586,6 +1624,7 @@ mod tests {
         let h = harness();
         let mut e = h.enroll(1).await;
         let key_session = h.login(&e, e.device_id, &e.device, AUDIENCE).await.unwrap();
+        let mut connections = [h.connection(key_session), h.connection(e.session)];
         let recovery = e.id.recover(&e.state, 4);
         let (next, _) = e.state.apply(&recovery).unwrap();
 
@@ -1618,6 +1657,7 @@ mod tests {
         assert_eq!(dto.key_seq, Some(1));
         assert!(h.session_revoked(key_session));
         assert!(h.session_revoked(e.session));
+        assert!(connections.iter_mut().all(SessionWatch::has_ended));
         let old = dto
             .devices
             .iter()
@@ -2505,6 +2545,7 @@ mod tests {
                 .svc
                 .with_server_id(A8_RELAY.to_string())
                 .with_quotas(quotas),
+            revocations: h.revocations,
         }
     }
 
@@ -2562,6 +2603,7 @@ mod tests {
         let other = Harness {
             state: other.state,
             svc: other.svc.with_server_id(SERVER_ID.to_string()),
+            revocations: other.revocations,
         };
         let q = other.present(1).await;
         let err = other

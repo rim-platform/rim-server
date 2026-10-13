@@ -203,3 +203,55 @@ async fn touch_last_seen_at_updates_timestamp() {
     assert!(last_seen >= before_touch - chrono::Duration::seconds(1));
     assert!(last_seen <= chrono::Utc::now() + chrono::Duration::seconds(1));
 }
+
+/// `get_many` returns the stored sessions among the ids, revoked and expired ones included,
+/// and nothing for unknown ids or none at all.
+#[tokio::test]
+async fn get_many_returns_the_stored_sessions_among_the_ids() {
+    let ctx = support::TestCtx::new().await;
+    let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let user = ctx.create_user("u").await;
+    let session = |token: &str, expires_in: chrono::Duration| NewSession {
+        user_id: user.id,
+        token_hash: token.to_string(),
+        expires_at: chrono::Utc::now() + expires_in,
+        user_agent: None,
+        ip: None,
+    };
+    let live = session_repo
+        .create_session(session("live", chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    let expired = session_repo
+        .create_session(session("expired", -chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    let revoked = session_repo
+        .create_session(session("revoked", chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    session_repo.revoke_session(revoked.id).await.unwrap();
+    let not_asked = session_repo
+        .create_session(session("not-asked", chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+
+    let mut found: Vec<_> = session_repo
+        .get_many(&[
+            live.id,
+            expired.id,
+            revoked.id,
+            rim_core::auth::model::SessionId::new(),
+        ])
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.id, s.revoked_at.is_some()))
+        .collect();
+    found.sort_by_key(|(id, _)| uuid::Uuid::from(*id));
+    let mut expected = vec![(live.id, false), (expired.id, false), (revoked.id, true)];
+    expected.sort_by_key(|(id, _)| uuid::Uuid::from(*id));
+    assert_eq!(found, expected);
+    assert!(!found.iter().any(|(id, _)| *id == not_asked.id));
+    assert!(session_repo.get_many(&[]).await.unwrap().is_empty());
+}
