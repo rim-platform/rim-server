@@ -20,6 +20,7 @@ use rim_services::auth::dto::{
     WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
+use rim_services::auth::terms::accepted_terms;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::limits::{InstanceLimits, ensure_below, limit_reached};
 use rim_services::session_revocation::SessionRevocations;
@@ -66,6 +67,8 @@ pub struct DefaultAuthService {
     password_hashing: PasswordHashing,
     /// Told of every session a logout ends, so the session's live connections close.
     session_revocations: std::sync::Arc<dyn SessionRevocations>,
+    /// The terms of service URL every signup must accept; `None` when there are none.
+    terms_url: Option<String>,
 }
 
 impl DefaultAuthService {
@@ -102,6 +105,7 @@ impl DefaultAuthService {
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
+            terms_url: None,
         }
     }
 
@@ -177,6 +181,12 @@ impl DefaultAuthService {
         self
     }
 
+    /// Requires every signup to accept the terms at `terms_url`.
+    pub fn with_terms_url(mut self, terms_url: Option<String>) -> Self {
+        self.terms_url = terms_url;
+        self
+    }
+
     /// Run hashing and verification through `hashing`, shared with other services.
     pub(crate) fn with_password_hashing(mut self, hashing: PasswordHashing) -> Self {
         self.password_hashing = hashing;
@@ -229,6 +239,7 @@ impl DefaultAuthService {
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
+            terms_url: None,
         }
     }
 
@@ -677,6 +688,8 @@ impl AuthService for DefaultAuthService {
             password,
             terms_accepted_url,
         } = cmd;
+        let terms_accepted_url =
+            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
         let (invite_token, username, password) =
             (invite_token.as_str(), username.as_str(), password.as_str());
         signup::validate_username(username)?;
@@ -879,6 +892,8 @@ impl AuthService for DefaultAuthService {
             display_name,
             terms_accepted_url,
         } = cmd;
+        let terms_accepted_url =
+            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
         let (username, password) = (username.as_str(), password.as_str());
 
         signup::validate_username(username)?;
@@ -960,6 +975,8 @@ impl AuthService for DefaultAuthService {
             display_name,
             terms_accepted_url,
         } = cmd;
+        let terms_accepted_url =
+            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
         let (username, password) = (username.as_str(), password.as_str());
 
         // Rate limit check.

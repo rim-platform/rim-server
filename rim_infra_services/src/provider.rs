@@ -66,6 +66,8 @@ pub struct FederationHooks {
     pub reserved_names: crate::reserved_names::ReservedNames,
     /// Runs Argon2 hashing and verification for signups, logins and password resets.
     pub password_hashing: crate::password_hashing::PasswordHashing,
+    /// The terms of service URL every signup must accept; `None` when there are none.
+    pub terms_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -147,7 +149,8 @@ impl DefaultAppServiceProvider {
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
             .with_password_hashing(federation.password_hashing.clone())
-            .with_session_revocations(Arc::clone(&session_revocations)),
+            .with_session_revocations(Arc::clone(&session_revocations))
+            .with_terms_url(federation.terms_url.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -179,7 +182,8 @@ impl DefaultAppServiceProvider {
             .with_quotas(federation.quotas)
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
-            .with_session_revocations(Arc::clone(&session_revocations));
+            .with_session_revocations(Arc::clone(&session_revocations))
+            .with_terms_url(federation.terms_url.clone());
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }

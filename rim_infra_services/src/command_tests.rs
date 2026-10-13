@@ -762,20 +762,31 @@ mod tests {
         .unwrap();
     }
 
-    #[derive(Clone)]
-    struct CapturedAuditWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+    type AuditBuf = Arc<std::sync::Mutex<Vec<u8>>>;
 
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedAuditWriter {
+    thread_local! {
+        /// Where this thread's `audit` lines go while a capture is active.
+        static AUDIT_CAPTURE: std::cell::RefCell<Option<AuditBuf>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Hands the formatter a writer into the calling thread's capture buffer.
+    struct ThreadAuditWriter;
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ThreadAuditWriter {
         type Writer = AuditBufWriter;
         fn make_writer(&'a self) -> Self::Writer {
-            AuditBufWriter(Arc::clone(&self.0))
+            AuditBufWriter(AUDIT_CAPTURE.with(|capture| capture.borrow().clone()))
         }
     }
 
-    struct AuditBufWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+    /// Appends to a capture buffer; discards the line when the thread has none.
+    struct AuditBufWriter(Option<AuditBuf>);
     impl std::io::Write for AuditBufWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
+            if let Some(capture) = &self.0 {
+                capture.lock().unwrap().extend_from_slice(buf);
+            }
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -783,32 +794,47 @@ mod tests {
         }
     }
 
-    fn capturing_subscriber() -> (
-        impl tracing::Subscriber + Send + Sync,
-        Arc<std::sync::Mutex<Vec<u8>>>,
-    ) {
-        use tracing_subscriber::Layer;
-        use tracing_subscriber::layer::SubscriberExt;
-        let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-        let writer = CapturedAuditWriter(Arc::clone(&buf));
-        let layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_ansi(false)
-            .with_writer(writer)
-            .with_filter(tracing_subscriber::filter::filter_fn(|m| {
-                m.target() == "audit"
-            }));
-        let subscriber = tracing_subscriber::registry().with(layer);
-        (subscriber, buf)
+    /// Ends this thread's capture when dropped.
+    struct AuditCaptureGuard;
+
+    impl Drop for AuditCaptureGuard {
+        fn drop(&mut self) {
+            AUDIT_CAPTURE.with(|capture| capture.borrow_mut().take());
+        }
     }
 
-    fn drain_buf(buf: &Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+    /// Captures this thread's `audit` lines into the returned buffer while the guard lives.
+    /// The subscriber is the process-wide default, installed once: tracing caches each
+    /// callsite's interest from the subscribers every thread can see when it is first reached,
+    /// so a thread-local subscriber misses a callsite another test's thread reached first.
+    fn capture_audit_lines() -> (AuditCaptureGuard, AuditBuf) {
+        static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            use tracing_subscriber::Layer;
+            use tracing_subscriber::layer::SubscriberExt;
+            let layer = tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_ansi(false)
+                .with_writer(ThreadAuditWriter)
+                .with_filter(tracing_subscriber::filter::filter_fn(|m| {
+                    m.target() == "audit"
+                }));
+            tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer))
+                .expect("no other global subscriber in this test binary");
+            tracing::callsite::rebuild_interest_cache();
+        });
+        let buf = AuditBuf::default();
+        AUDIT_CAPTURE.with(|capture| *capture.borrow_mut() = Some(Arc::clone(&buf)));
+        (AuditCaptureGuard, buf)
+    }
+
+    fn drain_buf(buf: &AuditBuf) -> String {
         String::from_utf8(buf.lock().unwrap().clone()).expect("audit emits are UTF-8 JSON")
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn execute_command_emits_audit_line_on_success() {
-        let (subscriber, buf) = capturing_subscriber();
+        let (_guard, buf) = capture_audit_lines();
 
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let actor_user_id = actor.user_id;
@@ -831,7 +857,6 @@ mod tests {
         let server_id = rim_core::server::model::ServerId::new();
         let conversation_id = rim_core::conversation::model::ConversationId::new();
 
-        let _guard = tracing::subscriber::set_default(subscriber);
         {
             svc.execute_command(ExecuteCommandCmd {
                 actor,
@@ -875,7 +900,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn execute_command_emits_audit_line_on_capability_denied() {
-        let (subscriber, buf) = capturing_subscriber();
+        let (_guard, buf) = capture_audit_lines();
 
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut cap = rim_services::capability::service::MockCapabilityService::new();
@@ -892,7 +917,6 @@ mod tests {
             cap,
         );
 
-        let _guard = tracing::subscriber::set_default(subscriber);
         {
             let _ = svc
                     .execute_command(ExecuteCommandCmd {
@@ -928,7 +952,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn execute_command_audit_line_redacts_sensitive_args() {
-        let (subscriber, buf) = capturing_subscriber();
+        let (_guard, buf) = capture_audit_lines();
 
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut cap = rim_services::capability::service::MockCapabilityService::new();
@@ -946,7 +970,6 @@ mod tests {
         let svc =
             service_with_capability(repo, MockConversationService::new(), message_service, cap);
 
-        let _guard = tracing::subscriber::set_default(subscriber);
         {
             svc.execute_command(ExecuteCommandCmd {
                     actor,
@@ -2826,8 +2849,19 @@ mod tests {
         args: serde_json::Value,
         context: Option<CommandContextDto>,
     ) -> Result<rim_services::command::dto::CommandResultDto, ServiceError> {
+        run_confirmed_as(svc, new_actor(), command_id, args, context).await
+    }
+
+    /// [`run_confirmed`] as `actor`.
+    async fn run_confirmed_as(
+        svc: &DefaultCommandService,
+        actor: Actor,
+        command_id: &str,
+        args: serde_json::Value,
+        context: Option<CommandContextDto>,
+    ) -> Result<rim_services::command::dto::CommandResultDto, ServiceError> {
         let cmd = ExecuteCommandCmd {
-            actor: new_actor(),
+            actor,
             command_id: command_id.to_string(),
             args: Some(args),
             context,
@@ -3738,5 +3772,205 @@ mod tests {
         ] {
             assert!(!ids.contains(&id.to_string()), "{id}");
         }
+    }
+
+    // ── Execution role gate ──
+
+    /// `moderating(expect)` with the caller holding `role` in every workspace.
+    fn moderating_as(
+        role: ServerMemberRole,
+        expect: impl FnOnce(&mut rim_services::moderation::service::MockModerationService),
+    ) -> DefaultCommandService {
+        let mut svc = moderating(expect);
+        svc.services.server_member_service = Arc::new(
+            rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
+                role,
+            )),
+        );
+        svc
+    }
+
+    /// An auth service whose `create_invite` is never called.
+    fn no_invites() -> Arc<rim_services::auth::service::MockAuthService> {
+        let mut auth = rim_services::auth::service::MockAuthService::new();
+        auth.expect_create_invite().never();
+        Arc::new(auth)
+    }
+
+    /// Asserts `result` is a `Forbidden` refusal naming `command_id`.
+    fn assert_forbidden<T: std::fmt::Debug>(result: Result<T, ServiceError>, command_id: &str) {
+        match result {
+            Err(ServiceError::Forbidden(msg)) => {
+                assert!(
+                    msg.contains(&format!("`{command_id}`")),
+                    "{command_id}: {msg}"
+                )
+            }
+            other => panic!("{command_id}: expected Forbidden, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_builtin_above_the_callers_role_is_refused_before_its_service_runs() {
+        let args = serde_json::json!({
+            "user_id": rim_core::user::model::UserId::new().to_string(),
+            "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
+            "minutes": 10,
+            "seconds": 10,
+            "role": "member",
+        });
+        let mut member_refused: Vec<&str> = ADMIN_TARGET_COMMANDS.to_vec();
+        member_refused.extend(["chat.set_slow_mode", "admin.invite_member"]);
+
+        for (role, refused) in [
+            (ServerMemberRole::Member, member_refused),
+            (ServerMemberRole::Moderator, vec!["admin.invite_member"]),
+        ] {
+            let mut svc = moderating_as(role, |moderation| {
+                moderation.expect_kick().never();
+                moderation.expect_ban().never();
+                moderation.expect_unban().never();
+                moderation.expect_timeout().never();
+                moderation.expect_set_member_role().never();
+                moderation.expect_set_slow_mode().never();
+            });
+            svc.services.auth_service = no_invites();
+
+            for command_id in refused {
+                let result = run_confirmed(
+                    &svc,
+                    command_id,
+                    args.clone(),
+                    Some(workspace_context(rim_core::server::model::ServerId::new())),
+                )
+                .await;
+                assert_forbidden(result, command_id);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_direct_space_guest_is_refused_a_member_builtin_before_its_service_runs() {
+        let direct = rim_core::server::model::ServerId::new();
+        let mut conversation = MockConversationService::new();
+        conversation.expect_create_conversation().never();
+        let mut svc = moderating_as(ServerMemberRole::Guest, |moderation| {
+            moderation.expect_kick().never();
+        })
+        .with_direct_space(direct);
+        svc.services.conversation_service = Arc::new(conversation);
+        let args = serde_json::json!({
+            "name": "general",
+            "user_id": rim_core::user::model::UserId::new().to_string(),
+        });
+
+        for command_id in ["chat.create_channel", "admin.kick"] {
+            let result = run_confirmed(
+                &svc,
+                command_id,
+                args.clone(),
+                Some(workspace_context(direct)),
+            )
+            .await;
+            assert_forbidden(result, command_id);
+        }
+    }
+
+    /// The role is the one held in the workspace the command acts on: the `server_id` arg
+    /// over the context's workspace.
+    #[tokio::test]
+    async fn an_owner_runs_the_owner_only_builtin_in_the_workspace_they_own() {
+        let owned = rim_core::server::model::ServerId::new();
+        let other = rim_core::server::model::ServerId::new();
+        let mut member = rim_services::server_member::service::MockServerMemberService::new();
+        member.expect_get_member().returning(move |query| {
+            let role = if query.server_id == owned {
+                ServerMemberRole::Owner
+            } else {
+                ServerMemberRole::Member
+            };
+            Box::pin(async move {
+                Ok(rim_services::server_member::dto::ServerMemberDto {
+                    server_id: query.server_id,
+                    user_id: query.user_id,
+                    username: "member".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                    timeout_until: None,
+                    principal_id: None,
+                })
+            })
+        });
+        let mut auth = rim_services::auth::service::MockAuthService::new();
+        auth.expect_create_invite()
+            .withf(move |cmd| cmd.server_id == owned)
+            .times(1)
+            .returning(|cmd| {
+                Box::pin(async move {
+                    Ok(rim_services::auth::dto::CreateInviteResultDto {
+                        invite: rim_services::auth::dto::InviteDto {
+                            id: rim_core::auth::model::InviteId::new(),
+                            server_id: cmd.server_id,
+                            created_by_user_id: cmd.actor.user_id,
+                            expires_at: None,
+                            max_uses: cmd.max_uses,
+                            use_count: 0,
+                            revoked_at: None,
+                            role: cmd.role,
+                        },
+                        invite_token: "token".to_string(),
+                    })
+                })
+            });
+        let mut svc = moderating(|_| {});
+        svc.services.server_member_service = Arc::new(member);
+        svc.services.auth_service = Arc::new(auth);
+
+        let invited = run_confirmed(
+            &svc,
+            "admin.invite_member",
+            serde_json::json!({ "server_id": owned.to_string() }),
+            Some(workspace_context(other)),
+        )
+        .await
+        .expect("the owner invites");
+        assert_eq!(invited.status, CommandResultStatusDto::Success);
+
+        let refused = run_confirmed(
+            &svc,
+            "admin.invite_member",
+            serde_json::json!({ "server_id": other.to_string() }),
+            Some(workspace_context(owned)),
+        )
+        .await;
+        assert_forbidden(refused, "admin.invite_member");
+    }
+
+    #[tokio::test]
+    async fn a_user_command_step_above_the_callers_role_is_refused_before_its_service_runs() {
+        let actor = new_actor();
+        let mut svc = moderating_as(ServerMemberRole::Member, |moderation| {
+            moderation.expect_kick().never();
+        });
+        svc.repos.user_command_repo = Arc::new(repo_with(vec![user_command_running(
+            actor.user_id,
+            "user.kick",
+            &["admin.kick"],
+        )]));
+
+        let result = run_confirmed_as(
+            &svc,
+            actor,
+            "user.kick",
+            serde_json::json!({}),
+            Some(workspace_context(rim_core::server::model::ServerId::new())),
+        )
+        .await;
+
+        assert_forbidden(result, "admin.kick");
     }
 }

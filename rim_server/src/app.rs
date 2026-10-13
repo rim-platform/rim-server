@@ -463,6 +463,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
             reserved_names,
             password_hashing,
+            terms_url: instance_policy.terms_url.clone(),
         },
         Arc::clone(&feature_gate),
         instance_limits,

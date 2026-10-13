@@ -405,7 +405,8 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
         .await
         .expect("create invite failed");
 
-    let svc = build_auth_service(db.clone());
+    let svc = build_auth_service(db.clone())
+        .with_terms_url(Some("https://rim.example.org/terms".to_string()));
     let result = svc
         .accept_invite(AcceptInviteCmd {
             invite_token: raw_token.to_string(),

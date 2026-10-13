@@ -321,6 +321,10 @@ impl CommandService for DefaultCommandService {
                 AuditOutcome::PermissionDenied,
                 Some("PermissionDenied".to_string()),
             ),
+            Err(ServiceError::Forbidden(_)) => (
+                AuditOutcome::PermissionDenied,
+                Some("Forbidden".to_string()),
+            ),
             Err(ServiceError::RateLimited { .. }) => {
                 (AuditOutcome::RateLimited, Some("RateLimited".to_string()))
             }

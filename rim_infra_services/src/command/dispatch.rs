@@ -444,8 +444,10 @@ impl DefaultCommandService {
         }
 
         if let Some(definition) = Self::builtin_definition(command_id) {
-            // Timeout gate for nested dispatch: user-command steps and pipe stages reach
-            // builtins here without passing the top-level gate in `execute_command_inner`.
+            // Role and timeout gates for nested dispatch: user-command steps and pipe stages
+            // reach builtins here without passing the top-level gates in `execute_command_inner`.
+            self.ensure_role_admits(&ctx.actor, command_id, args.as_ref(), ctx.context.as_ref())
+                .await?;
             self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
                 .await?;
             return self
@@ -487,6 +489,19 @@ impl DefaultCommandService {
                     .check(&cmd.actor, workspace_id, cap)
                     .await?;
             }
+        }
+
+        // ── Role gate ───────────────────────────────────────────────────
+        // Before the confirmation gate, so a caller whose role cannot run the command is
+        // refused rather than asked to confirm it.
+        if !cmd.is_pipe {
+            self.ensure_role_admits(
+                &cmd.actor,
+                &cmd.command_id,
+                cmd.args.as_ref(),
+                cmd.context.as_ref(),
+            )
+            .await?;
         }
 
         // ── Confirmation gate ────────────────────────────────────────────

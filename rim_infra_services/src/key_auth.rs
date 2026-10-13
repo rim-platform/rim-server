@@ -30,6 +30,7 @@ use rim_identity::{
 };
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::auth::dto::{AuthSessionDto, LoginResultDto, RegistrationMode, SignupResultDto};
+use rim_services::auth::terms::accepted_terms;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::Observers;
 use rim_services::host::service::HostService;
@@ -138,6 +139,8 @@ pub struct DefaultKeyAuthService {
     /// Told of the sessions a device revocation or a recovery ends, so their live connections
     /// close.
     session_revocations: Arc<dyn SessionRevocations>,
+    /// The terms of service URL every signup must accept; `None` when there are none.
+    terms_url: Option<String>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -276,6 +279,7 @@ impl DefaultKeyAuthService {
             revocation_fanout: None,
             reserved_names: ReservedNames::default(),
             session_revocations: crate::session_revocation::unshared(),
+            terms_url: None,
         }
     }
 
@@ -297,6 +301,12 @@ impl DefaultKeyAuthService {
 
     pub fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
         self.reserved_names = reserved_names;
+        self
+    }
+
+    /// Requires every signup to accept the terms at `terms_url`.
+    pub fn with_terms_url(mut self, terms_url: Option<String>) -> Self {
+        self.terms_url = terms_url;
         self
     }
 
@@ -956,6 +966,8 @@ impl KeyAuthService for DefaultKeyAuthService {
 
     #[instrument(name = "key_auth.signup_with_key", skip_all, fields(username = %cmd.username))]
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto> {
+        let terms_accepted_url =
+            accepted_terms(self.terms_url.as_deref(), cmd.terms_accepted_url.as_deref())?;
         // The same mode rules as `signupWithInvite`, checked here too so the service never
         // relies on the resolver alone. In pow mode a proof-of-work stands in for the token.
         let refuse = |why: &str| Err(ServiceError::Validation(why.to_string()));
@@ -1061,12 +1073,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .get_by_id(user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
-        signup::record_terms(
-            repos.user_repo.as_ref(),
-            user.id,
-            cmd.terms_accepted_url.clone(),
-        )
-        .await?;
+        signup::record_terms(repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
         let server_id = match &token {
             Some(token) => {
                 signup::claim_token(

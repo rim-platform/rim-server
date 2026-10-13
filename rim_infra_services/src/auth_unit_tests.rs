@@ -1317,8 +1317,11 @@ mod tests {
     const TERMS: &str = "https://rim.example.org/terms";
 
     /// A user store for one signup that creates `user_id` and expects the acceptance of
-    /// [`TERMS`] recorded on it once.
-    fn user_repo_recording_terms(user_id: UserId) -> MockUserRepository {
+    /// `recorded` stored on it once, or no acceptance stored when `None`.
+    fn user_repo_recording_terms(
+        user_id: UserId,
+        recorded: Option<&'static str>,
+    ) -> MockUserRepository {
         let mut user_repo = MockUserRepository::new();
         user_repo.expect_find_by_username().returning(|_| Ok(None));
         user_repo.expect_is_email_blocked().returning(|_| Ok(false));
@@ -1330,11 +1333,18 @@ mod tests {
             .expect_create_user()
             .returning(move |new| Ok(make_user(user_id, &new.username)));
         let before = Utc::now();
-        user_repo
-            .expect_record_terms_acceptance()
-            .withf(move |id, url, at| *id == user_id && url == TERMS && *at >= before)
-            .times(1)
-            .returning(|_, _, _| Ok(()));
+        match recorded {
+            Some(terms) => {
+                user_repo
+                    .expect_record_terms_acceptance()
+                    .withf(move |id, url, at| *id == user_id && url == terms && *at >= before)
+                    .times(1)
+                    .returning(|_, _, _| Ok(()));
+            }
+            None => {
+                user_repo.expect_record_terms_acceptance().never();
+            }
+        }
         user_repo
     }
 
@@ -1346,60 +1356,122 @@ mod tests {
         session_repo
     }
 
-    /// The open and instance-invite signups record the terms they accepted on the new account.
+    /// The open and instance-invite signups record the accepted terms, stamped now, on the new
+    /// account when the instance has terms, and record nothing when it has none.
     #[tokio::test]
     async fn password_signups_record_the_accepted_terms() {
-        let user_id = UserId::new();
-        let (_, sr, smr, _, ir, cr) = repos();
+        for (instance_terms, recorded) in [(Some(TERMS), Some(TERMS)), (None, None)] {
+            let instance_terms = instance_terms.map(str::to_string);
+            let (_, sr, smr, _, ir, cr) = repos();
+            let svc = svc_with_registration(
+                user_repo_recording_terms(UserId::new(), recorded),
+                sr,
+                smr,
+                session_repo_creating(),
+                ir,
+                cr,
+                MockInstanceInviteRepository::new(),
+            )
+            .with_terms_url(instance_terms.clone());
+            svc.signup_open(SignupOpenCmd {
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                remote_ip: "1.2.3.4".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: None,
+                terms_accepted_url: Some(TERMS.to_string()),
+            })
+            .await
+            .expect("open signup");
+
+            let invite = make_instance_invite(InstanceInviteId::new(), 1, 0);
+            let mut instance_invite_repo = MockInstanceInviteRepository::new();
+            instance_invite_repo
+                .expect_get_by_token_hash()
+                .returning(move |_| Ok(Some(invite.clone())));
+            instance_invite_repo
+                .expect_try_consume()
+                .returning(|_| Ok(true));
+            let (_, sr, smr, _, ir, cr) = repos();
+            let svc = svc_with_registration(
+                user_repo_recording_terms(UserId::new(), recorded),
+                sr,
+                smr,
+                session_repo_creating(),
+                ir,
+                cr,
+                instance_invite_repo,
+            )
+            .with_terms_url(instance_terms);
+            svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
+                username: "alice".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "alice@example.com".to_string(),
+                display_name: None,
+                terms_accepted_url: Some(TERMS.to_string()),
+            })
+            .await
+            .expect("instance invite signup");
+        }
+    }
+
+    /// On an instance with terms, every password signup that did not accept them is refused
+    /// before it touches a repository.
+    #[tokio::test]
+    async fn password_signups_without_the_instance_terms_are_refused() {
+        use rim_services::auth::terms::TERMS_NOT_ACCEPTED;
+
+        let (ur, sr, smr, sess_r, ir, cr) = repos();
         let svc = svc_with_registration(
-            user_repo_recording_terms(user_id),
+            ur,
             sr,
             smr,
-            session_repo_creating(),
+            sess_r,
             ir,
             cr,
             MockInstanceInviteRepository::new(),
-        );
-        svc.signup_open(SignupOpenCmd {
-            username: "carol".to_string(),
-            password: "s3cur3p4ss!".to_string(),
-            remote_ip: "1.2.3.4".to_string(),
-            email: "carol@example.com".to_string(),
-            display_name: None,
-            terms_accepted_url: Some(TERMS.to_string()),
-        })
-        .await
-        .expect("open signup");
-
-        let user_id = UserId::new();
-        let invite = make_instance_invite(InstanceInviteId::new(), 1, 0);
-        let mut instance_invite_repo = MockInstanceInviteRepository::new();
-        instance_invite_repo
-            .expect_get_by_token_hash()
-            .returning(move |_| Ok(Some(invite.clone())));
-        instance_invite_repo
-            .expect_try_consume()
-            .returning(|_| Ok(true));
-        let (_, sr, smr, _, ir, cr) = repos();
-        let svc = svc_with_registration(
-            user_repo_recording_terms(user_id),
-            sr,
-            smr,
-            session_repo_creating(),
-            ir,
-            cr,
-            instance_invite_repo,
-        );
-        svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
-            instance_invite_token: "raw_token".to_string(),
-            username: "alice".to_string(),
-            password: "s3cur3p4ss!".to_string(),
-            email: "alice@example.com".to_string(),
-            display_name: None,
-            terms_accepted_url: Some(TERMS.to_string()),
-        })
-        .await
-        .expect("instance invite signup");
+        )
+        .with_terms_url(Some(TERMS.to_string()));
+        for accepted in [None, Some("https://rim.example.org/old-terms".to_string())] {
+            let open = svc
+                .signup_open(SignupOpenCmd {
+                    username: "carol".to_string(),
+                    password: "s3cur3p4ss!".to_string(),
+                    remote_ip: "1.2.3.4".to_string(),
+                    email: "carol@example.com".to_string(),
+                    display_name: None,
+                    terms_accepted_url: accepted.clone(),
+                })
+                .await
+                .map(|_| ());
+            let invited = svc
+                .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                    instance_invite_token: "raw_token".to_string(),
+                    username: "carol".to_string(),
+                    password: "s3cur3p4ss!".to_string(),
+                    email: "carol@example.com".to_string(),
+                    display_name: None,
+                    terms_accepted_url: accepted.clone(),
+                })
+                .await
+                .map(|_| ());
+            let joined = svc
+                .accept_invite(AcceptInviteCmd {
+                    invite_token: "token".to_string(),
+                    username: "carol".to_string(),
+                    password: "s3cur3p4ss!".to_string(),
+                    terms_accepted_url: accepted.clone(),
+                })
+                .await
+                .map(|_| ());
+            for res in [open, invited, joined] {
+                assert!(
+                    matches!(&res, Err(ServiceError::Validation(m)) if m == TERMS_NOT_ACCEPTED),
+                    "{accepted:?}: {res:?}"
+                );
+            }
+        }
     }
 
     /// Open-mode signup rate-limited after threshold.
