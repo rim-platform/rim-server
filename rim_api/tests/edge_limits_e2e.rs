@@ -17,9 +17,11 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_services::ip_block::DefaultIpBlockService;
 use rim_services::ip_block::dto::BlockIpCmd;
 use rim_services::ip_block::service::IpBlockService;
+use rim_services::operator::OperatorCaller;
 use support::nodes::{Node, S2S_TABLES, start};
 
 /// A node on `DATABASE_URL` with `tweak` applied, its S2S tables cleared first.
@@ -154,13 +156,19 @@ async fn a_blocked_address_gets_403_on_every_route_but_healthz() {
         .execute_unprepared(S2S_TABLES)
         .await
         .expect("truncate");
-    let blocks = DefaultIpBlockService::new(Arc::new(SeaOrmIpBlockRepository::new(ctx.db.clone())));
+    let blocks = DefaultIpBlockService::new(
+        Arc::new(SeaOrmIpBlockRepository::new(ctx.db.clone())),
+        Arc::new(SeaOrmUserRepository::new(ctx.db.clone())),
+    );
     blocks
-        .block(BlockIpCmd {
-            cidr: "127.0.0.1/32".to_string(),
-            reason: "e2e".to_string(),
-            expires_in_days: Some(1),
-        })
+        .block(
+            OperatorCaller::CommandLine,
+            BlockIpCmd {
+                cidr: "127.0.0.1/32".to_string(),
+                reason: "e2e".to_string(),
+                expires_in_days: Some(1),
+            },
+        )
         .await
         .expect("block");
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
@@ -194,7 +202,7 @@ async fn a_blocked_address_gets_403_on_every_route_but_healthz() {
 
     assert!(
         blocks
-            .unblock("127.0.0.1".to_string())
+            .unblock(OperatorCaller::CommandLine, "127.0.0.1".to_string())
             .await
             .expect("unblock")
     );

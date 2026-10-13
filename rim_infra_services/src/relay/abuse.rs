@@ -1,7 +1,7 @@
 //! The operator's abuse tools: blocking principals and accounts on this server and the abuse
 //! reports.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,12 +11,13 @@ use tracing::{info, instrument};
 
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::repository::KeyIdentityRepository;
-use rim_core::relay::model::{AbuseReportId, NewAbuseReport};
+use rim_core::relay::model::{AbuseReport, AbuseReportId, NewAbuseReport, PrincipalBlock};
 use rim_core::relay::repository::RelayAbuseRepository;
 use rim_core::user::model::{InviteKind, User, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_identity::is_principal_id;
 use rim_infra_db::{TransactionScope, begin_transaction};
+use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
     AbuseReportDto, AccountRecordDto, AccountSummaryDto, CreatedInviteDto, FileAbuseReport,
     InviteeDto, PrincipalBlockDto, PrincipalBlockOutcome, PrincipalRecordDto,
@@ -26,6 +27,7 @@ use rim_services::relay::service::RelayAbuseService;
 use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::operator::require_operator;
 use crate::repos::AppRepos;
 
 /// Longest block or report reason, in characters.
@@ -113,7 +115,7 @@ impl DefaultRelayAbuseService {
     }
 
     /// Whether the account's principal or email is blocked.
-    async fn is_blocked(repos: &RelayAbuseRepos, user: &User) -> ServiceResult<bool> {
+    pub(crate) async fn is_blocked(repos: &RelayAbuseRepos, user: &User) -> ServiceResult<bool> {
         if let Some(principal_id) = &user.principal_id
             && repos
                 .relay_abuse_repo
@@ -210,9 +212,85 @@ impl DefaultRelayAbuseService {
         }
         Ok(tree)
     }
+
+    /// Refuse `by` unless it may use the operator's tools.
+    async fn check(&self, by: OperatorCaller) -> ServiceResult<()> {
+        require_operator(self.repos.user_repo.as_ref(), by).await
+    }
+
+    /// The username of the account holding `principal_id` here.
+    async fn username_of(
+        repos: &RelayAbuseRepos,
+        principal_id: &str,
+    ) -> ServiceResult<Option<String>> {
+        Ok(Self::account_of(repos, principal_id)
+            .await?
+            .map(|u| u.username))
+    }
+
+    /// Reports with their reporters' and subjects' usernames.
+    async fn named_reports(
+        repos: &RelayAbuseRepos,
+        reports: Vec<AbuseReport>,
+    ) -> ServiceResult<Vec<AbuseReportDto>> {
+        let reporter_ids: Vec<UserId> = reports
+            .iter()
+            .filter_map(|r| r.reporter_user_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let reporters: HashMap<UserId, String> = if reporter_ids.is_empty() {
+            HashMap::new()
+        } else {
+            repos
+                .user_repo
+                .get_by_ids(&reporter_ids)
+                .await?
+                .into_iter()
+                .map(|u| (u.id, u.username))
+                .collect()
+        };
+        let mut subjects: HashMap<String, Option<String>> = HashMap::new();
+        for principal_id in reports
+            .iter()
+            .filter_map(|r| r.subject_principal_id.as_ref())
+        {
+            if !subjects.contains_key(principal_id) {
+                let username = Self::username_of(repos, principal_id).await?;
+                subjects.insert(principal_id.clone(), username);
+            }
+        }
+        Ok(reports
+            .into_iter()
+            .map(|r| {
+                let mut dto = AbuseReportDto::from(r);
+                dto.reporter_username = dto
+                    .reporter_user_id
+                    .and_then(|id| reporters.get(&id).cloned());
+                dto.subject_username = dto
+                    .subject_principal_id
+                    .as_ref()
+                    .and_then(|p| subjects.get(p).cloned().flatten());
+                dto
+            })
+            .collect())
+    }
+
+    /// A block with the username of the account holding its principal.
+    async fn named_block(
+        repos: &RelayAbuseRepos,
+        block: PrincipalBlock,
+    ) -> ServiceResult<PrincipalBlockDto> {
+        Ok(PrincipalBlockDto {
+            username: Self::username_of(repos, &block.principal_id).await?,
+            principal_id: block.principal_id,
+            reason: block.reason,
+            created_at: block.created_at,
+        })
+    }
 }
 
-fn summary(user: &User) -> AccountSummaryDto {
+pub(crate) fn summary(user: &User) -> AccountSummaryDto {
     AccountSummaryDto {
         user_id: user.id,
         username: user.username.clone(),
@@ -247,10 +325,12 @@ impl RelayAbuseService for DefaultRelayAbuseService {
     #[instrument(name = "relay_abuse.block_principal", skip_all)]
     async fn block_principal(
         &self,
+        by: OperatorCaller,
         principal_id: String,
         reason: String,
         cascade: bool,
     ) -> ServiceResult<Vec<PrincipalBlockOutcome>> {
+        self.check(by).await?;
         check_principal(&principal_id)?;
         let reason = check_reason(&reason)?;
         let (scope, repos) = self.begin().await?;
@@ -314,6 +394,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
                 target: "audit",
                 event = "relay.principal_blocked",
                 scope = "server",
+                actor_id = %by,
                 principal_id = ?outcome.principal_id,
                 user_id = ?outcome.account.as_ref().map(|a| a.user_id),
                 newly_blocked = outcome.newly_blocked,
@@ -331,8 +412,10 @@ impl RelayAbuseService for DefaultRelayAbuseService {
     #[instrument(name = "relay_abuse.unblock_principal", skip_all)]
     async fn unblock_principal(
         &self,
+        by: OperatorCaller,
         principal_id: String,
     ) -> ServiceResult<PrincipalUnblockOutcome> {
+        self.check(by).await?;
         check_principal(&principal_id)?;
         let (scope, repos) = self.begin().await?;
         let lifted = repos
@@ -354,6 +437,7 @@ impl RelayAbuseService for DefaultRelayAbuseService {
                 target: "audit",
                 event = "relay.principal_unblocked",
                 scope = "server",
+                actor_id = %by,
                 principal_id = %principal_id,
                 email_unblocked,
                 "an operator unblocked a principal on this server"
@@ -365,28 +449,32 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         })
     }
 
-    async fn principal_record(&self, principal_id: String) -> ServiceResult<PrincipalRecordDto> {
+    async fn principal_record(
+        &self,
+        by: OperatorCaller,
+        principal_id: String,
+    ) -> ServiceResult<PrincipalRecordDto> {
+        self.check(by).await?;
         check_principal(&principal_id)?;
         let repos = &self.repos;
-        let block = repos
+        let block = match repos
             .relay_abuse_repo
             .list_principal_blocks()
             .await?
             .into_iter()
             .find(|b| b.principal_id == principal_id)
-            .map(|b| PrincipalBlockDto {
-                principal_id: b.principal_id,
-                reason: b.reason,
-                created_at: b.created_at,
-            });
+        {
+            Some(block) => Some(Self::named_block(repos, block).await?),
+            None => None,
+        };
         let open_reports = repos
             .relay_abuse_repo
             .list_reports(true)
             .await?
             .into_iter()
             .filter(|r| r.subject_principal_id.as_deref() == Some(principal_id.as_str()))
-            .map(Into::into)
             .collect();
+        let open_reports = Self::named_reports(repos, open_reports).await?;
         let account = match Self::account_of(repos, &principal_id).await? {
             Some(user) => {
                 let chain = repos.user_repo.invite_chain(user.id).await?;
@@ -432,23 +520,22 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         })
     }
 
-    async fn principal_blocks(&self) -> ServiceResult<Vec<PrincipalBlockDto>> {
-        Ok(self
-            .repos
-            .relay_abuse_repo
-            .list_principal_blocks()
-            .await?
-            .into_iter()
-            .map(|b| PrincipalBlockDto {
-                principal_id: b.principal_id,
-                reason: b.reason,
-                created_at: b.created_at,
-            })
-            .collect())
+    async fn principal_blocks(&self, by: OperatorCaller) -> ServiceResult<Vec<PrincipalBlockDto>> {
+        self.check(by).await?;
+        let mut named = Vec::new();
+        for block in self.repos.relay_abuse_repo.list_principal_blocks().await? {
+            named.push(Self::named_block(&self.repos, block).await?);
+        }
+        Ok(named)
     }
 
     #[instrument(name = "relay_abuse.file_report", skip_all)]
-    async fn file_report(&self, report: FileAbuseReport) -> ServiceResult<AbuseReportDto> {
+    async fn file_report(
+        &self,
+        by: OperatorCaller,
+        report: FileAbuseReport,
+    ) -> ServiceResult<AbuseReportDto> {
+        self.check(by).await?;
         let reason = check_reason(&report.reason)?;
         if report.subject_principal_id.is_none() && report.subject_server_id.is_none() {
             return Err(ServiceError::Validation(
@@ -479,37 +566,48 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         info!(
             target: "audit",
             event = "relay.abuse_report_filed",
+            actor_id = %by,
             report_id = %stored.id,
             principal_id = ?stored.subject_principal_id,
             peer_server_id = ?stored.subject_server_id,
             "an operator filed an abuse report"
         );
-        Ok(stored.into())
+        Self::named_reports(&self.repos, vec![stored])
+            .await?
+            .pop()
+            .ok_or_else(|| ServiceError::internal(anyhow::anyhow!("the filed report was lost")))
     }
 
-    async fn reports(&self, open_only: bool) -> ServiceResult<Vec<AbuseReportDto>> {
-        Ok(self
-            .repos
-            .relay_abuse_repo
-            .list_reports(open_only)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
+    async fn reports(
+        &self,
+        by: OperatorCaller,
+        open_only: bool,
+    ) -> ServiceResult<Vec<AbuseReportDto>> {
+        self.check(by).await?;
+        let reports = self.repos.relay_abuse_repo.list_reports(open_only).await?;
+        Self::named_reports(&self.repos, reports).await
     }
 
     #[instrument(name = "relay_abuse.resolve_report", skip_all)]
-    async fn resolve_report(&self, id: AbuseReportId) -> ServiceResult<Option<AbuseReportDto>> {
-        let resolved = self.repos.relay_abuse_repo.resolve_report(id).await?;
-        if resolved.is_some() {
-            info!(
-                target: "audit",
-                event = "relay.abuse_report_resolved",
-                report_id = %id,
-                "an operator resolved an abuse report"
-            );
-        }
-        Ok(resolved.map(Into::into))
+    async fn resolve_report(
+        &self,
+        by: OperatorCaller,
+        id: AbuseReportId,
+    ) -> ServiceResult<Option<AbuseReportDto>> {
+        self.check(by).await?;
+        let Some(resolved) = self.repos.relay_abuse_repo.resolve_report(id).await? else {
+            return Ok(None);
+        };
+        info!(
+            target: "audit",
+            event = "relay.abuse_report_resolved",
+            actor_id = %by,
+            report_id = %id,
+            "an operator resolved an abuse report"
+        );
+        Ok(Self::named_reports(&self.repos, vec![resolved])
+            .await?
+            .pop())
     }
 }
 
@@ -521,14 +619,18 @@ mod tests {
     use rim_core::auth::model::SessionId;
     use rim_core::auth::repository::MockSessionRepository;
     use rim_core::key_identity::repository::MockKeyIdentityRepository;
-    use rim_core::relay::model::{AbuseReport, PrincipalBlock};
+    use rim_core::principal::model::{Principal, PrincipalId};
     use rim_core::relay::repository::MockRelayAbuseRepository;
     use rim_core::user::model::{CreatedInvite, InviteChain};
     use rim_core::user::repository::MockUserRepository;
+    use rim_services::Actor;
     use rim_services::session_revocation::WatchedSession;
 
     use super::*;
+    use crate::audit_capture::{capture_audit_lines, drain_buf};
     use crate::session_revocation::InProcessSessionRevocations;
+
+    const CLI: OperatorCaller = OperatorCaller::CommandLine;
 
     const ADA: &str = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
     const BOB: &str = "rimp1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
@@ -719,6 +821,11 @@ mod tests {
             user_repo
                 .expect_is_email_blocked()
                 .returning(|email| Ok(email == "cy@example.com"));
+            // Ada is the instance operator.
+            let operator = self.ada.id;
+            user_repo
+                .expect_is_instance_operator()
+                .returning(move |id| Ok(id == operator));
             user_repo.expect_invite_chain().returning(move |id| {
                 Ok(inviters.get(&id).map(|by| InviteChain {
                     invite_id: uuid::Uuid::nil(),
@@ -761,7 +868,7 @@ mod tests {
         let outcomes = w
             .service()
             .with_session_revocations(Arc::clone(&registry) as Arc<dyn SessionRevocations>)
-            .block_principal(ADA.to_string(), "  spam wave ".to_string(), false)
+            .block_principal(CLI, ADA.to_string(), "  spam wave ".to_string(), false)
             .await
             .expect("blocked");
         assert!(ada.has_ended(), "the blocked account's connections close");
@@ -799,7 +906,7 @@ mod tests {
         let w = World::new();
         let outcomes = w
             .service()
-            .block_principal(ADA.to_string(), "spam ring".to_string(), true)
+            .block_principal(CLI, ADA.to_string(), "spam ring".to_string(), true)
             .await
             .expect("blocked");
         let summary_of = |o: &PrincipalBlockOutcome| {
@@ -856,7 +963,7 @@ mod tests {
         let stranger = "rimp1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
         let outcomes = w
             .service()
-            .block_principal(stranger.to_string(), "again".to_string(), true)
+            .block_principal(CLI, stranger.to_string(), "again".to_string(), true)
             .await
             .expect("blocked");
         assert_eq!(outcomes.len(), 1);
@@ -878,7 +985,7 @@ mod tests {
         let w = World::new();
         let outcome = w
             .service()
-            .unblock_principal(ADA.to_string())
+            .unblock_principal(CLI, ADA.to_string())
             .await
             .expect("unblocked");
         assert_eq!(
@@ -902,7 +1009,7 @@ mod tests {
         let w = World::new();
         let record = w
             .service()
-            .principal_record(BOB.to_string())
+            .principal_record(CLI, BOB.to_string())
             .await
             .expect("record");
         let account = record.account.expect("bob's account");
@@ -930,7 +1037,7 @@ mod tests {
 
         let record = w
             .service()
-            .principal_record(ADA.to_string())
+            .principal_record(CLI, ADA.to_string())
             .await
             .expect("record");
         let account = record.account.expect("ada's account");
@@ -951,14 +1058,14 @@ mod tests {
         let svc = World::new().service();
         for (principal, reason) in [("bob", "spam"), (ADA, "  "), (ADA, &"x".repeat(1001))] {
             assert!(matches!(
-                svc.block_principal(principal.to_string(), reason.to_string(), false)
+                svc.block_principal(CLI, principal.to_string(), reason.to_string(), false)
                     .await,
                 Err(ServiceError::Validation(_))
             ));
         }
         for bad in ["bob", ""] {
             assert!(matches!(
-                svc.principal_record(bad.to_string()).await,
+                svc.principal_record(CLI, bad.to_string()).await,
                 Err(ServiceError::Validation(_))
             ));
         }
@@ -975,9 +1082,107 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                svc.file_report(report).await,
+                svc.file_report(CLI, report).await,
                 Err(ServiceError::Validation(_))
             ));
         }
+    }
+
+    /// A signed-in caller acting as `user` directly.
+    fn as_user(user: &User) -> OperatorCaller {
+        OperatorCaller::User(Actor::new(user.id))
+    }
+
+    #[tokio::test]
+    async fn a_user_who_is_not_an_operator_is_refused_every_tool_before_any_change() {
+        let w = World::new();
+        let svc = w.service();
+        let bob = as_user(&w.bob);
+        let report = FileAbuseReport {
+            subject_principal_id: Some(ADA.to_string()),
+            subject_server_id: None,
+            reason: "spam".to_string(),
+        };
+        let refusals = [
+            svc.block_principal(bob, ADA.to_string(), "spam".to_string(), true)
+                .await
+                .err(),
+            svc.unblock_principal(bob, ADA.to_string()).await.err(),
+            svc.principal_record(bob, ADA.to_string()).await.err(),
+            svc.principal_blocks(bob).await.err(),
+            svc.file_report(bob, report).await.err(),
+            svc.reports(bob, false).await.err(),
+            svc.resolve_report(bob, AbuseReportId::new()).await.err(),
+        ];
+        for refusal in refusals {
+            assert!(
+                matches!(refusal, Some(ServiceError::Forbidden(_))),
+                "{refusal:?}"
+            );
+        }
+        assert!(w.calls().is_empty(), "{:?}", w.calls());
+    }
+
+    #[tokio::test]
+    async fn an_app_acting_for_an_operator_is_refused() {
+        let w = World::new();
+        let app = OperatorCaller::User(Actor {
+            principal: Principal::app(PrincipalId::new()),
+            user_id: w.ada.id,
+        });
+        assert!(matches!(
+            w.service().reports(app, true).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_operator_bans_as_the_command_line_does() {
+        let w = World::new();
+        let outcomes = w
+            .service()
+            .block_principal(as_user(&w.ada), BOB.to_string(), "spam".to_string(), false)
+            .await
+            .expect("blocked");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].principal_id.as_deref(), Some(BOB));
+        assert_eq!(w.calls()[0], format!("block {BOB}: spam"));
+    }
+
+    #[tokio::test]
+    async fn reports_and_blocks_name_the_accounts_holding_their_principals() {
+        let w = World::new();
+        let svc = w.service();
+        let reports = svc.reports(as_user(&w.ada), true).await.expect("reports");
+        assert_eq!(
+            reports
+                .iter()
+                .map(|r| (
+                    r.subject_username.as_deref(),
+                    r.reporter_username.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(Some("ada"), None), (Some("bob"), None)]
+        );
+        let blocks = svc.principal_blocks(CLI).await.expect("blocks");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].username.as_deref(), Some("ada"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_audit_line_names_the_operator_or_the_command_line() {
+        let (_guard, buf) = capture_audit_lines();
+        let w = World::new();
+        let svc = w.service();
+
+        svc.unblock_principal(as_user(&w.ada), ADA.to_string())
+            .await
+            .expect("unblocked");
+        svc.unblock_principal(CLI, ADA.to_string())
+            .await
+            .expect("unblocked");
+        let lines = drain_buf(&buf);
+        assert!(lines.contains(&format!("actor_id={}", w.ada.id)), "{lines}");
+        assert!(lines.contains("actor_id=cli"), "{lines}");
     }
 }

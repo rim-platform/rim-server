@@ -19,6 +19,10 @@ pub struct User {
     /// purged and only a tombstone named "Deleted account" stays as the author of its encrypted
     /// messages.
     pub deletion_scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the account is an instance operator, who may run the instance moderation queue
+    /// (`instanceReports` and the other `instance…` roots). Read on `me` only; false for
+    /// everyone else.
+    pub instance_operator: bool,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -33,6 +37,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             principal_id: value.principal_id,
             probation_ends_at: None,
             deletion_scheduled_for: value.deletion_scheduled_for,
+            instance_operator: false,
         }
     }
 }

@@ -44,6 +44,8 @@ pub struct Model {
     pub created_by_invite_id: Option<Uuid>,
     /// The creator of that invite.
     pub invited_by_user_id: Option<Uuid>,
+    /// Whether the account may run the instance's moderation queue.
+    pub instance_operator: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

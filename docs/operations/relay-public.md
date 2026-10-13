@@ -355,7 +355,14 @@ rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reaso
 rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
 rim-relay audit purge [--dry-run] [--older-than-days N]
 rim-relay ip block <cidr> --reason <text> [--expires-in-days D] | unblock <cidr> | list
+rim-relay operator grant <username> | revoke <username> | list
 ```
+
+`operator grant` makes an account an instance operator: it reads the abuse reports, principal
+blocks and IP blocks in the app and changes them as the `abuse-reports`, `principal` and `ip`
+commands do (`docs/api.md`, "Instance moderation"). A blocked account or one scheduled for
+deletion cannot be granted the role; `operator revoke` takes it back and `operator list` prints
+the operators.
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`, one per
 account a block reaches, `cascade` true for those after the first),
@@ -363,7 +370,9 @@ account a block reaches, `cascade` true for those after the first),
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
 `server_key.recovered`, `instance_invite_issued`,
 `instance_invite_revoked` (`issued_by` or `actor` `operator`), `ip.block` and `ip.unblock`
-(`scope` `server`, with the `cidr`). `audit purge` writes
+(`scope` `server`, with the `cidr`), `operator.granted` and `operator.revoked` (`scope`
+`server`, with the `user_id`). The principal, report and IP lines carry `actor_id`: `cli` for
+the command line, the operator's user id for a change made in the app. `audit purge` writes
 `audit.retention.purged` (`trigger` `cli`), the same event the daily purge writes; the purge, its
 export files and the logrotate setup for `/data/audit.log` are in
 `docs/operations/audit-retention.md`.

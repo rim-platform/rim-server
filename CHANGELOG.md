@@ -23,6 +23,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Instance moderation in the app: `rim_server operator grant | revoke | list` makes an account
+  an instance operator, `me.instanceOperator` says whether the caller is one, and the queries
+  `instanceReports`, `instancePrincipalBlocks`, `instanceIpBlocks` and the mutations
+  `instanceBlockPrincipal`, `instanceUnblockPrincipal`, `instanceResolveReport`,
+  `instanceBlockIp`, `instanceUnblockIp` do what the `abuse-reports`, `principal` and `ip`
+  commands do; anyone else gets `FORBIDDEN`. Their audit lines now carry `actor_id`.
+
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
 - Release images: every release tag publishes `ghcr.io/rim-platform/rim-server:<version>`
   (also `<major>.<minor>`, `sha-<short sha>` and `latest`), signed with cosign keyless by the

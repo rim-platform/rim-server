@@ -378,11 +378,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
 
     // The deny list is in force before the listener binds.
-    let ip_block_service: Arc<dyn rim_services::ip_block::service::IpBlockService> = Arc::new(
-        rim_infra_services::ip_block::DefaultIpBlockService::new(Arc::new(
-            rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository::new(db.clone()),
-        )),
-    );
+    let ip_block_service: Arc<dyn rim_services::ip_block::service::IpBlockService> =
+        Arc::new(rim_infra_services::ip_block::DefaultIpBlockService::new(
+            Arc::new(
+                rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository::new(db.clone()),
+            ),
+            Arc::clone(&repos.user_repo),
+        ));
     let ip_deny_list = Arc::new(crate::edge::IpDenyList::default());
     crate::edge::refresh_deny_list(ip_block_service.as_ref(), &ip_deny_list)
         .await
@@ -698,7 +700,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     }
 
     // Background task: read the IP deny list again and delete expired blocks, so a block or
-    // unblock made by the CLI applies within the interval.
+    // unblock made by the CLI or by an instance operator in the client applies within the
+    // interval.
     {
         let service = Arc::clone(&ip_block_service);
         let list = Arc::clone(&ip_deny_list);

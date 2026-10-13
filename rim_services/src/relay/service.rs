@@ -7,6 +7,7 @@ use rim_core::user::model::UserId;
 use tokio::sync::broadcast;
 
 use crate::e2ee::command::MlsCaller;
+use crate::operator::OperatorCaller;
 use crate::relay::dto::{
     AbuseReportDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, FileAbuseReport,
     IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
@@ -152,7 +153,8 @@ pub trait RelayService: Send + Sync {
 
 /// The operator's abuse tools: principals this server refuses (their sessions are ended, their
 /// signups, logins and deliveries refused) and the abuse reports users and the abuse address
-/// file.
+/// file. Each method takes who runs it and refuses a user who is not an instance operator with
+/// `Forbidden`.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait RelayAbuseService: Send + Sync {
@@ -164,6 +166,7 @@ pub trait RelayAbuseService: Send + Sync {
     /// principal's first, then breadth first.
     async fn block_principal(
         &self,
+        by: OperatorCaller,
         principal_id: String,
         reason: String,
         cascade: bool,
@@ -173,22 +176,39 @@ pub trait RelayAbuseService: Send + Sync {
     /// ended.
     async fn unblock_principal(
         &self,
+        by: OperatorCaller,
         principal_id: String,
     ) -> ServiceResult<PrincipalUnblockOutcome>;
 
     /// The account holding a principal here, its inviter, its invite tree, its open reports
     /// and its block.
-    async fn principal_record(&self, principal_id: String) -> ServiceResult<PrincipalRecordDto>;
+    async fn principal_record(
+        &self,
+        by: OperatorCaller,
+        principal_id: String,
+    ) -> ServiceResult<PrincipalRecordDto>;
 
     /// Every block, newest first.
-    async fn principal_blocks(&self) -> ServiceResult<Vec<PrincipalBlockDto>>;
+    async fn principal_blocks(&self, by: OperatorCaller) -> ServiceResult<Vec<PrincipalBlockDto>>;
 
     /// File a report from the abuse address.
-    async fn file_report(&self, report: FileAbuseReport) -> ServiceResult<AbuseReportDto>;
+    async fn file_report(
+        &self,
+        by: OperatorCaller,
+        report: FileAbuseReport,
+    ) -> ServiceResult<AbuseReportDto>;
 
     /// Reports, oldest first; only unresolved ones when `open_only`.
-    async fn reports(&self, open_only: bool) -> ServiceResult<Vec<AbuseReportDto>>;
+    async fn reports(
+        &self,
+        by: OperatorCaller,
+        open_only: bool,
+    ) -> ServiceResult<Vec<AbuseReportDto>>;
 
     /// Mark a report resolved. `None` when there is no such report.
-    async fn resolve_report(&self, id: AbuseReportId) -> ServiceResult<Option<AbuseReportDto>>;
+    async fn resolve_report(
+        &self,
+        by: OperatorCaller,
+        id: AbuseReportId,
+    ) -> ServiceResult<Option<AbuseReportDto>>;
 }

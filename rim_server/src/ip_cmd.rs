@@ -17,11 +17,16 @@ use chrono::{DateTime, Utc};
 use rim_core::ip_block::model::IpRange;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_services::ip_block::DefaultIpBlockService;
 use rim_services::ip_block::dto::{BlockIpCmd, IpBlockDto};
 use rim_services::ip_block::service::{IpBlockService, MAX_BLOCK_DAYS};
+use rim_services::operator::OperatorCaller;
 
 use crate::config::RIMConfig;
+
+/// The commands run as the operator at the command line.
+const CLI: OperatorCaller = OperatorCaller::CommandLine;
 
 const USAGE: &str = "usage: rim_server ip block <cidr> --reason <text> \
      [--expires-in-days <1-365>] | ip unblock <cidr> | ip list";
@@ -125,9 +130,11 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         .connect_database()
         .await
         .map_err(|e| format!("failed to connect to database: {e}"))?;
-    let service: Arc<dyn IpBlockService> = Arc::new(DefaultIpBlockService::new(Arc::new(
-        SeaOrmIpBlockRepository::new(DbHandle::from(db.clone())),
-    )));
+    let handle = DbHandle::from(db.clone());
+    let service: Arc<dyn IpBlockService> = Arc::new(DefaultIpBlockService::new(
+        Arc::new(SeaOrmIpBlockRepository::new(handle.clone())),
+        Arc::new(SeaOrmUserRepository::new(handle)),
+    ));
     let result = execute_on(command, service.as_ref(), Utc::now()).await;
     let _ = db.close().await;
     result
@@ -191,11 +198,14 @@ async fn execute_on(
             expires_in_days,
         } => {
             let outcome = service
-                .block(BlockIpCmd {
-                    cidr: range.to_string(),
-                    reason,
-                    expires_in_days,
-                })
+                .block(
+                    CLI,
+                    BlockIpCmd {
+                        cidr: range.to_string(),
+                        reason,
+                        expires_in_days,
+                    },
+                )
                 .await
                 .map_err(|e| e.to_string())?;
             let until = match outcome.block.expires_at {
@@ -214,7 +224,7 @@ async fn execute_on(
         }
         Command::Unblock { range } => {
             if service
-                .unblock(range.to_string())
+                .unblock(CLI, range.to_string())
                 .await
                 .map_err(|e| e.to_string())?
             {
@@ -224,7 +234,7 @@ async fn execute_on(
             }
         }
         Command::List => {
-            let blocks = service.list().await.map_err(|e| e.to_string())?;
+            let blocks = service.list(CLI).await.map_err(|e| e.to_string())?;
             out = table(&blocks, now);
         }
     }
@@ -345,13 +355,14 @@ mod tests {
         let mut first = true;
         service
             .expect_block()
-            .withf(|cmd| {
-                cmd.cidr == "203.0.113.0/24"
+            .withf(|by, cmd| {
+                *by == CLI
+                    && cmd.cidr == "203.0.113.0/24"
                     && cmd.reason == "scraping"
                     && cmd.expires_in_days == Some(7)
             })
             .times(2)
-            .returning(move |_| {
+            .returning(move |_, _| {
                 let newly_blocked = std::mem::replace(&mut first, false);
                 Box::pin(async move {
                     Ok(IpBlockOutcome {
@@ -362,8 +373,8 @@ mod tests {
             });
         service
             .expect_unblock()
-            .withf(|cidr| cidr == "203.0.113.0/24")
-            .returning(|_| Box::pin(async { Ok(true) }));
+            .withf(|by, cidr| *by == CLI && cidr == "203.0.113.0/24")
+            .returning(|_, _| Box::pin(async { Ok(true) }));
         let now = Utc::now();
         let block = || Command::Block {
             range: range("203.0.113.0/24"),
@@ -396,7 +407,7 @@ mod tests {
             .expect("time")
             .with_timezone(&Utc);
         let mut service = MockIpBlockService::new();
-        service.expect_list().times(1).returning(move || {
+        service.expect_list().times(1).returning(move |_| {
             Box::pin(async move {
                 Ok(vec![
                     dto("198.51.100.0/24", "spam", None),
@@ -426,7 +437,7 @@ mod tests {
         let mut empty = MockIpBlockService::new();
         empty
             .expect_list()
-            .returning(|| Box::pin(async { Ok(vec![]) }));
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
         assert_eq!(
             execute_on(Command::List, &empty, now).await.expect("list"),
             "no IP blocks\n"

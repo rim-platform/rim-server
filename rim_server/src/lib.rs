@@ -17,6 +17,7 @@ mod health;
 pub mod invite_cmd;
 pub mod ip_cmd;
 pub(crate) mod metrics;
+pub mod operator_cmd;
 pub(crate) mod origin;
 mod plugin_bundle_handlers;
 mod remote_handlers;
