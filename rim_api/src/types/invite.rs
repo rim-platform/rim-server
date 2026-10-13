@@ -90,7 +90,7 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
     }
 }
 
-/// Payload returned from `signupWithInvite`.
+/// Payload returned from `signupWithInvite` and `signupWithKey`.
 ///
 /// `server_id` is `Some` only when a `workspaceInviteToken` was used;
 /// the instance-invite and open paths land in "no workspaces yet" state.
@@ -98,4 +98,7 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
 pub struct SignupWithInvitePayloadGql {
     pub user_id: async_graphql::ID,
     pub server_id: Option<async_graphql::ID>,
+    /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
+    /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
+    pub csrf_token: String,
 }

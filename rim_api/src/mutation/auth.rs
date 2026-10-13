@@ -29,12 +29,13 @@ impl AuthMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
-                csrf_token: res.csrf_token,
+                csrf_token: res.csrf_token.clone(),
             });
         }
 
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
+            csrf_token: res.csrf_token,
         })
     }
 
@@ -128,7 +129,11 @@ pub struct LoginInput {
     pub password: String,
 }
 
+/// Payload returned from `login` and `loginWithKey`.
 #[derive(SimpleObject)]
 pub struct LoginPayload {
     pub user_id: ID,
+    /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
+    /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
+    pub csrf_token: String,
 }

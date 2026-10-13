@@ -21,7 +21,7 @@ use super::graphql::{anonymous_request, exec_ok};
 pub const PASSWORD: &str = "correct horse battery";
 
 pub const LOGIN: &str = r#"
-mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
+mutation Login($input: LoginInput!) { login(input: $input) { userId csrfToken } }"#;
 
 impl TestCtx {
     /// A user named `username` who signs in with [`PASSWORD`].
