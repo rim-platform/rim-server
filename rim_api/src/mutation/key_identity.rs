@@ -53,12 +53,13 @@ impl KeyIdentityMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
-                csrf_token: res.csrf_token,
+                csrf_token: res.csrf_token.clone(),
             });
         }
 
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
+            csrf_token: res.csrf_token,
         })
     }
 
@@ -195,13 +196,14 @@ impl KeyIdentityMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
-                csrf_token: res.csrf_token,
+                csrf_token: res.csrf_token.clone(),
             });
         }
 
         Ok(SignupWithInvitePayloadGql {
             user_id: ID(res.user_id.to_string()),
             server_id: res.server_id.map(|id| ID(id.to_string())),
+            csrf_token: res.csrf_token,
         })
     }
 }

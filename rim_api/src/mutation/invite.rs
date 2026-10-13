@@ -194,13 +194,14 @@ impl InviteMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token,
-                csrf_token,
+                csrf_token: csrf_token.clone(),
             });
         }
 
         Ok(SignupWithInvitePayloadGql {
             user_id: ID(user_id.to_string()),
             server_id: server_id.map(|id| ID(id.to_string())),
+            csrf_token,
         })
     }
 }

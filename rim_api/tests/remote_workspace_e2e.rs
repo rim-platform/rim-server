@@ -48,10 +48,10 @@ const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, pee
      relay_revocation_fanout, \"user\", server RESTART IDENTITY CASCADE";
 
 const SIGNUP: &str = r#"
-mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId } }"#;
+mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId csrfToken } }"#;
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 const LOGIN: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId } }"#;
+mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId csrfToken } }"#;
 const PUBLISH: &str = r#"
 mutation Publish($card: SignedStatementInput!) { publishProfileCard(card: $card) { version } }"#;
 const CREATE_SERVER: &str =
@@ -305,6 +305,7 @@ async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
     let (session, csrf) = cookies(&response);
     let body: Value = response.json().await.expect("json");
     assert!(body.get("errors").is_none(), "signup: {body}");
+    assert_eq!(body["data"]["signupWithKey"]["csrfToken"], json!(csrf));
     let person = Person {
         origin: node.origin.clone(),
         http,
@@ -1054,6 +1055,7 @@ async fn a_remote_member_signs_in_to_the_host_directly_for_a_day() {
         body["data"]["loginWithKey"]["userId"],
         json!(rita_on_h.to_string())
     );
+    assert_eq!(body["data"]["loginWithKey"]["csrfToken"], json!(csrf));
     let hours = scalar(
         &h,
         "SELECT (extract(epoch FROM (expires_at - now())) / 60)::bigint AS n FROM session \

@@ -33,6 +33,14 @@ fragment Inner on Mutation {
 
 const STATUS_TEXT: &str = "{ me { statusText } }";
 
+/// What a request carries of the CSRF token besides the session cookie.
+enum Csrf {
+    None,
+    /// The `X-CSRF-Token` header without the `rim_csrf` cookie.
+    HeaderOnly,
+    CookieAndHeader,
+}
+
 /// A server, and a password user signed in to it over HTTP who owns one workspace.
 struct SignedIn {
     node: Node,
@@ -76,6 +84,8 @@ impl SignedIn {
                 .unwrap_or_else(|| panic!("{name} cookie"))
         };
         let (session, csrf) = (cookie("rim_session"), cookie("rim_csrf"));
+        let body: Value = res.json().await.expect("json");
+        assert_eq!(body["data"]["login"]["csrfToken"], json!(csrf), "{body}");
         Self {
             node,
             http,
@@ -86,18 +96,20 @@ impl SignedIn {
         }
     }
 
-    /// Posts `query` with the session cookie, and with the CSRF cookie and header when `csrf`.
-    async fn post(&self, query: &str, csrf: bool) -> Value {
+    /// Posts `query` with the session cookie and what `csrf` adds.
+    async fn post(&self, query: &str, csrf: Csrf) -> Value {
         let mut request = self.http.post(format!("{}/api", self.node.origin));
-        request = if csrf {
-            request
+        request = match csrf {
+            Csrf::None => request.header("cookie", format!("rim_session={}", self.session)),
+            Csrf::HeaderOnly => request
+                .header("cookie", format!("rim_session={}", self.session))
+                .header("x-csrf-token", &self.csrf),
+            Csrf::CookieAndHeader => request
                 .header(
                     "cookie",
                     format!("rim_session={}; rim_csrf={}", self.session, self.csrf),
                 )
-                .header("x-csrf-token", &self.csrf)
-        } else {
-            request.header("cookie", format!("rim_session={}", self.session))
+                .header("x-csrf-token", &self.csrf),
         };
         request
             .json(&json!({ "query": query }))
@@ -110,7 +122,7 @@ impl SignedIn {
     }
 
     async fn status_text(&self) -> Value {
-        let res = self.post(STATUS_TEXT, false).await;
+        let res = self.post(STATUS_TEXT, Csrf::None).await;
         assert!(res.get("errors").is_none(), "{res}");
         res["data"]["me"]["statusText"].clone()
     }
@@ -120,16 +132,22 @@ impl SignedIn {
 async fn a_protected_mutation_in_nested_fragments_needs_the_csrf_header() {
     let signed_in = SignedIn::new().await;
 
-    let refused = signed_in.post(NESTED_PROTECTED, false).await;
-    assert_eq!(
-        refused["errors"][0]["message"], "csrf validation failed",
-        "{refused}"
-    );
-    assert!(refused["data"].is_null(), "{refused}");
+    // Without the header, and with the header but without the cookie it must equal.
+    for csrf in [Csrf::None, Csrf::HeaderOnly] {
+        let refused = signed_in.post(NESTED_PROTECTED, csrf).await;
+        assert_eq!(
+            refused["errors"][0]["message"], "csrf validation failed",
+            "{refused}"
+        );
+        assert!(refused["data"].is_null(), "{refused}");
+    }
     assert_eq!(signed_in.status_text().await, Value::Null);
 
-    // With the header the same document runs, so the refusal above was the check's.
-    let ran = signed_in.post(NESTED_PROTECTED, true).await;
+    // With the token `login` returned in the header and the cookie the same document runs, so
+    // the refusals above were the check's.
+    let ran = signed_in
+        .post(NESTED_PROTECTED, Csrf::CookieAndHeader)
+        .await;
     assert!(ran.get("errors").is_none(), "{ran}");
     assert_eq!(signed_in.status_text().await, "changed without CSRF");
 

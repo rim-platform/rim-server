@@ -30,6 +30,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   `instanceBlockIp`, `instanceUnblockIp` do what the `abuse-reports`, `principal` and `ip`
   commands do; anyone else gets `FORBIDDEN`. Their audit lines now carry `actor_id`.
 
+- `LoginPayload.csrfToken` and `SignupWithInvitePayloadGql.csrfToken`: `login`, `loginWithKey`,
+  `signupWithInvite` and `signupWithKey` return the session's CSRF token, the value of the
+  `rim_csrf` cookie, so a client that cannot read that cookie (a packaged desktop app talking to
+  a server on another host) can send it in `X-CSRF-Token`.
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
 - Release images: every release tag publishes `ghcr.io/rim-platform/rim-server:<version>`
   (also `<major>.<minor>`, `sha-<short sha>` and `latest`), signed with cosign keyless by the

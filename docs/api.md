@@ -254,6 +254,13 @@ that it is readable by scripts (not `HttpOnly`). Its value is an HMAC over the s
 client copies it into the `X-CSRF-Token` header. The server accepts a request when the header
 equals the cookie and the token is bound to the request's session cookie.
 
+Every mutation that starts a session (`login`, `loginWithKey`, `signupWithInvite` and
+`signupWithKey`) also returns the same token as `csrfToken` in its payload. A web client reads the
+cookie. A client that cannot read it, such as a packaged desktop app talking to a server on
+another host, keeps `csrfToken` in memory and sends it in `X-CSRF-Token`. The cookie still has to
+reach the server with the request: it carries the same attributes as the session cookie, so a
+request that sends the one sends the other.
+
 The header is required on:
 
 - every GraphQL request whose operation is a mutation, with the exceptions below. The check

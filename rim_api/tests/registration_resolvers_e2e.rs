@@ -283,11 +283,15 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
             }}) {{
                 userId
                 serverId
+                csrfToken
             }}
         }}"#
     );
 
-    let res = schema.execute(Request::new(&mutation)).await;
+    let intent = std::sync::Arc::new(rim_api::auth_intent::AuthIntentCtx::default());
+    let res = schema
+        .execute(Request::new(&mutation).data(std::sync::Arc::clone(&intent)))
+        .await;
     assert!(
         res.errors.is_empty(),
         "signupWithInvite operator invite: unexpected errors: {:?}",
@@ -302,6 +306,23 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
         .as_str()
         .expect("userId must be a non-null string");
     assert!(!user_id_str.is_empty(), "userId must be non-empty");
+
+    // The payload carries the token the `rim_csrf` cookie is set to, bound to the new session.
+    let Some(rim_api::auth_intent::AuthIntent::SetSession {
+        session_token,
+        csrf_token,
+    }) = intent.take()
+    else {
+        panic!("signupWithInvite must set a session");
+    };
+    assert_eq!(
+        json["signupWithInvite"]["csrfToken"],
+        serde_json::json!(csrf_token)
+    );
+    assert!(rim_auth::csrf::verify_csrf_token(
+        &csrf_token,
+        &session_token
+    ));
 
     // serverId must be null — the new account has no workspace.
     assert!(
