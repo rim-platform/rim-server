@@ -136,6 +136,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- The `TypingStarted` event of `workspaceEvents` carries the typing user's `username` and
+  `display_name`, so a client can say who is typing.
 - A local account's first use of the direct space, any operation that needs membership there,
   joins it as a guest instead of being refused.
 - `executeCommand` refuses a builtin whose required role the caller does not hold in its
