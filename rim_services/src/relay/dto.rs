@@ -283,6 +283,8 @@ pub struct RelayCleanup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrincipalBlockDto {
     pub principal_id: String,
+    /// The username of the account holding the principal here; `None` when none does.
+    pub username: Option<String>,
     pub reason: String,
     pub created_at: DateTime<Utc>,
 }
@@ -390,7 +392,11 @@ pub struct AbuseReportDto {
     pub id: AbuseReportId,
     /// The local user who reported; `None` for one an operator filed.
     pub reporter_user_id: Option<UserId>,
+    /// The reporter's username.
+    pub reporter_username: Option<String>,
     pub subject_principal_id: Option<String>,
+    /// The username of the account holding the subject principal here; `None` when none does.
+    pub subject_username: Option<String>,
     pub subject_server_id: Option<String>,
     pub request_id: Option<DmRequestId>,
     pub reason: String,
@@ -398,12 +404,15 @@ pub struct AbuseReportDto {
     pub resolved_at: Option<DateTime<Utc>>,
 }
 
+/// The report without usernames; the abuse service names the accounts.
 impl From<AbuseReport> for AbuseReportDto {
     fn from(r: AbuseReport) -> Self {
         Self {
             id: r.id,
             reporter_user_id: r.reporter_user_id,
+            reporter_username: None,
             subject_principal_id: r.subject_principal_id,
+            subject_username: None,
             subject_server_id: r.subject_server_id,
             request_id: r.request_id,
             reason: r.reason,

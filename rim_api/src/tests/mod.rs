@@ -543,6 +543,23 @@ impl AppServiceProvider for TestAppServiceProvider {
         // Every feature on; a test turns one off with `with_features_disabled`.
         Arc::new(rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled())
     }
+
+    fn relay_abuse_service(&self) -> Arc<dyn rim_services::relay::service::RelayAbuseService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::relay::service::MockRelayAbuseService::new())
+    }
+
+    fn ip_block_service(&self) -> Arc<dyn rim_services::ip_block::service::IpBlockService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::ip_block::service::MockIpBlockService::new())
+    }
+
+    fn instance_operator_service(
+        &self,
+    ) -> Arc<dyn rim_services::operator::InstanceOperatorService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::operator::MockInstanceOperatorService::new())
+    }
 }
 
 /// `request` on an instance where `disabled` are switched off: request data takes precedence

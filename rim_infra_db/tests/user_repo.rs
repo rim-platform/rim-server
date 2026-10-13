@@ -309,3 +309,45 @@ async fn a_purged_accounts_email_is_free_unless_it_was_blocked() {
     assert!(repo.find_by_email(&banned_email).await.unwrap().is_none());
     assert!(repo.is_email_blocked(&banned_email).await.unwrap());
 }
+
+#[tokio::test]
+async fn the_instance_operator_role_is_granted_listed_and_revoked_and_a_tombstone_never_holds_it() {
+    use sea_orm::ConnectionTrait;
+
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let zed = ctx.create_user("u_operator_zed").await;
+    let amy = ctx.create_user("u_operator_amy").await;
+    let plain = ctx.create_user("u_operator_plain").await;
+    assert!(!repo.is_instance_operator(zed.id).await.unwrap());
+
+    for user in [&zed, &amy] {
+        assert!(repo.set_instance_operator(user.id, true).await.unwrap());
+    }
+    assert!(!repo.set_instance_operator(zed.id, true).await.unwrap());
+    assert!(repo.is_instance_operator(zed.id).await.unwrap());
+    assert!(!repo.is_instance_operator(plain.id).await.unwrap());
+    let names: Vec<String> = repo
+        .instance_operators()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|u| u.username)
+        .collect();
+    assert_eq!(names, vec!["u_operator_amy", "u_operator_zed"]);
+
+    assert!(repo.set_instance_operator(zed.id, false).await.unwrap());
+    assert!(!repo.set_instance_operator(zed.id, false).await.unwrap());
+    assert!(!repo.is_instance_operator(zed.id).await.unwrap());
+
+    ctx.db
+        .execute_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            r#"UPDATE "user" SET deleted_at = now(), email = NULL WHERE id = $1"#,
+            [sea_orm::prelude::Uuid::from(amy.id).into()],
+        ))
+        .await
+        .unwrap();
+    assert!(!repo.is_instance_operator(amy.id).await.unwrap());
+    assert!(repo.instance_operators().await.unwrap().is_empty());
+}

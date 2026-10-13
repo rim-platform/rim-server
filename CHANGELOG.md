@@ -23,6 +23,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Instance moderation in the app: `rim_server operator grant | revoke | list` makes an account
+  an instance operator, `me.instanceOperator` says whether the caller is one, and the queries
+  `instanceReports`, `instancePrincipalBlocks`, `instanceIpBlocks` and the mutations
+  `instanceBlockPrincipal`, `instanceUnblockPrincipal`, `instanceResolveReport`,
+  `instanceBlockIp`, `instanceUnblockIp` do what the `abuse-reports`, `principal` and `ip`
+  commands do; anyone else gets `FORBIDDEN`. Their audit lines now carry `actor_id`.
+
+- `LoginPayload.csrfToken` and `SignupWithInvitePayloadGql.csrfToken`: `login`, `loginWithKey`,
+  `signupWithInvite` and `signupWithKey` return the session's CSRF token, the value of the
+  `rim_csrf` cookie, so a client that cannot read that cookie (a packaged desktop app talking to
+  a server on another host) can send it in `X-CSRF-Token`.
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
 - Release images: every release tag publishes `ghcr.io/rim-platform/rim-server:<version>`
   (also `<major>.<minor>`, `sha-<short sha>` and `latest`), signed with cosign keyless by the
@@ -127,6 +138,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - A local account's first use of the direct space, any operation that needs membership there,
   joins it as a guest instead of being refused.
+- `executeCommand` refuses a builtin whose required role the caller does not hold in its
+  workspace, with `FORBIDDEN` naming the command, before the service behind it runs; user command
+  steps and pipe stages are checked the same way.
+- On a server with terms of service, every signup path refuses an account that did not accept
+  them, not only the `signupWithInvite` and `signupWithKey` resolvers.
 
 ### Security
 

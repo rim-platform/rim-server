@@ -254,6 +254,13 @@ that it is readable by scripts (not `HttpOnly`). Its value is an HMAC over the s
 client copies it into the `X-CSRF-Token` header. The server accepts a request when the header
 equals the cookie and the token is bound to the request's session cookie.
 
+Every mutation that starts a session (`login`, `loginWithKey`, `signupWithInvite` and
+`signupWithKey`) also returns the same token as `csrfToken` in its payload. A web client reads the
+cookie. A client that cannot read it, such as a packaged desktop app talking to a server on
+another host, keeps `csrfToken` in memory and sends it in `X-CSRF-Token`. The cookie still has to
+reach the server with the request: it carries the same attributes as the session cookie, so a
+request that sends the one sends the other.
+
 The header is required on:
 
 - every GraphQL request whose operation is a mutation, with the exceptions below. The check
@@ -353,6 +360,32 @@ An operator can also block an address or range (`rim_server ip block`). A blocke
 answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,
 the readiness probe, discovery and `/s2s/v1/...`. The address is found the same way as for the
 limits.
+
+## Instance moderation
+
+An instance operator runs the server's moderation queue from the app: the abuse reports, the
+principals the server refuses and the IP deny list. The server's operator makes an account an
+instance operator with `rim_server operator grant <username>` and takes the role back with
+`operator revoke`; a blocked account or one scheduled for deletion cannot be granted it.
+`me { instanceOperator }` tells the signed-in caller whether they hold it (false on every other
+user).
+
+| Root | Does what the command line does |
+|---|---|
+| `instanceReports(openOnly: true)` | `abuse-reports list [--open]`, oldest first |
+| `instanceResolveReport(id)` | `abuse-reports resolve`; `NOT_FOUND` for no such report |
+| `instancePrincipalBlocks` | `principal list`, newest first |
+| `instanceBlockPrincipal(principalId, reason, cascade: false)` | `principal block [--cascade]` |
+| `instanceUnblockPrincipal(principalId)` | `principal unblock` |
+| `instanceIpBlocks` | `ip list` |
+| `instanceBlockIp(cidr, reason, expiresInDays)` | `ip block [--expires-in-days]` |
+| `instanceUnblockIp(cidr)` | `ip unblock` |
+
+Reports and blocks name the local account holding a principal (`subjectUsername`, `username`),
+null when no account here holds it. Each root needs a session and the mutations the CSRF
+header. Anyone but an instance operator gets `FORBIDDEN`, an app or bot acting for one too.
+Each change writes the same audit line as its command, with the operator's user id as
+`actor_id` (`cli` for the command line).
 
 ## Errors
 

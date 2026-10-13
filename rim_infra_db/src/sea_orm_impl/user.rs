@@ -8,7 +8,7 @@ use rim_core::user::repository::UserRepository;
 use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, Set, Statement, Value, sea_query::Expr,
+    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement, Value, sea_query::Expr,
 };
 
 use crate::DbHandle;
@@ -327,5 +327,42 @@ impl UserRepository for SeaOrmUserRepository {
         .await
         .map_err(map_db_err)?;
         Ok(row.is_some_and(|r| r.flag))
+    }
+
+    async fn is_instance_operator(&self, id: UserId) -> RepoResult<bool> {
+        let row = FlagRow::find_by_statement(statement(
+            r#"SELECT EXISTS (SELECT 1 FROM "user" WHERE id = $1 AND instance_operator
+               AND deleted_at IS NULL) AS flag"#,
+            vec![Uuid::from(id).into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.is_some_and(|r| r.flag))
+    }
+
+    async fn set_instance_operator(&self, id: UserId, operator: bool) -> RepoResult<bool> {
+        Ok(self
+            .db
+            .execute_raw(statement(
+                r#"UPDATE "user" SET instance_operator = $2, updated_at = now()
+                   WHERE id = $1 AND instance_operator <> $2"#,
+                vec![Uuid::from(id).into(), operator.into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .rows_affected()
+            == 1)
+    }
+
+    async fn instance_operators(&self) -> RepoResult<Vec<User>> {
+        let models = user::Entity::find()
+            .filter(user::Column::InstanceOperator.eq(true))
+            .filter(user::Column::DeletedAt.is_null())
+            .order_by_asc(user::Column::Username)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(models.into_iter().map(Into::into).collect())
     }
 }

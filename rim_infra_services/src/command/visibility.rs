@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use serde_json::Value;
+
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::{
@@ -11,7 +13,8 @@ use rim_services::server_member::command::GetServerMemberQuery;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
-use super::registry;
+use super::executor::resolve_workspace_id;
+use super::registry::{self, RequiredRole};
 
 /// The caller's membership in the workspace a listing is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +116,38 @@ impl DefaultCommandService {
             .into_iter()
             .filter(|c| may_run(c, membership, &held, user_steps))
             .collect())
+    }
+
+    /// Refuses the builtin `command_id` with `Forbidden` unless the actor's role in the
+    /// workspace it acts on (the `server_id` arg, else the context's) meets the role
+    /// [`role_admits`] requires. A command every member may run needs no lookup here; the
+    /// service behind it checks membership.
+    pub(super) async fn ensure_role_admits(
+        &self,
+        actor: &Actor,
+        command_id: &str,
+        args: Option<&Value>,
+        context: Option<&CommandContextDto>,
+    ) -> ServiceResult<()> {
+        if registry::required_role(command_id) == RequiredRole::Guest {
+            return Ok(());
+        }
+        let no_args = serde_json::Map::new();
+        let args = args.and_then(Value::as_object).unwrap_or(&no_args);
+        let workspace_id = resolve_workspace_id(args, context, "server_id")?;
+        let admitted = self
+            .membership(actor, workspace_id)
+            .await?
+            .is_some_and(|membership| {
+                role_admits(command_id, membership, &UserCommandSteps::new(), 0)
+            });
+        if admitted {
+            Ok(())
+        } else {
+            Err(ServiceError::Forbidden(format!(
+                "your role in this workspace does not allow `{command_id}`"
+            )))
+        }
     }
 
     /// The actor's membership in `workspace_id`, `None` when they are not a member.

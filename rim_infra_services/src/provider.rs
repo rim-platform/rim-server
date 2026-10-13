@@ -14,6 +14,7 @@ use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::device_link::service::DeviceLinkService;
 use rim_services::events::Observers;
 use rim_services::feature::service::FeatureGate;
+use rim_services::ip_block::service::IpBlockService;
 use rim_services::key_auth::service::KeyAuthService;
 use rim_services::keybind::service::KeybindService;
 use rim_services::limits::InstanceLimits;
@@ -27,11 +28,13 @@ use rim_services::message_thread::service::ThreadService;
 use rim_services::moderation::service::ModerationService;
 use rim_services::notification::service::NotificationService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
+use rim_services::operator::InstanceOperatorService;
 use rim_services::password_reset::service::PasswordResetService;
 use rim_services::pin::service::PinService;
 use rim_services::pipeline::service::PipelineService;
 use rim_services::provider::AppServiceProvider;
 use rim_services::read_state::service::ReadStateService;
+use rim_services::relay::service::RelayAbuseService;
 use rim_services::server::service::ServerService;
 use rim_services::server_member::service::ServerMemberService;
 use rim_services::session_revocation::SessionRevocations;
@@ -66,6 +69,8 @@ pub struct FederationHooks {
     pub reserved_names: crate::reserved_names::ReservedNames,
     /// Runs Argon2 hashing and verification for signups, logins and password resets.
     pub password_hashing: crate::password_hashing::PasswordHashing,
+    /// The terms of service URL every signup must accept; `None` when there are none.
+    pub terms_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -104,6 +109,9 @@ pub struct DefaultAppServiceProvider {
     feature_gate: Arc<dyn FeatureGate>,
     account_deletion: DefaultAccountDeletionService,
     session_revocations: Arc<dyn SessionRevocations>,
+    relay_abuse_service: Arc<dyn RelayAbuseService>,
+    ip_block_service: Arc<dyn IpBlockService>,
+    instance_operator_service: Arc<dyn InstanceOperatorService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -147,7 +155,8 @@ impl DefaultAppServiceProvider {
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
             .with_password_hashing(federation.password_hashing.clone())
-            .with_session_revocations(Arc::clone(&session_revocations)),
+            .with_session_revocations(Arc::clone(&session_revocations))
+            .with_terms_url(federation.terms_url.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -179,7 +188,8 @@ impl DefaultAppServiceProvider {
             .with_quotas(federation.quotas)
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
-            .with_session_revocations(Arc::clone(&session_revocations));
+            .with_session_revocations(Arc::clone(&session_revocations))
+            .with_terms_url(federation.terms_url.clone());
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -449,6 +459,24 @@ impl DefaultAppServiceProvider {
             .with_direct_space(federation.direct_space_id),
         );
 
+        let relay_abuse_service: Arc<dyn RelayAbuseService> = Arc::new(
+            crate::relay::abuse::DefaultRelayAbuseService::new(repos.for_relay_abuse())
+                .with_db(db.clone())
+                .with_session_revocations(Arc::clone(&session_revocations)),
+        );
+        let ip_block_service: Arc<dyn IpBlockService> =
+            Arc::new(crate::ip_block::DefaultIpBlockService::new(
+                Arc::new(
+                    rim_infra_db::sea_orm_impl::ip_block::SeaOrmIpBlockRepository::new(
+                        rim_infra_db::DbHandle::from(db.clone()),
+                    ),
+                ),
+                Arc::clone(&repos.user_repo),
+            ));
+        let instance_operator_service: Arc<dyn InstanceOperatorService> = Arc::new(
+            crate::operator::DefaultInstanceOperatorService::new(repos.for_relay_abuse()),
+        );
+
         Self {
             audit_log_service,
             auth_service,
@@ -484,6 +512,9 @@ impl DefaultAppServiceProvider {
             feature_gate,
             account_deletion,
             session_revocations,
+            relay_abuse_service,
+            ip_block_service,
+            instance_operator_service,
         }
     }
 
@@ -617,5 +648,14 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn feature_gate(&self) -> Arc<dyn FeatureGate> {
         Arc::clone(&self.feature_gate)
+    }
+    fn relay_abuse_service(&self) -> Arc<dyn RelayAbuseService> {
+        Arc::clone(&self.relay_abuse_service)
+    }
+    fn ip_block_service(&self) -> Arc<dyn IpBlockService> {
+        Arc::clone(&self.ip_block_service)
+    }
+    fn instance_operator_service(&self) -> Arc<dyn InstanceOperatorService> {
+        Arc::clone(&self.instance_operator_service)
     }
 }

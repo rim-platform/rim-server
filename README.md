@@ -127,6 +127,9 @@ rim_server ip block <cidr> --reason <text> [--expires-in-days <1-365>]
 rim_server ip unblock <cidr>
 rim_server ip list
 rim_server account purge [--dry-run]
+rim_server operator grant <username>
+rim_server operator revoke <username>
+rim_server operator list
 ```
 
 `invite create` prints a signup link; with `--email` it admits only a password signup with that
@@ -135,7 +138,8 @@ address. `docs/server-identity.md` explains the key and peer commands, `docs/rel
 purge. `ip block` refuses an address or CIDR range, IPv4 or IPv6, on every route but `/healthz`
 (`docs/self-hosting.md`, "Limits and blocking"). `account purge` purges the accounts whose
 deletion grace period ended now instead of at the next hourly run (`docs/self-hosting.md`,
-"Deleted accounts").
+"Deleted accounts"). `operator grant` lets an account run the abuse reports, principal blocks
+and IP blocks from the app (`docs/api.md`, "Instance moderation").
 
 ## Configuration
 

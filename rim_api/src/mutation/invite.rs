@@ -51,18 +51,6 @@ pub(crate) fn registration_token(
     Err(async_graphql::Error::new(message).extend_with(|_, e| e.set("code", "VALIDATION")))
 }
 
-/// The terms URL a signup records under the instance's policy: the instance's terms when the
-/// signup accepted them, `None` when the instance has none. Shared by `signupWithInvite` and
-/// `signupWithKey`.
-///
-/// # Errors
-/// `VALIDATION` when the instance has terms and `accepted` is missing or different.
-pub(crate) fn accepted_terms(ctx: &Context<'_>, accepted: Option<&str>) -> Result<Option<String>> {
-    let policy = ctx.data::<crate::types::InstancePolicy>()?;
-    rim_services::auth::terms::accepted_terms(policy.terms_url.as_deref(), accepted)
-        .map_err(map_service_error)
-}
-
 #[Object]
 impl InviteMutations {
     async fn create_invite(
@@ -135,7 +123,7 @@ impl InviteMutations {
             input.instance_invite_token,
             input.workspace_invite_token,
         )?;
-        let terms_accepted_url = accepted_terms(ctx, input.accepted_terms_url.as_deref())?;
+        let terms_accepted_url = input.accepted_terms_url;
 
         // Normalise email at the resolver boundary (trim + lowercase) as
         // defence in depth; the service also validates on the way in.
@@ -206,13 +194,14 @@ impl InviteMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token,
-                csrf_token,
+                csrf_token: csrf_token.clone(),
             });
         }
 
         Ok(SignupWithInvitePayloadGql {
             user_id: ID(user_id.to_string()),
             server_id: server_id.map(|id| ID(id.to_string())),
+            csrf_token,
         })
     }
 }

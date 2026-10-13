@@ -53,12 +53,13 @@ impl KeyIdentityMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
-                csrf_token: res.csrf_token,
+                csrf_token: res.csrf_token.clone(),
             });
         }
 
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
+            csrf_token: res.csrf_token,
         })
     }
 
@@ -176,8 +177,6 @@ impl KeyIdentityMutations {
             input.workspace_invite_token,
             input.proof_of_work,
         )?;
-        let terms_accepted_url =
-            super::invite::accepted_terms(ctx, input.accepted_terms_url.as_deref())?;
         let res = svc
             .signup_with_key(SignupWithKeyCmd {
                 username: input.username,
@@ -189,7 +188,7 @@ impl KeyIdentityMutations {
                 token,
                 proof_of_work,
                 remote_ip: crate::auth_context::remote_ip(ctx),
-                terms_accepted_url,
+                terms_accepted_url: input.accepted_terms_url,
             })
             .await
             .map_err(map_service_error)?;
@@ -197,13 +196,14 @@ impl KeyIdentityMutations {
         if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
-                csrf_token: res.csrf_token,
+                csrf_token: res.csrf_token.clone(),
             });
         }
 
         Ok(SignupWithInvitePayloadGql {
             user_id: ID(res.user_id.to_string()),
             server_id: res.server_id.map(|id| ID(id.to_string())),
+            csrf_token: res.csrf_token,
         })
     }
 }

@@ -171,15 +171,16 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
 }
 
-/// `User` ends with the caller's probation end and pending deletion.
+/// `User` ends with the caller's probation end, pending deletion and operator role.
 #[test]
-fn user_sdl_ends_with_the_probation_end_and_the_pending_deletion() {
+fn user_sdl_ends_with_the_probation_end_the_pending_deletion_and_the_operator_role() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     assert!(
         sdl.contains(
-            "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime }"
+            "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime \
+             instanceOperator: Boolean! }"
         ),
-        "User must end with probationEndsAt, then deletionScheduledFor"
+        "User must end with probationEndsAt, deletionScheduledFor, then instanceOperator"
     );
 }
 
@@ -295,4 +296,84 @@ fn signup_inputs_take_the_accepted_terms_last() {
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
+}
+
+/// The instance moderation roots and types, with their exact signatures.
+#[test]
+fn instance_moderation_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "instanceReports( openOnly: Boolean! = true ): [InstanceAbuseReport!]!",
+        "instancePrincipalBlocks: [InstancePrincipalBlock!]!",
+        "instanceIpBlocks: [InstanceIpBlock!]!",
+        "instanceBlockPrincipal( principalId: String!, reason: String!, cascade: Boolean! = \
+         false ): [InstancePrincipalBlockOutcome!]!",
+        "instanceUnblockPrincipal( principalId: String! ): InstancePrincipalUnblockOutcome!",
+        "instanceResolveReport( id: ID! ): InstanceAbuseReport!",
+        "instanceBlockIp( cidr: String!, reason: String!, expiresInDays: Int ): \
+         InstanceIpBlockOutcome!",
+        "instanceUnblockIp( cidr: String! ): Boolean!",
+        "type InstanceAbuseReport { id: ID! reporterUserId: ID reporterUsername: String \
+         subjectPrincipalId: String subjectUsername: String subjectServerId: String requestId: \
+         ID reason: String! createdAt: DateTime! resolvedAt: DateTime resolved: Boolean! }",
+        "type InstancePrincipalBlock { principalId: String! username: String reason: String! \
+         createdAt: DateTime! }",
+        "type InstanceIpBlock { cidr: String! reason: String! expiresAt: DateTime createdAt: \
+         DateTime! expired: Boolean! }",
+        "type InstanceIpBlockOutcome { block: InstanceIpBlock! newlyBlocked: Boolean! }",
+        "type InstanceAccount { userId: ID! username: String! principalId: String createdAt: \
+         DateTime! }",
+        "type InstancePrincipalBlockOutcome { principalId: String newlyBlocked: Boolean! \
+         account: InstanceAccount reason: String! endedSessions: Int! ignoredRequests: Int! \
+         revokedInvites: Int! emailBlocked: Boolean! invitees: [InstanceAccount!]! }",
+        "type InstancePrincipalUnblockOutcome { lifted: Boolean! emailUnblocked: Boolean! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// Every instance moderation type, field, root and argument carries a description.
+#[test]
+fn instance_moderation_sdl_describes_every_type_field_and_argument() {
+    let sdl = test_sdl();
+    let mut undocumented = Vec::new();
+    let mut in_description = false;
+    let mut described = false;
+    let mut in_instance_type = false;
+    let mut in_root = false;
+    let mut in_instance_args = false;
+    for line in sdl.lines().map(str::trim) {
+        if line == "\"\"\"" {
+            in_description = !in_description;
+            described = !in_description;
+            continue;
+        }
+        if in_description || line.is_empty() {
+            continue;
+        }
+        let instance_root = in_root && !in_instance_args && line.starts_with("instance");
+        let relevant = line.starts_with("type Instance")
+            || instance_root
+            || (in_instance_type && line != "}")
+            || (in_instance_args && !line.starts_with(')'));
+        // Arguments without descriptions are printed inline, on the root's own line.
+        let inline_arguments = instance_root && line.contains('(') && !line.ends_with('(');
+        if relevant && (!described || inline_arguments) {
+            undocumented.push(line.to_string());
+        }
+        if line.starts_with("type ") {
+            in_instance_type = line.starts_with("type Instance");
+            in_root = line == "type Query {" || line == "type Mutation {";
+        } else if line == "}" {
+            in_instance_type = false;
+            in_root = false;
+        }
+        if instance_root && line.ends_with('(') {
+            in_instance_args = true;
+        } else if line.starts_with(')') {
+            in_instance_args = false;
+        }
+        described = false;
+    }
+    assert!(undocumented.is_empty(), "undocumented: {undocumented:?}");
 }
