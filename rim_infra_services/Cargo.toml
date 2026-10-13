@@ -34,7 +34,7 @@ regex = "1"
 base64 = "0.22.1"
 sha2 = "0.10.9"
 hmac = "0.12.1"
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 subtle = "2.6"
 zeroize = "1.8"
 # The post-quantum suite is enabled on `openmls_traits` and the provider, not on `openmls`, whose
