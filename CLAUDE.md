@@ -172,4 +172,4 @@ Review covers: layered architecture compliance, pattern consistency, cross-repo 
 
 ## CI
 
-GitHub Actions runs: build+test (single-threaded), fmt check, clippy (-D warnings), coverage (75% line gate via cargo-llvm-cov — temporarily lowered from 95%; raise it as coverage improves), cargo audit, Docker build validation.
+GitHub Actions runs: build+test (single-threaded), fmt check, clippy (-D warnings), coverage (90% line gate via cargo-llvm-cov; raise it as coverage improves), cargo audit, Docker build validation.
