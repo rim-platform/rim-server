@@ -64,8 +64,8 @@ rendering, the Vim profile, audit retention) and the first groups of the cleanup
 public: the incident and on-call vertical was dropped from
 the core (the last commit with it is tagged `incidents-last`), dead code and GraphQL roots no
 client calls were removed, bootstrap tokens were folded into instance invites, and the schema,
-build and metadata were tidied. The documentation and comment pass (C-4) is in progress; the
-`.env` history purge (C-5) comes last.
+build and metadata were tidied. The documentation and comment pass (C-4) is merged, and the
+`.env` history purge (C-5) ran on 2026-10-11 (`docs/security/env-history-purge-runbook.md`).
 
 | Area | State |
 |---|---|
@@ -81,11 +81,15 @@ build and metadata were tidied. The documentation and comment pass (C-4) is in p
 | Showcase vertical | Dropped from the core 2026-10-10; may return as a plugin once bots and webhooks (Track 3) exist |
 | rim-cli | Initial commit only |
 
-**Open:** the outside cryptographic review of Stages 3 and 4
-(`docs/security/crypto-review-brief-2026-10.md`), hybrid post-quantum signatures after it, the
-upgrade guide and changelog (D-5), the first-run path in the clients (F-1, F-2), the PWA, release
-workflows and an image registry (held on the decision about the organisation), and the cleanup's
-last two groups.
+**Open:** the outside cryptographic review of Stages 3 and 4, the one outside sign-off still
+missing before release (`docs/security/crypto-review-brief-2026-10.md`), hybrid post-quantum
+signatures after it, the first-run path in the clients (F-1, F-2) and the PWA.
+
+**Done since:** the upgrade guide and changelog (D-5: `docs/operations/upgrade.md`,
+`CHANGELOG.md`), the release workflows that sign and publish the images to
+`ghcr.io/rim-platform` (`.github/workflows/release.yaml` in rim-server and in rim-ui), and the
+cleanup's last two groups, C-4 and the `.env` history purge C-5
+(`docs/security/env-history-purge-runbook.md`).
 
 ## Principles for sequencing
 
@@ -434,7 +438,8 @@ state.
 - **Key loss.** Recovery phrase and backup are mandatory at first run with a banner until
   done; the recovery key in the rotation log restores identity even without the drive.
 - **Crypto correctness.** Stages 3 and 4 need an outside review before release, and OpenMLS
-  rather than hand-rolled primitives.
+  rather than hand-rolled primitives. The review is the one outside sign-off still missing
+  (`docs/security/crypto-review-brief-2026-10.md`).
 - **Keys in the web app.** A browser has no OS keyring; non-extractable WebCrypto keys in
   IndexedDB are weaker than desktop, and the UI should say so.
 - **Spam without domain reputation.** Request inbox and rate limits per IP, key and server
@@ -492,8 +497,8 @@ settled: the master plan adopts sandboxed iframes for web plugins and DMs plus p
 for E2EE v1, Jakub confirmed the decentralization model (see the decision record), and the
 four-role ladder shipped in 1.2.
 
-Carried: the `.env` history purge (cleanup C-5), formal ratification of the client-side plugin
-reframe.
+Carried: formal ratification of the client-side plugin reframe. The `.env` history purge
+(cleanup C-5) is done (`docs/security/env-history-purge-runbook.md`).
 
 ## Ledger — what the previous roadmaps shipped
 

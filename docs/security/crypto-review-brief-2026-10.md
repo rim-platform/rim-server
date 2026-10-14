@@ -1,5 +1,22 @@
 # Outside cryptographic review: brief for Stages 3 and 4
 
+## Status as of 2026-10-14
+
+This brief predates several fixes, so its numbered items in section 6 are not all open. Review
+them against the release commits, not the commits in 1.1. These are fixed:
+
+| Item | Fix | Where |
+|---|---|---|
+| 1. Client encryption pinning | A device pins a conversation it holds group state for as encrypted and refuses every plaintext write to it | rim-ui PR #47 |
+| 2. Remembered revocations | Each client keeps the devices it has seen revoked, so a revocation the server later omits no longer gets through | rim-ui PR #47 |
+| 7. Server franking key handling | The franking keys live in a key file, not the database, and a report is checked against the row's stored commitment | rim-server PR #74 |
+| 11. Key-log head pinning | Each client keeps the head of every principal's longest verified key log and refuses a shorter or forked one | rim-ui PR #47 |
+| 14. Login validation order | The challenge and audience are checked before a revoked device is answered with `FORBIDDEN` | rim-server PR #74 |
+| 15. Public-bind audience checks | The server refuses to start on a public bind without a key login audience | rim-server PR #74 |
+
+The same two pull requests also change code behind other items (for example 3 to 6, 9, 10, 20
+and 22); check each against the code before treating it as open.
+
 _Written 2026-10-09 for the outside review that `ROADMAP.md` ("Risks", "Crypto correctness")
 and the Stage 4 plan's rules for every PR require before a public release.
 It covers key identity, device linking, recovery, the desktop secret vault and the browser

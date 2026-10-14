@@ -8,6 +8,42 @@ and the pull request says which. Only the maintainer tags and publishes;
 
 The gates run locally on the release commit. CI counts only when it ran on that same commit.
 
+## Before the first public release
+
+One-time sign-offs for the launch. Tick them in the first release pull request, with a link or
+a date for each.
+
+- [ ] The outside cryptographic review of Stages 3 and 4 is signed off, and its report is linked
+      here. The brief is `docs/security/crypto-review-brief-2026-10.md`; its "Status as of
+      2026-10-14" names the numbered items already fixed.
+- [ ] A public operating profile is chosen, set in the deployment's `deploy/.env` and tested with
+      the packaged client, including how the client shows a refusal and retries. Each of these is
+      off when unset or 0 (the message burst follows the per-minute rate), and
+      `deploy/compose.relay.yml` sets none of them:
+      - API rates: `RIM_RATE_REQUESTS_PER_MIN_PER_IP`, `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`,
+        `RIM_RATE_MESSAGES_PER_MIN_PER_USER`, `RIM_RATE_MESSAGES_BURST`.
+      - WebSocket and subscriptions: `RIM_RATE_WS_CONNECTIONS_PER_USER`,
+        `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`.
+      - Instance caps: `RIM_LIMIT_WORKSPACES_PER_USER`, `RIM_LIMIT_MEMBERS_PER_WORKSPACE`,
+        `RIM_LIMIT_CHANNELS_PER_WORKSPACE`, `RIM_LIMIT_DEVICES_PER_USER`,
+        `RIM_LIMIT_DM_REQUESTS_PER_DAY`, `RIM_LIMIT_MACROS_PER_WORKSPACE`,
+        `RIM_LIMIT_PIPELINES_PER_WORKSPACE`, `RIM_LIMIT_PLUGINS_PER_WORKSPACE`,
+        `RIM_LIMIT_INVITES_PER_USER_PER_DAY`, `RIM_LIMIT_INVITE_MAX_USES`,
+        `RIM_LIMIT_MESSAGE_BYTES`.
+      - Probation: `RIM_PROBATION_HOURS`, `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
+
+      `deploy/.env.example`, "Request limits" and "Instance limits", says what each one limits.
+- [ ] `docs/testing/manual-test-plan-2026-10-12.md` is run on the packaged client and the HTTPS
+      deployment being released, and the results are recorded: the "Steps passed" and "Not run"
+      sections of `docs/testing/manual-test-findings-2026-10-12.md` are filled.
+- [ ] The upgrade, rollback and restore drill of section 4 ran for this release, with its date
+      recorded there.
+- [ ] Desktop distribution is decided: installers tested on each platform with a documented
+      manual update path, or signing and the updater complete (section 8; rim-ui's
+      `src-tauri/updater.json` has no endpoint or public key yet). A web-only launch says so here.
+- [ ] The credentials the old `.env` exposed stay rotated: rewriting history does not revoke them
+      (`docs/security/env-history-purge-runbook.md`).
+
 ## 1. Choose the version
 
 - [ ] Read `Unreleased` in `CHANGELOG.md`. Every user-visible change since the last tag has a
@@ -62,6 +98,8 @@ yet, so the new images are built from the release commits with `deploy/compose.d
 - [ ] `deploy/restore-drill.sh` on a production backup (FILL: which server's backups), built from
       the release commit: the new image applies its migrations to real data and reaches
       `/readyz`.
+- [ ] Record the drill in the release pull request: `Drill run: <YYYY-MM-DD>`, the host, and the
+      previous release it started from.
 
 ## 5. Check the clients against the server
 
