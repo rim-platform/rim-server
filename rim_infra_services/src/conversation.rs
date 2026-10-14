@@ -247,8 +247,8 @@ impl DefaultConversationService {
         }
     }
 
-    /// Removes `user_id` from the conversation and tells the remaining members and the removed
-    /// user (whose client must drop the conversation).
+    /// Removes `user_id` from the conversation, deletes their notifications for it, and tells
+    /// the remaining members and the removed user (whose client must drop the conversation).
     async fn remove_member_and_notify(
         &self,
         conversation: &Conversation,
@@ -257,6 +257,10 @@ impl DefaultConversationService {
         self.repos
             .conversation_member_repo
             .remove_member(conversation.id, user_id)
+            .await?;
+        self.repos
+            .notification_repo
+            .delete_for_user_in_conversation(user_id, conversation.id)
             .await?;
 
         let mut notify_user_ids = self

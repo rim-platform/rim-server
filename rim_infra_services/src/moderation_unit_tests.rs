@@ -16,6 +16,7 @@ mod tests {
         FrankedReport, MemberTimeout, MessageReport, MessageReportId, MessageReportStatus,
     };
     use rim_core::moderation::repository::MockModerationRepository;
+    use rim_core::notification::repository::MockNotificationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::ServerId;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
@@ -154,6 +155,8 @@ mod tests {
         roles: Vec<(UserId, ServerMemberRole)>,
         audit: Arc<RecordingAudit>,
         events: Arc<RecordingBroadcaster>,
+        /// `(user, workspace)` pairs whose notifications were deleted.
+        cleared_notifications: Arc<Mutex<Vec<(UserId, ServerId)>>>,
         conversation: Option<Conversation>,
         message: Option<Message>,
         /// Whether every moderator is a member of every conversation.
@@ -171,6 +174,7 @@ mod tests {
                 roles: roles.to_vec(),
                 audit: Arc::default(),
                 events: Arc::default(),
+                cleared_notifications: Arc::default(),
                 conversation: None,
                 message: None,
                 conversation_member: true,
@@ -191,6 +195,10 @@ mod tests {
 
         fn events(&self) -> Vec<WorkspaceEvent> {
             self.events.0.lock().expect("lock").clone()
+        }
+
+        fn cleared_notifications(&self) -> Vec<(UserId, ServerId)> {
+            self.cleared_notifications.lock().expect("lock").clone()
         }
 
         fn service(&self, moderation_repo: MockModerationRepository) -> DefaultModerationService {
@@ -296,6 +304,15 @@ mod tests {
                     }))
                 });
 
+            let mut notification_repo = MockNotificationRepository::new();
+            let cleared = Arc::clone(&self.cleared_notifications);
+            notification_repo
+                .expect_delete_for_user_in_server()
+                .returning(move |user_id, server_id| {
+                    cleared.lock().expect("lock").push((user_id, server_id));
+                    Box::pin(async { Ok(1) })
+                });
+
             DefaultModerationService::new(
                 ModerationRepos {
                     server_member_repo: Arc::new(server_member_repo),
@@ -305,6 +322,7 @@ mod tests {
                     message_repo: Arc::new(message_repo),
                     message_attachment_repo: Arc::new(message_attachment_repo),
                     moderation_repo: Arc::new(moderation_repo),
+                    notification_repo: Arc::new(notification_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
@@ -359,6 +377,10 @@ mod tests {
             Err(ServiceError::NotFound)
         ));
         assert!(fx.audited().is_empty(), "refused kicks are not audited");
+        assert!(
+            fx.cleared_notifications().is_empty(),
+            "refused kicks keep notifications"
+        );
 
         svc.kick(kick(&fx, mod_a, member))
             .await
@@ -376,6 +398,10 @@ mod tests {
             })
             .collect();
         assert_eq!(left, [member, mod_b]);
+        assert_eq!(
+            fx.cleared_notifications(),
+            [(member, fx.server_id), (mod_b, fx.server_id)]
+        );
     }
 
     // ── ban ──────────────────────────────────────────────────────────────
@@ -413,6 +439,7 @@ mod tests {
         assert!(fx.events().iter().any(
             |e| matches!(e, WorkspaceEvent::MemberLeft { user_id, .. } if *user_id == member)
         ));
+        assert_eq!(fx.cleared_notifications(), [(member, fx.server_id)]);
     }
 
     #[tokio::test]

@@ -81,6 +81,8 @@ pub struct ConversationRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    /// Drops a removed member's notifications for the conversation.
+    pub notification_repo: Arc<dyn NotificationRepository>,
 }
 
 #[derive(Clone)]
@@ -238,6 +240,7 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            notification_repo: Arc::clone(&self.notification_repo),
         }
     }
 
@@ -308,6 +311,7 @@ impl AppRepos {
             message_repo: Arc::clone(&self.message_repo),
             message_attachment_repo: Arc::clone(&self.message_attachment_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
+            notification_repo: Arc::clone(&self.notification_repo),
         }
     }
 
@@ -522,6 +526,8 @@ impl AppRepos {
             message_repo: Arc::clone(&self.message_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             user_repo: Arc::clone(&self.user_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 

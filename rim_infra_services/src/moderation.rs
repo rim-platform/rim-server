@@ -22,6 +22,7 @@ use rim_core::moderation::model::{
     MemberTimeout, MessageReport, MessageReportStatus, NewMessageReport, ServerBan,
 };
 use rim_core::moderation::repository::ModerationRepository;
+use rim_core::notification::repository::NotificationRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
@@ -218,6 +219,8 @@ pub struct ModerationRepos {
     pub message_repo: Arc<dyn MessageRepository>,
     pub message_attachment_repo: Arc<dyn MessageAttachmentRepository>,
     pub moderation_repo: Arc<dyn ModerationRepository>,
+    /// Drops a removed member's notifications for the workspace.
+    pub notification_repo: Arc<dyn NotificationRepository>,
 }
 
 /// The `blobSha256` values (unpadded base64url) of a verified content's `attachments`. The
@@ -329,7 +332,8 @@ impl DefaultModerationService {
     }
 
     /// Removes the user from the workspace and from every conversation of it (so a later
-    /// re-join does not restore private-channel access), then announces `MemberLeft`.
+    /// re-join does not restore private-channel access), deletes their notifications there,
+    /// then announces `MemberLeft`.
     async fn remove_from_workspace(
         &self,
         server_id: ServerId,
@@ -356,6 +360,10 @@ impl DefaultModerationService {
                 Err(e) => return Err(e.into()),
             }
         }
+        self.repos
+            .notification_repo
+            .delete_for_user_in_server(user_id, server_id)
+            .await?;
         self.observers.emit(WorkspaceEvent::MemberLeft {
             workspace_id: server_id,
             user_id,

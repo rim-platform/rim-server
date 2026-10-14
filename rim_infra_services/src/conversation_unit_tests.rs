@@ -9,6 +9,7 @@ mod tests {
     };
     use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
+    use rim_core::notification::repository::MockNotificationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
@@ -86,6 +87,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -128,6 +130,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -195,6 +198,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -253,6 +257,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -308,6 +313,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -377,6 +383,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -450,6 +457,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -516,6 +524,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -569,6 +578,8 @@ mod tests {
         /// Workspace members whose timeout is in force.
         timed_out: Vec<UserId>,
         events: Arc<RecordingBroadcaster>,
+        /// `(user, conversation)` pairs whose notifications were deleted.
+        cleared_notifications: Arc<Mutex<Vec<(UserId, ConversationId)>>>,
     }
 
     impl Fx {
@@ -584,6 +595,7 @@ mod tests {
                 roles: vec![],
                 timed_out: vec![],
                 events: Arc::new(RecordingBroadcaster::default()),
+                cleared_notifications: Arc::default(),
             }
         }
 
@@ -608,6 +620,10 @@ mod tests {
 
         fn events(&self) -> Vec<WorkspaceEvent> {
             self.events.0.lock().expect("lock").clone()
+        }
+
+        fn cleared_notifications(&self) -> Vec<(UserId, ConversationId)> {
+            self.cleared_notifications.lock().expect("lock").clone()
         }
 
         fn service(&self) -> DefaultConversationService {
@@ -725,11 +741,24 @@ mod tests {
                     })
                 });
 
+            let mut notification_repo = MockNotificationRepository::new();
+            let cleared = Arc::clone(&self.cleared_notifications);
+            notification_repo
+                .expect_delete_for_user_in_conversation()
+                .returning(move |user_id, conversation_id| {
+                    cleared
+                        .lock()
+                        .expect("lock")
+                        .push((user_id, conversation_id));
+                    Box::pin(async { Ok(1) })
+                });
+
             DefaultConversationService::new(
                 ConversationRepos {
                     conversation_repo: Arc::new(conversation_repo),
                     conversation_member_repo: Arc::new(conversation_member_repo),
                     server_member_repo: Arc::new(server_member_repo),
+                    notification_repo: Arc::new(notification_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
@@ -929,9 +958,15 @@ mod tests {
             WorkspaceEvent::MemberRemovedFromConversation { user_id, member_user_ids, .. }
                 if *user_id == bob && member_user_ids.contains(&bob) && member_user_ids.contains(&alice)
         )));
+        assert_eq!(fx.cleared_notifications(), [(bob, fx.conversation.id)]);
         // Having left a private channel, bob can no longer see it.
         assert!(matches!(fx.get(bob).await, Err(ServiceError::NotFound)));
         assert!(matches!(fx.leave(bob).await, Err(ServiceError::NotFound)));
+        assert_eq!(
+            fx.cleared_notifications().len(),
+            1,
+            "a failed leave clears nothing"
+        );
     }
 
     #[tokio::test]
@@ -949,6 +984,7 @@ mod tests {
         public.leave(carol).await.expect("no-op leave");
         assert_eq!(public.members(), vec![alice]);
         assert!(public.events().is_empty());
+        assert!(public.cleared_notifications().is_empty());
     }
 
     #[tokio::test]
@@ -1050,6 +1086,7 @@ mod tests {
             Err(ServiceError::PermissionDenied)
         ));
         assert_eq!(fx.members(), vec![alice, bob]);
+        assert!(fx.cleared_notifications().is_empty());
 
         // Anyone may remove themselves.
         let fx = fresh();
@@ -1060,6 +1097,7 @@ mod tests {
         let fx = fresh();
         fx.remove(moderator, bob).await.expect("moderator removal");
         assert_eq!(fx.members(), vec![alice]);
+        assert_eq!(fx.cleared_notifications(), [(bob, fx.conversation.id)]);
         assert!(fx.events().iter().any(|e| matches!(
             e,
             WorkspaceEvent::MemberRemovedFromConversation { user_id, .. } if *user_id == bob
@@ -1195,6 +1233,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         );
@@ -1355,6 +1394,7 @@ mod tests {
                     conversation_repo: Arc::new(conversation_repo),
                     conversation_member_repo: Arc::new(conversation_member_repo),
                     server_member_repo: Arc::new(server_member_repo),
+                    notification_repo: Arc::new(MockNotificationRepository::new()),
                 },
                 test_observers(),
             );
@@ -1413,6 +1453,7 @@ mod tests {
                 conversation_repo: Arc::new(conversation_repo),
                 conversation_member_repo: Arc::new(conversation_member_repo),
                 server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
             },
             test_observers(),
         )
