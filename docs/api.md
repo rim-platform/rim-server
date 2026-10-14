@@ -55,10 +55,12 @@ is refused with 400, and an upgrade without a valid session with 401: there are 
 subscriptions. A user holding as many connections as `RIM_RATE_WS_CONNECTIONS_PER_USER` allows
 is refused with 429 and `{"error":"too_many_connections"}`. A subscription started past
 `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` on one connection answers one error with the code
-`TOO_MANY_SUBSCRIPTIONS` and ends; ending another subscription frees its place. The socket runs
-subscriptions only: a query or a mutation sent on it answers one error with the code
-`VALIDATION` and the message "only subscriptions over the WebSocket", runs nothing, and
-completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
+`TOO_MANY_SUBSCRIPTIONS` and ends; ending another subscription frees its place. A client
+message over 256 KiB, whole or in fragments, closes the connection with code `1009` ("message
+too large"), and more than 32 messages waiting for the server close it with `1008` ("too many
+messages"). The socket runs subscriptions only: a query or a mutation sent on it answers one
+error with the code `VALIDATION` and the message "only subscriptions over the WebSocket", runs
+nothing, and completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
 `relayStream`; the schema describes both. A `TypingStarted` event, sent for direct conversations
 only, names the typing user by `user_id`, `username` and `display_name`, which is `null` when
 they have none.
