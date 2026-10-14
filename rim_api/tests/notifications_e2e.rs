@@ -14,11 +14,28 @@
 
 mod support;
 
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
 use rim_api::AppSchema;
 use rim_core::server_member::model::ServerMemberRole;
+use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
+use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+use rim_infra_services::email::{EmailMessage, EmailSender};
+use rim_infra_services::notification::digest::DigestRunReport;
+use rim_infra_services::notification::{
+    DefaultNotificationJobs, NotificationJobRepos, NotificationJobs,
+};
+use rim_infra_services::presence::PresenceManager;
 use rim_services::auth::dto::RegistrationMode;
+use rim_services::events::{NoopBroadcaster, Observers};
 
 use support::graphql::{
     Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
@@ -62,6 +79,20 @@ mutation Reply($input: ReplyToMessageInput!) { msg: replyToMessage(input: $input
 
 const DELETE_MESSAGE: &str = r#"
 mutation Delete($input: DeleteMessageInput!) { deleteMessage(input: $input) }
+"#;
+
+const EDIT_MESSAGE: &str = r#"
+mutation Edit($input: EditMessageInput!) { editMessage(input: $input) { id } }
+"#;
+
+const LEAVE_CONVERSATION: &str = r#"
+mutation Leave($serverId: ID!, $conversationId: ID!) {
+  leaveConversation(serverId: $serverId, conversationId: $conversationId)
+}
+"#;
+
+const KICK: &str = r#"
+mutation Kick($serverId: ID!, $userId: ID!) { kickMember(serverId: $serverId, userId: $userId) }
 "#;
 
 const MARK_AS_READ: &str = r#"
@@ -360,6 +391,72 @@ impl Fixture {
         )
         .await["result"]
             .clone()
+    }
+}
+
+/// Collects the emails the digest job sends.
+#[derive(Default)]
+struct Outbox(Mutex<Vec<EmailMessage>>);
+
+#[async_trait]
+impl EmailSender for Outbox {
+    async fn send(&self, message: EmailMessage) -> anyhow::Result<()> {
+        self.0.lock().expect("lock").push(message);
+        Ok(())
+    }
+}
+
+impl Fixture {
+    /// Make every stored notification two hours old, past the hourly digest interval.
+    async fn age_notifications(&self) {
+        self.ctx
+            .conn
+            .execute_unprepared(
+                "UPDATE user_notification SET created_at = now() - interval '2 hours'",
+            )
+            .await
+            .expect("age notifications");
+    }
+
+    /// Every stored notification of `who`, in any workspace, read or not.
+    async fn stored_notifications(&self, who: &Caller) -> i64 {
+        let row = self
+            .ctx
+            .conn
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS n FROM user_notification WHERE user_id = $1",
+                [uuid::Uuid::from(who.user_id).into()],
+            ))
+            .await
+            .expect("count")
+            .expect("row");
+        row.try_get("", "n").expect("n")
+    }
+
+    /// Run the digest job over the real repositories and return what it sent.
+    async fn run_digest(&self) -> (DigestRunReport, Vec<EmailMessage>) {
+        let db = &self.ctx.db;
+        let outbox = Arc::new(Outbox::default());
+        let observers = Observers::new(Arc::new(NoopBroadcaster));
+        let jobs = DefaultNotificationJobs::new(
+            NotificationJobRepos {
+                notification_repo: Arc::new(SeaOrmNotificationRepository::new(db.clone())),
+                message_repo: Arc::new(SeaOrmMessageRepository::new(db.clone())),
+                conversation_repo: Arc::new(SeaOrmConversationRepository::new(db.clone())),
+                user_repo: Arc::new(SeaOrmUserRepository::new(db.clone())),
+                server_member_repo: Arc::new(SeaOrmServerMemberRepository::new(db.clone())),
+                conversation_member_repo: Arc::new(SeaOrmConversationMemberRepository::new(
+                    db.clone(),
+                )),
+            },
+            Arc::clone(&outbox) as Arc<dyn EmailSender>,
+            Arc::new(PresenceManager::new(Arc::new(observers))),
+            None,
+        );
+        let report = jobs.run_digest(chrono::Utc::now()).await.expect("digest");
+        let sent = outbox.0.lock().expect("lock").clone();
+        (report, sent)
     }
 }
 
@@ -780,8 +877,8 @@ async fn private_channel_never_notifies_non_members() {
         vec![(msg, "MENTION".to_string())]
     );
 
-    // Once removed, an earlier notification stays in the inbox but no longer resolves the
-    // conversation or the message.
+    // Once removed, the channel's notifications leave the inbox; the others stay.
+    let in_general = f.send(&f.alice, &f.general, "for everyone").await;
     let earlier = f.send(&f.alice, &secret, "for bob").await;
     let bob_items = f.notifications(&f.bob).await;
     assert_eq!(bob_items[0]["messageId"], json!(earlier));
@@ -797,9 +894,92 @@ async fn private_channel_never_notifies_non_members() {
         ),
     )
     .await;
-    let bob_items = f.notifications(&f.bob).await;
-    assert_eq!(bob_items[0]["conversation"], Value::Null);
-    assert_eq!(bob_items[0]["message"], Value::Null);
+    assert_eq!(
+        f.reasons(&f.bob).await,
+        vec![(in_general, "ALL".to_string())]
+    );
+    assert_eq!(f.unread_count(&f.bob).await, 1);
+}
+
+#[tokio::test]
+async fn leaving_a_conversation_drops_only_its_notifications() {
+    let f = setup().await;
+    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            ADD_MEMBERS,
+            json!({
+                "serverId": f.server_id, "conversationId": secret,
+                "userIds": [f.bob.user_id.to_string()],
+            }),
+        ),
+    )
+    .await;
+    let in_general = f.send(&f.alice, &f.general, "for everyone").await;
+    f.send(&f.alice, &secret, "for bob").await;
+    assert_eq!(f.unread_count(&f.bob).await, 2);
+
+    exec_ok(&f.schema, f.bob.request(LEAVE_CONVERSATION, f.ids(&secret))).await;
+    assert_eq!(
+        f.reasons(&f.bob).await,
+        vec![(in_general, "ALL".to_string())]
+    );
+    assert_eq!(f.unread_count(&f.bob).await, 1);
+}
+
+/// A kicked member's pending notifications go with them: an edit made after the kick never
+/// reaches them by email, while other members still get their digest.
+#[tokio::test]
+async fn kicked_member_gets_no_digest_of_a_later_edit() {
+    let f = setup().await;
+    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            ADD_MEMBERS,
+            json!({
+                "serverId": f.server_id, "conversationId": secret,
+                "userIds": [f.bob.user_id.to_string()],
+            }),
+        ),
+    )
+    .await;
+    for who in [&f.bob, &f.carol] {
+        f.update_settings(who, settings_input("ALL", &[], "HOURLY"))
+            .await;
+    }
+    let before = f.send(&f.alice, &secret, "before removal").await;
+    f.send(&f.alice, &f.general, "general news").await;
+    f.age_notifications().await;
+
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            KICK,
+            json!({ "serverId": f.server_id, "userId": f.bob.user_id.to_string() }),
+        ),
+    )
+    .await;
+    assert_eq!(f.stored_notifications(&f.bob).await, 0);
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            EDIT_MESSAGE,
+            json!({ "input": {
+                "serverId": f.server_id, "conversationId": secret, "messageId": before,
+                "text": "SECRET ADDED AFTER REMOVAL",
+            } }),
+        ),
+    )
+    .await;
+
+    let (report, sent) = f.run_digest().await;
+    assert_eq!((report.candidates, report.sent), (1, 1));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "nt-carol@test.example.com");
+    assert!(sent[0].body_text.contains("general news"));
+    assert!(sent.iter().all(|m| !m.body_text.contains("SECRET")));
 }
 
 #[tokio::test]

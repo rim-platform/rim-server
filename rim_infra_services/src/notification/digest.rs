@@ -7,8 +7,12 @@
 //! 24 h), (2) their previous digest in that workspace, if any, is at least one interval old, and
 //! (3) they have had no presence heartbeat in the workspace for [`ACTIVE_WINDOW_MINUTES`]. The
 //! database query applies (1) and (2); [`digest_due`] re-checks them and adds (3).
+//!
+//! Access is checked again when the digest is composed: a recipient who is no longer a member
+//! of the workspace gets nothing, and a notification of a conversation they can no longer read
+//! is left out. Both kinds of rows are deleted so they stop qualifying.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,17 +20,22 @@ use chrono::{DateTime, Duration, Utc};
 
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::model::Message;
 use rim_core::message::repository::MessageRepository;
 use rim_core::notification::model::{DigestCandidate, UserNotification};
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::server::model::ServerId;
+use rim_core::server_member::model::ServerMemberRole;
+use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
+use rim_services::ServiceError;
 use rim_services::presence::PresenceService;
 
 use crate::email::EmailSender;
 use crate::email::templates::{DigestGroup, DigestItem, notification_digest};
+use crate::util::ensure_conversation_access_as;
 
 /// A user seen (presence heartbeat or disconnect) this recently gets no digest.
 pub const ACTIVE_WINDOW_MINUTES: i64 = 15;
@@ -177,6 +186,10 @@ pub struct NotificationJobRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     /// Names the senders of encrypted messages.
     pub user_repo: Arc<dyn UserRepository>,
+    /// Whether the recipient is still a member of the workspace, and in which role.
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    /// Whether the recipient can still read each conversation.
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
 }
 
 pub struct DefaultNotificationJobs {
@@ -201,14 +214,69 @@ impl DefaultNotificationJobs {
         }
     }
 
+    /// Conversations among `conversation_ids` the candidate can no longer read under the
+    /// conversation access rule as `role`: gone, outside the workspace, or closed to them.
+    async fn unreadable_conversations(
+        &self,
+        candidate: &DigestCandidate,
+        role: ServerMemberRole,
+        conversation_ids: &[ConversationId],
+        conversations: &HashMap<ConversationId, Conversation>,
+    ) -> anyhow::Result<HashSet<ConversationId>> {
+        let mut unreadable = HashSet::new();
+        for id in conversation_ids {
+            let readable = match conversations.get(id) {
+                Some(c) if c.server_id == candidate.server_id => {
+                    match ensure_conversation_access_as(
+                        self.repos.conversation_member_repo.as_ref(),
+                        c,
+                        candidate.user_id,
+                        role,
+                    )
+                    .await
+                    {
+                        Ok(()) => true,
+                        Err(ServiceError::NotFound | ServiceError::PermissionDenied) => false,
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                _ => false,
+            };
+            if !readable {
+                unreadable.insert(*id);
+            }
+        }
+        Ok(unreadable)
+    }
+
     /// Send one candidate's digest. `Ok(true)` when sent, `Ok(false)` when nothing was left to
-    /// list (rows are still marked emailed so they stop qualifying).
+    /// list (rows of deleted messages are still marked emailed so they stop qualifying; rows the
+    /// candidate may no longer read are deleted).
     async fn send_digest(
         &self,
         candidate: &DigestCandidate,
         now: DateTime<Utc>,
     ) -> anyhow::Result<bool> {
-        let pending = self
+        let Some(standing) = self
+            .repos
+            .server_member_repo
+            .get_member_standing(candidate.server_id, candidate.user_id)
+            .await?
+        else {
+            let dropped = self
+                .repos
+                .notification_repo
+                .delete_for_user_in_server(candidate.user_id, candidate.server_id)
+                .await?;
+            tracing::info!(
+                user_id = %candidate.user_id,
+                server_id = %candidate.server_id,
+                dropped,
+                "digest recipient is no longer a workspace member; dropped their notifications"
+            );
+            return Ok(false);
+        };
+        let mut pending = self
             .repos
             .notification_repo
             .list_pending_digest(candidate.user_id, candidate.server_id, MAX_DIGEST_ITEMS)
@@ -216,8 +284,6 @@ impl DefaultNotificationJobs {
         if pending.is_empty() {
             return Ok(false);
         }
-        let message_ids: Vec<_> = pending.iter().map(|n| n.message_id).collect();
-        let messages = self.repos.message_repo.get_by_ids(&message_ids).await?;
         let mut conversation_ids: Vec<ConversationId> =
             pending.iter().map(|n| n.conversation_id).collect();
         conversation_ids.sort_by_key(|id| uuid::Uuid::from(*id));
@@ -230,6 +296,28 @@ impl DefaultNotificationJobs {
             .into_iter()
             .map(|c| (c.id, c))
             .collect();
+        let unreadable = self
+            .unreadable_conversations(candidate, standing.role, &conversation_ids, &conversations)
+            .await?;
+        for conversation_id in &unreadable {
+            let dropped = self
+                .repos
+                .notification_repo
+                .delete_for_user_in_conversation(candidate.user_id, *conversation_id)
+                .await?;
+            tracing::info!(
+                user_id = %candidate.user_id,
+                conversation_id = %conversation_id,
+                dropped,
+                "digest recipient can no longer read the conversation; dropped their notifications"
+            );
+        }
+        pending.retain(|n| !unreadable.contains(&n.conversation_id));
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        let message_ids: Vec<_> = pending.iter().map(|n| n.message_id).collect();
+        let messages = self.repos.message_repo.get_by_ids(&message_ids).await?;
         let mut encrypted_authors: Vec<UserId> = messages
             .values()
             .filter(|m| m.encryption.is_some())
@@ -342,11 +430,14 @@ mod tests {
     use super::*;
 
     use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::MessageId;
     use rim_core::message::repository::MockMessageRepository;
     use rim_core::message_thread::model::MessageThreadId;
     use rim_core::notification::model::{DigestFrequency, NotificationReason, UserNotificationId};
     use rim_core::notification::repository::MockNotificationRepository;
+    use rim_core::server_member::model::MemberStanding;
+    use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_services::presence::{PresenceStatus, UserPresence};
 
     use crate::email::MockEmailSender;
@@ -481,7 +572,7 @@ mod tests {
         }
     }
 
-    fn channel(id: ConversationId, title: &str) -> Conversation {
+    fn channel(server_id: ServerId, id: ConversationId, title: &str) -> Conversation {
         Conversation {
             id,
             conversation_type: ConversationType::Channel,
@@ -489,7 +580,7 @@ mod tests {
             topic: None,
             created_at: now(),
             last_activity_at: now(),
-            server_id: ServerId::new(),
+            server_id,
             is_private: false,
             archived_at: None,
             created_by: None,
@@ -518,7 +609,7 @@ mod tests {
             .into_iter()
             .map(|m| (m.id, m.clone()))
             .collect();
-        let conversations: HashMap<_, _> = [channel(general, "general")]
+        let conversations: HashMap<_, _> = [channel(server, general, "general")]
             .into_iter()
             .map(|c| (c.id, c))
             .collect();
@@ -562,45 +653,151 @@ mod tests {
         assert!(without_base[0].items[0].link.is_none());
     }
 
-    fn jobs(
-        notification_repo: MockNotificationRepository,
-        message_repo: MockMessageRepository,
-        conversation_repo: MockConversationRepository,
+    /// The jobs' collaborators; each test sets the expectations it relies on.
+    #[derive(Default)]
+    struct Mocks {
+        notification: MockNotificationRepository,
+        message: MockMessageRepository,
+        conversation: MockConversationRepository,
+        server_member: MockServerMemberRepository,
+        conversation_member: MockConversationMemberRepository,
         email: MockEmailSender,
-        presence: Vec<UserPresence>,
-    ) -> DefaultNotificationJobs {
-        struct FixedPresence(Vec<UserPresence>);
-        impl PresenceService for FixedPresence {
-            fn heartbeat(&self, _: UserId, _: ServerId, _: PresenceStatus) {}
-            fn get_workspace_presence(&self, _: ServerId) -> Vec<UserPresence> {
-                self.0.clone()
-            }
-            fn mark_offline(&self, _: UserId) {}
+    }
+
+    impl Mocks {
+        /// Every candidate is a workspace member with `role`.
+        fn member_as(mut self, role: ServerMemberRole) -> Self {
+            self.server_member
+                .expect_get_member_standing()
+                .returning(move |_, _| Ok(Some(MemberStanding::new(role))));
+            self
         }
-        DefaultNotificationJobs::new(
-            NotificationJobRepos {
-                notification_repo: Arc::new(notification_repo),
-                message_repo: Arc::new(message_repo),
-                conversation_repo: Arc::new(conversation_repo),
-                user_repo: Arc::new(rim_core::user::repository::MockUserRepository::new()),
-            },
-            Arc::new(email),
-            Arc::new(FixedPresence(presence)),
-            Some("https://rim.example.com".to_string()),
-        )
+
+        /// The candidate belongs to exactly the conversations in `joined`.
+        fn joined(mut self, joined: Vec<ConversationId>) -> Self {
+            self.conversation_member
+                .expect_is_member()
+                .returning(move |conversation_id, _| {
+                    let is = joined.contains(&conversation_id);
+                    Box::pin(async move { Ok(is) })
+                });
+            self
+        }
+
+        /// `get_by_ids` answers with `conversations` (missing ids are absent).
+        fn conversations(mut self, conversations: Vec<Conversation>) -> Self {
+            self.conversation.expect_get_by_ids().returning(move |ids| {
+                let found: Vec<_> = conversations
+                    .iter()
+                    .filter(|c| ids.contains(&c.id))
+                    .cloned()
+                    .collect();
+                Box::pin(async move { Ok(found) })
+            });
+            self
+        }
+
+        /// `list_pending_digest` answers with `pending`.
+        fn pending(mut self, pending: Vec<UserNotification>) -> Self {
+            self.notification
+                .expect_list_pending_digest()
+                .withf(|_, _, limit| *limit == MAX_DIGEST_ITEMS)
+                .returning(move |_, _, _| {
+                    let p = pending.clone();
+                    Box::pin(async move { Ok(p) })
+                });
+            self
+        }
+
+        /// `list_digest_candidates` answers with `candidates`.
+        fn candidates(mut self, candidates: Vec<DigestCandidate>) -> Self {
+            self.notification
+                .expect_list_digest_candidates()
+                .returning(move |_, _| {
+                    let c = candidates.clone();
+                    Box::pin(async move { Ok(c) })
+                });
+            self
+        }
+
+        /// `get_by_ids` answers with whichever of `messages` were asked for.
+        fn messages(mut self, messages: Vec<Message>) -> Self {
+            self.message.expect_get_by_ids().returning(move |ids| {
+                let found: HashMap<_, _> = messages
+                    .iter()
+                    .filter(|m| ids.contains(&m.id))
+                    .map(|m| (m.id, m.clone()))
+                    .collect();
+                Box::pin(async move { Ok(found) })
+            });
+            self
+        }
+
+        fn jobs(self, presence: Vec<UserPresence>) -> DefaultNotificationJobs {
+            struct FixedPresence(Vec<UserPresence>);
+            impl PresenceService for FixedPresence {
+                fn heartbeat(&self, _: UserId, _: ServerId, _: PresenceStatus) {}
+                fn get_workspace_presence(&self, _: ServerId) -> Vec<UserPresence> {
+                    self.0.clone()
+                }
+                fn mark_offline(&self, _: UserId) {}
+            }
+            DefaultNotificationJobs::new(
+                NotificationJobRepos {
+                    notification_repo: Arc::new(self.notification),
+                    message_repo: Arc::new(self.message),
+                    conversation_repo: Arc::new(self.conversation),
+                    user_repo: Arc::new(rim_core::user::repository::MockUserRepository::new()),
+                    server_member_repo: Arc::new(self.server_member),
+                    conversation_member_repo: Arc::new(self.conversation_member),
+                },
+                Arc::new(self.email),
+                Arc::new(FixedPresence(presence)),
+                Some("https://rim.example.com".to_string()),
+            )
+        }
+    }
+
+    fn private_channel(server_id: ServerId, title: &str) -> Conversation {
+        Conversation {
+            is_private: true,
+            ..channel(server_id, ConversationId::new(), title)
+        }
+    }
+
+    fn direct(server_id: ServerId) -> Conversation {
+        Conversation {
+            conversation_type: ConversationType::Direct,
+            title: None,
+            ..channel(server_id, ConversationId::new(), "")
+        }
+    }
+
+    fn report(candidates: usize, sent: usize) -> DigestRunReport {
+        DigestRunReport {
+            candidates,
+            sent,
+            ..DigestRunReport::default()
+        }
     }
 
     #[tokio::test]
     async fn run_digest_sends_and_marks_emailed() {
         let c = candidate(DigestFrequency::Hourly, 120);
-        let general = ConversationId::new();
-        let m = message(general, "deploy is <b>broken</b>", false);
+        let ops = channel(c.server_id, ConversationId::new(), "ops");
+        let m = message(ops.id, "deploy is <b>broken</b>", false);
         let pending = vec![notification(c.user_id, c.server_id, &m)];
         let pending_ids: Vec<_> = pending.iter().map(|n| n.id).collect();
 
-        let mut repo = MockNotificationRepository::new();
+        let mut mocks = Mocks::default()
+            .member_as(ServerMemberRole::Member)
+            .conversations(vec![ops])
+            .messages(vec![m])
+            .pending(pending);
         let cand = c.clone();
-        repo.expect_list_digest_candidates()
+        mocks
+            .notification
+            .expect_list_digest_candidates()
             .withf(|hourly, daily| {
                 *hourly == now() - Duration::minutes(60) && *daily == now() - Duration::hours(24)
             })
@@ -608,33 +805,17 @@ mod tests {
                 let cand = cand.clone();
                 Box::pin(async move { Ok(vec![cand]) })
             });
-        let pending_clone = pending.clone();
-        repo.expect_list_pending_digest()
-            .withf(|_, _, limit| *limit == MAX_DIGEST_ITEMS)
-            .returning(move |_, _, _| {
-                let p = pending_clone.clone();
-                Box::pin(async move { Ok(p) })
-            });
-        repo.expect_mark_emailed()
+        mocks
+            .notification
+            .expect_mark_emailed()
             .withf(move |ids, at| ids == pending_ids.as_slice() && *at == now())
             .times(1)
             .returning(|ids, _| {
                 let n = ids.len() as u64;
                 Box::pin(async move { Ok(n) })
             });
-        let mut messages = MockMessageRepository::new();
-        let m_clone = m.clone();
-        messages.expect_get_by_ids().returning(move |_| {
-            let m = m_clone.clone();
-            Box::pin(async move { Ok([(m.id, m)].into_iter().collect()) })
-        });
-        let mut conversations = MockConversationRepository::new();
-        conversations.expect_get_by_ids().returning(move |_| {
-            let ch = channel(general, "ops");
-            Box::pin(async move { Ok(vec![ch]) })
-        });
-        let mut email = MockEmailSender::new();
-        email
+        mocks
+            .email
             .expect_send()
             .withf(|msg| {
                 msg.to == "bob@example.com"
@@ -649,55 +830,36 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let report = jobs(repo, messages, conversations, email, vec![])
-            .run_digest(now())
-            .await
-            .expect("run");
-        assert_eq!(
-            report,
-            DigestRunReport {
-                candidates: 1,
-                sent: 1,
-                skipped_active: 0,
-                failed: 0
-            }
-        );
+        let report = mocks.jobs(vec![]).run_digest(now()).await.expect("run");
+        assert_eq!(report, self::report(1, 1));
     }
 
     #[tokio::test]
     async fn run_digest_skips_active_users_and_keeps_failures_pending() {
         let active = candidate(DigestFrequency::Hourly, 120);
         let failing = candidate(DigestFrequency::Hourly, 120);
-        let general = ConversationId::new();
-        let m = message(general, "hello", false);
+        let general = channel(failing.server_id, ConversationId::new(), "general");
+        let m = message(general.id, "hello", false);
         let pending = vec![notification(failing.user_id, failing.server_id, &m)];
 
-        let mut repo = MockNotificationRepository::new();
-        let both = vec![active.clone(), failing.clone()];
-        repo.expect_list_digest_candidates().returning(move |_, _| {
-            let both = both.clone();
-            Box::pin(async move { Ok(both) })
-        });
+        let mut mocks = Mocks::default()
+            .member_as(ServerMemberRole::Member)
+            .candidates(vec![active.clone(), failing.clone()])
+            .conversations(vec![general])
+            .messages(vec![m]);
         let failing_user = failing.user_id;
-        repo.expect_list_pending_digest()
+        mocks
+            .notification
+            .expect_list_pending_digest()
             .withf(move |user, _, _| *user == failing_user)
             .times(1)
             .returning(move |_, _, _| {
                 let p = pending.clone();
                 Box::pin(async move { Ok(p) })
             });
-        repo.expect_mark_emailed().never();
-        let mut messages = MockMessageRepository::new();
-        messages.expect_get_by_ids().returning(move |_| {
-            let m = m.clone();
-            Box::pin(async move { Ok([(m.id, m)].into_iter().collect()) })
-        });
-        let mut conversations = MockConversationRepository::new();
-        conversations
-            .expect_get_by_ids()
-            .returning(|_| Box::pin(async { Ok(vec![]) }));
-        let mut email = MockEmailSender::new();
-        email
+        mocks.notification.expect_mark_emailed().never();
+        mocks
+            .email
             .expect_send()
             .times(1)
             .returning(|_| Err(anyhow::anyhow!("smtp down")));
@@ -707,10 +869,7 @@ mod tests {
             status: PresenceStatus::Online,
             last_seen_at: now() - Duration::minutes(2),
         }];
-        let report = jobs(repo, messages, conversations, email, presence)
-            .run_digest(now())
-            .await
-            .expect("run");
+        let report = mocks.jobs(presence).run_digest(now()).await.expect("run");
         assert_eq!(
             report,
             DigestRunReport {
@@ -723,22 +882,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kicked_member_gets_no_digest_and_their_rows_stop_qualifying() {
+        let c = candidate(DigestFrequency::Hourly, 120);
+        let mut mocks = Mocks::default().candidates(vec![c.clone()]);
+        mocks
+            .server_member
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(None));
+        let (user, server) = (c.user_id, c.server_id);
+        mocks
+            .notification
+            .expect_delete_for_user_in_server()
+            .withf(move |u, s| *u == user && *s == server)
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(2) }));
+        mocks.notification.expect_list_pending_digest().never();
+        mocks.notification.expect_mark_emailed().never();
+        mocks.message.expect_get_by_ids().never();
+        mocks.email.expect_send().never();
+
+        let report = mocks.jobs(vec![]).run_digest(now()).await.expect("run");
+        assert_eq!(report, self::report(1, 0));
+    }
+
+    #[tokio::test]
+    async fn removal_from_a_private_conversation_drops_only_its_items() {
+        let c = candidate(DigestFrequency::Hourly, 120);
+        let general = channel(c.server_id, ConversationId::new(), "general");
+        let secret = private_channel(c.server_id, "secret");
+        let dm = direct(c.server_id);
+        let in_general = message(general.id, "standup moved", false);
+        let in_secret = message(secret.id, "salary bands", false);
+        let in_dm = message(dm.id, "lunch?", false);
+        let pending: Vec<_> = [&in_general, &in_secret, &in_dm]
+            .into_iter()
+            .map(|m| notification(c.user_id, c.server_id, m))
+            .collect();
+        let kept: Vec<_> = [&pending[0], &pending[2]].map(|n| n.id).to_vec();
+        let (secret_id, readable_ids) = (secret.id, [in_general.id, in_dm.id]);
+
+        let mut mocks = Mocks::default()
+            .member_as(ServerMemberRole::Member)
+            .joined(vec![dm.id])
+            .candidates(vec![c.clone()])
+            .conversations(vec![general, secret, dm])
+            .pending(pending);
+        let user = c.user_id;
+        mocks
+            .notification
+            .expect_delete_for_user_in_conversation()
+            .withf(move |u, conversation| *u == user && *conversation == secret_id)
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(1) }));
+        mocks
+            .notification
+            .expect_mark_emailed()
+            .withf(move |ids, _| ids == kept.as_slice())
+            .times(1)
+            .returning(|ids, _| {
+                let n = ids.len() as u64;
+                Box::pin(async move { Ok(n) })
+            });
+        let messages = [in_general, in_secret, in_dm];
+        mocks
+            .message
+            .expect_get_by_ids()
+            .withf(move |ids| ids == readable_ids.as_slice())
+            .times(1)
+            .returning(move |ids| {
+                let found: HashMap<_, _> = messages
+                    .iter()
+                    .filter(|m| ids.contains(&m.id))
+                    .map(|m| (m.id, m.clone()))
+                    .collect();
+                Box::pin(async move { Ok(found) })
+            });
+        mocks
+            .email
+            .expect_send()
+            .withf(|msg| {
+                msg.body_text.contains("standup moved")
+                    && msg.body_text.contains("lunch?")
+                    && !msg.body_text.contains("salary")
+                    && !msg.body_text.contains("#secret")
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let report = mocks.jobs(vec![]).run_digest(now()).await.expect("run");
+        assert_eq!(report, self::report(1, 1));
+    }
+
+    #[tokio::test]
+    async fn edit_after_losing_access_is_never_loaded_or_emailed() {
+        let c = candidate(DigestFrequency::Hourly, 120);
+        // A guest reads a public channel only once added to it, like a private one.
+        let lobby = channel(c.server_id, ConversationId::new(), "lobby");
+        let secret = private_channel(c.server_id, "secret");
+        let elsewhere = channel(ServerId::new(), ConversationId::new(), "elsewhere");
+        let gone = ConversationId::new();
+        let edited = [
+            message(lobby.id, "edited after removal", false),
+            message(secret.id, "edited after removal", false),
+            message(elsewhere.id, "edited after removal", false),
+            message(gone, "edited after removal", false),
+        ];
+        let pending: Vec<_> = edited
+            .iter()
+            .map(|m| notification(c.user_id, c.server_id, m))
+            .collect();
+        let mut expected_dropped = vec![lobby.id, secret.id, elsewhere.id, gone];
+        expected_dropped.sort_by_key(|id| uuid::Uuid::from(*id));
+
+        let mut mocks = Mocks::default()
+            .member_as(ServerMemberRole::Guest)
+            .joined(vec![])
+            .candidates(vec![c.clone()])
+            .conversations(vec![lobby, secret, elsewhere])
+            .pending(pending);
+        let dropped = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = Arc::clone(&dropped);
+        let user = c.user_id;
+        mocks
+            .notification
+            .expect_delete_for_user_in_conversation()
+            .withf(move |u, _| *u == user)
+            .times(4)
+            .returning(move |_, conversation| {
+                record.lock().expect("lock").push(conversation);
+                Box::pin(async { Ok(1) })
+            });
+        mocks.notification.expect_mark_emailed().never();
+        mocks.message.expect_get_by_ids().never();
+        mocks.email.expect_send().never();
+
+        let report = mocks.jobs(vec![]).run_digest(now()).await.expect("run");
+        assert_eq!(report, self::report(1, 0));
+        let mut dropped = dropped.lock().expect("lock").clone();
+        dropped.sort_by_key(|id| uuid::Uuid::from(*id));
+        assert_eq!(dropped, expected_dropped);
+    }
+
+    #[tokio::test]
     async fn purge_deletes_rows_older_than_ninety_days() {
-        let mut repo = MockNotificationRepository::new();
-        repo.expect_delete_created_before()
+        let mut mocks = Mocks::default();
+        mocks
+            .notification
+            .expect_delete_created_before()
             .withf(|cutoff| *cutoff == now() - Duration::days(90))
             .times(1)
             .returning(|_| Box::pin(async { Ok(7) }));
-        let deleted = jobs(
-            repo,
-            MockMessageRepository::new(),
-            MockConversationRepository::new(),
-            MockEmailSender::new(),
-            vec![],
-        )
-        .purge_expired(now())
-        .await
-        .expect("purge");
+        let deleted = mocks
+            .jobs(vec![])
+            .purge_expired(now())
+            .await
+            .expect("purge");
         assert_eq!(deleted, 7);
     }
 }

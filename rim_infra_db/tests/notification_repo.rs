@@ -457,6 +457,105 @@ async fn deleting_a_message_drops_unread_rows_and_retention_purges_old_ones() {
 }
 
 #[tokio::test]
+async fn losing_access_deletes_a_users_rows_by_workspace_or_conversation() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmNotificationRepository::new(ctx.db.clone());
+    let acme = ctx.create_server("Acme").await;
+    let other = ctx.create_server("Other").await;
+    let alice = ctx.create_user("alice").await.id;
+    let bob = ctx.create_user("bob").await.id;
+    let author = ctx.create_user("author").await.id;
+    let secret = ctx
+        .create_conversation(acme.id, ConversationType::Channel)
+        .await;
+    let general = ctx
+        .create_conversation(acme.id, ConversationType::Channel)
+        .await;
+    let elsewhere = ctx
+        .create_conversation(other.id, ConversationType::Channel)
+        .await;
+    repo.upsert_settings(settings(alice, acme.id, DigestFrequency::Hourly))
+        .await
+        .unwrap();
+
+    let mut rows = Vec::new();
+    for (user, server, conv) in [
+        (alice, acme.id, &secret),
+        (alice, acme.id, &secret),
+        (alice, acme.id, &general),
+        (alice, other.id, &elsewhere),
+        (bob, acme.id, &secret),
+    ] {
+        let msg = ctx.create_message(conv.id, author, "hi").await;
+        rows.extend(
+            repo.create_notifications(
+                &[new_row(user, server, conv, msg.id, NotificationReason::All)],
+                t(-90),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    repo.mark_read_by_ids(alice, acme.id, &[rows[0].id], t(0))
+        .await
+        .unwrap();
+    let alice_in_acme = |candidates: Vec<rim_core::notification::model::DigestCandidate>| {
+        candidates
+            .iter()
+            .any(|c| c.user_id == alice && c.server_id == acme.id)
+    };
+    assert!(alice_in_acme(
+        repo.list_digest_candidates(t(-60), t(-24 * 60))
+            .await
+            .unwrap()
+    ));
+
+    // Read and unread rows of the conversation go; other conversations and users stay.
+    assert_eq!(
+        repo.delete_for_user_in_conversation(alice, secret.id)
+            .await
+            .unwrap(),
+        2
+    );
+    let pending = repo.list_pending_digest(alice, acme.id, 10).await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|n| n.conversation_id)
+            .collect::<Vec<_>>(),
+        [general.id]
+    );
+    assert_eq!(repo.unread_count(bob, acme.id).await.unwrap(), 1);
+
+    // The workspace's rows go and stop qualifying for a digest; other workspaces stay.
+    assert_eq!(
+        repo.delete_for_user_in_server(alice, acme.id)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        repo.list_pending_digest(alice, acme.id, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!alice_in_acme(
+        repo.list_digest_candidates(t(-60), t(-24 * 60))
+            .await
+            .unwrap()
+    ));
+    assert_eq!(repo.unread_count(alice, other.id).await.unwrap(), 1);
+    assert_eq!(repo.unread_count(bob, acme.id).await.unwrap(), 1);
+    assert_eq!(
+        repo.delete_for_user_in_server(alice, acme.id)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn digest_candidates_follow_frequency_age_and_last_digest() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmNotificationRepository::new(ctx.db.clone());

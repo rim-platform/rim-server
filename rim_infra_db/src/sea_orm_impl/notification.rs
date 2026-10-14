@@ -380,6 +380,34 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         Ok(res.rows_affected)
     }
 
+    async fn delete_for_user_in_server(
+        &self,
+        user_id: UserId,
+        server_id: ServerId,
+    ) -> RepoResult<u64> {
+        let res = user_notification::Entity::delete_many()
+            .filter(user_notification::Column::UserId.eq(Uuid::from(user_id)))
+            .filter(user_notification::Column::ServerId.eq(Uuid::from(server_id)))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
+    }
+
+    async fn delete_for_user_in_conversation(
+        &self,
+        user_id: UserId,
+        conversation_id: ConversationId,
+    ) -> RepoResult<u64> {
+        let res = user_notification::Entity::delete_many()
+            .filter(user_notification::Column::UserId.eq(Uuid::from(user_id)))
+            .filter(user_notification::Column::ConversationId.eq(Uuid::from(conversation_id)))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
+    }
+
     async fn delete_created_before(&self, cutoff: DateTime<Utc>) -> RepoResult<u64> {
         let cutoff: DateTimeWithTimeZone = cutoff.into();
         let res = user_notification::Entity::delete_many()
