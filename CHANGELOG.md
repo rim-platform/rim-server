@@ -189,5 +189,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   process or from the command line closes its connections within
   `RIM_WS_SESSION_RECHECK_SECS` (default 30, 0 turns the recheck off). `docs/api.md`
   ("Subscriptions") describes it; a client that sees `4401` signs in again before reconnecting.
+- A message on `/api/ws` is at most 256 KiB, whole or in fragments; a larger one closes the
+  connection with code `1009` ("message too large"), refused at the frame header where it can
+  be. Before, fragments were reassembled without a limit and queued for the server unbounded.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

@@ -1,6 +1,7 @@
 //! A WebSocket connection ends with its session: on a revocation in this process, on a
 //! recheck that finds the session expired, and before a new operation on a session ended
 //! where this process did not hear of it. Each closes with `4401` and sends nothing after.
+//! A client message over the size cap ends the connection the same way with `1009`.
 //!
 //! Run with:
 //! ```sh
@@ -34,6 +35,12 @@ const LOGOUT_OTHER_SESSIONS: &str = "mutation { logoutOtherSessions }";
 const SESSION_ENDED: (u16, &str) = (4401, "session ended");
 /// How long a closed connection may take to send its close frame.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
+/// The largest client message the socket takes.
+const MAX_MESSAGE_BYTES: usize = 256 * 1024;
+/// The close code and reason of a connection whose client sent a message over the cap.
+const TOO_LARGE: (u16, &str) = (1009, "message too large");
+/// The fragment size the size tests send in.
+const FRAGMENT: usize = 4096;
 
 /// A node with `tweak` applied, where `ada` owns workspace `workspace`.
 struct World {
@@ -120,6 +127,19 @@ impl World {
         Socket::open(&self.node.origin, &session.token).await
     }
 
+    /// Open a connection as `session`, waiting while a closed connection still holds the
+    /// user's slot.
+    async fn reopen(&self, session: &Session) -> Socket {
+        for _ in 0..50 {
+            match self.open(session).await {
+                Ok(socket) => return socket,
+                Err(429) => tokio::time::sleep(Duration::from_millis(100)).await,
+                Err(status) => panic!("upgrade refused with {status}"),
+            }
+        }
+        panic!("the closed connection's slot is not free");
+    }
+
     /// Subscribe to the workspace's events on `socket` and wait until the subscription
     /// delivers one: a workspace state change by `other`, one per attempt. Events of earlier
     /// attempts that arrive late are drained.
@@ -149,6 +169,74 @@ async fn expect_session_ended(socket: &mut Socket) {
     socket.expect_close(code, reason, CLOSE_WAIT).await;
 }
 
+async fn expect_too_large(socket: &mut Socket) {
+    let (code, reason) = TOO_LARGE;
+    socket.expect_close(code, reason, CLOSE_WAIT).await;
+}
+
+/// A `graphql-transport-ws` ping of exactly `len` bytes, padded in its payload.
+fn ping_of_len(len: usize) -> Vec<u8> {
+    let empty = json!({ "type": "ping", "payload": { "pad": "" } }).to_string();
+    let pad = "x".repeat(len - empty.len());
+    let ping = json!({ "type": "ping", "payload": { "pad": pad } }).to_string();
+    assert_eq!(ping.len(), len);
+    ping.into_bytes()
+}
+
+/// `socket` answers a ping sent in fragments with a pong.
+async fn expect_pong_to_fragmented_ping(socket: &mut Socket, len: usize) {
+    socket.send_fragmented(&ping_of_len(len), FRAGMENT).await;
+    assert_eq!(
+        socket.receive().await["type"],
+        "pong",
+        "a ping of {len} bytes"
+    );
+}
+
+/// Fragmented messages just under and right at the cap reach the engine, which answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fragmented_messages_up_to_the_size_cap_are_answered() {
+    let w = world(|_| {}).await;
+    let session = w.sign_in().await;
+    let mut socket = w.open(&session).await.expect("open");
+
+    for len in [MAX_MESSAGE_BYTES - 1, MAX_MESSAGE_BYTES] {
+        expect_pong_to_fragmented_ping(&mut socket, len).await;
+    }
+    w.node.stop().await;
+}
+
+/// A fragmented message one byte over the cap closes the socket with `1009` and nothing
+/// after; the connection's slot is free again and a new connection works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fragmented_message_over_the_size_cap_closes_the_websocket() {
+    let w = world(|config| config.rate_ws_connections_per_user = Some(1)).await;
+    let session = w.sign_in().await;
+    let mut socket = w.open(&session).await.expect("open");
+
+    socket
+        .send_fragmented(&ping_of_len(MAX_MESSAGE_BYTES + 1), FRAGMENT)
+        .await;
+    expect_too_large(&mut socket).await;
+
+    let mut reopened = w.reopen(&session).await;
+    expect_pong_to_fragmented_ping(&mut reopened, FRAGMENT * 2).await;
+    w.node.stop().await;
+}
+
+/// A frame announcing more than the cap closes the socket with `1009` at its header, without
+/// waiting for the payload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_frame_over_the_size_cap_closes_the_websocket_at_its_header() {
+    let w = world(|_| {}).await;
+    let session = w.sign_in().await;
+    let mut socket = w.open(&session).await.expect("open");
+
+    socket.send_frame_header(MAX_MESSAGE_BYTES as u64 + 1).await;
+    expect_too_large(&mut socket).await;
+    w.node.stop().await;
+}
+
 /// Signing the other sessions out closes their open socket with `4401` and nothing after,
 /// with the recheck off; the connection's slot is free again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -175,18 +263,7 @@ async fn signing_other_sessions_out_closes_their_websocket() {
     expect_session_ended(&mut socket).await;
 
     // The slot is given back once the closed connection is gone.
-    let mut reopened = None;
-    for _ in 0..50 {
-        match w.open(&laptop).await {
-            Ok(socket) => {
-                reopened = Some(socket);
-                break;
-            }
-            Err(429) => tokio::time::sleep(Duration::from_millis(100)).await,
-            Err(status) => panic!("upgrade refused with {status}"),
-        }
-    }
-    assert!(reopened.is_some(), "the closed connection's slot is free");
+    w.reopen(&laptop).await;
     w.node.stop().await;
 }
 

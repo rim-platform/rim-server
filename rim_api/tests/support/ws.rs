@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use actix_codec::Framed;
-use actix_http::ws::{CloseCode, Codec, Frame, Message};
+use actix_http::ws::{Codec, Frame, Item, Message};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -125,12 +125,46 @@ impl Socket {
         .await
         .expect("the close in time")
         .expect("a close reason");
-        assert_eq!(close.code, CloseCode::Other(code));
+        assert_eq!(u16::from(close.code), code);
         assert_eq!(close.description.as_deref(), Some(reason));
         let after = tokio::time::timeout(wait, self.0.next())
             .await
             .expect("the server ends the connection");
         assert!(after.is_none(), "nothing follows the close: {after:?}");
+    }
+
+    /// Sends `message` as one text message in fragments of `fragment` bytes, at least two.
+    pub async fn send_fragmented(&mut self, message: &[u8], fragment: usize) {
+        let fragments: Vec<&[u8]> = message.chunks(fragment).collect();
+        assert!(
+            fragments.len() > 1,
+            "a fragmented message has two fragments"
+        );
+        let last = fragments.len() - 1;
+        for (i, fragment) in fragments.into_iter().enumerate() {
+            let bytes = fragment.to_vec().into();
+            let item = match i {
+                0 => Item::FirstText(bytes),
+                i if i == last => Item::Last(bytes),
+                _ => Item::Continue(bytes),
+            };
+            self.0
+                .send(Message::Continuation(item))
+                .await
+                .expect("send a fragment");
+        }
+    }
+
+    /// Sends the header of a text frame announcing `length` payload bytes, and no payload.
+    pub async fn send_frame_header(&mut self, length: u64) {
+        let mut header = vec![0x81, 0x80 | 127];
+        header.extend_from_slice(&length.to_be_bytes());
+        header.extend_from_slice(&[0; 4]);
+        self.0
+            .io_mut()
+            .write_all(&header)
+            .await
+            .expect("send a frame header");
     }
 
     async fn send(&mut self, message: Value) {
