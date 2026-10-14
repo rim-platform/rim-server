@@ -153,6 +153,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- `rustls` 0.23.46: the TLS library behind outgoing HTTPS requests picks up the fixes for
+  RUSTSEC-2026-0346, -0347, -0348 and -0349 (TLS secrets in `Debug` output, buffered data after
+  an ECH rejection, certificate decompression memory, key-exchange downgrade).
 - A mutation whose protected field sits in nested fragments, named or inline, needs the CSRF
   header. Before, a request that showed only an exempt field such as `logout` at its top level
   skipped the check while a fragment two levels down ran `updateMyProfile`. The server reads
