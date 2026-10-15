@@ -157,7 +157,8 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("serverInfo: ServerInfo!"));
     assert!(sdl.contains(
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
-         auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! }"
+         auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
+         signupRequiresKeys: Boolean! }"
     ));
     assert!(sdl.contains(
         "type ServerLimits { workspacesPerUser: Int membersPerWorkspace: Int \
@@ -218,16 +219,18 @@ async fn server_info_reports_the_audit_retention() {
     assert_eq!(data["serverInfo"]["auditRetentionDays"], 90);
 }
 
-/// `serverInfo.instanceNotice` and `termsUrl` report the configured instance policy.
+/// `serverInfo.instanceNotice`, `termsUrl` and `signupRequiresKeys` report the configured
+/// instance policy.
 #[tokio::test]
 async fn server_info_reports_the_instance_notice_and_terms() {
     let schema = schema_with_user_mock(MockUserService::new());
     let res = schema
         .execute(
-            Request::new("{ serverInfo { instanceNotice termsUrl } }").data(
+            Request::new("{ serverInfo { instanceNotice termsUrl signupRequiresKeys } }").data(
                 crate::types::InstancePolicy {
                     notice: Some("Run by the Example club.".to_string()),
                     terms_url: Some("https://rim.example.org/terms".to_string()),
+                    signup_requires_keys: true,
                 },
             ),
         )
@@ -239,6 +242,7 @@ async fn server_info_reports_the_instance_notice_and_terms() {
         serde_json::json!({
             "instanceNotice": "Run by the Example club.",
             "termsUrl": "https://rim.example.org/terms",
+            "signupRequiresKeys": true,
         })
     );
 }

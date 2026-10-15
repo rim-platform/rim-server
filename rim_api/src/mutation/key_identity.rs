@@ -63,7 +63,9 @@ impl KeyIdentityMutations {
         })
     }
 
-    /// Bind a key identity to the signed-in account. Afterwards the password no longer signs in.
+    /// Bind a key identity to the signed-in account. The calling session becomes the new
+    /// device's and every other session of the account ends. Afterwards the password no longer
+    /// signs in.
     async fn enroll_identity_key(
         &self,
         ctx: &Context<'_>,
@@ -160,10 +162,12 @@ impl KeyIdentityMutations {
         Ok(dto.into())
     }
 
-    /// Create an account from a key identity alone: no password, no email. The registration
-    /// mode applies as for `signupWithInvite` (exactly one token in invite-only mode, none in
-    /// open mode). Signs the new account in on the device that signed up, setting the same
-    /// session and CSRF cookies as `signupWithInvite`.
+    /// Create an account from a key identity alone, with no password. The registration mode
+    /// applies as for `signupWithInvite` (exactly one token in invite-only mode, none in open
+    /// mode). An instance invite bound to an email address gives the account that address
+    /// (`EMAIL_TAKEN` when another account has it); otherwise the account has no email. Signs
+    /// the new account in on the device that signed up, setting the same session and CSRF
+    /// cookies as `signupWithInvite`.
     async fn signup_with_key(
         &self,
         ctx: &Context<'_>,

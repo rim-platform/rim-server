@@ -342,7 +342,10 @@ type Mutation {
 
 ## Client rules
 
-### Old device (desktop)
+### Old device
+
+The device that holds the identity key, desktop or web (`key-identity-v1.md`, "Web client"). A
+web client keeps the pending link record of rule 5 in IndexedDB instead of the keyring.
 
 1. Linking is offered only when this device holds the head's identity key
    (`LogStatus.holdsIdentityKey`). It generates the secret, calls `startDeviceLink`, and shows the
@@ -394,7 +397,10 @@ type Mutation {
 
 ### Web client
 
-Same as the new desktop device, except:
+As the old device, the web client follows "Old device" when it holds the identity key: it signs
+the certificate with its non-extractable identity key. A web client that is itself a linked
+device holds no identity key and links no other device. As the new device, it follows the new
+desktop device, except:
 
 - It only takes a pasted code, and only for its own GraphQL endpoint (cookies and CORS would fail
   for another).
@@ -406,7 +412,6 @@ Same as the new desktop device, except:
   false, ["encrypt", "decrypt"])`, then `encrypt({ name: "AES-GCM", iv, additionalData,
   tagLength: 128 })`, whose output is already ciphertext followed by tag.
 - `platform` is `web`. The secret lives only in the page; a reload abandons the attempt.
-- The web client is never the old device in v1: it holds no identity key.
 
 ## Failure and retry
 
@@ -432,7 +437,9 @@ Same as the new desktop device, except:
   format already reserves the mechanism (a new `keyWraps` kind, `history-archive-v1.md`). A later
   code version adds both; until then the new device unlocks the archive with the passphrase, and
   it needs the folder or drive sign-in in any case.
-- **Moving the identity key** off the enrolling device, or holding it offline.
+- **Moving the identity key** off the enrolling device, or holding it offline. A browser-held
+  identity cannot move at all until then: its key is not extractable and is never backed up, so
+  linking gives another device access to the account, not the identity.
 - **Short typed codes** with a PAKE (CPace, SPAKE2), so a code can be read aloud.
 - **QR scanning**, with the mobile PWA; the code format is fixed now so the QR works then.
 - **A subscription** in place of polling (see GraphQL).

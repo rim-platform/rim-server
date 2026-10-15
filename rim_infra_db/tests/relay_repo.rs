@@ -21,10 +21,12 @@ use rim_core::relay::model::{
 use rim_core::relay::repository::RelayRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::UserId;
+use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository;
 use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_infra_db::{DbHandle, begin_transaction};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use uuid::Uuid;
@@ -770,11 +772,16 @@ async fn the_direct_space_is_unique_and_unlisted_and_remote_users_are_members() 
     assert!(members[0].role.is_guest());
     assert_eq!(members[0].home_relay.as_deref(), Some("rims1_relay"));
 
-    repo.make_local(remote, "bob", "Bob").await.unwrap();
+    repo.make_local(remote, "bob", "Bob", Some("bob@example.com"))
+        .await
+        .unwrap();
     assert_eq!(repo.user_kind(remote).await.unwrap(), Some(UserKind::Local));
     assert!(repo.remote_members(direct).await.unwrap().is_empty());
+    let users = SeaOrmUserRepository::new(ctx.db.clone());
+    let bob = users.get_by_id(remote).await.unwrap().expect("bob");
+    assert_eq!(bob.email.as_deref(), Some("bob@example.com"));
     assert!(
-        repo.make_local(remote, "bob2", "Bob").await.is_err(),
+        repo.make_local(remote, "bob2", "Bob", None).await.is_err(),
         "only remote users"
     );
 }

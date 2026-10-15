@@ -410,6 +410,33 @@ impl TestCtx {
         )
     }
 
+    /// Build the schema on an instance whose signups need a key, as `RIM_SIGNUP_REQUIRE_KEYS`
+    /// does, in `registration_mode`.
+    pub fn build_schema_requiring_keys(
+        &self,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+    ) -> rim_api::AppSchema {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks {
+                signup_requires_keys: true,
+                ..Default::default()
+            },
+            rim_services::limits::InstanceLimits::default(),
+        );
+        schema_with_policy(
+            std::sync::Arc::new(provider),
+            observers,
+            registration_mode,
+            rim_api::types::InstancePolicy {
+                signup_requires_keys: true,
+                ..Default::default()
+            },
+        )
+    }
+
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
     /// and the test database.
     ///
@@ -442,6 +469,21 @@ fn schema_for(
     observers: Observers,
     registration_mode: rim_services::auth::dto::RegistrationMode,
 ) -> rim_api::AppSchema {
+    schema_with_policy(
+        service_provider,
+        observers,
+        registration_mode,
+        Default::default(),
+    )
+}
+
+/// [`schema_for`], serving the instance policy `instance_policy`.
+fn schema_with_policy(
+    service_provider: std::sync::Arc<dyn AppServiceProvider>,
+    observers: Observers,
+    registration_mode: rim_services::auth::dto::RegistrationMode,
+    instance_policy: rim_api::types::InstancePolicy,
+) -> rim_api::AppSchema {
     use std::sync::Arc;
 
     use rim_api::RegistrationContext;
@@ -463,7 +505,7 @@ fn schema_for(
         RegistrationContext {
             registration_mode: Arc::new(registration_mode),
             audit_retention_days: None,
-            instance_policy: Default::default(),
+            instance_policy,
             instance_limits: Default::default(),
         },
         None,

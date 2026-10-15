@@ -90,6 +90,8 @@ USER rim
 #                           sends to other servers, per day (default: 20)
 #   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
 #   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
+#   RIM_SIGNUP_REQUIRE_KEYS — Refuse every password signup, so accounts sign up with a key
+#                           (default: true); password sign-in of existing accounts still works
 #   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
 #   RIM_SMTP_HOST         — SMTP server; without it or RIM_SMTP_FROM mail is only logged
 #   RIM_SMTP_PORT         — SMTP port (default: 587)

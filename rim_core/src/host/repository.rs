@@ -46,12 +46,14 @@ pub trait HostRepository: Send + Sync {
         home_relay: Option<String>,
     ) -> RepoResult<()>;
 
-    /// Turn a remote user into a local one with a username and display name of their choice.
+    /// Turn a remote user into a local one with a username and display name of their choice,
+    /// and the normalised `email` their signup took, if any.
     async fn make_local(
         &self,
         user_id: UserId,
         username: &str,
         display_name: &str,
+        email: Option<&str>,
     ) -> RepoResult<()>;
 
     async fn home_relay(&self, user_id: UserId) -> RepoResult<Option<String>>;

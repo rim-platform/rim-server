@@ -1417,14 +1417,50 @@ mod tests {
         }
     }
 
-    /// On an instance with terms, every password signup that did not accept them is refused
-    /// before it touches a repository.
-    #[tokio::test]
-    async fn password_signups_without_the_instance_terms_are_refused() {
-        use rim_services::auth::terms::TERMS_NOT_ACCEPTED;
+    /// Every password signup, open, with an instance invite and with a workspace invite, each
+    /// accepting `accepted`, as `Ok(())` or its refusal.
+    async fn every_password_signup(
+        svc: &DefaultAuthService,
+        accepted: Option<String>,
+    ) -> [Result<(), ServiceError>; 3] {
+        let open = svc
+            .signup_open(SignupOpenCmd {
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                remote_ip: "1.2.3.4".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: None,
+                terms_accepted_url: accepted.clone(),
+            })
+            .await
+            .map(|_| ());
+        let invited = svc
+            .signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                instance_invite_token: "raw_token".to_string(),
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                email: "carol@example.com".to_string(),
+                display_name: None,
+                terms_accepted_url: accepted.clone(),
+            })
+            .await
+            .map(|_| ());
+        let joined = svc
+            .accept_invite(AcceptInviteCmd {
+                invite_token: "token".to_string(),
+                username: "carol".to_string(),
+                password: "s3cur3p4ss!".to_string(),
+                terms_accepted_url: accepted,
+            })
+            .await
+            .map(|_| ());
+        [open, invited, joined]
+    }
 
+    /// A service over repositories that expect no call, so a signup that reaches one panics.
+    fn untouched_svc() -> DefaultAuthService {
         let (ur, sr, smr, sess_r, ir, cr) = repos();
-        let svc = svc_with_registration(
+        svc_with_registration(
             ur,
             sr,
             smr,
@@ -1433,42 +1469,38 @@ mod tests {
             cr,
             MockInstanceInviteRepository::new(),
         )
-        .with_terms_url(Some(TERMS.to_string()));
+    }
+
+    /// On an instance with terms, every password signup that did not accept them is refused
+    /// before it touches a repository.
+    #[tokio::test]
+    async fn password_signups_without_the_instance_terms_are_refused() {
+        use rim_services::auth::terms::TERMS_NOT_ACCEPTED;
+
+        let svc = untouched_svc().with_terms_url(Some(TERMS.to_string()));
         for accepted in [None, Some("https://rim.example.org/old-terms".to_string())] {
-            let open = svc
-                .signup_open(SignupOpenCmd {
-                    username: "carol".to_string(),
-                    password: "s3cur3p4ss!".to_string(),
-                    remote_ip: "1.2.3.4".to_string(),
-                    email: "carol@example.com".to_string(),
-                    display_name: None,
-                    terms_accepted_url: accepted.clone(),
-                })
-                .await
-                .map(|_| ());
-            let invited = svc
-                .signup_with_instance_invite(SignupWithInstanceInviteCmd {
-                    instance_invite_token: "raw_token".to_string(),
-                    username: "carol".to_string(),
-                    password: "s3cur3p4ss!".to_string(),
-                    email: "carol@example.com".to_string(),
-                    display_name: None,
-                    terms_accepted_url: accepted.clone(),
-                })
-                .await
-                .map(|_| ());
-            let joined = svc
-                .accept_invite(AcceptInviteCmd {
-                    invite_token: "token".to_string(),
-                    username: "carol".to_string(),
-                    password: "s3cur3p4ss!".to_string(),
-                    terms_accepted_url: accepted.clone(),
-                })
-                .await
-                .map(|_| ());
-            for res in [open, invited, joined] {
+            for res in every_password_signup(&svc, accepted.clone()).await {
                 assert!(
                     matches!(&res, Err(ServiceError::Validation(m)) if m == TERMS_NOT_ACCEPTED),
+                    "{accepted:?}: {res:?}"
+                );
+            }
+        }
+    }
+
+    /// On an instance whose signups need a key, every password signup is refused with
+    /// `Forbidden` before it touches a repository, terms accepted or not.
+    #[tokio::test]
+    async fn password_signups_are_refused_when_signups_require_keys() {
+        use crate::signup::KEYS_REQUIRED_REFUSAL;
+
+        let svc = untouched_svc()
+            .with_terms_url(Some(TERMS.to_string()))
+            .with_signup_requires_keys(true);
+        for accepted in [None, Some(TERMS.to_string())] {
+            for res in every_password_signup(&svc, accepted.clone()).await {
+                assert!(
+                    matches!(&res, Err(ServiceError::Forbidden(m)) if m == KEYS_REQUIRED_REFUSAL),
                     "{accepted:?}: {res:?}"
                 );
             }

@@ -85,6 +85,11 @@ impl TestCtx {
     /// named "Desktop".
     pub async fn enrolled(&self, schema: &AppSchema, name: &str, seed: u8) -> Enrolled {
         let user = self.create_user(name).await;
+        self.enroll_user(schema, user, seed).await
+    }
+
+    /// [`TestCtx::enrolled`] for an existing `user`, from a new password session.
+    pub async fn enroll_user(&self, schema: &AppSchema, user: User, seed: u8) -> Enrolled {
         let caller = self.caller(&user).await;
         let identity = TestIdentity::with_version(seed, StatementVersion::V2);
         let inception = identity.inception();

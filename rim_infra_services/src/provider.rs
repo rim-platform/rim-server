@@ -71,6 +71,8 @@ pub struct FederationHooks {
     pub password_hashing: crate::password_hashing::PasswordHashing,
     /// The terms of service URL every signup must accept; `None` when there are none.
     pub terms_url: Option<String>,
+    /// Refuse every password signup, so new accounts sign up with a key.
+    pub signup_requires_keys: bool,
 }
 
 #[derive(Clone)]
@@ -156,7 +158,8 @@ impl DefaultAppServiceProvider {
             .with_reserved_names(federation.reserved_names.clone())
             .with_password_hashing(federation.password_hashing.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
-            .with_terms_url(federation.terms_url.clone()),
+            .with_terms_url(federation.terms_url.clone())
+            .with_signup_requires_keys(federation.signup_requires_keys),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(

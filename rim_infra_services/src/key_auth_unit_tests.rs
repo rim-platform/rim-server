@@ -77,6 +77,8 @@ mod tests {
         terms: HashMap<UserId, String>,
         /// Principals of accounts deleted on this server.
         retired: HashSet<String>,
+        /// Email addresses an operator blocked on this server.
+        blocked_emails: HashSet<String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -543,8 +545,8 @@ mod tests {
         }
     }
 
-    /// The user store behind the harness: lookups by id, username and email, and inserts that
-    /// mirror the unique username and principal id indexes.
+    /// The user store behind the harness: lookups by id, username and email, blocked emails, and
+    /// inserts that mirror the unique username and principal id indexes.
     fn user_repo(state: &Shared) -> MockUserRepository {
         let mut user_repo = MockUserRepository::new();
         let users = Arc::clone(state);
@@ -560,7 +562,18 @@ mod tests {
                 .find(|(_, u)| u.username == name)
                 .map(|(id, _)| user_row(&s, *id)))
         });
-        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        let users = Arc::clone(state);
+        user_repo.expect_find_by_email().returning(move |email| {
+            let s = users.lock().unwrap();
+            Ok(s.created
+                .iter()
+                .find(|(_, u)| u.email.as_deref() == Some(email))
+                .map(|(id, _)| user_row(&s, *id)))
+        });
+        let users = Arc::clone(state);
+        user_repo
+            .expect_is_email_blocked()
+            .returning(move |email| Ok(users.lock().unwrap().blocked_emails.contains(email)));
         let users = Arc::clone(state);
         user_repo
             .expect_create_user()
@@ -692,17 +705,22 @@ mod tests {
         async fn add_user_with_session(&self) -> (UserId, SessionId) {
             let user_id = UserId::new();
             self.state.lock().unwrap().users.insert(user_id);
-            let session = FakeSessions(Arc::clone(&self.state))
+            (user_id, self.add_session(user_id).await)
+        }
+
+        /// Another password session of `user_id`.
+        async fn add_session(&self, user_id: UserId) -> SessionId {
+            FakeSessions(Arc::clone(&self.state))
                 .create_session(NewSession {
                     user_id,
-                    token_hash: format!("password-session-{user_id}"),
+                    token_hash: format!("password-session-{}", Uuid::now_v7()),
                     expires_at: Utc::now() + Duration::days(1),
                     user_agent: None,
                     ip: None,
                 })
                 .await
-                .unwrap();
-            (user_id, session.id)
+                .unwrap()
+                .id
         }
 
         /// A `login` statement by `device` over a fresh challenge, as enrollment requires.
@@ -746,6 +764,18 @@ mod tests {
         /// Like [`Harness::enroll`], with every statement written at `version`.
         async fn enroll_with(&self, seed: u8, version: StatementVersion) -> Enrolled {
             let (user_id, session) = self.add_user_with_session().await;
+            self.enroll_from(user_id, session, seed, version).await
+        }
+
+        /// Enroll `user_id` from its password session `session` with the identity from `seed`
+        /// and a first device, every statement written at `version`.
+        async fn enroll_from(
+            &self,
+            user_id: UserId,
+            session: SessionId,
+            seed: u8,
+            version: StatementVersion,
+        ) -> Enrolled {
             let id = TestIdentity::with_version(seed, version);
             let inception = id.inception();
             let state = KeyState::from_inception(&inception).unwrap();
@@ -864,6 +894,26 @@ mod tests {
         assert_eq!(identity.devices.len(), 1);
         assert_eq!(identity.devices[0].device_id, e.device_id);
         assert!(h.session_device(e.session).is_some());
+    }
+
+    #[tokio::test]
+    async fn enroll_ends_every_other_session_of_the_account() {
+        let h = harness();
+        let (user_id, enrolling) = h.add_user_with_session().await;
+        let other = h.add_session(user_id).await;
+        let (_, stranger) = h.add_user_with_session().await;
+        let mut connections = [h.connection(other), h.connection(stranger)];
+
+        let e = h
+            .enroll_from(user_id, enrolling, 1, StatementVersion::V2)
+            .await;
+
+        assert!(h.session_revoked(other));
+        assert!(connections[0].has_ended());
+        assert!(!h.session_revoked(e.session));
+        assert!(h.session_device(e.session).is_some());
+        assert!(!h.session_revoked(stranger));
+        assert!(!connections[1].has_ended());
     }
 
     #[tokio::test]
@@ -2436,36 +2486,99 @@ mod tests {
         assert_eq!(h.user_count(), 0);
     }
 
-    #[tokio::test]
-    async fn signup_with_key_refuses_an_email_bound_instance_invite() {
+    /// A signup harness whose one instance invite, `rim_iinv`, is bound to `ops@example.com`
+    /// and expects to be consumed `uses` times.
+    fn email_bound_invite_harness(uses: usize) -> Harness {
         let invite = instance_invite(Duration::minutes(15), Some("ops@example.com"));
+        let invite_id = invite.id;
         let mut invites = MockInstanceInviteRepository::new();
         invites
             .expect_get_by_token_hash()
             .returning(move |_| Ok(Some(invite.clone())));
-        invites.expect_try_consume().never();
+        invites
+            .expect_try_consume()
+            .withf(move |id| *id == invite_id)
+            .times(uses)
+            .returning(|_| Ok(true));
+        let (users, _) = crate::signup::tests::chain_recorder();
         let signup = SignupRepos {
             instance_invite_repo: Arc::new(invites),
+            user_repo: Arc::new(users),
             ..no_signup_repos()
         };
-        let h = signup_harness(signup, Arc::new(Recording::default()));
+        signup_harness(signup, Arc::new(Recording::default()))
+    }
+
+    fn email_bound_signup_cmd(p: &Presented) -> SignupWithKeyCmd {
+        signup_cmd(
+            p,
+            "ops",
+            RegistrationMode::InviteOnly,
+            Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
+        )
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_with_an_email_bound_instance_invite_takes_its_address() {
+        let h = email_bound_invite_harness(1);
         let p = h.present(1).await;
 
+        let res = h
+            .svc
+            .signup_with_key(email_bound_signup_cmd(&p))
+            .await
+            .unwrap();
+        let s = h.state.lock().unwrap();
+        let created = &s.created[&res.user_id];
+        assert_eq!(created.email.as_deref(), Some("ops@example.com"));
+        assert_eq!(created.password, None);
+        assert!(created.key_identity.is_some());
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_an_email_bound_invite_whose_address_is_blocked_or_taken() {
+        let h = email_bound_invite_harness(0);
+        h.state
+            .lock()
+            .unwrap()
+            .blocked_emails
+            .insert("ops@example.com".to_string());
+        let p = h.present(1).await;
         let err = h
             .svc
-            .signup_with_key(signup_cmd(
-                &p,
-                "admin",
-                RegistrationMode::InviteOnly,
-                Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
-            ))
+            .signup_with_key(email_bound_signup_cmd(&p))
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, ServiceError::Validation(m) if m == crate::signup::EMAIL_BOUND_INVITE_REFUSAL),
+            matches!(&err, ServiceError::Validation(m) if m == crate::signup::BLOCKED_EMAIL_REFUSAL),
             "{err:?}"
         );
         assert_eq!(h.user_count(), 0);
+
+        let h = email_bound_invite_harness(0);
+        {
+            let mut s = h.state.lock().unwrap();
+            let holder = UserId::new();
+            s.users.insert(holder);
+            s.created.insert(
+                holder,
+                NewUser {
+                    username: "holder".to_string(),
+                    password: Some("hash".to_string()),
+                    email: Some("ops@example.com".to_string()),
+                    display_name: None,
+                    key_identity: None,
+                },
+            );
+        }
+        let p = h.present(2).await;
+        let err = h
+            .svc
+            .signup_with_key(email_bound_signup_cmd(&p))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::EmailTaken), "{err:?}");
+        assert_eq!(h.user_count(), 1);
     }
 
     #[tokio::test]

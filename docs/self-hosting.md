@@ -128,8 +128,8 @@ Signups are invite-only by default. Issue a single-use link for your own account
 dc exec rim /app/rim-server invite create --public-url https://rim.example.org
 ```
 
-`--email you@example.org` binds the link to that address: it then admits only a password signup
-with it, not a key-only one.
+`--email you@example.org` binds the link to that address: a key signup with it gives the new
+account that address, and a password signup must give that address.
 
 Open the link it prints (`https://rim.example.org/join/…`) and sign up. For other people, a link
 for up to 50 signups that lasts up to 30 days:
@@ -143,6 +143,12 @@ dc exec rim /app/rim-server invite revoke <id>
 The owner of a workspace can also invite from the app. `RIM_OPEN_REGISTRATION=true` lets
 anyone sign up, rate-limited per address; `RIM_REGISTRATION_POW_BITS` asks a proof-of-work of
 signups without an invite.
+
+New accounts sign up with a key: the app creates the account's identity on the device that signs
+up and shows its recovery kit. `RIM_SIGNUP_REQUIRE_KEYS` (commented out in `deploy/.env.example`,
+on unless set to `false`) refuses every password signup, whatever the registration mode;
+password accounts that already exist still sign in. Set it to `false` only for clients that
+cannot sign up with a key.
 
 ### Check it answers
 

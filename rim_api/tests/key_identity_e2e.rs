@@ -689,3 +689,192 @@ async fn finding_14_revocation_is_disclosed_only_to_a_proof_that_would_pass() {
     assert_eq!(exec_err_code(&schema, valid()).await, "FORBIDDEN");
     assert_eq!(exec_err_code(&schema, valid()).await, "UNAUTHENTICATED");
 }
+
+/// The user signed up as `data`'s `signupWithKey`.
+fn signed_up_user(data: &Value) -> UserId {
+    data["signupWithKey"]["userId"]
+        .as_str()
+        .expect("userId")
+        .parse::<Uuid>()
+        .expect("uuid")
+        .into()
+}
+
+/// The uses spent of the instance invite `id`.
+async fn invite_uses(ctx: &TestCtx, id: rim_core::auth::model::InstanceInviteId) -> i32 {
+    SeaOrmInstanceInviteRepository::new(ctx.db.clone())
+        .get_by_id(id)
+        .await
+        .expect("get invite")
+        .expect("invite")
+        .use_count
+}
+
+/// An instance invite bound to an address signs up with a key and gives the account that
+/// address. While an operator blocks the address, or another account holds it, the signup is
+/// refused and the invite stays unspent.
+#[tokio::test]
+async fn signup_with_key_and_an_email_bound_invite_takes_its_address() {
+    use sea_orm::ConnectionTrait;
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let users = SeaOrmUserRepository::new(ctx.db.clone());
+    let issuer = ctx.create_user("issuer").await;
+    let invite = seed_instance_invite(
+        &ctx.db,
+        issuer.id,
+        "rim_iinv_bound_key",
+        SeedInstanceInviteOpts {
+            email: Some("ops@example.com".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let token = json!({ "instanceInviteToken": "rim_iinv_bound_key" });
+    let id = TestIdentity::with_version(31, StatementVersion::V2);
+
+    users
+        .block_email("ops@example.com", "test")
+        .await
+        .expect("block");
+    let request = signup_request(&schema, "ops", &id, 81, token.clone()).await;
+    assert_eq!(exec_err_code(&schema, request).await, "VALIDATION");
+    users
+        .unblock_email("ops@example.com")
+        .await
+        .expect("unblock");
+
+    let holder = users
+        .create_user(NewUser {
+            username: "holder".to_string(),
+            password: Some(hash_password(PASSWORD).expect("hash")),
+            email: Some("ops@example.com".to_string()),
+            display_name: None,
+            key_identity: None,
+        })
+        .await
+        .expect("create holder");
+    let request = signup_request(&schema, "ops", &id, 82, token.clone()).await;
+    assert_eq!(exec_err_code(&schema, request).await, "EMAIL_TAKEN");
+    assert!(users.find_by_username("ops").await.expect("find").is_none());
+    assert_eq!(invite_uses(&ctx, invite).await, 0);
+
+    ctx.conn
+        .execute_unprepared(&format!(
+            "UPDATE \"user\" SET email = 'holder@example.com' WHERE id = '{}'",
+            holder.id
+        ))
+        .await
+        .expect("move the holder's address");
+    let request = signup_request(&schema, "ops", &id, 83, token).await;
+    let user_id = signed_up_user(&exec_ok(&schema, request).await);
+    let user = users
+        .get_by_id(user_id)
+        .await
+        .expect("get user")
+        .expect("user");
+    assert_eq!(user.email.as_deref(), Some("ops@example.com"));
+    assert_eq!(user.password_hash, None);
+    assert!(user.principal_id.is_some());
+    assert_eq!(invite_uses(&ctx, invite).await, 1);
+}
+
+/// Two key signups racing for one single-use, email-bound invite create one account: the
+/// loser's account, device and session roll back with its transaction.
+#[tokio::test]
+async fn racing_key_signups_for_one_email_bound_invite_create_one_account() {
+    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let issuer = ctx.create_user("issuer").await;
+    let invite = seed_instance_invite(
+        &ctx.db,
+        issuer.id,
+        "rim_iinv_bound_race",
+        SeedInstanceInviteOpts {
+            email: Some("race@example.com".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let token = json!({ "instanceInviteToken": "rim_iinv_bound_race" });
+    let first = signup_request(
+        &schema,
+        "first",
+        &TestIdentity::with_version(32, StatementVersion::V2),
+        84,
+        token.clone(),
+    )
+    .await;
+    let second = signup_request(
+        &schema,
+        "second",
+        &TestIdentity::with_version(33, StatementVersion::V2),
+        85,
+        token,
+    )
+    .await;
+
+    let (first, second) = tokio::join!(schema.execute(first), schema.execute(second));
+    let won: Vec<_> = [&first, &second]
+        .into_iter()
+        .filter(|r| r.errors.is_empty())
+        .collect();
+    assert_eq!(won.len(), 1, "{:?} / {:?}", first.errors, second.errors);
+    assert_eq!(invite_uses(&ctx, invite).await, 1);
+
+    let users = SeaOrmUserRepository::new(ctx.db.clone());
+    let holder = users
+        .find_by_email("race@example.com")
+        .await
+        .expect("find")
+        .expect("one account has the address");
+    let winner = signed_up_user(&won[0].data.clone().into_json().expect("json"));
+    assert_eq!(holder.id, winner);
+    let accounts = [
+        users.find_by_username("first").await.expect("find"),
+        users.find_by_username("second").await.expect("find"),
+    ];
+    assert_eq!(accounts.iter().flatten().count(), 1);
+}
+
+/// Enrollment ends every other session of the account; the enrolling session, now the
+/// device's, and another account's sessions go on.
+#[tokio::test]
+async fn enrollment_ends_every_other_session_of_the_account() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let sessions = SeaOrmSessionRepository::new(ctx.db.clone());
+    let ada = ctx.create_user("ada").await;
+    let others = [
+        ctx.create_session(&ada).await,
+        ctx.create_session(&ada).await,
+    ];
+    let bob = ctx.create_user("bob").await;
+    let bobs = ctx.create_session(&bob).await;
+
+    let enrolled = ctx.enroll_user(&schema, ada, 34).await;
+
+    for id in others {
+        let session = sessions.get_by_id(id).await.expect("get").expect("session");
+        assert!(session.revoked_at.is_some(), "{id}");
+    }
+    let enrolling = sessions
+        .get_by_id(enrolled.caller.session_id)
+        .await
+        .expect("get")
+        .expect("session");
+    assert!(enrolling.revoked_at.is_none());
+    assert!(enrolling.device_key_id.is_some());
+    let bobs = sessions
+        .get_by_id(bobs)
+        .await
+        .expect("get")
+        .expect("session");
+    assert!(bobs.revoked_at.is_none());
+    let data = exec_ok(&schema, enrolled.caller.request(MY_KEY_IDENTITY, json!({}))).await;
+    assert!(data["myKeyIdentity"]["principalId"].is_string());
+}

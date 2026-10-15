@@ -12,6 +12,9 @@ use crate::auth::dto::{
     JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto, SignupResultDto,
 };
 
+/// Password sign-in, sessions, invites and the password signups. A server whose signups need a
+/// key refuses every password signup with `Forbidden`; sign-in of existing accounts is
+/// unaffected.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait AuthService: Send + Sync {

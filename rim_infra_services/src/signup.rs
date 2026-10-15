@@ -50,10 +50,14 @@ pub(crate) enum CheckedToken {
     WorkspaceInvite(Invite),
 }
 
-/// The refusal of a signup an email-bound instance invite does not admit: another address, or
-/// a key-only signup, which has none.
+/// The refusal of a password signup with another address than its email-bound instance
+/// invite's.
 pub(crate) const EMAIL_BOUND_INVITE_REFUSAL: &str =
-    "this invite admits only a password signup with the email address it was issued for";
+    "this invite admits only the email address it was issued for";
+
+/// The refusal of a password signup on a server whose signups need a key.
+pub(crate) const KEYS_REQUIRED_REFUSAL: &str =
+    "password signup is turned off on this server; sign up with a key";
 
 /// The refusal of a signup with an address an operator blocked.
 pub(crate) const BLOCKED_EMAIL_REFUSAL: &str = "this email cannot sign up here";
@@ -171,7 +175,8 @@ pub(crate) fn check_open_signup_rate(
 }
 
 /// Look a registration token up and check it is still usable, outside any transaction.
-/// `email` is the normalised address the account signs up with, `None` for a key-only signup.
+/// `email` is the normalised address a password signup gives, `None` for a key-only signup,
+/// which takes the address of an email-bound instance invite.
 ///
 /// # Errors
 /// As [`check_instance_invite`] and [`check_workspace_invite`].
@@ -191,13 +196,13 @@ pub(crate) async fn check_token(
 }
 
 /// The instance invite `raw`, if it is unrevoked, not used up, unexpired and, when bound to an
-/// address, presented with that address (compared trimmed and case-insensitively). `email` is
-/// `None` for a key-only signup, which an email-bound invite does not admit. The claim checks the
-/// uses again.
+/// address and `email` is given, presented with that address (compared trimmed and
+/// case-insensitively). `email` is `None` for a key-only signup, which an email-bound invite
+/// admits with the invite's address. The claim checks the uses again.
 ///
 /// # Errors
 /// `InvalidToken` when unknown, revoked or used up, `ExpiredToken` when expired, `Validation`
-/// when the invite is bound to another address or the signup has none.
+/// when the invite is bound to another address than `email`.
 pub(crate) async fn check_instance_invite(
     repo: &dyn InstanceInviteRepository,
     raw: &str,
@@ -213,19 +218,18 @@ pub(crate) async fn check_instance_invite(
     if invite.expires_at < Utc::now() {
         return Err(ServiceError::ExpiredToken);
     }
-    if let Some(bound) = &invite.email {
-        let matches = email.is_some_and(|email| email.trim().eq_ignore_ascii_case(bound.trim()));
-        if !matches {
-            tracing::info!(
-                target: "audit",
-                event = "instance_invite_email_mismatch",
-                instance_invite_id = %invite.id,
-                "signup refused: the instance invite is bound to another email address"
-            );
-            return Err(ServiceError::Validation(
-                EMAIL_BOUND_INVITE_REFUSAL.to_string(),
-            ));
-        }
+    if let (Some(bound), Some(email)) = (&invite.email, email)
+        && !email.trim().eq_ignore_ascii_case(bound.trim())
+    {
+        tracing::info!(
+            target: "audit",
+            event = "instance_invite_email_mismatch",
+            instance_invite_id = %invite.id,
+            "signup refused: the instance invite is bound to another email address"
+        );
+        return Err(ServiceError::Validation(
+            EMAIL_BOUND_INVITE_REFUSAL.to_string(),
+        ));
     }
     Ok(invite)
 }
@@ -347,14 +351,13 @@ pub(crate) fn announce_claimed(
 }
 
 /// Create a user with `user_repo` (the transaction's). Checks the username, then the email
-/// (case-insensitive) when there is one, before inserting. The email must already be
+/// with [`check_signup_email`] when there is one, before inserting. The email must already be
 /// normalised and the display name resolved.
 ///
 /// # Errors
 /// - `Conflict` when the username is taken, or the insert hits a unique index (a race on the
 ///   username, the email or the principal id).
-/// - `Validation` ([`BLOCKED_EMAIL_REFUSAL`]) when an operator blocked the email.
-/// - `EmailTaken` when the email is in use.
+/// - As [`check_signup_email`].
 pub(crate) async fn create_user(
     user_repo: &dyn UserRepository,
     new_user: NewUser,
@@ -368,30 +371,8 @@ pub(crate) async fn create_user(
             "username already exists".to_string(),
         ));
     }
-    if let Some(email) = &new_user.email
-        && user_repo.is_email_blocked(email).await?
-    {
-        tracing::info!(
-            target: "audit",
-            event = "blocked_email_refused",
-            action = "signup",
-            username = %new_user.username,
-            "signup refused: the email is blocked on this server"
-        );
-        return Err(ServiceError::Validation(BLOCKED_EMAIL_REFUSAL.to_string()));
-    }
-    if let Some(email) = &new_user.email
-        && user_repo.find_by_email(email).await?.is_some()
-    {
-        // Audited so operators can detect enumeration attacks or signup bot activity.
-        tracing::info!(
-            target: "audit",
-            event = "email_taken_attempt",
-            email = %email,
-            username = %new_user.username,
-            "signup rejected: email already in use"
-        );
-        return Err(ServiceError::EmailTaken);
+    if let Some(email) = &new_user.email {
+        check_signup_email(user_repo, email, &new_user.username).await?;
     }
 
     let user = user_repo.create_user(new_user).await.map_err(|e| {
@@ -402,6 +383,41 @@ pub(crate) async fn create_user(
         e
     })?;
     Ok(user)
+}
+
+/// Refuse a signup's normalised `email` when an operator blocked it or another account holds
+/// it (case-insensitive).
+///
+/// # Errors
+/// - `Validation` ([`BLOCKED_EMAIL_REFUSAL`]) when an operator blocked the email.
+/// - `EmailTaken` when the email is in use.
+pub(crate) async fn check_signup_email(
+    user_repo: &dyn UserRepository,
+    email: &str,
+    username: &str,
+) -> ServiceResult<()> {
+    if user_repo.is_email_blocked(email).await? {
+        tracing::info!(
+            target: "audit",
+            event = "blocked_email_refused",
+            action = "signup",
+            username = %username,
+            "signup refused: the email is blocked on this server"
+        );
+        return Err(ServiceError::Validation(BLOCKED_EMAIL_REFUSAL.to_string()));
+    }
+    if user_repo.find_by_email(email).await?.is_some() {
+        // Audited so operators can detect enumeration attacks or signup bot activity.
+        tracing::info!(
+            target: "audit",
+            event = "email_taken_attempt",
+            email = %email,
+            username = %username,
+            "signup rejected: email already in use"
+        );
+        return Err(ServiceError::EmailTaken);
+    }
+    Ok(())
 }
 
 /// Record on `user_id` the terms URL the signup accepted, stamped now; nothing when it accepted
@@ -643,12 +659,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn an_email_bound_instance_invite_admits_only_its_address() {
+    async fn an_email_bound_instance_invite_admits_only_its_address_or_a_key_signup() {
         for (email, admitted) in [
             (Some("ops@example.com"), true),
             (Some(" Ops@Example.COM "), true),
             (Some("other@example.com"), false),
-            (None, false),
+            (None, true),
         ] {
             let mut repo = MockInstanceInviteRepository::new();
             repo.expect_get_by_token_hash().returning(|_| {
