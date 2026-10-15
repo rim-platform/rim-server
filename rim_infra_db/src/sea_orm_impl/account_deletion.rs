@@ -151,12 +151,13 @@ const SOLE_MEMBER_WORKSPACES: &str = "SELECT s.id FROM server s \
        AND NOT EXISTS (SELECT 1 FROM server_member o \
                        WHERE o.server_id = s.id AND o.user_id <> $1)";
 
-/// The encrypted conversations the account is a member of, with their other members.
+/// The encrypted conversations the account is a member of, with their other active members.
 const LEFT_ENCRYPTED_CONVERSATIONS: &str = "SELECT c.server_id, c.id AS conversation_id, \
          COALESCE(array_agg(o.user_id) FILTER (WHERE o.user_id IS NOT NULL), '{}') AS members \
      FROM conversation_member cm \
      JOIN conversation c ON c.id = cm.conversation_id \
      LEFT JOIN conversation_member o ON o.conversation_id = c.id AND o.user_id <> $1 \
+         AND o.pending_since IS NULL \
      WHERE cm.user_id = $1 AND c.encrypted_at IS NOT NULL \
      GROUP BY c.server_id, c.id \
      ORDER BY c.id";

@@ -118,4 +118,5 @@ pub(crate) struct MutationGroup8(
     workspace::WorkspaceOwnerMutations,
     account::AccountMutations,
     instance_moderation::InstanceModerationMutations,
+    conversation::ConversationInviteMutations,
 );

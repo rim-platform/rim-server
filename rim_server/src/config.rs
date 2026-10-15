@@ -244,6 +244,10 @@ pub struct RIMConfig {
     pub limit_invite_max_uses: Option<u32>,
     /// Bytes of one message's text, at most 65536. Controlled by `RIM_LIMIT_MESSAGE_BYTES`.
     pub limit_message_bytes: Option<u32>,
+    /// Pending invitations to encrypted conversations one user holds; unlike the other caps it
+    /// defaults to [`DEFAULT_PENDING_INVITES_PER_USER`], and 0 turns it off. Controlled by
+    /// `RIM_LIMIT_PENDING_INVITES_PER_USER`.
+    pub limit_pending_invites_per_user: Option<u32>,
 
     // ── Probation of new accounts ───────────────────────────────────────────
     /// Hours after its creation during which an account cannot create a workspace or send a
@@ -451,6 +455,7 @@ impl Default for RIMConfig {
             limit_invites_per_user_per_day: None,
             limit_invite_max_uses: None,
             limit_message_bytes: None,
+            limit_pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
             probation_hours: None,
             rate_probation_messages_per_min: None,
             account_deletion_grace_days: None,
@@ -1084,6 +1089,9 @@ impl RIMConfig {
     }
 }
 
+/// Default `RIM_LIMIT_PENDING_INVITES_PER_USER`.
+pub const DEFAULT_PENDING_INVITES_PER_USER: u32 = 50;
+
 /// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
 pub const MAX_LIMIT_MESSAGE_BYTES: u32 = rim_services::e2ee::MAX_CONTENT_BYTES as u32;
 
@@ -1136,6 +1144,7 @@ impl RIMConfig {
             invite_max_uses: cap(self.limit_invite_max_uses),
             message_bytes,
             probation_hours: cap(self.probation_hours),
+            pending_invites_per_user: cap(self.limit_pending_invites_per_user),
         })
     }
 }
@@ -1171,6 +1180,10 @@ impl RIMConfig {
                 i64::from(DEFAULT_S2S_PEER_RATE_PER_MIN),
             )?
             .set_default("s2s_max_body_bytes", DEFAULT_S2S_MAX_BODY_BYTES as i64)?
+            .set_default(
+                "limit_pending_invites_per_user",
+                i64::from(DEFAULT_PENDING_INVITES_PER_USER),
+            )?
             .add_source(Environment::with_prefix("RIM").source(Some(env)))
             .add_source(Environment::default().source(Some(unprefixed)));
         c.build()?.try_deserialize()
@@ -1944,7 +1957,14 @@ mod tests {
             dm_requests_per_day: Some(20),
             ..Default::default()
         };
-        assert_eq!(RIMConfig::default().instance_limits(), Ok(relay_only));
+        let defaults = InstanceLimits {
+            pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
+            ..relay_only
+        };
+        assert_eq!(RIMConfig::default().instance_limits(), Ok(defaults));
+        let unset = RIMConfig::load_from(env(&[("DATABASE_URL", "postgres://localhost/rim")]))
+            .expect("loads");
+        assert_eq!(unset.instance_limits(), Ok(defaults));
         let zero = RIMConfig::load_from(env(&[
             ("DATABASE_URL", "postgres://localhost/rim"),
             ("RIM_LIMIT_WORKSPACES_PER_USER", "0"),
@@ -1958,6 +1978,7 @@ mod tests {
             ("RIM_LIMIT_INVITES_PER_USER_PER_DAY", "0"),
             ("RIM_LIMIT_INVITE_MAX_USES", "0"),
             ("RIM_LIMIT_MESSAGE_BYTES", "0"),
+            ("RIM_LIMIT_PENDING_INVITES_PER_USER", "0"),
         ]))
         .expect("loads");
         assert_eq!(zero.instance_limits(), Ok(relay_only));
@@ -1979,6 +2000,7 @@ mod tests {
             ("RIM_LIMIT_INVITES_PER_USER_PER_DAY", "5"),
             ("RIM_LIMIT_INVITE_MAX_USES", "5"),
             ("RIM_LIMIT_MESSAGE_BYTES", "8192"),
+            ("RIM_LIMIT_PENDING_INVITES_PER_USER", "20"),
         ]))
         .expect("loads");
         assert_eq!(
@@ -1996,6 +2018,7 @@ mod tests {
                 invite_max_uses: Some(5),
                 message_bytes: Some(8192),
                 probation_hours: None,
+                pending_invites_per_user: Some(20),
             })
         );
     }

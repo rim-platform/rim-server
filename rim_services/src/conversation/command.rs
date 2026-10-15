@@ -97,6 +97,14 @@ pub struct LeaveConversationCmd {
     pub conversation_id: ConversationId,
 }
 
+/// Accept or decline the caller's pending invitation to an encrypted conversation.
+#[derive(Debug, Clone)]
+pub struct ConversationInviteCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+}
+
 /// Archive (`archived: true`) or unarchive a channel. Owner/Moderator only.
 #[derive(Debug, Clone, Copy)]
 pub struct ArchiveConversationCmd {

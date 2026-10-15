@@ -65,6 +65,7 @@ async fn create_conversation_with_members_is_atomic() {
                 encrypted: false,
             },
             &[u1, u2],
+            &[],
         )
         .await
         .unwrap();
@@ -623,6 +624,7 @@ async fn accessible_ids_include_private_channels_only_for_members() {
                 encrypted: false,
             },
             &[alice],
+            &[],
         )
         .await
         .unwrap();
@@ -686,6 +688,7 @@ async fn migration_backfill_makes_workspace_members_channel_members() {
                 encrypted: false,
             },
             &[alice],
+            &[],
         )
         .await
         .unwrap();
@@ -804,6 +807,7 @@ async fn joined_conversation_ids_cover_membership_rows_only() {
                 encrypted: false,
             },
             &[alice],
+            &[],
         )
         .await
         .unwrap();
@@ -815,5 +819,66 @@ async fn joined_conversation_ids_cover_membership_rows_only() {
                 .unwrap()
         ),
         sorted(vec![joined_public.id, private.id, group.id])
+    );
+}
+
+/// A pending member finds the conversation in their inbox and as a direct conversation, but
+/// cannot access it and has no unread scope in it.
+#[tokio::test]
+async fn pending_members_list_the_conversation_but_cannot_access_it() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
+    let alice = ctx.create_user("pending-alice").await.id;
+    let bob = ctx.create_user("pending-bob").await.id;
+
+    let dm = repo
+        .create_conversation_with_members(
+            NewConversation {
+                server_id: server.id,
+                conversation_type: ConversationType::Direct,
+                title: None,
+                is_private: false,
+                created_by: Some(alice),
+                encrypted: true,
+            },
+            &[alice],
+            &[bob],
+        )
+        .await
+        .unwrap();
+
+    let inbox = repo
+        .list_inbox_conversations_for_user(bob, server.id, 10, PageDir::After, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![dm.id]
+    );
+    for (a, b) in [(alice, bob), (bob, alice)] {
+        let found = repo
+            .find_direct_between_users(server.id, a, b)
+            .await
+            .unwrap();
+        assert_eq!(found.map(|c| c.id), Some(dm.id));
+    }
+    assert!(
+        repo.list_accessible_conversation_ids(server.id, bob)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repo.list_joined_conversation_ids(server.id, bob)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repo.list_joined_conversation_ids(server.id, alice)
+            .await
+            .unwrap(),
+        vec![dm.id]
     );
 }

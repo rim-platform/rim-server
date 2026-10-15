@@ -297,7 +297,9 @@ of a message. Each is a `RIM_LIMIT_*` variable, off until set (the "Instance lim
 a message naming the cap, and clients read every cap from `serverInfo.limits`. Devices and DM
 requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and
 `RIM_RELAY_DM_REQUESTS_PER_DAY`: the stricter number applies. A negative or non-numeric value,
-or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot.
+or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot. One cap is on by default:
+`RIM_LIMIT_PENDING_INVITES_PER_USER` (50, 0 turns it off) bounds the invitations to encrypted
+conversations one person holds, so nobody can be buried in them.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
 an account cannot create a workspace or send a DM request to someone it shares no workspace

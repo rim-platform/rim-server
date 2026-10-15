@@ -25,15 +25,19 @@ use rim_api::auth_context::AuthActorCtx;
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::key_identity::repository::KeyIdentityRepository;
+use rim_core::message::model::NewMessage;
+use rim_core::message::repository::MessageRepository;
 use rim_core::server::model::Server;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::User;
 use rim_identity::testing::{TestIdentity, device_self_revoke, signing_key};
 use rim_identity::{KeyState, StatementVersion};
 use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
+use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_services::email::{EmailMessage, EmailSender};
 use rim_services::auth::dto::RegistrationMode;
+use rim_services::events::WorkspaceEvent;
 use rim_services::provider::AppServiceProvider;
 
 use support::graphql::{
@@ -1059,7 +1063,7 @@ async fn messages_follow_the_epoch_and_wait_for_removals() {
 }
 
 /// Without a device-bound session nothing MLS works; an encrypted conversation without a group
-/// asks for a Commit; unready members cannot be in an encrypted conversation.
+/// asks for a Commit; an unready user cannot create an encrypted conversation.
 #[tokio::test]
 async fn sessions_groups_and_members_must_be_ready() {
     let mut f = fixture().await;
@@ -1088,11 +1092,11 @@ async fn sessions_groups_and_members_must_be_ready() {
     .await;
     assert_eq!(code, "FORBIDDEN");
 
-    // Bob has uploaded nothing yet: he is not ready for an encrypted DM.
+    // Bob has uploaded nothing yet: he cannot start an encrypted DM.
     upload(&f.schema, &f.alice, 1).await;
-    let refused = f.alice.request(
+    let refused = f.bob.request(
         CREATE_CONVERSATION,
-        json!({ "input": { "serverId": f.server_id(), "otherUserId": f.bob.user.id.to_string(), "encrypted": true } }),
+        json!({ "input": { "serverId": f.server_id(), "otherUserId": f.alice.user.id.to_string(), "encrypted": true } }),
     );
     let res = f.schema.execute(refused).await;
     assert_eq!(
@@ -1133,23 +1137,6 @@ async fn sessions_groups_and_members_must_be_ready() {
     .await;
     assert_eq!(code, "MLS_COMMIT_REQUIRED");
     assert_eq!(extensions["reason"], json!("noGroup"));
-
-    // A member without a ready device cannot be added to an encrypted group.
-    let carol = f.ctx.create_user("carol").await;
-    f.ctx
-        .add_member(&f.server, &carol, ServerMemberRole::Member)
-        .await;
-    let res = f
-        .schema
-        .execute(f.alice.request(
-            ADD_MEMBERS,
-            json!({ "serverId": f.server_id(), "conversationId": group_id, "userIds": [carol.id.to_string()] }),
-        ))
-        .await;
-    assert_eq!(
-        res.errors[0].message,
-        "every member of an encrypted conversation needs a device set up for encryption"
-    );
 
     // Workspace peers see each other's certified devices.
     let devices = exec_ok(
@@ -1990,4 +1977,276 @@ async fn finding_26_a_deleted_message_is_reported_end_to_end() {
         .try_get("", "franked_content")
         .expect("column");
     assert_eq!(stored.as_deref(), Some(sent_content.as_slice()));
+}
+
+const PENDING_CONVERSATION: &str = r#"
+mutation Create($input: CreateConversationInput!) {
+  createConversation(input: $input) { id memberIds pendingMemberIds }
+}"#;
+const VIEW: &str = r#"
+query View($serverId: ID!, $conversationId: ID!) {
+  conversation(serverId: $serverId, conversationId: $conversationId) { memberIds pendingMemberIds }
+}"#;
+const INBOX: &str = r#"
+query Inbox($serverId: ID!) {
+  inboxConversations(serverId: $serverId, dir: AFTER, limit: 50) {
+    items { id memberIds pendingMemberIds isMember mlsGroup { epoch } }
+  }
+}"#;
+const READ: &str = r#"
+query Read($serverId: ID!, $conversationId: ID!) {
+  messages(serverId: $serverId, conversationId: $conversationId, dir: AFTER, limit: 50,
+           includeDeleted: false) { items { id } }
+}"#;
+const UNREAD: &str = r#"
+query Unread($workspaceId: ID!) { unreadCounts(workspaceId: $workspaceId) { conversationId count } }"#;
+const ACCEPT: &str = r#"
+mutation Accept($serverId: ID!, $conversationId: ID!) {
+  acceptConversationInvite(serverId: $serverId, conversationId: $conversationId) {
+    memberIds pendingMemberIds
+  }
+}"#;
+const DECLINE: &str = r#"
+mutation Decline($serverId: ID!, $conversationId: ID!) {
+  declineConversationInvite(serverId: $serverId, conversationId: $conversationId)
+}"#;
+const KICK: &str = r#"
+mutation Kick($serverId: ID!, $userId: ID!) { kickMember(serverId: $serverId, userId: $userId) }"#;
+
+/// An encrypted DM with a party who has no ready device invites them: they see it but read,
+/// send and count nothing there, a key-package upload alone changes nothing, and accepting
+/// once their device is ready makes them a member. Another invitee declines; a kick removes a
+/// third.
+#[tokio::test]
+async fn an_unready_party_is_invited_and_joins_by_accepting() {
+    let ctx = TestCtx::new().await;
+    let (schema, _provider, events) = ctx.build_recording(RegistrationMode::InviteOnly);
+    let server = ctx.create_server("pending").await;
+    let alice = member(&ctx, &schema, "alice", 1).await;
+    let bob = member(&ctx, &schema, "bob", 2).await;
+    ctx.add_owner(&server, &alice.user).await;
+    ctx.add_member(&server, &bob.user, ServerMemberRole::Member)
+        .await;
+    let server_id = server.id.to_string();
+    let (alice_id, bob_id) = (alice.user.id.to_string(), bob.user.id.to_string());
+    upload(&schema, &alice, 1).await;
+
+    let created = exec_ok(
+        &schema,
+        alice.request(
+            PENDING_CONVERSATION,
+            json!({ "input": { "serverId": server_id, "otherUserId": bob_id, "encrypted": true } }),
+        ),
+    )
+    .await["createConversation"]
+        .clone();
+    assert_eq!(created["memberIds"], json!([alice_id]));
+    assert_eq!(created["pendingMemberIds"], json!([bob_id]));
+    let conv = created["id"].as_str().expect("id").to_string();
+    let conv_id: rim_core::conversation::model::ConversationId =
+        conv.parse::<Uuid>().expect("uuid").into();
+    let invited = events.events().into_iter().any(|e| {
+        matches!(e, WorkspaceEvent::MemberAddedToConversation { user_id, member_user_ids, .. }
+            if user_id == bob.user.id && member_user_ids.contains(&bob.user.id))
+    });
+    assert!(invited, "bob hears of the invitation");
+    // A message lands while bob is invited.
+    SeaOrmMessageRepository::new(ctx.db.clone())
+        .create_message(&NewMessage {
+            conversation_id: conv_id,
+            text: Some("before bob".to_string()),
+            sent_by: alice.user.id,
+            thread_id: None,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+        })
+        .await
+        .expect("message");
+
+    // Bob sees the invitation in his inbox, with no group and no membership.
+    let inbox = exec_ok(
+        &schema,
+        bob.request(INBOX, json!({ "serverId": server_id })),
+    )
+    .await;
+    let item = &inbox["inboxConversations"]["items"][0];
+    assert_eq!(item["id"], json!(conv));
+    assert_eq!(item["pendingMemberIds"], json!([bob_id]));
+    assert_eq!(item["isMember"], json!(false));
+    assert_eq!(item["mlsGroup"], Value::Null);
+
+    // He reads, sends and counts nothing there, like a non-member.
+    let ids = json!({ "serverId": server_id, "conversationId": conv });
+    let refused = |request| async { exec_err(&schema, request).await.0 };
+    assert_eq!(refused(bob.request(VIEW, ids.clone())).await, "FORBIDDEN");
+    assert_eq!(refused(bob.request(READ, ids.clone())).await, "FORBIDDEN");
+    let send = json!({ "input": { "serverId": server_id, "conversationId": conv, "text": "hi" } });
+    assert_eq!(refused(bob.request(SEND_PLAIN, send)).await, "FORBIDDEN");
+    let unread = json!({ "workspaceId": server_id });
+    let counts = exec_ok(&schema, bob.request(UNREAD, unread.clone())).await;
+    assert_eq!(counts["unreadCounts"], json!([]));
+
+    // Without a ready device he cannot accept; an upload alone does not make him a member.
+    let (code, _) = exec_err(&schema, bob.request(ACCEPT, ids.clone())).await;
+    assert_eq!(code, "VALIDATION");
+    upload(&schema, &bob, 1).await;
+    assert_eq!(refused(bob.request(VIEW, ids.clone())).await, "FORBIDDEN");
+
+    // He accepts: a member now, and the group should add his device.
+    let before = events.events().len();
+    let accepted = exec_ok(&schema, bob.request(ACCEPT, ids.clone())).await;
+    assert_eq!(
+        accepted["acceptConversationInvite"]["pendingMemberIds"],
+        json!([])
+    );
+    let after = events.events().split_off(before);
+    let changed = after
+        .iter()
+        .filter(|e| {
+            matches!(e,
+            WorkspaceEvent::MlsMembershipChanged { conversation_id, member_user_ids, .. }
+                if *conversation_id == conv_id && member_user_ids.contains(&bob.user.id))
+        })
+        .count();
+    assert_eq!(changed, 1);
+    assert!(after.iter().any(|e| matches!(e,
+        WorkspaceEvent::MemberAddedToConversation { conversation_id, user_id, .. }
+            if *conversation_id == conv_id && *user_id == bob.user.id)));
+    let view = exec_ok(&schema, bob.request(VIEW, ids.clone())).await;
+    let mut members: Vec<String> =
+        serde_json::from_value(view["conversation"]["memberIds"].clone()).expect("member ids");
+    members.sort();
+    let mut expected = vec![alice_id.clone(), bob_id.clone()];
+    expected.sort();
+    assert_eq!(members, expected);
+    exec_ok(&schema, bob.request(READ, ids.clone())).await;
+    // History from before he joined does not count as unread.
+    let counts = exec_ok(&schema, bob.request(UNREAD, unread)).await;
+    assert_eq!(counts["unreadCounts"], json!([]));
+    // Accepting again changes nothing.
+    let before = events.events().len();
+    exec_ok(&schema, bob.request(ACCEPT, ids.clone())).await;
+    assert_eq!(events.events().len(), before);
+
+    // Carol and dave, never ready, are invited into a group: carol declines, dave is kicked.
+    let carol = member(&ctx, &schema, "carol", 3).await;
+    let dave = ctx.create_user("dave").await;
+    ctx.add_member(&server, &carol.user, ServerMemberRole::Member)
+        .await;
+    ctx.add_member(&server, &dave, ServerMemberRole::Member)
+        .await;
+    let (carol_id, dave_id) = (carol.user.id.to_string(), dave.id.to_string());
+    let group = exec_ok(
+        &schema,
+        alice.request(
+            PENDING_CONVERSATION,
+            json!({ "input": { "serverId": server_id, "memberIds": [bob_id], "encrypted": true } }),
+        ),
+    )
+    .await["createConversation"]["id"]
+        .clone();
+    exec_ok(
+        &schema,
+        alice.request(
+            ADD_MEMBERS,
+            json!({ "serverId": server_id, "conversationId": group, "userIds": [carol_id, dave_id] }),
+        ),
+    )
+    .await;
+    let group_ids = json!({ "serverId": server_id, "conversationId": group });
+    let pending = |view: &Value| {
+        let mut ids: Vec<String> =
+            serde_json::from_value(view["conversation"]["pendingMemberIds"].clone())
+                .expect("pending ids");
+        ids.sort();
+        ids
+    };
+    let view = exec_ok(&schema, alice.request(VIEW, group_ids.clone())).await;
+    let mut both = vec![carol_id.clone(), dave_id.clone()];
+    both.sort();
+    assert_eq!(pending(&view), both);
+
+    let declined = exec_ok(&schema, carol.request(DECLINE, group_ids.clone())).await;
+    assert_eq!(declined["declineConversationInvite"], json!(true));
+    let (code, _) = exec_err(&schema, carol.request(DECLINE, group_ids.clone())).await;
+    assert_eq!(code, "NOT_FOUND");
+    exec_ok(
+        &schema,
+        alice.request(KICK, json!({ "serverId": server_id, "userId": dave_id })),
+    )
+    .await;
+    let view = exec_ok(&schema, alice.request(VIEW, group_ids)).await;
+    assert!(pending(&view).is_empty());
+}
+
+/// One user holds at most the instance's number of invitations; inviting them past it refuses
+/// the whole conversation. An invitation older than 30 days is purged, which frees its place.
+#[tokio::test]
+async fn invitations_are_capped_per_user_and_expire() {
+    let ctx = TestCtx::new().await;
+    let (schema, _events) = ctx.build_with_limits(rim_services::limits::InstanceLimits {
+        pending_invites_per_user: Some(1),
+        ..Default::default()
+    });
+    let server = ctx.create_server("capped").await;
+    let alice = member(&ctx, &schema, "alice", 1).await;
+    let bob = member(&ctx, &schema, "bob", 2).await;
+    let carol = member(&ctx, &schema, "carol", 3).await;
+    ctx.add_owner(&server, &alice.user).await;
+    for m in [&bob, &carol] {
+        ctx.add_member(&server, &m.user, ServerMemberRole::Member)
+            .await;
+    }
+    let server_id = server.id.to_string();
+    let bob_id = bob.user.id.to_string();
+    upload(&schema, &alice, 1).await;
+    upload(&schema, &carol, 1).await;
+    let create = |input: Value| alice.request(PENDING_CONVERSATION, json!({ "input": input }));
+
+    let dm = exec_ok(
+        &schema,
+        create(json!({ "serverId": server_id, "otherUserId": bob_id, "encrypted": true })),
+    )
+    .await["createConversation"]["id"]
+        .clone();
+    let group = json!({ "serverId": server_id, "memberIds": [carol.user.id.to_string(), bob_id], "encrypted": true });
+    let res = schema.execute(create(group.clone())).await;
+    assert_eq!(
+        res.errors[0].message,
+        "this instance allows 1 pending invitations per user"
+    );
+
+    // Bob's invitation is a month old: the purge deletes it.
+    ctx.db
+        .execute_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "UPDATE conversation_member SET pending_since = now() - interval '31 days' \
+             WHERE user_id = $1",
+            [Uuid::from(bob.user.id).into()],
+        ))
+        .await
+        .expect("age the invitation");
+    let purged = rim_infra_services::scheduled_purges::purge_expired_conversation_invites(
+        &rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository::new(
+            ctx.db.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(purged, Some(1));
+    let ids = json!({ "serverId": server_id, "conversationId": dm });
+    let view = exec_ok(&schema, alice.request(VIEW, ids)).await;
+    assert_eq!(view["conversation"]["pendingMemberIds"], json!([]));
+    let inbox = exec_ok(
+        &schema,
+        bob.request(INBOX, json!({ "serverId": server_id })),
+    )
+    .await;
+    assert_eq!(inbox["inboxConversations"]["items"], json!([]));
+
+    // With its place free, bob can be invited again.
+    let created = exec_ok(&schema, create(group)).await;
+    assert_eq!(
+        created["createConversation"]["pendingMemberIds"],
+        json!([bob_id])
+    );
 }

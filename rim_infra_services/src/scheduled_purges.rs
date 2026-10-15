@@ -1,6 +1,6 @@
 //! Background purges the composition root runs on a timer: stale attachment uploads are marked
-//! failed daily, expired workspace state is deleted hourly, and accounts whose deletion grace
-//! period ended are purged hourly. Each runs first a few minutes after boot and stops when the
+//! failed daily, expired workspace state and conversation invitations are deleted hourly, and
+//! accounts whose deletion grace period ended are purged hourly. Each runs first a few minutes after boot and stops when the
 //! shutdown signal changes.
 
 use std::future::Future;
@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_services::account_deletion::dto::PurgeRunDto;
 use rim_services::account_deletion::service::AccountDeletionService;
@@ -22,6 +23,10 @@ const FIRST_RUN_DELAY: Duration = Duration::from_secs(5 * 60);
 pub const ATTACHMENT_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Interval of the workspace-state expiry purge.
 pub const WORKSPACE_STATE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Interval of the conversation invitation expiry purge.
+pub const CONVERSATION_INVITE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How long a pending invitation to an encrypted conversation waits to be accepted.
+pub const CONVERSATION_INVITE_TTL: chrono::Duration = chrono::Duration::days(30);
 /// Interval of the purge of accounts whose deletion grace period ended.
 pub const ACCOUNT_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -73,6 +78,27 @@ pub async fn purge_expired_workspace_state(repo: &dyn WorkspaceStateRepository) 
         }
         Err(e) => {
             tracing::error!(error = %e, "workspace state expiry purge failed");
+            None
+        }
+    }
+}
+
+/// Delete the pending conversation invitations older than [`CONVERSATION_INVITE_TTL`]. Returns
+/// how many, `None` when the purge failed (logged).
+pub async fn purge_expired_conversation_invites(
+    repo: &dyn ConversationMemberRepository,
+) -> Option<u64> {
+    match repo
+        .delete_pending_before(chrono::Utc::now() - CONVERSATION_INVITE_TTL)
+        .await
+    {
+        Ok(count) => {
+            crate::metrics::conversation_invites_expired(count);
+            tracing::info!(count, "purged expired conversation invitations");
+            Some(count)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "conversation invitation expiry purge failed");
             None
         }
     }
@@ -142,8 +168,23 @@ pub async fn run_workspace_state_purge(
     .await;
 }
 
+/// Run [`purge_expired_conversation_invites`] hourly until `shutdown` changes.
+pub async fn run_conversation_invite_purge(
+    repo: Arc<dyn ConversationMemberRepository>,
+    shutdown: watch::Receiver<bool>,
+) {
+    every(CONVERSATION_INVITE_PURGE_INTERVAL, shutdown, || {
+        let repo = Arc::clone(&repo);
+        async move {
+            purge_expired_conversation_invites(repo.as_ref()).await;
+        }
+    })
+    .await;
+}
+
 #[cfg(test)]
 mod tests {
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::workspace_state::repository::MockWorkspaceStateRepository;
     use rim_services::ServiceError;
@@ -152,7 +193,9 @@ mod tests {
 
     use super::*;
     use crate::metrics::test_support::{block_on, recorded};
-    use crate::metrics::{ATTACHMENTS_CLEANED, WORKSPACE_STATE_PURGED};
+    use crate::metrics::{
+        ATTACHMENTS_CLEANED, CONVERSATION_INVITES_EXPIRED, WORKSPACE_STATE_PURGED,
+    };
 
     #[test]
     fn the_attachment_cleanup_uses_the_services_threshold_and_counts_what_it_marked() {
@@ -187,6 +230,33 @@ mod tests {
         let (count, got) = recorded(|| block_on(purge_expired_workspace_state(&repo)));
         assert_eq!(count, Some(7));
         assert_eq!(got.counter(WORKSPACE_STATE_PURGED, &[]), 7);
+    }
+
+    #[test]
+    fn the_invitation_purge_deletes_those_older_than_30_days_and_counts_them() {
+        let mut repo = MockConversationMemberRepository::new();
+        repo.expect_delete_pending_before()
+            .withf(|cutoff| {
+                let age = chrono::Utc::now() - *cutoff;
+                age >= CONVERSATION_INVITE_TTL
+                    && age < CONVERSATION_INVITE_TTL + chrono::Duration::minutes(1)
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(4) }));
+        let (count, got) = recorded(|| block_on(purge_expired_conversation_invites(&repo)));
+        assert_eq!(count, Some(4));
+        assert_eq!(got.counter(CONVERSATION_INVITES_EXPIRED, &[]), 4);
+        assert_eq!(CONVERSATION_INVITE_TTL, chrono::Duration::days(30));
+    }
+
+    #[test]
+    fn a_failed_invitation_purge_counts_nothing() {
+        let mut repo = MockConversationMemberRepository::new();
+        repo.expect_delete_pending_before()
+            .returning(|_| Box::pin(async { Err(RepoError::new(RepoErrorKind::Internal)) }));
+        let (count, got) = recorded(|| block_on(purge_expired_conversation_invites(&repo)));
+        assert_eq!(count, None);
+        assert_eq!(got.counter(CONVERSATION_INVITES_EXPIRED, &[]), 0);
     }
 
     #[test]

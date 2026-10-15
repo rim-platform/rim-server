@@ -39,12 +39,16 @@ pub trait ConversationRepository: Send + Sync {
 
     async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;
 
+    /// Creates the conversation with `member_ids` as active and `pending_ids` as pending
+    /// members, in one transaction.
     async fn create_conversation_with_members(
         &self,
         conv: NewConversation,
         member_ids: &[UserId],
+        pending_ids: &[UserId],
     ) -> RepoResult<Conversation>;
 
+    /// The direct conversation between two users, either of them active or pending.
     async fn find_direct_between_users(
         &self,
         server_id: ServerId,
@@ -52,7 +56,8 @@ pub trait ConversationRepository: Send + Sync {
         user_b: UserId,
     ) -> RepoResult<Option<Conversation>>;
 
-    /// List DM + Group conversations for a user ("inbox" semantics).
+    /// List DM + Group conversations for a user ("inbox" semantics), pending memberships
+    /// included.
     ///
     /// Ordering: `last_activity_at DESC, id DESC`.
     async fn list_inbox_conversations_for_user(
@@ -95,7 +100,7 @@ pub trait ConversationRepository: Send + Sync {
 
     /// List all conversation IDs that the user can access in a server.
     /// Includes: public channels, archived or not (server membership is sufficient) + private
-    /// channels, DMs and groups where the user is a conversation member.
+    /// channels, DMs and groups where the user is an active member.
     async fn list_accessible_conversation_ids(
         &self,
         server_id: ServerId,
@@ -107,9 +112,9 @@ pub trait ConversationRepository: Send + Sync {
     async fn list_public_channel_ids(&self, server_id: ServerId)
     -> RepoResult<Vec<ConversationId>>;
 
-    /// Conversations in a server the user is a `conversation_member` of: joined public channels,
-    /// private channels, DMs and groups (not public channels they merely can read). Scopes the
-    /// unread counts.
+    /// Conversations in a server the user is an active `conversation_member` of: joined public
+    /// channels, private channels, DMs and groups (not public channels they merely can read, nor
+    /// pending memberships). Scopes the unread counts.
     async fn list_joined_conversation_ids(
         &self,
         server_id: ServerId,

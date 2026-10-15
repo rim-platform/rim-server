@@ -448,6 +448,27 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             .collect()
     }
 
+    async fn remote_users(&self, user_ids: &[UserId]) -> RepoResult<Vec<UserId>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = self
+            .db
+            .query_all_raw(Self::statement(
+                r#"SELECT id FROM "user" WHERE id = ANY($1) AND kind = 'remote'"#,
+                vec![uuids(user_ids)],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.iter()
+            .map(|row| {
+                row.try_get::<Uuid>("", "id")
+                    .map(Into::into)
+                    .map_err(map_db_err)
+            })
+            .collect()
+    }
+
     async fn mls_active_device_ids(
         &self,
         user_id: UserId,
@@ -488,8 +509,8 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                        FROM conversation_member cm
                        JOIN "user" u ON u.id = cm.user_id
                        JOIN device_key d ON d.user_id = u.id
-                       WHERE cm.conversation_id = $1 AND u.principal_id IS NOT NULL
-                         AND d.revoked_at IS NULL AND d.last_key_package_upload_at >= $2
+                       WHERE cm.conversation_id = $1 AND cm.pending_since IS NULL
+                         AND u.principal_id IS NOT NULL AND d.revoked_at IS NULL AND d.last_key_package_upload_at >= $2
                        ORDER BY d.device_id"#,
                     usable("k.")
                 ),
@@ -523,7 +544,8 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             .all(
                 r#"SELECT u.principal_id, u.id AS user_id
                    FROM conversation_member cm JOIN "user" u ON u.id = cm.user_id
-                   WHERE cm.conversation_id = $1 AND u.principal_id = ANY($2)"#,
+                   WHERE cm.conversation_id = $1 AND cm.pending_since IS NULL
+                     AND u.principal_id = ANY($2)"#,
                 vec![id.into(), principal_ids.to_vec().into()],
             )
             .await?;
@@ -1092,7 +1114,8 @@ impl E2eeRepository for SeaOrmE2eeRepository {
             .query_all_raw(Self::statement(
                 "SELECT m.conversation_id FROM mls_group m \
                  JOIN conversation_member cm ON cm.conversation_id = m.conversation_id \
-                 WHERE cm.user_id = $1 AND m.retired_at IS NULL",
+                 WHERE cm.user_id = $1 AND cm.pending_since IS NULL \
+                   AND m.retired_at IS NULL",
                 vec![id.into()],
             ))
             .await
@@ -1226,7 +1249,7 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                  WHERE r.device_key_id = $1 AND r.acked_at IS NULL AND w.expires_at > now()
                    AND EXISTS (SELECT 1 FROM conversation_member cm
                                WHERE cm.conversation_id = w.conversation_id
-                                 AND cm.user_id = r.user_id)
+                                 AND cm.user_id = r.user_id AND cm.pending_since IS NULL)
                  ORDER BY w.created_at, w.id",
                 vec![id.into()],
             )

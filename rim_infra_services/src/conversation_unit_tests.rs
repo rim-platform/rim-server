@@ -7,8 +7,11 @@ mod tests {
         ChannelListFilter, ConversationActivityCursor, ConversationCreatedCursor,
         MockConversationRepository,
     };
-    use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId};
+    use rim_core::conversation_member::model::{
+        ConversationMember, ConversationMemberId, Membership,
+    };
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
+    use rim_core::e2ee::repository::MockE2eeRepository;
     use rim_core::notification::repository::MockNotificationRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::repository::pagination::{Page, PageDir};
@@ -19,9 +22,9 @@ mod tests {
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
     use rim_services::conversation::command::{
-        AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd,
-        GetConversationQuery, JoinChannelCmd, LeaveConversationCmd, ListChannelsQuery,
-        RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+        AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
+        CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
+        ListChannelsQuery, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
     };
     use rim_services::conversation::service::ConversationService;
     use rim_services::conversation::types::ConversationParticipants;
@@ -179,7 +182,7 @@ mod tests {
         let created_for_repo = created.clone();
         conversation_repo
             .expect_create_conversation_with_members()
-            .return_once(move |new, members| {
+            .return_once(move |new, members, _pending| {
                 assert_eq!(new.conversation_type, ConversationType::Channel);
                 assert_eq!(new.server_id, server_id);
                 assert_eq!(new.title.as_deref(), Some("Launches"));
@@ -573,6 +576,15 @@ mod tests {
         server_id: ServerId,
         conversation: Conversation,
         members: Arc<Mutex<Vec<UserId>>>,
+        /// Pending conversation members.
+        pending: Arc<Mutex<Vec<UserId>>>,
+        /// Users with a device ready for encryption.
+        ready: Vec<UserId>,
+        /// Users whose accounts live on another server.
+        remote: Vec<UserId>,
+        /// Pending invitations each user holds elsewhere.
+        held_invites: Vec<(UserId, usize)>,
+        limits: rim_services::limits::InstanceLimits,
         /// Workspace members and their roles; anyone else is not in the workspace.
         roles: Vec<(UserId, ServerMemberRole)>,
         /// Workspace members whose timeout is in force.
@@ -592,6 +604,11 @@ mod tests {
                 server_id,
                 conversation,
                 members: Arc::new(Mutex::new(members.to_vec())),
+                pending: Arc::default(),
+                ready: vec![],
+                remote: vec![],
+                held_invites: vec![],
+                limits: Default::default(),
                 roles: vec![],
                 timed_out: vec![],
                 events: Arc::new(RecordingBroadcaster::default()),
@@ -614,8 +631,39 @@ mod tests {
             self
         }
 
+        fn encrypted(mut self) -> Self {
+            self.conversation.encrypted_at = Some(chrono::Utc::now());
+            self
+        }
+
+        fn ready(mut self, users: &[UserId]) -> Self {
+            self.ready.extend_from_slice(users);
+            self
+        }
+
+        fn remote(mut self, users: &[UserId]) -> Self {
+            self.remote.extend_from_slice(users);
+            self
+        }
+
+        /// Caps pending invitations per user at `cap`; `user` already holds `held` elsewhere.
+        fn invite_cap(mut self, cap: u32, user: UserId, held: usize) -> Self {
+            self.limits.pending_invites_per_user = Some(cap);
+            self.held_invites.push((user, held));
+            self
+        }
+
+        fn with_pending(self, users: &[UserId]) -> Self {
+            self.pending.lock().expect("lock").extend_from_slice(users);
+            self
+        }
+
         fn members(&self) -> Vec<UserId> {
             self.members.lock().expect("lock").clone()
+        }
+
+        fn pending(&self) -> Vec<UserId> {
+            self.pending.lock().expect("lock").clone()
         }
 
         fn events(&self) -> Vec<WorkspaceEvent> {
@@ -677,6 +725,22 @@ mod tests {
                 let c = get.lock().expect("lock").clone();
                 Box::pin(async move { Ok((c.id == id).then_some(c)) })
             });
+            conversation_repo
+                .expect_find_direct_between_users()
+                .returning(|_, _, _| Box::pin(async { Ok(None) }));
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
+            let template = self.conversation.clone();
+            conversation_repo
+                .expect_create_conversation_with_members()
+                .returning(move |new, members, pending| {
+                    m.lock().expect("lock").extend_from_slice(members);
+                    p.lock().expect("lock").extend_from_slice(pending);
+                    let mut c = template.clone();
+                    c.id = ConversationId::new();
+                    c.conversation_type = new.conversation_type;
+                    c.encrypted_at = new.encrypted.then(chrono::Utc::now);
+                    Box::pin(async move { Ok(c) })
+                });
             let set = Arc::clone(&stored);
             conversation_repo
                 .expect_set_archived()
@@ -710,28 +774,71 @@ mod tests {
                     let ids = m.lock().expect("lock").clone();
                     Box::pin(async move { Ok(ids) })
                 });
-            let m = Arc::clone(&self.members);
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
+            conversation_member_repo
+                .expect_membership()
+                .returning(move |_cid, uid| {
+                    let membership = if m.lock().expect("lock").contains(&uid) {
+                        Some(Membership::Active)
+                    } else if p.lock().expect("lock").contains(&uid) {
+                        Some(Membership::Pending)
+                    } else {
+                        None
+                    };
+                    Box::pin(async move { Ok(membership) })
+                });
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
+            conversation_member_repo
+                .expect_activate_member()
+                .returning(move |_cid, uid| {
+                    let mut pending = p.lock().expect("lock");
+                    let waiting = pending.contains(&uid);
+                    if waiting {
+                        pending.retain(|u| *u != uid);
+                        m.lock().expect("lock").push(uid);
+                    }
+                    Box::pin(async move { Ok(waiting) })
+                });
+            let (p, held) = (Arc::clone(&self.pending), self.held_invites.clone());
+            conversation_member_repo
+                .expect_list_pending_conversation_ids()
+                .returning(move |uid| {
+                    let elsewhere = held.iter().find(|(u, _)| *u == uid).map_or(0, |(_, n)| *n);
+                    let here = usize::from(p.lock().expect("lock").contains(&uid));
+                    let ids = vec![ConversationId::new(); elsewhere + here];
+                    Box::pin(async move { Ok(ids) })
+                });
+            let p = Arc::clone(&self.pending);
+            conversation_member_repo
+                .expect_list_pending_member_ids()
+                .returning(move |_cid| {
+                    let ids = p.lock().expect("lock").clone();
+                    Box::pin(async move { Ok(ids) })
+                });
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
             conversation_member_repo
                 .expect_add_member()
                 .returning(move |cid, uid| {
-                    m.lock().expect("lock").push(uid);
-                    Box::pin(async move {
-                        Ok(ConversationMember {
-                            id: ConversationMemberId::new(),
-                            user_id: uid,
-                            conversation_id: cid,
-                            joined_at: chrono::Utc::now(),
-                        })
-                    })
+                    let row = insert_member(&m, &p, cid, uid, false);
+                    Box::pin(async move { row })
                 });
-            let m = Arc::clone(&self.members);
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
+            conversation_member_repo
+                .expect_add_pending_member()
+                .returning(move |cid, uid| {
+                    let row = insert_member(&m, &p, cid, uid, true);
+                    Box::pin(async move { row })
+                });
+            let (m, p) = (Arc::clone(&self.members), Arc::clone(&self.pending));
             conversation_member_repo
                 .expect_remove_member()
                 .returning(move |_cid, uid| {
                     let mut members = m.lock().expect("lock");
-                    let before = members.len();
+                    let mut pending = p.lock().expect("lock");
+                    let before = members.len() + pending.len();
                     members.retain(|u| *u != uid);
-                    let removed = members.len() != before;
+                    pending.retain(|u| *u != uid);
+                    let removed = members.len() + pending.len() != before;
                     Box::pin(async move {
                         if removed {
                             Ok(())
@@ -753,6 +860,26 @@ mod tests {
                     Box::pin(async { Ok(1) })
                 });
 
+            let mut e2ee_repo = MockE2eeRepository::new();
+            let ready = self.ready.clone();
+            e2ee_repo.expect_ready_users().returning(move |ids, _| {
+                let found = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| ready.contains(id))
+                    .collect();
+                Box::pin(async move { Ok(found) })
+            });
+            let remote = self.remote.clone();
+            e2ee_repo.expect_remote_users().returning(move |ids| {
+                let found = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| remote.contains(id))
+                    .collect();
+                Box::pin(async move { Ok(found) })
+            });
+
             DefaultConversationService::new(
                 ConversationRepos {
                     conversation_repo: Arc::new(conversation_repo),
@@ -762,6 +889,47 @@ mod tests {
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
+            .with_e2ee_repo(Arc::new(e2ee_repo))
+            .with_limits(self.limits)
+        }
+
+        fn invite_cmd(&self, actor: UserId) -> ConversationInviteCmd {
+            ConversationInviteCmd {
+                actor: Actor::new(actor),
+                server_id: self.server_id,
+                conversation_id: self.conversation.id,
+            }
+        }
+
+        async fn accept(&self, actor: UserId) -> Result<(), ServiceError> {
+            self.service()
+                .accept_conversation_invite(self.invite_cmd(actor))
+                .await
+                .map(|_| ())
+        }
+
+        async fn decline(&self, actor: UserId) -> Result<(), ServiceError> {
+            self.service()
+                .decline_conversation_invite(self.invite_cmd(actor))
+                .await
+        }
+
+        /// Creates an encrypted conversation as `actor`.
+        async fn create_encrypted(
+            &self,
+            actor: UserId,
+            participants: ConversationParticipants,
+        ) -> Result<rim_services::conversation::dto::ConversationDto, ServiceError> {
+            self.service()
+                .create_conversation(CreateConversationCmd {
+                    actor: Actor::new(actor),
+                    server_id: self.server_id,
+                    participants,
+                    title: None,
+                    is_private: false,
+                    encrypted: true,
+                })
+                .await
         }
 
         async fn join(&self, actor: UserId) -> Result<(), ServiceError> {
@@ -841,6 +1009,33 @@ mod tests {
                 .await
                 .map(|_| ())
         }
+    }
+
+    /// Adds `uid` to the fixture's active or pending members; `Conflict` when already either.
+    fn insert_member(
+        members: &Mutex<Vec<UserId>>,
+        pending: &Mutex<Vec<UserId>>,
+        cid: ConversationId,
+        uid: UserId,
+        as_pending: bool,
+    ) -> Result<ConversationMember, RepoError> {
+        let mut members = members.lock().expect("lock");
+        let mut pending = pending.lock().expect("lock");
+        if members.contains(&uid) || pending.contains(&uid) {
+            return Err(RepoError::new(RepoErrorKind::Conflict));
+        }
+        if as_pending {
+            pending.push(uid);
+        } else {
+            members.push(uid);
+        }
+        Ok(ConversationMember {
+            id: ConversationMemberId::new(),
+            user_id: uid,
+            conversation_id: cid,
+            joined_at: chrono::Utc::now(),
+            pending_since: as_pending.then(chrono::Utc::now),
+        })
     }
 
     fn users<const N: usize>() -> [UserId; N] {
@@ -1439,7 +1634,7 @@ mod tests {
         }
         conversation_repo
             .expect_create_conversation_with_members()
-            .returning(|new, _| {
+            .returning(|new, _, _| {
                 let mut created = conv(new.server_id);
                 created.conversation_type = ConversationType::Channel;
                 created.is_private = new.is_private;
@@ -1490,5 +1685,297 @@ mod tests {
                 Err(other) => panic!("unexpected {other:?}"),
             }
         }
+    }
+
+    // ── Pending members of encrypted conversations ──
+
+    fn dm(other_user_id: UserId) -> ConversationParticipants {
+        ConversationParticipants::DirectMessage { other_user_id }
+    }
+
+    fn joined(events: &[WorkspaceEvent]) -> Vec<(UserId, Vec<UserId>)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                WorkspaceEvent::MemberAddedToConversation {
+                    user_id,
+                    member_user_ids,
+                    ..
+                } => Some((*user_id, member_user_ids.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn mls_changes(events: &[WorkspaceEvent]) -> usize {
+        events
+            .iter()
+            .filter(|e| matches!(e, WorkspaceEvent::MlsMembershipChanged { .. }))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn encrypted_dm_with_an_unready_party_makes_them_pending() {
+        let [alice, bob] = users();
+        let fx = Fx::new(ConversationType::Direct, false, &[])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .ready(&[alice]);
+
+        let dto = fx.create_encrypted(alice, dm(bob)).await.expect("created");
+
+        assert_eq!(dto.member_ids, vec![alice]);
+        assert_eq!(dto.pending_member_ids, vec![bob]);
+        let events = fx.events();
+        // Bob hears of the conversation through his own join.
+        assert_eq!(joined(&events), vec![(bob, vec![alice, bob])]);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::ConversationCreated { member_user_ids, .. } if *member_user_ids == [alice]
+        )));
+    }
+
+    #[tokio::test]
+    async fn encrypted_conversations_refuse_an_unready_creator_or_remote_member() {
+        let [alice, bob, remote] = users();
+        let fresh = || {
+            Fx::new(ConversationType::Group, false, &[])
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
+                .with_workspace_member(remote, ServerMemberRole::Member)
+                .remote(&[remote])
+        };
+        let not_ready = |r: Result<_, ServiceError>| matches!(r, Err(ServiceError::Validation(m)) if m.contains("needs a device set up"));
+
+        let fx = fresh().ready(&[bob]);
+        assert!(not_ready(fx.create_encrypted(alice, dm(bob)).await));
+        assert!(fx.members().is_empty() && fx.pending().is_empty());
+
+        let fx = fresh().ready(&[alice]);
+        let group = ConversationParticipants::Group {
+            member_ids: vec![bob, remote],
+        };
+        assert!(not_ready(fx.create_encrypted(alice, group).await));
+        assert!(fx.members().is_empty() && fx.pending().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inviting_unready_users_to_an_encrypted_group_adds_them_pending() {
+        let [alice, bob, carol] = users();
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .ready(&[alice, bob]);
+
+        fx.invite(alice, &[bob, carol]).await.expect("invited");
+
+        assert_eq!(fx.members(), vec![alice, bob]);
+        assert_eq!(fx.pending(), vec![carol]);
+        let events = fx.events();
+        assert_eq!(
+            joined(&events),
+            vec![(bob, vec![alice, bob]), (carol, vec![alice, bob, carol])]
+        );
+        assert_eq!(mls_changes(&events), 1);
+
+        // A pending invitee invited again stays pending, with no event.
+        fx.invite(alice, &[carol]).await.expect("invited again");
+        assert_eq!(fx.pending(), vec![carol]);
+        assert!(joined(&fx.events()[events.len()..]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn plaintext_conversations_never_have_pending_members() {
+        let [alice, bob, carol] = users();
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member);
+
+        fx.invite(alice, &[bob]).await.expect("invited");
+        let dto = fx
+            .service()
+            .create_conversation(CreateConversationCmd {
+                actor: Actor::new(alice),
+                server_id: fx.server_id,
+                participants: ConversationParticipants::Group {
+                    member_ids: vec![carol],
+                },
+                title: None,
+                is_private: false,
+                encrypted: false,
+            })
+            .await
+            .expect("created");
+
+        assert!(fx.pending().is_empty());
+        assert!(dto.pending_member_ids.is_empty());
+        assert_eq!(mls_changes(&fx.events()), 0);
+    }
+
+    #[tokio::test]
+    async fn the_encrypted_member_cap_counts_pending_members() {
+        let [alice, carol] = users();
+        let waiting: Vec<UserId> = (1..rim_services::e2ee::MAX_ENCRYPTED_MEMBERS)
+            .map(|_| UserId::new())
+            .collect();
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .with_pending(&waiting)
+            .ready(&[alice, carol]);
+
+        let err = fx.invite(alice, &[carol]).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(m) if m.contains("at most")));
+    }
+
+    #[tokio::test]
+    async fn pending_members_may_leave_or_be_removed_without_an_mls_change() {
+        let [alice, carol, moderator] = users();
+        let fresh = || {
+            Fx::new(ConversationType::Group, false, &[alice])
+                .encrypted()
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(carol, ServerMemberRole::Member)
+                .with_workspace_member(moderator, ServerMemberRole::Moderator)
+                .with_pending(&[carol])
+        };
+
+        // A pending member cannot read the conversation, like a non-member.
+        let fx = fresh();
+        assert!(matches!(
+            fx.get(carol).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+
+        let fx = fresh();
+        fx.leave(carol).await.expect("left");
+        assert!(fx.pending().is_empty());
+        assert_eq!(fx.members(), vec![alice]);
+        assert_eq!(fx.cleared_notifications(), [(carol, fx.conversation.id)]);
+        let events = fx.events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::MemberRemovedFromConversation { user_id, member_user_ids, .. }
+                if *user_id == carol && member_user_ids.contains(&carol)
+        )));
+        assert_eq!(mls_changes(&events), 0);
+
+        let fx = fresh();
+        fx.remove(moderator, carol).await.expect("removed");
+        assert!(fx.pending().is_empty());
+        assert_eq!(mls_changes(&fx.events()), 0);
+    }
+
+    #[tokio::test]
+    async fn accepting_an_invitation_needs_a_ready_device_and_happens_once() {
+        let [alice, carol] = users();
+        let mut fx = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .with_pending(&[carol]);
+
+        let err = fx.accept(carol).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(m) if m.contains("needs a device set up")));
+        assert_eq!(fx.pending(), vec![carol]);
+
+        fx.ready.push(carol);
+        fx.accept(carol).await.expect("accepted");
+        assert_eq!(fx.members(), vec![alice, carol]);
+        assert!(fx.pending().is_empty());
+        let events = fx.events();
+        assert_eq!(joined(&events), vec![(carol, vec![alice, carol])]);
+        assert_eq!(mls_changes(&events), 1);
+
+        fx.accept(carol).await.expect("accepted again");
+        assert_eq!(fx.events().len(), events.len());
+    }
+
+    #[tokio::test]
+    async fn declining_an_invitation_deletes_it_without_an_mls_change() {
+        let [alice, bob] = users();
+        let fx = Fx::new(ConversationType::Direct, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_pending(&[bob]);
+
+        fx.decline(bob).await.expect("declined");
+
+        assert!(fx.pending().is_empty());
+        assert_eq!(fx.members(), vec![alice]);
+        assert_eq!(fx.cleared_notifications(), [(bob, fx.conversation.id)]);
+        let events = fx.events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::MemberRemovedFromConversation { user_id, member_user_ids, .. }
+                if *user_id == bob && *member_user_ids == [alice, bob]
+        )));
+        assert_eq!(mls_changes(&events), 0);
+    }
+
+    #[tokio::test]
+    async fn answering_without_an_invitation_is_not_found() {
+        let [alice, bob] = users();
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .ready(&[alice, bob]);
+
+        assert!(matches!(fx.accept(bob).await, Err(ServiceError::NotFound)));
+        assert!(matches!(fx.decline(bob).await, Err(ServiceError::NotFound)));
+        // A member has nothing to decline; accepting changes nothing.
+        assert!(matches!(
+            fx.decline(alice).await,
+            Err(ServiceError::NotFound)
+        ));
+        fx.accept(alice).await.expect("already a member");
+        assert_eq!(fx.members(), vec![alice]);
+        assert!(fx.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_user_holding_the_most_pending_invitations_is_not_invited_again() {
+        let [alice, bob, carol] = users();
+        let fresh = |held| {
+            Fx::new(ConversationType::Group, false, &[alice])
+                .encrypted()
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
+                .with_workspace_member(carol, ServerMemberRole::Member)
+                .ready(&[alice, bob])
+                .invite_cap(2, carol, held)
+        };
+        let capped = |r: Result<_, ServiceError>| {
+            matches!(r, Err(ServiceError::Validation(m))
+                if m == "this instance allows 2 pending invitations per user")
+        };
+
+        let fx = fresh(2);
+        assert!(capped(fx.invite(alice, &[bob, carol]).await));
+        assert!(fx.pending().is_empty());
+        assert_eq!(fx.members(), vec![alice]);
+        assert!(capped(
+            fx.create_encrypted(alice, dm(carol)).await.map(|_| ())
+        ));
+
+        let fx = fresh(1);
+        fx.invite(alice, &[carol]).await.expect("below the cap");
+        assert_eq!(fx.pending(), vec![carol]);
+        // A ready user is never capped.
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Member)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .ready(&[alice, bob])
+            .invite_cap(2, bob, 5);
+        fx.invite(alice, &[bob])
+            .await
+            .expect("ready joiners are not invitations");
     }
 }

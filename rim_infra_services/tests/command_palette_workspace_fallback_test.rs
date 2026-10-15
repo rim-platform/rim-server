@@ -153,6 +153,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
                         title: Some("general".to_string()),
                         topic: None,
                         member_ids: vec![],
+                        pending_member_ids: vec![],
                         is_private: false,
                         archived_at: None,
                         created_by: None,

@@ -22,6 +22,8 @@ pub const AUDIT_RETENTION_DAYS: &str = "rim_audit_retention_days";
 pub const ATTACHMENTS_CLEANED: &str = "rim_attachments_cleaned_total";
 /// Expired workspace state entries the hourly purge deleted.
 pub const WORKSPACE_STATE_PURGED: &str = "rim_workspace_state_purged_total";
+/// Expired conversation invitations the hourly purge deleted.
+pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -65,6 +67,11 @@ pub fn describe() {
         Unit::Count,
         "Expired workspace state entries the hourly purge deleted."
     );
+    describe_counter!(
+        CONVERSATION_INVITES_EXPIRED,
+        Unit::Count,
+        "Expired conversation invitations the hourly purge deleted."
+    );
 }
 
 /// Count one request the limiter named `limiter` refused.
@@ -90,6 +97,11 @@ pub fn attachments_cleaned(n: u64) {
 /// Count `n` expired workspace state entries the purge deleted.
 pub fn workspace_state_purged(n: u64) {
     counter!(WORKSPACE_STATE_PURGED).increment(n);
+}
+
+/// Count `n` expired conversation invitations the purge deleted.
+pub fn conversation_invites_expired(n: u64) {
+    counter!(CONVERSATION_INVITES_EXPIRED).increment(n);
 }
 
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.

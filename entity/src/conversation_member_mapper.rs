@@ -8,6 +8,7 @@ impl From<conversation_member::Model> for ConversationMember {
             conversation_id: m.conversation_id.into(),
             user_id: m.user_id.into(),
             joined_at: m.joined_at.into(),
+            pending_since: m.pending_since.map(Into::into),
         }
     }
 }

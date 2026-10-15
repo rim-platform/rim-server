@@ -23,7 +23,7 @@ conversation with them (`ServerMemberService::visible_members`); everyone else s
 | `Notification.conversation` | the conversation | resolver: `load_readable_conversation`; null when unreadable | guarded |
 | `Notification.message` | the message | resolver: `load_readable_conversation` first | guarded |
 | `Conversation.isMuted`, `.notificationLevel`, `.effectiveNotificationLevel` | the viewer's own preferences | keyed by the viewer | guarded |
-| `Conversation.mlsGroup` | the group and its devices | service: `E2eeService::group` checks read access to the conversation | guarded |
+| `Conversation.mlsGroup` | the group and its devices | resolver: null for a viewer in `pendingMemberIds`; service: `E2eeService::group` checks read access to the conversation | guarded |
 | `Conversation.predecessor` | the host and id this conversation succeeds | parent: same conversation | guarded |
 | `Server.viewerRole` | the viewer's own membership | keyed by the viewer | guarded |
 | `Server.owner` | the owner's `User` through `UserLoader` | service: `ServerMemberService::get_owner` answers members only; the owner is workspace metadata every member sees, guests included | guarded |
@@ -37,6 +37,7 @@ conversation with them (`ServerMemberService::visible_members`); everyone else s
 | `Message.attachments`, `.encryption` | the message's own attachments and envelope | parent | guarded |
 | `MessageChange.message` | a changed message | root: `messageChanges` checks each conversation and answers `NO_ACCESS` without changes | guarded |
 | `Conversation.memberIds` | the conversation's members | root: a guest lists only joined conversations | guarded |
+| `Conversation.pendingMemberIds` | the users invited to an encrypted conversation | root: as `memberIds`; an invitee gets the conversation from `inboxConversations` alone, and every root that reads its content (`conversation`, `messages`, `unreadCounts`, sends) treats them as a non-member | guarded |
 | `ServerMember` profile fields | a member's profile | root: `serverMembers` applies the member visibility rule | guarded |
 | `Thread.rootAuthorId`, `.rootText` | the thread root | root: thread queries check the conversation | guarded |
 | `MessageReport.message*`, `.franked*` | the reported message | root: moderators only | guarded |

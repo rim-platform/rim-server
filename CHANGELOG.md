@@ -23,6 +23,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Invitations to encrypted conversations: an encrypted DM or group may now include members who
+  have no device ready for encryption. They are listed in the new
+  `Conversation.pendingMemberIds`, see the conversation but cannot read, send or be notified,
+  and join with the new `acceptConversationInvite` once a device is ready, or decline with
+  `declineConversationInvite`. Invitations expire after 30 days, and
+  `RIM_LIMIT_PENDING_INVITES_PER_USER` (`serverInfo.limits.pendingInvitesPerUser`, default 50)
+  caps how many one user holds. Before, the server refused such members; it still refuses a
+  creator who is not ready (`e2ee-mls-v1.md`).
 - Instance moderation in the app: `rim_server operator grant | revoke | list` makes an account
   an instance operator, `me.instanceOperator` says whether the caller is one, and the queries
   `instanceReports`, `instancePrincipalBlocks`, `instanceIpBlocks` and the mutations

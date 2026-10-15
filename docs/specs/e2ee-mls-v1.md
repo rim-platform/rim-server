@@ -10,8 +10,9 @@ crate, S4-3 to S4-5 the desktop client, S4-6 the web client._
 ## Summary
 
 1. **DMs and groups** are encrypted; channels, private ones included, stay plaintext. New DMs and
-   groups are encrypted when every member is ready; existing ones are upgraded once, by a member
-   device, behind a visible "encrypted since" marker. Old plaintext stays.
+   groups are encrypted when their creator is ready; members who are not ready yet are invited
+   and become members when they accept with a ready device. Existing ones are upgraded
+   once, by a member device, behind a visible "encrypted since" marker. Old plaintext stays.
 2. One MLS group per conversation, suite **0x004F** (X25519 + ML-KEM-768, AES-128-GCM, Ed25519).
    Members are **devices**. The server owns conversation membership; the group follows it.
 3. Credentials: a per-device **MLS signature key** certified by the device key (an `mls-key`
@@ -46,6 +47,17 @@ crate, S4-3 to S4-5 the desktop client, S4-6 the web client._
   not revoked, with a key package uploaded in the last 60 days (`device_key.last_key_package_upload_at`,
   set by every upload; key package rows themselves expire after 90 days), shown as
   `PrincipalDevice.mlsActive`. Bots, the CLI and password-only accounts are never ready.
+- **Pending member (invitation).** A member of an encrypted conversation who was not ready when
+  they were added (`Conversation.pendingMemberIds`; not in `memberIds` or `memberCount`). They see
+  the conversation in their inbox, with `mlsGroup` null, but cannot read, send or be notified
+  there (`FORBIDDEN`, like a non-member), and their devices are not desired. The server never
+  makes them a member on its own: a key-package upload changes nothing. They call
+  `acceptConversationInvite`, which needs them ready (`VALIDATION` otherwise) and emits
+  `MemberAddedToConversation` and `MlsMembershipChanged`; a member device then adds their devices
+  like any pending add, and they read nothing from before. `declineConversationInvite` deletes the
+  invitation. An invitation expires after 30 days, and one user holds at most
+  `RIM_LIMIT_PENDING_INVITES_PER_USER` (default 50). Remote users and members of the relay's
+  direct space are never invited: they must be ready.
 - **An encrypted conversation** has `conversation.encrypted_at` set. It is set when an encrypted
   conversation is created (`createConversation(input: { encrypted: true })`) or when the first
   Commit of an existing plaintext DM or group is accepted ("Migration"). It is never cleared.
@@ -57,15 +69,17 @@ crate, S4-3 to S4-5 the desktop client, S4-6 the web client._
   `replyToMessage`, `editMessage`, `forwardMessage`, a plugin's post) and never upgrades it again.
 - In an encrypted conversation the server refuses plaintext writes (`sendMessage`,
   `replyToMessage`, `editMessage` on an encrypted row, `forwardMessage` into it: `VALIDATION`,
-  `this conversation is encrypted`), and `createConversation(encrypted: true)` and
-  `addConversationMembers` refuse members who are not ready (`VALIDATION`,
-  `every member of an encrypted conversation needs a device set up for encryption`).
+  `this conversation is encrypted`). `createConversation(encrypted: true)` refuses a creator who
+  is not ready (`VALIDATION`,
+  `every member of an encrypted conversation needs a device set up for encryption`), and adds
+  invites every other member who is not ready; `addConversationMembers` invites them too.
 - **Group devices**: the devices that are leaves of the current MLS group, as the server records
   them from accepted Commits (`mls_group_device`). **Desired devices**: the MLS-active devices of
   the conversation's current members. **Pending adds** are desired devices not in the group;
   **pending removes** are group devices no longer desired (member left, removed, kicked or banned;
   device revoked; inactive for 60 days).
-- At most **100 members and 512 devices** per encrypted conversation (`VALIDATION` beyond).
+- At most **100 members and 512 devices** per encrypted conversation (`VALIDATION` beyond);
+  pending members count.
 
 ## Identity and credentials
 
@@ -124,6 +138,7 @@ read, and the UI says that a device RIM cannot verify can read new messages.
 | Event | Effect | Who commits |
 |---|---|---|
 | A device is linked (`device-linking-v1.md`) and uploads key packages | Pending add | Ranked group devices, or the member's own other device first (rank 0) |
+| An invited member accepts (`acceptConversationInvite`) | The member becomes active; pending adds for their devices | Ranked group devices |
 | `revokeDeviceKey` | Pending remove | Ranked group devices; any sender first |
 | Identity rotation (`signer: identity`) | None: devices stay enrolled | — |
 | Recovery rotation (all devices revoked, a new one enrolled) | Pending removes, then a pending add | Ranked group devices |
@@ -219,8 +234,8 @@ name the conversation and incarnation they expect.
 ### Creating a group
 
 1. The creator's client calls `createConversation(input: { …, encrypted: true })`. The server
-   checks that every member is ready, creates the conversation with `encrypted_at = created_at`,
-   and no group. A DM pair that already has a DM gets that conversation back, as today; a plaintext
+   checks that the creator is ready, creates the conversation with `encrypted_at = created_at`,
+   the members who are not ready invited, and no group. A DM pair that already has a DM gets that conversation back, as today; a plaintext
    one is then upgraded as in "Migration".
 2. It calls `claimMlsKeyPackages` for every desired device but its own (with no group there is no
    `mlsGroup` to list pending adds: the desired devices are the members' devices with

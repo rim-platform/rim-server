@@ -22,6 +22,7 @@ use rim_core::e2ee::model::{
     NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
+use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{DeviceKeyId, NewDeviceKey};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::message::model::{MessageEncryption, MessageId};
@@ -1602,4 +1603,65 @@ async fn search_never_returns_encrypted_rows() {
         vec![plain.id],
         "an operator-only search matches rows without text, but never encrypted ones"
     );
+}
+
+/// A pending member's devices are not wanted in the group, and they do not count as a member
+/// for Commits, Welcomes or group lookups; remote users are told apart from local ones.
+#[tokio::test]
+async fn pending_members_stay_out_of_the_group() {
+    let f = fixture().await;
+    let carol = member(&f.ctx, "carol").await;
+    SeaOrmConversationMemberRepository::new(f.ctx.db.clone())
+        .add_pending_member(f.conv.id, carol.user.id)
+        .await
+        .unwrap();
+    create_group(&f).await;
+    let active_since = Utc::now() - Duration::days(60);
+
+    let desired = f
+        .repo
+        .desired_devices(f.conv.id, active_since, SUITE)
+        .await
+        .unwrap();
+    assert!(desired.iter().all(|d| d.device.user_id != carol.user.id));
+    assert_eq!(desired.len(), 2);
+    let members = f
+        .repo
+        .members_by_principal(f.conv.id, &["rimp1_carol".to_string()])
+        .await
+        .unwrap();
+    assert!(members.is_empty());
+    assert!(
+        f.repo
+            .grouped_conversations_of_user(carol.user.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        f.repo
+            .grouped_conversations_of_user(f.alice.user.id)
+            .await
+            .unwrap(),
+        vec![f.conv.id]
+    );
+
+    let remote = rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository::new(f.ctx.db.clone())
+        .create_remote_user(rim_core::host::model::NewRemoteUser {
+            principal_id: "rimp1_remote".to_string(),
+            identity_key: "ed25519:remote".to_string(),
+            username: "r_remote".to_string(),
+            display_name: "Remote".to_string(),
+            home_relay: Some("rims1_relay".to_string()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .remote_users(&[f.alice.user.id, remote])
+            .await
+            .unwrap(),
+        vec![remote]
+    );
+    assert!(f.repo.remote_users(&[]).await.unwrap().is_empty());
 }

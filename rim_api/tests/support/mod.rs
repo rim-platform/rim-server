@@ -355,6 +355,7 @@ impl TestCtx {
             std::sync::Arc::new(NoopBroadcaster),
             rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
             rim_infra_services::FederationHooks::default(),
+            rim_services::limits::InstanceLimits::default(),
         );
         let provider: std::sync::Arc<dyn AppServiceProvider> =
             std::sync::Arc::new(provider.with_account_deletion(grace, None));
@@ -364,6 +365,28 @@ impl TestCtx {
             registration_mode,
         );
         (schema, provider)
+    }
+
+    /// Build the schema and the provider it runs on with the instance caps `limits`, recording
+    /// every event the services emit.
+    pub fn build_with_limits(
+        &self,
+        limits: rim_services::limits::InstanceLimits,
+    ) -> (rim_api::AppSchema, std::sync::Arc<RecordingBroadcaster>) {
+        let events = std::sync::Arc::new(RecordingBroadcaster::default());
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::clone(&events) as std::sync::Arc<dyn rim_services::events::Broadcaster>,
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks::default(),
+            limits,
+        );
+        let schema = schema_for(
+            std::sync::Arc::new(provider),
+            observers,
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        );
+        (schema, events)
     }
 
     /// Build the schema on an instance that reserves the comma-separated `names`, as
@@ -378,6 +401,7 @@ impl TestCtx {
                     .expect("reserved names"),
                 ..Default::default()
             },
+            rim_services::limits::InstanceLimits::default(),
         );
         schema_for(
             std::sync::Arc::new(provider),
@@ -493,18 +517,20 @@ pub fn build_test_provider_with_gate(
         broadcaster,
         gate,
         rim_infra_services::FederationHooks::default(),
+        rim_services::limits::InstanceLimits::default(),
     );
     (std::sync::Arc::new(provider), observers)
 }
 
-/// The real service provider over `conn` with the instance feature gate `gate` and the
-/// instance settings in `hooks`, before it is shared, so a test can set what the composition
-/// root sets on it.
+/// The real service provider over `conn` with the instance feature gate `gate`, the instance
+/// settings in `hooks` and the caps in `limits`, before it is shared, so a test can set what the
+/// composition root sets on it.
 fn test_provider(
     conn: &DatabaseConnection,
     broadcaster: std::sync::Arc<dyn rim_services::events::Broadcaster>,
     gate: rim_infra_services::feature_gate::InstanceFeatureGate,
     hooks: rim_infra_services::FederationHooks,
+    limits: rim_services::limits::InstanceLimits,
 ) -> (DefaultAppServiceProvider, Observers) {
     use std::sync::Arc;
 
@@ -676,7 +702,7 @@ fn test_provider(
         ),
         hooks,
         Arc::new(gate),
-        rim_services::limits::InstanceLimits::default(),
+        limits,
     );
 
     (service_provider, observers)

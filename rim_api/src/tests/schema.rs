@@ -163,7 +163,8 @@ fn server_info_sdl_matches_the_contract() {
         "type ServerLimits { workspacesPerUser: Int membersPerWorkspace: Int \
          channelsPerWorkspace: Int devicesPerUser: Int dmRequestsPerDay: Int \
          macrosPerWorkspace: Int pipelinesPerWorkspace: Int pluginsPerWorkspace: Int \
-         invitesPerUserPerDay: Int inviteMaxUses: Int messageBytes: Int probationHours: Int }"
+         invitesPerUserPerDay: Int inviteMaxUses: Int messageBytes: Int probationHours: Int \
+         pendingInvitesPerUser: Int }"
     ));
     assert!(sdl.contains(
         "type ServerFeatureInfo { key: String! state: ServerFeatureState! reason: String }"
@@ -252,7 +253,7 @@ async fn server_info_reports_the_instance_limits() {
                 "{ serverInfo { limits { workspacesPerUser membersPerWorkspace \
                  channelsPerWorkspace devicesPerUser dmRequestsPerDay macrosPerWorkspace \
                  pipelinesPerWorkspace pluginsPerWorkspace invitesPerUserPerDay inviteMaxUses \
-                 messageBytes probationHours } } }",
+                 messageBytes probationHours pendingInvitesPerUser } } }",
             )
             .data(rim_services::limits::InstanceLimits {
                 workspaces_per_user: Some(5),
@@ -261,6 +262,7 @@ async fn server_info_reports_the_instance_limits() {
                 dm_requests_per_day: Some(20),
                 message_bytes: Some(8192),
                 probation_hours: Some(24),
+                pending_invites_per_user: Some(50),
                 ..Default::default()
             }),
         )
@@ -282,6 +284,7 @@ async fn server_info_reports_the_instance_limits() {
             "inviteMaxUses": null,
             "messageBytes": 8192,
             "probationHours": 24,
+            "pendingInvitesPerUser": 50,
         })
     );
 }

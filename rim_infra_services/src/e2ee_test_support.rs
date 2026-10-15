@@ -52,6 +52,8 @@ pub(crate) type Welcomes = Vec<(MlsWelcomeId, NewMlsWelcome, HashSet<DeviceKeyId
 pub(crate) struct State {
     pub(crate) devices: Vec<E2eeDevice>,
     pub(crate) members: HashMap<ConversationId, Vec<UserId>>,
+    /// Users whose accounts live on another server.
+    pub(crate) remote: HashSet<UserId>,
     pub(crate) principals: HashMap<UserId, String>,
     pub(crate) visible: HashMap<UserId, HashSet<UserId>>,
     pub(crate) packages: Vec<StoredPackage>,
@@ -147,6 +149,15 @@ impl E2eeRepository for FakeE2ee {
                     .iter()
                     .any(|d| d.user_id == *u && Self::active(d, active_since))
             })
+            .collect())
+    }
+
+    async fn remote_users(&self, user_ids: &[UserId]) -> RepoResult<Vec<UserId>> {
+        let state = self.state();
+        Ok(user_ids
+            .iter()
+            .copied()
+            .filter(|u| state.remote.contains(u))
             .collect())
     }
 

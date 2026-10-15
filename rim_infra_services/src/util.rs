@@ -607,6 +607,7 @@ mod tests {
             &self,
             _conv: rim_core::conversation::model::NewConversation,
             _member_ids: &[UserId],
+            _pending_ids: &[UserId],
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
@@ -960,6 +961,60 @@ mod tests {
             _conversation_ids: &[ConversationId],
         ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>> {
             Ok(std::collections::HashMap::new())
+        }
+
+        async fn add_pending_member(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<rim_core::conversation_member::model::ConversationMember> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn membership(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<Option<rim_core::conversation_member::model::Membership>> {
+            Ok(self
+                .is_member
+                .then_some(rim_core::conversation_member::model::Membership::Active))
+        }
+
+        async fn list_pending_member_ids(
+            &self,
+            _conversation_id: ConversationId,
+        ) -> RepoResult<Vec<UserId>> {
+            Ok(vec![])
+        }
+
+        async fn list_pending_member_ids_for_conversations(
+            &self,
+            _conversation_ids: &[ConversationId],
+        ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>> {
+            Ok(std::collections::HashMap::new())
+        }
+
+        async fn list_pending_conversation_ids(
+            &self,
+            _user_id: UserId,
+        ) -> RepoResult<Vec<ConversationId>> {
+            Ok(vec![])
+        }
+
+        async fn delete_pending_before(
+            &self,
+            _cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> RepoResult<u64> {
+            Ok(0)
+        }
+
+        async fn activate_member(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<bool> {
+            Ok(false)
         }
     }
 
@@ -1384,6 +1439,7 @@ mod tests {
                         user_id: uid,
                         conversation_id: cid,
                         joined_at: chrono::Utc::now(),
+                        pending_since: None,
                     })
                 })
             });

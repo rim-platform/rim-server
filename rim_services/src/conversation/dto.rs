@@ -14,7 +14,10 @@ pub struct ConversationDto {
     pub title: Option<String>,
     pub topic: Option<String>,
 
+    /// Active members: they read, send and are notified.
     pub member_ids: Vec<UserId>,
+    /// Members of an encrypted conversation who wait for a device ready for encryption.
+    pub pending_member_ids: Vec<UserId>,
 
     pub is_private: bool,
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,

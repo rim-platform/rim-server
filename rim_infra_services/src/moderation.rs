@@ -348,7 +348,24 @@ impl DefaultModerationService {
             .conversation_repo
             .list_joined_conversation_ids(server_id, user_id)
             .await?;
-        for conversation_id in &joined {
+        let pending = self
+            .repos
+            .conversation_member_repo
+            .list_pending_conversation_ids(user_id)
+            .await?;
+        let pending_here: Vec<ConversationId> = if pending.is_empty() {
+            Vec::new()
+        } else {
+            self.repos
+                .conversation_repo
+                .get_by_ids(&pending)
+                .await?
+                .into_iter()
+                .filter(|c| c.server_id == server_id)
+                .map(|c| c.id)
+                .collect()
+        };
+        for conversation_id in joined.iter().chain(&pending_here) {
             match self
                 .repos
                 .conversation_member_repo
@@ -405,6 +422,14 @@ impl DefaultModerationService {
             .conversation_member_repo
             .list_member_ids(conversation.id)
             .await?;
+        let pending_member_ids = if conversation.is_encrypted() {
+            self.repos
+                .conversation_member_repo
+                .list_pending_member_ids(conversation.id)
+                .await?
+        } else {
+            Vec::new()
+        };
         Ok(ConversationDto {
             id: conversation.id,
             server_id: conversation.server_id,
@@ -412,6 +437,7 @@ impl DefaultModerationService {
             title: conversation.title,
             topic: conversation.topic,
             member_ids,
+            pending_member_ids,
             is_private: conversation.is_private,
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
