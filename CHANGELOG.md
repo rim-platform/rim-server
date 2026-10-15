@@ -23,6 +23,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- GraphQL `ServerInfo.signupRequiresKeys`: true when new accounts sign up with a key only and
+  `signupWithInvite` is refused, so a client offers only the key signup.
 - Invitations to encrypted conversations: an encrypted DM or group may now include members who
   have no device ready for encryption. They are listed in the new
   `Conversation.pendingMemberIds`, see the conversation but cannot read, send or be notified,
@@ -115,6 +117,23 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- **Upgrade:** password signups are refused by default. `RIM_SIGNUP_REQUIRE_KEYS` (default
+  `true`) makes `signupWithInvite` answer `FORBIDDEN` in every registration mode, so new
+  accounts sign up with `signupWithKey`; existing password accounts still sign in with
+  `login`. Set it to `false` in `deploy/.env` while your users run a client that cannot sign up
+  with a key.
+- `signupWithKey` accepts an instance invite bound to an email address and gives the new account
+  that address, refusing it like a password signup does when another account has it
+  (`EMAIL_TAKEN`) or an operator blocked it (`VALIDATION`); before, it refused such an invite. A
+  password signup with another address now answers "this invite admits only the email address
+  it was issued for".
+- `enrollIdentityKey` ends every other session of the account in the same transaction and
+  closes their WebSocket connections; before, other password sessions stayed valid until they
+  expired or were signed out.
+- `key-identity-v1.md` and `device-linking-v1.md`: the web client may create and hold an
+  identity, sign up with a key and link other devices; a browser-held identity is never backed
+  up, the recovery kit is shown after signup or enrollment and its entropy is kept until the
+  person confirms they saved it.
 - **Upgrade:** `deploy/compose.yml` runs the published images `ghcr.io/rim-platform/rim-server`
   and `ghcr.io/rim-platform/rim-web` at `RIM_VERSION` (default `latest`) instead of building
   them. Set `RIM_VERSION` in `deploy/.env` to the release you run, and run `pull` then `up -d`

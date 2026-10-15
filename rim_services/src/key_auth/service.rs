@@ -37,22 +37,25 @@ pub trait KeyAuthService: Send + Sync {
     async fn login_with_key(&self, cmd: LoginWithKeyCmd) -> ServiceResult<LoginResultDto>;
 
     /// Bind a key identity to the signed-in account, with its first device. The calling session
-    /// becomes that device's session, and the password stops signing in.
+    /// becomes that device's session, every other session of the account ends, and the password
+    /// stops signing in.
     ///
     /// # Errors
     /// - `Validation` when the log or the certificate does not verify.
     /// - `Conflict` when the account already has a key, or another account here has this one.
     async fn enroll(&self, cmd: EnrollIdentityKeyCmd) -> ServiceResult<KeyIdentityDto>;
 
-    /// Create an account from a key identity alone, with no password and no email, and sign it
-    /// in on the device that signed up. The identity is verified as for [`Self::enroll`]; the
+    /// Create an account from a key identity alone, with no password, and sign it in on the
+    /// device that signed up. The identity is verified as for [`Self::enroll`]; the
     /// registration token (or, in open mode, the per-IP signup limit) is handled as for the
-    /// password signups.
+    /// password signups. An email-bound instance invite gives the account its address; the
+    /// account has no email otherwise.
     ///
     /// # Errors
     /// - `Validation` when the log, certificate or proof does not verify, the proof names
-    ///   another server or a used challenge, the username or display name is invalid, or the
-    ///   token does not match the registration mode.
+    ///   another server or a used challenge, the username or display name is invalid, the
+    ///   token does not match the registration mode, or an operator blocked the invite's email.
+    /// - `EmailTaken` when another account has the email-bound invite's address.
     /// - `Conflict` when the username is taken or another account here has this principal.
     /// - `InvalidToken`, `ExpiredToken`, `NotFound` or `PermissionDenied` for a token refused
     ///   the way its password signup refuses it.

@@ -251,13 +251,19 @@ impl HostRepository for SeaOrmHostRepository {
         user_id: UserId,
         username: &str,
         display_name: &str,
+        email: Option<&str>,
     ) -> RepoResult<()> {
         let changed = self
             .execute(
                 r#"UPDATE "user" SET kind = 'local', username = $2, display_name = $3,
-                       home_relay = NULL, updated_at = now()
+                       email = COALESCE($4, email), home_relay = NULL, updated_at = now()
                    WHERE id = $1 AND kind = 'remote'"#,
-                vec![uuid(user_id), username.into(), display_name.into()],
+                vec![
+                    uuid(user_id),
+                    username.into(),
+                    display_name.into(),
+                    email.map(str::to_string).into(),
+                ],
             )
             .await?;
         if changed == 1 {

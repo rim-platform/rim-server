@@ -132,7 +132,7 @@ rim_server operator revoke <username>
 rim_server operator list
 ```
 
-`invite create` prints a signup link; with `--email` it admits only a password signup with that
+`invite create` prints a signup link; with `--email` the account it signs up gets that
 address. `docs/server-identity.md` explains the key and peer commands, `docs/relay.md` and
 `docs/operations/relay-public.md` the abuse tools, `docs/operations/audit-retention.md` the
 purge. `ip block` refuses an address or CIDR range, IPv4 or IPv6, on every route but `/healthz`

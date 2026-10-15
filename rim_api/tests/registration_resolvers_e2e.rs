@@ -510,7 +510,7 @@ async fn mutation_signup_with_an_email_bound_invite_admits_only_its_address() {
     );
     assert_eq!(
         refused.errors[0].message,
-        "this invite admits only a password signup with the email address it was issued for"
+        "this invite admits only the email address it was issued for"
     );
 
     let admitted = schema
@@ -939,4 +939,101 @@ async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
         json!({ "input": { "displayName": "RIM Team" } }),
     );
     assert_eq!(exec_err(&schema, edit).await, refused);
+}
+
+/// On a server whose signups need a key, `serverInfo.signupRequiresKeys` is true and every
+/// password signup is `FORBIDDEN` and spends nothing: open, with an instance invite and with a
+/// workspace invite. An existing password account still signs in, and the instance invite
+/// still signs up with a key.
+#[tokio::test]
+async fn with_signups_requiring_keys_password_signups_are_forbidden_and_password_login_works() {
+    use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository};
+    use rim_identity::StatementVersion;
+    use rim_identity::testing::TestIdentity;
+    use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
+    use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_err, exec_ok};
+    use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
+
+    let ctx = TestCtx::new().await;
+    let refused = (
+        "FORBIDDEN".to_string(),
+        "password signup is turned off on this server; sign up with a key".to_string(),
+    );
+    let requires_keys = |schema: rim_api::AppSchema| async move {
+        exec_ok(
+            &schema,
+            anonymous_request("{ serverInfo { signupRequiresKeys } }", json!({})),
+        )
+        .await["serverInfo"]["signupRequiresKeys"]
+            .clone()
+    };
+    assert_eq!(
+        requires_keys(ctx.build_schema(RegistrationMode::InviteOnly).await).await,
+        json!(false)
+    );
+
+    let open = ctx.build_schema_requiring_keys(RegistrationMode::Open);
+    assert_eq!(requires_keys(open.clone()).await, json!(true));
+    let request = anonymous_request(
+        SIGNUP_WITH_INVITE,
+        json!({ "input": {
+            "username": "opencarol",
+            "email": "opencarol@test.example.com",
+            "password": PASSWORD,
+        } }),
+    );
+    assert_eq!(exec_err(&open, request).await, refused);
+
+    let schema = ctx.build_schema_requiring_keys(RegistrationMode::InviteOnly);
+    let instance_invite = seed_operator_invite(
+        &ctx.db,
+        "rim_iinv_keys_only",
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    let owner = ctx.create_user("keysowner").await;
+    let server = ctx.create_server("Keys only").await;
+    ctx.add_owner(&server, &owner).await;
+    let workspace_invite =
+        seed_workspace_invite(&ctx.db, owner.id, server.id, "rim_inv_keys_only").await;
+    for (field, raw) in [
+        ("instanceInviteToken", "rim_iinv_keys_only"),
+        ("workspaceInviteToken", "rim_inv_keys_only"),
+    ] {
+        let request = signup_request(field, raw, "carol", "carol@test.example.com");
+        assert_eq!(exec_err(&schema, request).await, refused, "{field}");
+    }
+    let instance = SeaOrmInstanceInviteRepository::new(ctx.db.clone())
+        .get_by_id(instance_invite)
+        .await
+        .expect("get instance invite")
+        .expect("instance invite");
+    assert_eq!(instance.use_count, 0);
+    let workspace = SeaOrmInviteRepository::new(ctx.db.clone())
+        .get_by_id(workspace_invite)
+        .await
+        .expect("get workspace invite")
+        .expect("workspace invite");
+    assert_eq!(workspace.use_count, 0);
+
+    ctx.create_password_user("dora").await;
+    support::sessions::login(&schema, "dora").await;
+
+    let id = TestIdentity::with_version(41, StatementVersion::V2);
+    let input = signup_input(
+        &schema,
+        "carol",
+        &id,
+        91,
+        json!({ "instanceInviteToken": "rim_iinv_keys_only" }),
+    )
+    .await;
+    let data = exec_ok(
+        &schema,
+        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
+    )
+    .await;
+    assert!(data["signupWithKey"]["userId"].is_string());
 }

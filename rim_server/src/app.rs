@@ -466,6 +466,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             reserved_names,
             password_hashing,
             terms_url: instance_policy.terms_url.clone(),
+            signup_requires_keys: instance_policy.signup_requires_keys,
         },
         Arc::clone(&feature_gate),
         instance_limits,
@@ -810,6 +811,12 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             pow_bits = bits,
             open_registration_ignored = config.open_registration.unwrap_or(false),
             "RIM_REGISTRATION_POW_BITS is set: key-only signups need a proof-of-work or a token"
+        );
+    }
+    if !instance_policy.signup_requires_keys {
+        tracing::info!(
+            target: "audit",
+            "RIM_SIGNUP_REQUIRE_KEYS=false: password signups are accepted"
         );
     }
 

@@ -214,6 +214,11 @@ pub struct RIMConfig {
     /// `RIM_TERMS_URL`; see [`RIMConfig::terms_url`].
     pub terms_url: Option<String>,
 
+    /// Refuse every password signup, so new accounts sign up with a key only; unset is `true`.
+    /// Password sign-in of existing accounts is unaffected. Controlled by
+    /// `RIM_SIGNUP_REQUIRE_KEYS`; see [`RIMConfig::signup_requires_keys`].
+    pub signup_require_keys: Option<bool>,
+
     // ── Instance limits (RIM_LIMIT_*) ───────────────────────────────────────
     //
     // Each caps one thing across the instance; unset or 0 sets no cap. See
@@ -376,6 +381,7 @@ impl fmt::Debug for RIMConfig {
             .field("api_limits", &self.api_limits())
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
+            .field("signup_requires_keys", &self.signup_requires_keys())
             .field("instance_limits", &self.instance_limits())
             .field(
                 "account_deletion_grace_days",
@@ -444,6 +450,7 @@ impl Default for RIMConfig {
             ws_session_recheck_secs: None,
             instance_notice: None,
             terms_url: None,
+            signup_require_keys: None,
             limit_workspaces_per_user: None,
             limit_members_per_workspace: None,
             limit_channels_per_workspace: None,
@@ -970,7 +977,13 @@ impl RIMConfig {
         }
     }
 
-    /// The instance notice and terms URL the GraphQL schema serves and signups follow.
+    /// Whether password signups are refused: `RIM_SIGNUP_REQUIRE_KEYS`, `true` when unset.
+    pub fn signup_requires_keys(&self) -> bool {
+        self.signup_require_keys.unwrap_or(true)
+    }
+
+    /// The instance notice, terms URL and signup policy the GraphQL schema serves and signups
+    /// follow.
     ///
     /// # Errors
     /// The messages of [`RIMConfig::instance_notice`] and [`RIMConfig::terms_url`].
@@ -978,6 +991,7 @@ impl RIMConfig {
         Ok(rim_api::types::InstancePolicy {
             notice: self.instance_notice()?,
             terms_url: self.terms_url()?,
+            signup_requires_keys: self.signup_requires_keys(),
         })
     }
 }
@@ -1945,8 +1959,30 @@ mod tests {
             Ok(rim_api::types::InstancePolicy {
                 notice: Some("Run by the Example club, rules at /rules".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
+                signup_requires_keys: true,
             })
         );
+    }
+
+    #[test]
+    fn signup_requires_keys_unless_the_variable_turns_it_off() {
+        let load = |pairs: &[(&str, &str)]| {
+            let mut all = vec![("DATABASE_URL", "postgres://localhost/rim")];
+            all.extend_from_slice(pairs);
+            RIMConfig::load_from(env(&all))
+        };
+        assert!(RIMConfig::default().signup_requires_keys());
+        assert!(load(&[]).expect("loads").signup_requires_keys());
+        for (value, requires) in [("false", false), ("0", false), ("true", true), ("1", true)] {
+            let config = load(&[("RIM_SIGNUP_REQUIRE_KEYS", value)]).expect("loads");
+            assert_eq!(config.signup_requires_keys(), requires, "{value}");
+            assert_eq!(
+                config.instance_policy().map(|p| p.signup_requires_keys),
+                Ok(requires),
+                "{value}"
+            );
+        }
+        assert!(load(&[("RIM_SIGNUP_REQUIRE_KEYS", "sometimes")]).is_err());
     }
 
     #[test]

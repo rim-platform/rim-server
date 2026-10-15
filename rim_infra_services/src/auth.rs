@@ -69,6 +69,8 @@ pub struct DefaultAuthService {
     session_revocations: std::sync::Arc<dyn SessionRevocations>,
     /// The terms of service URL every signup must accept; `None` when there are none.
     terms_url: Option<String>,
+    /// Refuse every password signup.
+    signup_requires_keys: bool,
 }
 
 impl DefaultAuthService {
@@ -106,6 +108,7 @@ impl DefaultAuthService {
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
+            signup_requires_keys: false,
         }
     }
 
@@ -187,6 +190,28 @@ impl DefaultAuthService {
         self
     }
 
+    /// Refuse every password signup when `required`, so new accounts sign up with a key.
+    pub fn with_signup_requires_keys(mut self, required: bool) -> Self {
+        self.signup_requires_keys = required;
+        self
+    }
+
+    /// `Forbidden` ([`signup::KEYS_REQUIRED_REFUSAL`]) when password signups are refused.
+    fn ensure_password_signup_allowed(&self, path: &str) -> ServiceResult<()> {
+        if !self.signup_requires_keys {
+            return Ok(());
+        }
+        info!(
+            target: "audit",
+            event = "password_signup_refused",
+            path,
+            "password signup refused: this server takes key signups only"
+        );
+        Err(ServiceError::Forbidden(
+            signup::KEYS_REQUIRED_REFUSAL.to_string(),
+        ))
+    }
+
     /// Run hashing and verification through `hashing`, shared with other services.
     pub(crate) fn with_password_hashing(mut self, hashing: PasswordHashing) -> Self {
         self.password_hashing = hashing;
@@ -240,6 +265,7 @@ impl DefaultAuthService {
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
+            signup_requires_keys: false,
         }
     }
 
@@ -682,6 +708,7 @@ impl AuthService for DefaultAuthService {
 
     #[instrument(name = "auth.accept_invite", skip_all, fields(username = %cmd.username))]
     async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto> {
+        self.ensure_password_signup_allowed("workspace_invite")?;
         let AcceptInviteCmd {
             invite_token,
             username,
@@ -884,6 +911,7 @@ impl AuthService for DefaultAuthService {
         &self,
         cmd: SignupWithInstanceInviteCmd,
     ) -> ServiceResult<SignupResultDto> {
+        self.ensure_password_signup_allowed("instance_invite")?;
         let SignupWithInstanceInviteCmd {
             instance_invite_token: raw_token,
             username,
@@ -967,6 +995,7 @@ impl AuthService for DefaultAuthService {
 
     #[instrument(name = "auth.signup_open", skip_all, fields(username = %cmd.username))]
     async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto> {
+        self.ensure_password_signup_allowed("open")?;
         let SignupOpenCmd {
             username,
             password,

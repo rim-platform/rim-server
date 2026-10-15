@@ -668,13 +668,15 @@ impl DefaultKeyAuthService {
 
     /// Turn a remote user into the local account a key-only signup creates: their stored log
     /// must be a prefix of the presented one, which extends it; the presented device is reused
-    /// when it is stored already. Memberships stay.
+    /// when it is stored already. Memberships stay. `email` is the address an email-bound
+    /// invite gives the account, checked as a new account's is.
     #[allow(clippy::too_many_arguments)]
     async fn adopt_remote(
         repos: &KeyAuthRepos,
         user_id: UserId,
         username: &str,
         display_name: &str,
+        email: Option<&str>,
         state: &KeyState,
         entries: Vec<NewKeyLogEntry>,
         cert: &DeviceCert,
@@ -699,9 +701,12 @@ impl DefaultKeyAuthService {
                 .append_rotation(user_id, entry, &state.identity_key.to_string())
                 .await?;
         }
+        if let Some(email) = email {
+            signup::check_signup_email(repos.user_repo.as_ref(), email, username).await?;
+        }
         repos
             .host_repo
-            .make_local(user_id, username, display_name)
+            .make_local(user_id, username, display_name, email)
             .await
             .map_err(|e| match e.kind() {
                 RepoErrorKind::Conflict => {
@@ -950,7 +955,14 @@ impl KeyAuthService for DefaultKeyAuthService {
             .session_repo
             .bind_device(cmd.session_id, device.id)
             .await?;
+        // No other session is bound to a device yet, so none of them may outlive the password.
+        let ended_sessions = repos
+            .session_repo
+            .revoke_all_for_user_except(user_id, cmd.session_id)
+            .await?;
         Self::commit(scope).await?;
+        self.session_revocations
+            .revoke_user_except(user_id, cmd.session_id);
 
         info!(
             target: "audit",
@@ -958,7 +970,8 @@ impl KeyAuthService for DefaultKeyAuthService {
             user_id = %user_id,
             principal_id = %state.principal_id,
             device_id = %device.device_id,
-            "key identity enrolled; password sign-in disabled for this account"
+            ended_sessions,
+            "key identity enrolled; password sign-in disabled and other sessions ended"
         );
         self.get_my_key_identity(GetMyKeyIdentityQuery { actor: cmd.actor })
             .await
@@ -1008,6 +1021,13 @@ impl KeyAuthService for DefaultKeyAuthService {
             Some(token) => Some(signup::check_token(&self.repos.signup, token, None).await?),
             None => None,
         };
+        // An email-bound instance invite gives the account its address.
+        let email = match &token {
+            Some(signup::CheckedToken::InstanceInvite(invite)) => {
+                invite.email.as_deref().map(|e| e.trim().to_lowercase())
+            }
+            _ => None,
+        };
         let PresentedIdentity {
             state,
             cert,
@@ -1030,6 +1050,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                     remote,
                     username,
                     &display_name,
+                    email.as_deref(),
                     &state,
                     entries,
                     &cert,
@@ -1051,7 +1072,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                     NewUser {
                         username: username.to_string(),
                         password: None,
-                        email: None,
+                        email,
                         display_name: Some(display_name),
                         key_identity: Some(NewUserKeyIdentity {
                             principal_id: state.principal_id.clone(),

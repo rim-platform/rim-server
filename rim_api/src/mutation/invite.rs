@@ -109,6 +109,8 @@ impl InviteMutations {
     /// In invite-only mode, exactly one of `instanceInviteToken` or `workspaceInviteToken`
     /// must be supplied.
     /// In open mode, all token fields must be absent.
+    /// Refused with `FORBIDDEN` when `serverInfo.signupRequiresKeys` is true: new accounts then
+    /// sign up with `signupWithKey`.
     ///
     /// On success, sets session and CSRF cookies via `AuthIntent`.
     async fn signup_with_invite(

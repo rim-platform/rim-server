@@ -33,6 +33,9 @@ a date for each.
       - Probation: `RIM_PROBATION_HOURS`, `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
 
       `deploy/.env.example`, "Request limits" and "Instance limits", says what each one limits.
+- [ ] `RIM_SIGNUP_REQUIRE_KEYS` stays on (the default) in the deployment's `deploy/.env`, and the
+      packaged desktop client and the web client both sign up with a key against it. A
+      deployment that sets it to `false` says why here.
 - [ ] `docs/testing/manual-test-plan-2026-10-12.md` is run on the packaged client and the HTTPS
       deployment being released, and the results are recorded: the "Steps passed" and "Not run"
       sections of `docs/testing/manual-test-findings-2026-10-12.md` are filled.

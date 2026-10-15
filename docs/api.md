@@ -203,10 +203,15 @@ reports `https`. These mutations set it, and need no session or CSRF header:
   signs a `login` statement over the nonce with its device key and calls `loginWithKey(proof)`.
   The session is bound to that device. `specs/key-identity-v1.md` ("Challenge login") has the
   statement, the audiences and the limits.
-- **Key-only signup.** `signupWithKey` creates the account and signs it in.
+- **Key-only signup.** `signupWithKey` creates the account and signs it in. An instance invite
+  bound to an email address gives the account that address (`EMAIL_TAKEN` when another account
+  has it); otherwise the account has no email.
 - **Password login.** `login(input: { username, password })`. An account without a password,
   such as a key-only account or one that enrolled an identity key, cannot sign in this way.
-- **Invite signup.** `signupWithInvite` creates a password account and signs it in.
+- **Invite signup.** `signupWithInvite` creates a password account and signs it in. It is
+  refused with `FORBIDDEN` while `serverInfo.signupRequiresKeys` is true, which is the default
+  (`RIM_SIGNUP_REQUIRE_KEYS`); new accounts then sign up with `signupWithKey`. Password login of
+  existing accounts works either way.
 
 When the server has terms of service (`serverInfo.termsUrl` is set), both signups must accept
 them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup without it, or with
@@ -214,8 +219,9 @@ another URL, answers `VALIDATION`. The server records the acceptance and its tim
 account. Without terms on the server the field is ignored.
 
 `logout` ends the session and clears both cookies; `logoutOtherSessions` ends every other
-session of the account. Either also closes the WebSocket connections of the sessions it ends
-(see "Subscriptions").
+session of the account, and so does `enrollIdentityKey`, which binds the calling session to the
+new device. Each also closes the WebSocket connections of the sessions it ends (see
+"Subscriptions").
 
 A session lasts `RIM_SESSION_TTL_DAYS` days (default 30) from sign-in: the cookie's `Max-Age`
 and the server-side expiry are both set from it, and using the session does not extend it. A
@@ -415,7 +421,7 @@ on the message.
 | Code | Meaning | Extra extensions |
 |---|---|---|
 | `UNAUTHENTICATED` | No valid session, or a sign-in attempt that failed. | |
-| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation. | |
+| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, a password signup on a server whose signups need a key. | |
 | `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). | |
 | `VALIDATION` | The input is malformed or out of range, or the feature does not exist in the direct space; the message says what. | |
 | `CONFLICT` | The change conflicts with the current state; the message says how. | |
@@ -495,6 +501,9 @@ each list.
   server has none. A client links it at signup and sends it back as `acceptedTermsUrl`.
 - **`limits`**: the instance's caps ("Limits"), each an integer or null when there is none,
   and `probationHours`, the probation of new accounts.
+- **`signupRequiresKeys`**: true when new accounts sign up with a key only and
+  `signupWithInvite` answers `FORBIDDEN` (`RIM_SIGNUP_REQUIRE_KEYS`, on by default). A client
+  then offers only the key signup.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

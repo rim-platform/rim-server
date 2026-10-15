@@ -29,6 +29,10 @@ pub struct ServerInfo {
     pub terms_url: Option<String>,
     /// The instance-wide caps, so a client can show "5 of 5" before it tries.
     pub limits: ServerLimits,
+    /// Whether new accounts sign up with a key only: `signupWithInvite` is refused with
+    /// `FORBIDDEN` and `signupWithKey` is the signup. Password sign-in of existing accounts
+    /// works either way.
+    pub signup_requires_keys: bool,
 }
 
 /// The instance-wide caps; each is null when this instance sets none, but devices and DM
@@ -93,13 +97,15 @@ impl From<&InstanceLimits> for ServerLimits {
 pub struct AuditRetention(pub Option<u32>);
 
 /// What the operator publishes about the instance, held in the schema data: the notice shown
-/// to people and the terms URL every signup accepts.
+/// to people, the terms URL every signup accepts and whether signups need a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InstancePolicy {
     /// The instance notice; `None` when there is none.
     pub notice: Option<String>,
     /// The terms of service URL; `None` when signups accept no terms.
     pub terms_url: Option<String>,
+    /// Whether password signups are refused.
+    pub signup_requires_keys: bool,
 }
 
 impl ServerInfo {
@@ -123,6 +129,7 @@ impl ServerInfo {
             instance_notice: policy.notice.clone(),
             terms_url: policy.terms_url.clone(),
             limits: limits.into(),
+            signup_requires_keys: policy.signup_requires_keys,
         }
     }
 }
