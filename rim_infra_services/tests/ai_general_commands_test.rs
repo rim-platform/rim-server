@@ -400,6 +400,7 @@ async fn agent_create_group_with_proof_accepts_comma_separated_member_ids() {
                     title: Some("release".to_string()),
                     topic: None,
                     member_ids: vec![anna, petr],
+                    pending_member_ids: vec![],
                     is_private: false,
                     archived_at: None,
                     created_by: None,

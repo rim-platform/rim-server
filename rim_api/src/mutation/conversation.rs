@@ -2,8 +2,9 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::conversation::command::{
-    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, JoinChannelCmd,
-    LeaveConversationCmd, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+    AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
+    CreateConversationCmd, JoinChannelCmd, LeaveConversationCmd, RemoveConversationMemberCmd,
+    UpdateConversationTopicCmd,
 };
 use rim_services::conversation::service::ConversationService;
 
@@ -480,6 +481,57 @@ async fn remote_member_ids(
     ensure_encrypted_across_servers(any_remote, input.encrypted.unwrap_or(false))
         .map_err(map_service_error)?;
     Ok(ids)
+}
+
+/// Answers to a pending invitation to an encrypted conversation.
+#[derive(Default)]
+pub(crate) struct ConversationInviteMutations;
+
+#[Object]
+impl ConversationInviteMutations {
+    /// Accept the caller's pending invitation (`Conversation.pendingMemberIds`): they become a
+    /// member and a member's device adds theirs to the group. Needs a device set up for
+    /// encryption (`VALIDATION` otherwise); already a member, it changes nothing; `NOT_FOUND`
+    /// when the caller was not invited.
+    async fn accept_conversation_invite(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<Conversation> {
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let conv = svc
+            .accept_conversation_invite(invite_cmd(ctx, &server_id, &conversation_id)?)
+            .await
+            .map_err(map_service_error)?;
+        Ok(conv.into())
+    }
+
+    /// Decline the caller's pending invitation; `NOT_FOUND` when there is none.
+    async fn decline_conversation_invite(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+    ) -> Result<bool> {
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        svc.decline_conversation_invite(invite_cmd(ctx, &server_id, &conversation_id)?)
+            .await
+            .map_err(map_service_error)?;
+        Ok(true)
+    }
+}
+
+fn invite_cmd(
+    ctx: &Context<'_>,
+    server_id: &ID,
+    conversation_id: &ID,
+) -> Result<ConversationInviteCmd> {
+    Ok(ConversationInviteCmd {
+        actor: Actor::new(require_actor(ctx)?),
+        server_id: parse_uuid_id(server_id)?,
+        conversation_id: parse_uuid_id(conversation_id)?,
+    })
 }
 
 /// A conversation with anyone from another server is end-to-end encrypted, so relays carry

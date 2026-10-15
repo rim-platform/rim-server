@@ -55,6 +55,9 @@ pub trait E2eeRepository: Send + Sync {
         active_since: DateTime<Utc>,
     ) -> RepoResult<Vec<UserId>>;
 
+    /// The users among `user_ids` whose accounts live on another server.
+    async fn remote_users(&self, user_ids: &[UserId]) -> RepoResult<Vec<UserId>>;
+
     /// The `device_id`s of the user's unrevoked devices that uploaded key packages at or after
     /// `active_since`.
     async fn mls_active_device_ids(

@@ -5,16 +5,18 @@ use async_trait::async_trait;
 use tracing::{info, instrument};
 
 use rim_core::conversation::model::{
-    Conversation, ConversationType as CoreConversationType, NewConversation,
+    Conversation, ConversationId, ConversationType as CoreConversationType, NewConversation,
 };
+use rim_core::conversation_member::model::Membership;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_services::conversation::command::{
-    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, GetConversationQuery,
-    JoinChannelCmd, LeaveConversationCmd, ListChannelsQuery, ListInboxConversationsQuery,
-    RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+    AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
+    CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
+    ListChannelsQuery, ListInboxConversationsQuery, RemoveConversationMemberCmd,
+    UpdateConversationTopicCmd,
 };
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
@@ -123,22 +125,81 @@ impl DefaultConversationService {
         self
     }
 
-    /// `Validation` unless every one of `user_ids` is ready for encryption: a principal and a
-    /// device that uploaded key packages within the activity window.
-    async fn ensure_ready(&self, user_ids: &[UserId]) -> ServiceResult<()> {
-        let e2ee_repo = self.e2ee_repo.as_ref().ok_or_else(|| {
-            ServiceError::internal(anyhow::anyhow!("encryption is not configured"))
-        })?;
-        let ready: HashSet<UserId> = e2ee_repo
+    /// Splits the users joining an encrypted conversation into those ready for encryption (a
+    /// principal and a device that uploaded key packages within the activity window), who join
+    /// active, and the rest, who join pending. `Validation` when one of the rest may not wait:
+    /// a remote user, or anyone in the direct space.
+    async fn split_by_readiness(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+        user_ids: &[UserId],
+    ) -> ServiceResult<(Vec<UserId>, Vec<UserId>)> {
+        let e2ee_repo = self.e2ee_repo()?;
+        let ready = self.ready_users(user_ids).await?;
+        let (active, pending): (Vec<UserId>, Vec<UserId>) =
+            user_ids.iter().partition(|id| ready.contains(id));
+        if pending.is_empty() {
+            return Ok((active, pending));
+        }
+        if self.is_direct_space(server_id) || !e2ee_repo.remote_users(&pending).await?.is_empty() {
+            return Err(not_ready());
+        }
+        self.ensure_invites_below_cap(&pending).await?;
+        Ok((active, pending))
+    }
+
+    fn e2ee_repo(&self) -> ServiceResult<&Arc<dyn E2eeRepository>> {
+        self.e2ee_repo
+            .as_ref()
+            .ok_or_else(|| ServiceError::internal(anyhow::anyhow!("encryption is not configured")))
+    }
+
+    /// The users among `user_ids` ready for encryption.
+    async fn ready_users(&self, user_ids: &[UserId]) -> ServiceResult<HashSet<UserId>> {
+        Ok(self
+            .e2ee_repo()?
             .ready_users(user_ids, crate::e2ee::active_since(chrono::Utc::now()))
             .await?
             .into_iter()
-            .collect();
-        if user_ids.iter().all(|id| ready.contains(id)) {
-            Ok(())
-        } else {
-            Err(not_ready())
+            .collect())
+    }
+
+    /// `Validation` naming the cap when one of `user_ids` already holds as many pending
+    /// invitations as the instance allows.
+    async fn ensure_invites_below_cap(&self, user_ids: &[UserId]) -> ServiceResult<()> {
+        let Some(cap) = self.limits.pending_invites_per_user else {
+            return Ok(());
+        };
+        for &user_id in user_ids {
+            let held = self
+                .repos
+                .conversation_member_repo
+                .list_pending_conversation_ids(user_id)
+                .await?
+                .len();
+            ensure_below(
+                Some(cap),
+                u64::try_from(held).unwrap_or(u64::MAX),
+                "pending invitations per user",
+            )?;
         }
+        Ok(())
+    }
+
+    /// The conversation `user_id` holds a pending invitation to, as a workspace member.
+    async fn invited_conversation(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> ServiceResult<Conversation> {
+        ensure_server_member(self.repos.server_member_repo.as_ref(), server_id, user_id).await?;
+        ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            conversation_id,
+            server_id,
+        )
+        .await
     }
 
     /// Tell an encrypted conversation's members that its group should add or remove devices.
@@ -158,14 +219,62 @@ impl DefaultConversationService {
             .conversation_member_repo
             .list_member_ids(conversation.id)
             .await?;
+        // Only encrypted conversations have pending members.
+        let pending_member_ids = if conversation.is_encrypted() {
+            self.repos
+                .conversation_member_repo
+                .list_pending_member_ids(conversation.id)
+                .await?
+        } else {
+            Vec::new()
+        };
 
-        Ok(self.to_dto_with_members(conversation, member_ids))
+        Ok(Self::to_dto_with_members(
+            conversation,
+            member_ids,
+            pending_member_ids,
+        ))
+    }
+
+    /// The DTOs of `conversations`, with members listed in two batched queries.
+    async fn to_dtos(
+        &self,
+        conversations: Vec<Conversation>,
+    ) -> ServiceResult<Vec<ConversationDto>> {
+        let ids: Vec<ConversationId> = conversations.iter().map(|c| c.id).collect();
+        let mut members = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids_for_conversations(&ids)
+            .await?;
+        let encrypted: Vec<ConversationId> = conversations
+            .iter()
+            .filter(|c| c.is_encrypted())
+            .map(|c| c.id)
+            .collect();
+        let mut pending = if encrypted.is_empty() {
+            Default::default()
+        } else {
+            self.repos
+                .conversation_member_repo
+                .list_pending_member_ids_for_conversations(&encrypted)
+                .await?
+        };
+
+        Ok(conversations
+            .into_iter()
+            .map(|conv| {
+                let member_ids = members.remove(&conv.id).unwrap_or_default();
+                let pending_member_ids = pending.remove(&conv.id).unwrap_or_default();
+                Self::to_dto_with_members(conv, member_ids, pending_member_ids)
+            })
+            .collect())
     }
 
     fn to_dto_with_members(
-        &self,
         conversation: Conversation,
         member_ids: Vec<UserId>,
+        pending_member_ids: Vec<UserId>,
     ) -> ConversationDto {
         ConversationDto {
             id: conversation.id,
@@ -174,6 +283,7 @@ impl DefaultConversationService {
             title: conversation.title,
             topic: conversation.topic,
             member_ids,
+            pending_member_ids,
             is_private: conversation.is_private,
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
@@ -220,12 +330,14 @@ impl DefaultConversationService {
         )
     }
 
-    /// Adds `user_id` unless already a member. Returns whether a row was inserted; a concurrent
-    /// insert that loses the unique-index race counts as "already a member".
+    /// Adds `user_id`, active or pending as `membership` says, unless already a member.
+    /// Returns whether a row was inserted; a concurrent insert that loses the unique-index race,
+    /// or an existing pending row, counts as "already a member".
     async fn add_member_if_absent(
         &self,
-        conversation_id: rim_core::conversation::model::ConversationId,
+        conversation_id: ConversationId,
         user_id: UserId,
+        membership: Membership,
     ) -> ServiceResult<bool> {
         if self
             .repos
@@ -235,24 +347,26 @@ impl DefaultConversationService {
         {
             return Ok(false);
         }
-        match self
-            .repos
-            .conversation_member_repo
-            .add_member(conversation_id, user_id)
-            .await
-        {
+        let members = &self.repos.conversation_member_repo;
+        let inserted = match membership {
+            Membership::Active => members.add_member(conversation_id, user_id).await,
+            Membership::Pending => members.add_pending_member(conversation_id, user_id).await,
+        };
+        match inserted {
             Ok(_) => Ok(true),
             Err(err) if matches!(err.kind(), RepoErrorKind::Conflict) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
 
-    /// Removes `user_id` from the conversation, deletes their notifications for it, and tells
-    /// the remaining members and the removed user (whose client must drop the conversation).
+    /// Removes `user_id`, whose membership was `membership`, from the conversation, deletes
+    /// their notifications for it, and tells the remaining members and the removed user (whose
+    /// client must drop the conversation).
     async fn remove_member_and_notify(
         &self,
         conversation: &Conversation,
         user_id: UserId,
+        membership: Membership,
     ) -> ServiceResult<()> {
         self.repos
             .conversation_member_repo
@@ -278,12 +392,30 @@ impl DefaultConversationService {
                 user_id,
                 member_user_ids: notify_user_ids.clone(),
             });
-        let remaining = notify_user_ids
-            .into_iter()
-            .filter(|id| *id != user_id)
-            .collect();
-        self.emit_mls_membership_changed(conversation, remaining);
+        // A pending member has no devices in the group.
+        if membership == Membership::Active {
+            let remaining = notify_user_ids
+                .into_iter()
+                .filter(|id| *id != user_id)
+                .collect();
+            self.emit_mls_membership_changed(conversation, remaining);
+        }
         Ok(())
+    }
+
+    /// Tells the members and `user_id`, active or pending, that `user_id` joined.
+    fn emit_member_added(&self, dto: &ConversationDto, user_id: UserId) {
+        let mut member_user_ids = dto.member_ids.clone();
+        if !member_user_ids.contains(&user_id) {
+            member_user_ids.push(user_id);
+        }
+        self.observers
+            .emit(WorkspaceEvent::MemberAddedToConversation {
+                workspace_id: dto.server_id,
+                conversation_id: dto.id,
+                user_id,
+                member_user_ids,
+            });
     }
 
     fn emit_conversation_updated(&self, dto: &ConversationDto) {
@@ -473,15 +605,23 @@ impl ConversationService for DefaultConversationService {
         };
 
         let member_count = member_ids.len();
-        if cmd.encrypted {
+        // Members of an encrypted conversation without a ready device join pending; the
+        // creator must be ready.
+        let (member_ids, pending_ids) = if cmd.encrypted {
             if member_count > rim_services::e2ee::MAX_ENCRYPTED_MEMBERS {
                 return Err(ServiceError::Validation(format!(
                     "an encrypted conversation has at most {} members",
                     rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
                 )));
             }
-            self.ensure_ready(&member_ids).await?;
-        }
+            let (active, pending) = self.split_by_readiness(cmd.server_id, &member_ids).await?;
+            if pending.contains(&cmd.actor.user_id) {
+                return Err(not_ready());
+            }
+            (active, pending)
+        } else {
+            (member_ids, Vec::new())
+        };
 
         let conversation = self
             .repos
@@ -496,6 +636,7 @@ impl ConversationService for DefaultConversationService {
                     encrypted: cmd.encrypted,
                 },
                 &member_ids,
+                &pending_ids,
             )
             .await?;
 
@@ -508,6 +649,7 @@ impl ConversationService for DefaultConversationService {
         info!(
             conversation_id = %conversation.id,
             member_count,
+            pending = pending_ids.len(),
             "initialized conversation members"
         );
 
@@ -521,6 +663,9 @@ impl ConversationService for DefaultConversationService {
             member_user_ids: dto.member_ids.clone(),
             is_private: dto.is_private,
         });
+        for &user_id in &pending_ids {
+            self.emit_member_added(&dto, user_id);
+        }
 
         Ok(dto)
     }
@@ -560,24 +705,7 @@ impl ConversationService for DefaultConversationService {
         ids: &[rim_core::conversation::model::ConversationId],
     ) -> ServiceResult<Vec<ConversationDto>> {
         let conversations = self.repos.conversation_repo.get_by_ids(ids).await?;
-
-        let conv_ids: Vec<_> = conversations.iter().map(|c| c.id).collect();
-        let member_ids_by_conversation = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids_for_conversations(&conv_ids)
-            .await?;
-
-        Ok(conversations
-            .into_iter()
-            .map(|conv| {
-                let member_ids = member_ids_by_conversation
-                    .get(&conv.id)
-                    .cloned()
-                    .unwrap_or_default();
-                self.to_dto_with_members(conv, member_ids)
-            })
-            .collect())
+        self.to_dtos(conversations).await
     }
 
     async fn list_inbox_conversations(
@@ -603,21 +731,7 @@ impl ConversationService for DefaultConversationService {
             )
             .await?;
 
-        let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
-        let member_ids_by_conversation = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids_for_conversations(&conversation_ids)
-            .await?;
-
-        let mut items = Vec::with_capacity(page.items.len());
-        for conv in page.items {
-            let member_ids = member_ids_by_conversation
-                .get(&conv.id)
-                .cloned()
-                .unwrap_or_default();
-            items.push(self.to_dto_with_members(conv, member_ids));
-        }
+        let items = self.to_dtos(page.items).await?;
 
         Ok(Page::new(
             items,
@@ -656,21 +770,7 @@ impl ConversationService for DefaultConversationService {
             )
             .await?;
 
-        let conversation_ids = page.items.iter().map(|c| c.id).collect::<Vec<_>>();
-        let member_ids_by_conversation = self
-            .repos
-            .conversation_member_repo
-            .list_member_ids_for_conversations(&conversation_ids)
-            .await?;
-
-        let mut items = Vec::with_capacity(page.items.len());
-        for conv in page.items {
-            let member_ids = member_ids_by_conversation
-                .get(&conv.id)
-                .cloned()
-                .unwrap_or_default();
-            items.push(self.to_dto_with_members(conv, member_ids));
-        }
+        let items = self.to_dtos(page.items).await?;
 
         Ok(Page::new(
             items,
@@ -739,12 +839,12 @@ impl ConversationService for DefaultConversationService {
                 )));
             }
         }
+        // Joiners of an encrypted conversation without a ready device join pending.
+        let mut pending = HashSet::new();
         if conversation.is_encrypted() {
-            let current = self
-                .repos
-                .conversation_member_repo
-                .list_member_ids(conversation.id)
-                .await?;
+            let members = &self.repos.conversation_member_repo;
+            let mut current = members.list_member_ids(conversation.id).await?;
+            current.extend(members.list_pending_member_ids(conversation.id).await?);
             let joining: Vec<UserId> = targets
                 .iter()
                 .copied()
@@ -756,31 +856,40 @@ impl ConversationService for DefaultConversationService {
                     rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
                 )));
             }
-            self.ensure_ready(&joining).await?;
+            let (_, waiting) = self.split_by_readiness(cmd.server_id, &joining).await?;
+            pending.extend(waiting);
         }
 
         let mut added = Vec::new();
+        let mut added_active = false;
         for user_id in targets {
-            if self.add_member_if_absent(conversation.id, user_id).await? {
+            let membership = if pending.contains(&user_id) {
+                Membership::Pending
+            } else {
+                Membership::Active
+            };
+            if self
+                .add_member_if_absent(conversation.id, user_id, membership)
+                .await?
+            {
                 added.push(user_id);
+                added_active |= membership == Membership::Active;
             }
         }
 
-        info!(added = added.len(), "added conversation members");
+        info!(
+            added = added.len(),
+            pending = pending.len(),
+            "added conversation members"
+        );
 
         let encrypted = conversation.clone();
         let dto = self.to_dto(conversation).await?;
-        if !added.is_empty() {
+        if added_active {
             self.emit_mls_membership_changed(&encrypted, dto.member_ids.clone());
         }
         for user_id in added {
-            self.observers
-                .emit(WorkspaceEvent::MemberAddedToConversation {
-                    workspace_id: dto.server_id,
-                    conversation_id: dto.id,
-                    user_id,
-                    member_user_ids: dto.member_ids.clone(),
-                });
+            self.emit_member_added(&dto, user_id);
         }
 
         Ok(dto)
@@ -830,16 +939,16 @@ impl ConversationService for DefaultConversationService {
             ));
         }
 
-        if !self
+        let Some(membership) = self
             .repos
             .conversation_member_repo
-            .is_member(conversation.id, cmd.user_id)
+            .membership(conversation.id, cmd.user_id)
             .await?
-        {
+        else {
             return Err(ServiceError::NotFound);
-        }
+        };
 
-        self.remove_member_and_notify(&conversation, cmd.user_id)
+        self.remove_member_and_notify(&conversation, cmd.user_id, membership)
             .await?;
         info!("removed conversation member");
         Ok(())
@@ -866,19 +975,13 @@ impl ConversationService for DefaultConversationService {
         ensure_not_archived(&conversation)?;
 
         let joined = self
-            .add_member_if_absent(conversation.id, cmd.actor.user_id)
+            .add_member_if_absent(conversation.id, cmd.actor.user_id, Membership::Active)
             .await?;
 
         let dto = self.to_dto(conversation).await?;
         if joined {
             info!("joined channel");
-            self.observers
-                .emit(WorkspaceEvent::MemberAddedToConversation {
-                    workspace_id: dto.server_id,
-                    conversation_id: dto.id,
-                    user_id: cmd.actor.user_id,
-                    member_user_ids: dto.member_ids.clone(),
-                });
+            self.emit_member_added(&dto, cmd.actor.user_id);
         }
 
         Ok(dto)
@@ -890,13 +993,24 @@ impl ConversationService for DefaultConversationService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
     )]
     async fn leave_conversation(&self, cmd: LeaveConversationCmd) -> ServiceResult<()> {
-        let conversation = ensure_conversation_member_access(
-            self.access_repos(),
-            cmd.actor.user_id,
-            cmd.server_id,
-            cmd.conversation_id,
-        )
-        .await?;
+        let membership = self
+            .repos
+            .conversation_member_repo
+            .membership(cmd.conversation_id, cmd.actor.user_id)
+            .await?;
+        // A pending member cannot read the conversation, but may leave it.
+        let conversation = if membership == Some(Membership::Pending) {
+            self.invited_conversation(cmd.server_id, cmd.conversation_id, cmd.actor.user_id)
+                .await?
+        } else {
+            ensure_conversation_member_access(
+                self.access_repos(),
+                cmd.actor.user_id,
+                cmd.server_id,
+                cmd.conversation_id,
+            )
+            .await?
+        };
 
         if conversation.conversation_type == CoreConversationType::Direct {
             return Err(ServiceError::Validation(
@@ -905,18 +1019,13 @@ impl ConversationService for DefaultConversationService {
         }
 
         // Leaving a public channel you never joined is a no-op, mirroring `join_channel`.
-        if !self
-            .repos
-            .conversation_member_repo
-            .is_member(conversation.id, cmd.actor.user_id)
-            .await?
-        {
+        let Some(membership) = membership else {
             return Ok(());
-        }
+        };
 
         // Leaving a private channel as its last member is allowed; it then stays invisible to
         // everyone, and only an Owner/Moderator can archive it, by id.
-        self.remove_member_and_notify(&conversation, cmd.actor.user_id)
+        self.remove_member_and_notify(&conversation, cmd.actor.user_id, membership)
             .await?;
         info!("left conversation");
         Ok(())
@@ -1020,5 +1129,74 @@ impl ConversationService for DefaultConversationService {
         let dto = self.to_dto(updated).await?;
         self.emit_conversation_updated(&dto);
         Ok(dto)
+    }
+
+    #[instrument(
+        name = "conversation.accept_invite",
+        skip_all,
+        fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
+    )]
+    async fn accept_conversation_invite(
+        &self,
+        cmd: ConversationInviteCmd,
+    ) -> ServiceResult<ConversationDto> {
+        let user_id = cmd.actor.user_id;
+        let conversation = self
+            .invited_conversation(cmd.server_id, cmd.conversation_id, user_id)
+            .await?;
+        match self
+            .repos
+            .conversation_member_repo
+            .membership(conversation.id, user_id)
+            .await?
+        {
+            Some(Membership::Active) => return self.to_dto(conversation).await,
+            Some(Membership::Pending) => {}
+            None => return Err(ServiceError::NotFound),
+        }
+        if !self.ready_users(&[user_id]).await?.contains(&user_id) {
+            return Err(not_ready());
+        }
+        // A concurrent accept may have flipped the row first; it emitted the events.
+        if !self
+            .repos
+            .conversation_member_repo
+            .activate_member(conversation.id, user_id)
+            .await?
+        {
+            return self.to_dto(conversation).await;
+        }
+        info!("accepted conversation invitation");
+
+        let encrypted = conversation.clone();
+        let dto = self.to_dto(conversation).await?;
+        self.emit_mls_membership_changed(&encrypted, dto.member_ids.clone());
+        self.emit_member_added(&dto, user_id);
+        Ok(dto)
+    }
+
+    #[instrument(
+        name = "conversation.decline_invite",
+        skip_all,
+        fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id)
+    )]
+    async fn decline_conversation_invite(&self, cmd: ConversationInviteCmd) -> ServiceResult<()> {
+        let user_id = cmd.actor.user_id;
+        if self
+            .repos
+            .conversation_member_repo
+            .membership(cmd.conversation_id, user_id)
+            .await?
+            != Some(Membership::Pending)
+        {
+            return Err(ServiceError::NotFound);
+        }
+        let conversation = self
+            .invited_conversation(cmd.server_id, cmd.conversation_id, user_id)
+            .await?;
+        self.remove_member_and_notify(&conversation, user_id, Membership::Pending)
+            .await?;
+        info!("declined conversation invitation");
+        Ok(())
     }
 }

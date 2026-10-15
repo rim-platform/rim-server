@@ -766,6 +766,19 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    let conversation_member_repo: Arc<
+        dyn rim_core::conversation_member::repository::ConversationMemberRepository,
+    > = Arc::new(
+        rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository::new(
+            raw_db_for_tasks.clone().into(),
+        ),
+    );
+    tokio::spawn(
+        rim_infra_services::scheduled_purges::run_conversation_invite_purge(
+            conversation_member_repo,
+            shutdown_tx.subscribe(),
+        ),
+    );
     // Background task: end the WebSocket connections of sessions that ended where this
     // process did not hear of it (another process, expiry, a purge), every interval.
     if let Some(interval) = config.ws_session_recheck() {

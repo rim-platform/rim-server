@@ -52,12 +52,13 @@ impl SeaOrmConversationRepository {
         active
     }
 
-    /// `SELECT conversation_id FROM conversation_member WHERE user_id = $user`.
+    /// The conversations `user_id` is an active member of.
     fn member_conversation_ids(user_id: UserId) -> sea_orm::sea_query::SelectStatement {
         conversation_member::Entity::find()
             .select_only()
             .column(conversation_member::Column::ConversationId)
             .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .filter(conversation_member::Column::PendingSince.is_null())
             .into_query()
     }
 
@@ -112,12 +113,18 @@ impl ConversationRepository for SeaOrmConversationRepository {
         &self,
         conv: NewConversation,
         member_ids: &[UserId],
+        pending_ids: &[UserId],
     ) -> RepoResult<Conversation> {
-        let member_ids = member_ids
+        let pending_since: DateTimeWithTimeZone = Utc::now().into();
+        let members = member_ids
             .iter()
-            .copied()
-            .map(Into::into)
-            .collect::<Vec<Uuid>>();
+            .map(|id| (Uuid::from(*id), None))
+            .chain(
+                pending_ids
+                    .iter()
+                    .map(|id| (Uuid::from(*id), Some(pending_since))),
+            )
+            .collect::<Vec<_>>();
 
         let inserted = self
             .db
@@ -127,7 +134,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
                     let inserted = active.insert(txn).await.map_err(map_db_err)?;
 
-                    for user_id in member_ids {
+                    for (user_id, pending_since) in members {
                         let member = conversation_member::ActiveModel {
                             id: Set(
                                 rim_core::conversation_member::model::ConversationMemberId::new()
@@ -135,6 +142,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
                             ),
                             conversation_id: Set(inserted.id),
                             user_id: Set(user_id),
+                            pending_since: Set(pending_since),
                             ..Default::default()
                         };
                         member.insert(txn).await.map_err(map_db_err)?;

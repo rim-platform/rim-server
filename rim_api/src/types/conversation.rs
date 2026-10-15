@@ -39,6 +39,11 @@ pub struct Conversation {
     /// When the conversation became end-to-end encrypted; null for plaintext. Messages from
     /// then on are encrypted.
     pub encrypted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Members invited to an encrypted conversation who have no device set up for encryption
+    /// yet. They cannot read or send; they join with `acceptConversationInvite` once a device is
+    /// ready, without the history before that, or `declineConversationInvite`. Not in
+    /// `memberIds` or `memberCount`.
+    pub pending_member_ids: Vec<async_graphql::ID>,
 }
 
 #[ComplexObject]
@@ -94,7 +99,8 @@ impl Conversation {
             .into())
     }
 
-    /// The conversation's current MLS group; null for plaintext and before the first Commit.
+    /// The conversation's current MLS group; null for plaintext, before the first Commit, and
+    /// for a pending member.
     #[graphql(complexity = 5)]
     async fn mls_group(
         &self,
@@ -104,6 +110,13 @@ impl Conversation {
             return Ok(None);
         }
         let actor = crate::auth_context::require_actor(ctx)?;
+        // A pending member is not in the group yet.
+        if self
+            .pending_member_ids
+            .contains(&async_graphql::ID(actor.to_string()))
+        {
+            return Ok(None);
+        }
         let svc = ctx.data::<std::sync::Arc<dyn rim_services::e2ee::service::E2eeService>>()?;
         let group = svc
             .group(rim_services::e2ee::command::GetMlsGroupQuery {
@@ -177,6 +190,11 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
             created_by: value.created_by.map(|id| async_graphql::ID(id.to_string())),
             slow_mode_seconds: value.slow_mode_seconds,
             encrypted_at: value.encrypted_at,
+            pending_member_ids: value
+                .pending_member_ids
+                .into_iter()
+                .map(|id| async_graphql::ID(id.to_string()))
+                .collect(),
         }
     }
 }

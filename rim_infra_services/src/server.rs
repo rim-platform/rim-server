@@ -171,6 +171,7 @@ async fn create_default_channels(
                     encrypted: false,
                 },
                 &[creator_id],
+                &[],
             )
             .await
         {

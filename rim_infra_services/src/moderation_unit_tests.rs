@@ -263,6 +263,9 @@ mod tests {
             conversation_member_repo
                 .expect_is_member()
                 .returning(move |_, _| Box::pin(async move { Ok(is_member) }));
+            conversation_member_repo
+                .expect_list_pending_conversation_ids()
+                .returning(|_| Box::pin(async { Ok(vec![]) }));
 
             let mut message_attachment_repo = MockMessageAttachmentRepository::new();
             let attachments = self.attachments.clone();

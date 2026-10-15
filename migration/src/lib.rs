@@ -106,6 +106,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261012_173710_add_user_invite_chain::Migration),
             Box::new(m20261012_173711_add_blocked_email::Migration),
             Box::new(m20261013_055701_add_instance_operator_to_user::Migration),
+            Box::new(m20261015_175228_add_conversation_member_pending::Migration),
         ]
     }
 }
@@ -199,3 +200,4 @@ mod m20261012_173710_add_user_invite_chain;
 mod m20261012_173711_add_blocked_email;
 mod m20261012_174304_add_account_deletion;
 mod m20261013_055701_add_instance_operator_to_user;
+mod m20261015_175228_add_conversation_member_pending;

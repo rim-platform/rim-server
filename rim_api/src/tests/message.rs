@@ -134,6 +134,7 @@ async fn search_messages_query_returns_matches() {
                     title: Some("general".to_string()),
                     topic: None,
                     member_ids: vec![],
+                    pending_member_ids: vec![],
                     is_private: false,
                     archived_at: None,
                     created_by: None,

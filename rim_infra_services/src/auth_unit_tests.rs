@@ -167,8 +167,8 @@ mod tests {
         // New workspace members auto-join public channels; none exist in these fixtures.
         repo.expect_list_public_channel_ids()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
-        repo.expect_create_conversation_with_members()
-            .returning(|conv, _member_ids| {
+        repo.expect_create_conversation_with_members().returning(
+            |conv, _member_ids, _pending_ids| {
                 Box::pin(async move {
                     let now = chrono::Utc::now();
                     Ok(Conversation {
@@ -186,7 +186,8 @@ mod tests {
                         encrypted_at: None,
                     })
                 })
-            });
+            },
+        );
         repo
     }
 

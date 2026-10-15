@@ -10,6 +10,7 @@ pub struct Model {
     pub user_id: Uuid,
     pub conversation_id: Uuid,
     pub joined_at: DateTimeWithTimeZone,
+    pub pending_since: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

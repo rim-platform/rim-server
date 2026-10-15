@@ -43,6 +43,7 @@ mod tests {
                 &self,
                 conv: NewConversation,
                 member_ids: &[UserId],
+                pending_ids: &[UserId],
             ) -> RepoResult<Conversation>;
             async fn find_direct_between_users(
                 &self,
@@ -134,6 +135,37 @@ mod tests {
                 &self,
                 conversation_ids: &[ConversationId],
             ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>>;
+            async fn add_pending_member(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<ConversationMember>;
+            async fn membership(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<Option<rim_core::conversation_member::model::Membership>>;
+            async fn list_pending_member_ids(
+                &self,
+                conversation_id: ConversationId,
+            ) -> RepoResult<Vec<UserId>>;
+            async fn list_pending_member_ids_for_conversations(
+                &self,
+                conversation_ids: &[ConversationId],
+            ) -> RepoResult<std::collections::HashMap<ConversationId, Vec<UserId>>>;
+            async fn list_pending_conversation_ids(
+                &self,
+                user_id: UserId,
+            ) -> RepoResult<Vec<ConversationId>>;
+            async fn delete_pending_before(
+                &self,
+                cutoff: chrono::DateTime<chrono::Utc>,
+            ) -> RepoResult<u64>;
+            async fn activate_member(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<bool>;
         }
     }
 

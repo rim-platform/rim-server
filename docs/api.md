@@ -46,6 +46,19 @@ reads an `X-Request-Id` header, or makes one, and adds it to every error as
 A person whose relay is another server, signed in here directly, cannot run mutations that
 change their account rather than a space; those answer `FORBIDDEN` and run at their relay.
 
+An encrypted DM or group (`createConversation(input: { encrypted: true })`) needs a creator with a
+device set up for encryption, else `VALIDATION`. Every other member without such a device is
+invited instead: `Conversation.pendingMemberIds` lists them, apart from `memberIds` and
+`memberCount`. An invitee hears of it through `MemberAddedToConversation` and finds it in
+`inboxConversations` with `isMember: false` and `mlsGroup` null, but reading, sending or opening
+it answers `FORBIDDEN`, as for a non-member, it has no unread count and nothing notifies them.
+`acceptConversationInvite(serverId, conversationId)` makes them a member once a device of theirs
+is set up (`VALIDATION` before), emits `MemberAddedToConversation` and `MlsMembershipChanged`, and
+a member's device adds them to the group; they read nothing from before. Accepting again changes
+nothing. `declineConversationInvite` deletes the invitation; both answer `NOT_FOUND` without one.
+`addConversationMembers` invites such users too, with the same authorization as adding members.
+An invitation not accepted within 30 days expires. `specs/e2ee-mls-v1.md` is the contract.
+
 ### Subscriptions: `GET /api/ws`
 
 A WebSocket upgrade carrying the session cookie. The subprotocol is chosen with
@@ -343,6 +356,7 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 | `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours. |
 | `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
 | `RIM_LIMIT_MESSAGE_BYTES` | `messageBytes` | A message's text in UTF-8 bytes, at most 65536. An encrypted message's ciphertext may exceed it by 4096 bytes of framing. |
+| `RIM_LIMIT_PENDING_INVITES_PER_USER` | `pendingInvitesPerUser` | Pending invitations to encrypted conversations one user holds. Unlike the others it defaults to 50; 0 turns it off. Inviting someone who holds that many refuses the whole create or add. |
 
 Devices and DM requests also have a relay quota, `RIM_RELAY_DEVICES_PER_USER` (default 32) and
 `RIM_RELAY_DM_REQUESTS_PER_DAY` (default 20). The stricter of the cap and the quota applies,

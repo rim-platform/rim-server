@@ -4,9 +4,10 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::conversation::command::{
-    AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, GetConversationQuery,
-    JoinChannelCmd, LeaveConversationCmd, ListChannelsQuery, ListInboxConversationsQuery,
-    RemoveConversationMemberCmd, UpdateConversationTopicCmd,
+    AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
+    CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
+    ListChannelsQuery, ListInboxConversationsQuery, RemoveConversationMemberCmd,
+    UpdateConversationTopicCmd,
 };
 use crate::conversation::dto::{ChannelPageCursor, ConversationDto, InboxPageCursor};
 use rim_core::conversation::model::ConversationId;
@@ -73,4 +74,17 @@ pub trait ConversationService: Send + Sync {
 
     async fn update_topic(&self, cmd: UpdateConversationTopicCmd)
     -> ServiceResult<ConversationDto>;
+
+    /// Accept the caller's pending invitation to an encrypted conversation: they become a
+    /// member, which needs a device ready for encryption (`Validation` otherwise). Emits
+    /// `MlsMembershipChanged` and `MemberAddedToConversation`. Already a member: no-op.
+    /// `NotFound` when the caller is neither.
+    async fn accept_conversation_invite(
+        &self,
+        cmd: ConversationInviteCmd,
+    ) -> ServiceResult<ConversationDto>;
+
+    /// Decline the caller's pending invitation: the membership is deleted like a leave.
+    /// `NotFound` when the caller has no pending invitation there.
+    async fn decline_conversation_invite(&self, cmd: ConversationInviteCmd) -> ServiceResult<()>;
 }

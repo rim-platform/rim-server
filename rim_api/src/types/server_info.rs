@@ -62,6 +62,9 @@ pub struct ServerLimits {
     /// DM request to a stranger, and sends messages at a lower rate; `me.probationEndsAt` says
     /// when the caller's ends.
     pub probation_hours: Option<u32>,
+    /// Pending invitations to encrypted conversations one user holds; past it, adding them to
+    /// one more answers `VALIDATION`.
+    pub pending_invites_per_user: Option<u32>,
 }
 
 impl From<&InstanceLimits> for ServerLimits {
@@ -79,6 +82,7 @@ impl From<&InstanceLimits> for ServerLimits {
             invite_max_uses: limits.invite_max_uses,
             message_bytes: limits.message_bytes,
             probation_hours: limits.probation_hours,
+            pending_invites_per_user: limits.pending_invites_per_user,
         }
     }
 }

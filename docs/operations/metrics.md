@@ -147,6 +147,7 @@ the database when the listener starts and every 30 seconds after; a read that fa
 |---|---|---|---|
 | `rim_attachments_cleaned_total` | counter | | Attachment uploads the daily cleanup marked failed because they never completed (`docs/operations/background-jobs.md`). |
 | `rim_workspace_state_purged_total` | counter | | Expired workspace state entries the hourly purge deleted. |
+| `rim_conversation_invites_expired_total` | counter | | Expired conversation invitations the hourly purge deleted. |
 
 ## Example alert rules
 

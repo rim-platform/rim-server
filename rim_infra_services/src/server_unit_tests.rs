@@ -36,7 +36,7 @@ mod tests {
         if let Some(times) = times {
             creates.times(times);
         }
-        creates.returning(|conv, _member_ids| {
+        creates.returning(|conv, _member_ids, _pending_ids| {
             Box::pin(async move {
                 let now = chrono::Utc::now();
                 Ok(Conversation {

@@ -417,6 +417,7 @@ mod tests {
                         title: None,
                         topic: None,
                         member_ids: vec![],
+                        pending_member_ids: vec![],
                         is_private: false,
                         archived_at: None,
                         created_by: None,
