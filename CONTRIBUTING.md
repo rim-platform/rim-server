@@ -146,12 +146,11 @@ order of the existing schema does not change; `CLAUDE.md` explains why.
 
   Each release also carries the image's SBOM (SPDX JSON), attested to the image;
   `cosign verify-attestation --type spdxjson` with the same flags checks it.
-- **The maintainer holds the desktop signing keys.** The minisign key that signs rim-ui's update
-  bundles and, once they exist, the Windows code-signing credentials are held by the maintainer,
-  with an offline backup. They reach a build only through rim-ui's `release` environment, whose
-  runs the maintainer approves. A lost updater key cannot be replaced for apps already
-  installed: they trust only its public key, so they get no further updates and have to be
-  reinstalled by hand.
+- **The maintainer holds the updater key.** The minisign key that signs rim-ui's update bundles
+  is held by the maintainer, with an offline backup. It reaches a build only through rim-ui's
+  `release` environment, whose runs the maintainer approves. A lost updater key cannot be
+  replaced for apps already installed: they trust only its public key, so they get no further
+  updates and have to be reinstalled by hand.
 
 ### Repository settings
 

@@ -45,9 +45,10 @@ a date for each.
 - [ ] Desktop distribution is in place as section 8 checks it. rim-ui's release workflow builds
       installers for Linux x86_64 and Windows x86_64 on the tag, and the in-app updater reads
       `latest.json` from GitHub Releases. macOS is build-from-source only. Windows installers are
-      unsigned, so SmartScreen warns on the first run ("More info", then "Run anyway"). Two
-      follow-ups stay open: an Apple Developer account for signed macOS builds, and Windows code
-      signing, whose paperwork the maintainer has started.
+      unsigned and stay so for `0.0.x`; the install guide documents the SmartScreen prompt ("More
+      info", then "Run anyway"). Every new version prompts again, because SmartScreen builds the
+      reputation of an unsigned installer per file. One follow-up stays open: an Apple Developer
+      account for signed macOS builds.
 - [ ] The `release` environment in both repositories has the maintainer as its only required
       reviewer and allows deployments from `v*` tags only (`CONTRIBUTING.md`, "Repository
       settings").
@@ -212,7 +213,7 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
       v=<version>
       gh release download v$v --repo rim-platform/rim-ui --dir rim-ui-$v
       cd rim-ui-$v
-      cosign verify-blob SHA256SUMS --bundle SHA256SUMS.cosign.bundle \
+      cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
         --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
         --certificate-oidc-issuer https://token.actions.githubusercontent.com
       sha256sum --check --ignore-missing SHA256SUMS
