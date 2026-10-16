@@ -62,7 +62,7 @@ preparation (version and health probes, metrics, the
 compose stack with backup and restore, the dormant updater, instance feature switches, message
 rendering, the Vim profile, audit retention) and the first groups of the cleanup before going
 public: the incident and on-call vertical was dropped from
-the core (the last commit with it is tagged `incidents-last`), dead code and GraphQL roots no
+the core (the last commit with it is 77846eb), dead code and GraphQL roots no
 client calls were removed, bootstrap tokens were folded into instance invites, and the schema,
 build and metadata were tidied. The documentation and comment pass (C-4) is merged, and the
 `.env` history purge (C-5) ran on 2026-10-11 (`docs/security/env-history-purge-runbook.md`).
