@@ -11,7 +11,9 @@ incidents, the abuse policy and every command. `docs/relay.md` explains what a r
 A server that hosts workspaces uses `compose.yml` alone: `docs/self-hosting.md` covers it, and
 its sections on updates, backups and monitoring apply to the relay too.
 
-The relay's working name, `relay.rim.chat`, is not a registered domain. Use your own.
+The project's public relay is `relay.rim-platform.org`; yours uses your own domain. `RIM_DOMAIN`
+is the relay's host name, such as a `relay.` subdomain: Caddy answers for that name only, so the
+apex of the domain can serve a website from elsewhere.
 
 ## Before the first start
 

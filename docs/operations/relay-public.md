@@ -4,8 +4,8 @@ The public relay is the server anyone's app can use as its relay: accounts, devi
 cards, the queue of what other servers send, the request inbox, and the forward path to the
 servers that host people's workspaces. It runs the stock image with `RIM_ROLE=relay` from
 `deploy/compose.yml` with the `deploy/compose.relay.yml` override (`deploy/README.md` brings it
-up). Its working name is `relay.rim.chat`; that domain is not registered, so read it as "the
-relay's domain" wherever this page or the compose files say it.
+up). The project's relay is `relay.rim-platform.org`; read it as "the relay's domain" wherever
+this page says it.
 
 Everything marked **FILL** is a decision or a fact the operator records here before the relay
 opens to the public.

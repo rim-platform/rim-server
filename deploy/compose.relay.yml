@@ -4,8 +4,9 @@
 #
 #   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d
 #
-# relay.rim.chat is a working name: that domain is not registered. Set
-# RIM_DOMAIN in deploy/.env to the real one.
+# The project's relay is relay.rim-platform.org. Set RIM_DOMAIN in
+# deploy/.env to your relay's host name; Caddy answers for it alone, so the
+# apex of the domain can serve a website from elsewhere.
 # =============================================================================
 
 name: rim-relay
