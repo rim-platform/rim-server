@@ -24,7 +24,7 @@ The relay's working name, `relay.rim.chat`, is not a registered domain. Use your
    cat > deploy/.env <<EOF
    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')
    RIM_DOMAIN=relay.example.org
-   RIM_VERSION=0.1.0
+   RIM_VERSION=0.0.1
    EOF
    chmod 600 deploy/.env
    ```
