@@ -35,6 +35,8 @@ jobs:
         # not redundant: code that only feature-gated tests call is dead (and warned about)
         # only when the features are off, which is how the server itself is built.
         run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
+      - name: Release version script
+        run: scripts/release/test-set-version.sh
 
   test_and_coverage:
     name: Test & Coverage

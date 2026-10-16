@@ -56,7 +56,7 @@ certificate names the repository's release workflow and the tag it ran for, so a
 signed anywhere else does not verify. Before the first start and after every upgrade:
 
 ```sh
-v=0.1.0                                      # your RIM_VERSION
+v=0.0.1                                      # your RIM_VERSION
 dc pull
 cosign verify ghcr.io/rim-platform/rim-server:$v \
   --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
