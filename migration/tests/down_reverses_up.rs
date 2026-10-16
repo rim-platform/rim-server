@@ -5,7 +5,7 @@ mod common;
 /// Migrations whose `down` deliberately leaves the schema as it is.
 const DOWN_NO_OP_ALLOWED: &[&str] = &[
     // Drops the incident module's tables with their rows; recreating them empty would bring
-    // nothing back, so the way back is the `incidents-last` tag.
+    // nothing back, so the way back is commit 77846eb.
     "m20261010_184831_drop_incident_module",
 ];
 
