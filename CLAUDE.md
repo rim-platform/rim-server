@@ -40,7 +40,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Tests
 cargo test --workspace                    # all unit tests
-cargo test --all -- --test-threads=1      # single-threaded (CI style, needed for shared DB)
+cargo test --all -- --test-threads=1      # single-threaded (needed by the shared-database suites)
 cargo test -p rim_services send_message   # single test by substring
 cargo test -p rim_services conversation::tests::creates_conversation  # specific test path
 cargo test -p rim_core -- --nocapture     # with stdout
@@ -172,4 +172,4 @@ Review covers: layered architecture compliance, pattern consistency, cross-repo 
 
 ## CI
 
-GitHub Actions runs: build+test (single-threaded), fmt check, clippy (-D warnings), coverage (90% line gate via cargo-llvm-cov; raise it as coverage improves), cargo audit, Docker build validation.
+GitHub Actions runs: build+test (the workspace in parallel, then the three database suites single-threaded), fmt check, clippy (-D warnings, with the test features), coverage (90% line gate via cargo-llvm-cov; raise it as coverage improves), cargo audit, Docker build validation.
