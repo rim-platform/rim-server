@@ -12,6 +12,10 @@ pub struct Model {
     pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub kind: String,
+    #[sea_orm(column_type = "Text")]
+    pub dm_outside_floor: String,
+    #[sea_orm(column_type = "Text")]
+    pub dm_member_default: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

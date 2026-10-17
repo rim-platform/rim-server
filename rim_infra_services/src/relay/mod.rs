@@ -5,6 +5,7 @@
 pub mod abuse;
 pub(crate) mod identity;
 pub(crate) mod inbox;
+pub(crate) mod policy;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use tokio::sync::broadcast;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
+use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::UserKind;
 use rim_core::host::repository::HostRepository;
@@ -35,6 +37,7 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_s2s::SharedIdentity;
 use rim_s2s::host::{read_host_event, verify_host_event};
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::command::MlsCaller;
 use rim_services::e2ee::{ACCEPTED_CIPHER_SUITES, PREFERRED_CIPHER_SUITE};
 use rim_services::relay::dto::{
@@ -51,6 +54,7 @@ use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{local_document, verify_identity};
 use crate::relay::inbox::{Filing, InboxFacts, file};
+use crate::relay::policy::{DmPolicy, PolicySource};
 use crate::repos::AppRepos;
 
 /// Most items one delivery carries.
@@ -88,6 +92,8 @@ pub struct RelayRepos {
     pub subscription_repo: Arc<dyn SubscriptionRepository>,
     /// Principals this server refuses, and abuse reports.
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
+    /// Workspaces' DM rules and each user's choices.
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
 }
 
 /// Limits of the relay's queues and its users' traffic.
@@ -114,6 +120,8 @@ pub struct DefaultRelayService {
     forwards_per_device: RegistrationRateLimiter,
     /// Requests each user sends through `/api/remote/…` per day.
     forwards_per_user: DailyCounter,
+    /// The operator's DM settings.
+    dm_policy: DmOperatorPolicy,
 }
 
 /// Validate a principal id given by a client.
@@ -167,6 +175,20 @@ pub(crate) fn card_relays(card_payload: &str) -> Vec<String> {
         .and_then(|v| v.get("relays").cloned())
         .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
         .unwrap_or_default()
+}
+
+/// The relays a card lists as a contact's relay URLs: its first ones when they follow the
+/// contact link rules, else none.
+pub(crate) fn contact_relays(card_payload: &str) -> Vec<String> {
+    let relays: Vec<String> = card_relays(card_payload)
+        .into_iter()
+        .take(MAX_CONTACT_RELAYS)
+        .collect();
+    if check_relay_urls(&relays).is_ok() {
+        relays
+    } else {
+        Vec::new()
+    }
 }
 
 fn item_dto(record: RelayItemRecord) -> RelayItemDto {
@@ -234,6 +256,51 @@ impl DefaultRelayService {
                 settings.quotas.forwards_per_device_per_min,
             ),
             forwards_per_user: DailyCounter::per_day(settings.quotas.forwards_per_user_per_day),
+            dm_policy: DmOperatorPolicy::default(),
+        }
+    }
+
+    /// Apply the operator's DM settings.
+    pub fn with_dm_policy(mut self, dm_policy: DmOperatorPolicy) -> Self {
+        self.dm_policy = dm_policy;
+        self
+    }
+
+    /// Whether `peer_server_id` may read a local user's identity and claim their key packages:
+    /// the operator's inbound setting admits it, or the user holds an active subscription to a
+    /// workspace it hosts.
+    async fn admits_peer(&self, user_id: UserId, peer_server_id: &str) -> ServiceResult<bool> {
+        if self.dm_policy.admits_inbound(peer_server_id) {
+            return Ok(true);
+        }
+        Ok(self
+            .repos
+            .subscription_repo
+            .subscribed_hosts(user_id, Utc::now())
+            .await?
+            .iter()
+            .any(|host| host == peer_server_id))
+    }
+
+    /// The server a DM invite's sender writes from: the host that delivered it, or for an own
+    /// event the home relay of a creator from another server, else this one.
+    async fn sender_server(
+        &self,
+        repos: &RelayRepos,
+        peer_server_id: &str,
+        read: &ReadEnvelope,
+        from_principal_id: &str,
+    ) -> ServiceResult<String> {
+        if !read.local {
+            return Ok(peer_server_id.to_string());
+        }
+        match repos.host_repo.find_user(from_principal_id).await? {
+            Some((user_id, UserKind::Remote)) => Ok(repos
+                .host_repo
+                .home_relay(user_id)
+                .await?
+                .unwrap_or_default()),
+            _ => Ok(peer_server_id.to_string()),
         }
     }
 
@@ -520,7 +587,7 @@ impl DefaultRelayService {
             is_invite: read.invite.is_some(),
             conversation_scoped: read.conversation_id.is_some(),
             blocked: false,
-            trusted: false,
+            policy: DmPolicy::Request,
             request,
             pending_for_user: 0,
             filed_by_sender_today: 0,
@@ -530,10 +597,19 @@ impl DefaultRelayService {
             let from = invite.from_principal_id.as_str();
             facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?
                 || repos.relay_abuse_repo.is_principal_blocked(from).await?;
-            facts.trusted = repos.relay_repo.is_contact(user_id, from).await?
-                || repos.relay_repo.accepted_from(user_id, from).await?
-                || repos.host_repo.shares_workspace(user_id, from).await?;
             if facts.request.is_none() {
+                let own_id = self.own_id();
+                let sender_server = self
+                    .sender_server(repos, peer_server_id, read, from)
+                    .await?;
+                facts.policy = PolicySource {
+                    relay_repo: repos.relay_repo.as_ref(),
+                    dm_policy_repo: repos.dm_policy_repo.as_ref(),
+                    operator: &self.dm_policy,
+                    own_server_id: &own_id,
+                }
+                .inbound(user_id, from, &sender_server)
+                .await?;
                 facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
                 facts.filed_by_sender_today = repos
                     .relay_repo
@@ -670,12 +746,14 @@ impl DefaultRelayService {
 }
 
 /// Fetch a principal's identity from the first of `relay_urls` that serves it, pinning each
-/// relay first. Returns the document and the serving relay's id.
+/// relay first and skipping one whose server id `admit` refuses. Returns the document and the
+/// serving relay's id.
 pub(crate) async fn fetch_from_relays(
     peers: &dyn PeerService,
     client: &dyn S2sClient,
     principal_id: &str,
     relay_urls: &[String],
+    admit: &(dyn Fn(&str) -> bool + Sync),
 ) -> ServiceResult<(IdentityDocument, String)> {
     let mut last = ServiceError::NotFound;
     for url in relay_urls {
@@ -690,6 +768,10 @@ pub(crate) async fn fetch_from_relays(
                 continue;
             }
         };
+        if !admit(&pinned.server_id) {
+            last = policy::outbound_refused();
+            continue;
+        }
         let response = client
             .send(S2sRequest {
                 peer_server_id: pinned.server_id.clone(),
@@ -851,11 +933,8 @@ impl RelayService for DefaultRelayService {
             .await?
             .ok_or_else(|| ServiceError::Conflict("the request was decided already".to_string()))?;
         repos.relay_repo.release_held(request.id).await?;
-        let relays: Vec<String> = card_relays(&request.card_payload)
-            .into_iter()
-            .take(MAX_CONTACT_RELAYS)
-            .collect();
-        if check_relay_urls(&relays).is_ok() {
+        let relays = contact_relays(&request.card_payload);
+        if !relays.is_empty() {
             repos
                 .relay_repo
                 .upsert_contact(actor.user_id, &request.from_principal_id, relays)
@@ -1073,6 +1152,22 @@ impl RelayService for DefaultRelayService {
         }
     }
 
+    async fn identity_for_peer(
+        &self,
+        peer_server_id: String,
+        principal_id: String,
+    ) -> ServiceResult<Option<IdentityDocument>> {
+        let Some((user_id, UserKind::Local)) =
+            self.repos.host_repo.find_user(&principal_id).await?
+        else {
+            return Ok(None);
+        };
+        if !self.admits_peer(user_id, &peer_server_id).await? {
+            return Ok(None);
+        }
+        self.local_identity(principal_id).await
+    }
+
     #[instrument(name = "relay.remote_identity", skip_all, fields(actor_id = %_actor.user_id))]
     async fn remote_identity(
         &self,
@@ -1105,6 +1200,7 @@ impl RelayService for DefaultRelayService {
                     self.client.as_ref(),
                     &principal_id,
                     &[url],
+                    &|_| true,
                 )
                 .await?
             }
@@ -1273,6 +1369,11 @@ impl RelayService for DefaultRelayService {
             .await?
         {
             return Err(ServiceError::NotFound);
+        }
+        if !self.admits_peer(user_id, &peer_server_id).await? {
+            return Err(ServiceError::Forbidden(
+                "this server takes no DMs from that server".to_string(),
+            ));
         }
         let claimer = request.claimer.principal_id.as_str();
         if self.repos.relay_repo.is_blocked(user_id, claimer).await?
@@ -1526,6 +1627,7 @@ mod tests {
             &client,
             "rimp1_alice",
             &["https://relay.example/x".to_string()],
+            &|_| true,
         )
         .await
         .expect_err("unpinned");
@@ -1563,6 +1665,7 @@ mod tests {
             &client,
             "rimp1_alice",
             &["https://relay.example".to_string()],
+            &|_| true,
         )
         .await
         .expect_err("refused");
@@ -1587,6 +1690,16 @@ mod tests {
             Some("http://127.0.0.1:8099")
         );
         assert_eq!(origin_of("ftp://relay.example"), None);
+    }
+
+    #[test]
+    fn contact_relays_keep_valid_urls_only() {
+        assert_eq!(
+            contact_relays(r#"{"relays":["https://a.example"]}"#),
+            vec!["https://a.example"]
+        );
+        assert!(contact_relays(r#"{"relays":["https://a.example/?x"]}"#).is_empty());
+        assert!(contact_relays("{}").is_empty());
     }
 
     #[test]

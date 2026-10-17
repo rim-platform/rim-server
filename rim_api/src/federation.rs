@@ -68,9 +68,11 @@ pub(crate) fn direct_space<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationCon
     Ok(federation)
 }
 
-/// `VALIDATION` while the caller's account is in probation and a conversation in the direct
-/// space would send a DM request to a stranger among `user_ids`. Elsewhere, and on a server
-/// without the direct space, it allows everything.
+/// Whether the caller may start a conversation in the direct space with `user_ids`:
+/// `FORBIDDEN` when one is on a server the operator's outbound DM setting does not admit, or a
+/// local one's DM settings refuse the caller; `VALIDATION` while the caller's account is in
+/// probation and the conversation would send a DM request to a stranger among them. Elsewhere,
+/// and on a server without the direct space, it allows everything.
 pub(crate) async fn ensure_may_request(
     ctx: &Context<'_>,
     actor: UserId,
@@ -160,6 +162,8 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
     "renewDelegations",
     "requestAccountDeletion",
     "cancelAccountDeletion",
+    "setMyDmSettings",
+    "setMyWorkspaceDmSetting",
 ];
 
 /// The first account mutation the operation `operation_name` selects runs at its top level,

@@ -26,6 +26,7 @@ pub(crate) mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
@@ -117,4 +118,5 @@ pub(crate) struct QueryGroup8(
     remote_workspace::RemoteWorkspaceQueries,
     server_info::ServerInfoQueries,
     instance_moderation::InstanceModerationQueries,
+    dm_policy::DmPolicyQueries,
 );

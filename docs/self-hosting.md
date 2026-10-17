@@ -334,6 +334,16 @@ stops the server at boot. Changing the terms URL does not ask existing accounts 
 that signups and profile edits refuse, ignoring case, so nobody can pose as your maintainers;
 set it once their accounts exist, since it refuses those names to new signups too.
 
+## Who may start a DM
+
+`RIM_DM_INBOUND`, `RIM_DM_OUTBOUND` and `RIM_DM_PARTNERS` (commented out in
+`deploy/.env.example`) set floors for every account: by default a stranger's first message is a
+request the recipient accepts, and people here may start DMs with anyone. A company closes its
+server with `none`, or opens it to named partner servers with `partners`
+(`docs/operations/closed-company-server.md`). Workspace owners and each person tighten further
+in the app ("Who May Start A DM" in `docs/messaging.md`). A value the server does not take stops
+it at boot.
+
 ## Deleted accounts
 
 People delete their own account from the client. The account is purged once a grace period

@@ -142,6 +142,9 @@ workspaces (`RIM_ROLE=both`), with server-to-server traffic off.
 | `RIM_SERVER_KEY_FILE` | `<RIM_DATA_DIR>/server-key.json` | The server key seed |
 | `RIM_HOST_ALLOWED_RELAYS` | empty, any | Comma-separated server ids allowed to use this server's workspaces as a host |
 | `RIM_S2S_DENIED_PEERS` | empty | Comma-separated server ids refused everywhere |
+| `RIM_DM_INBOUND` | `requests` | Who outside a shared workspace may start a DM with people here: `open`, `requests`, `partners` (the servers `RIM_DM_PARTNERS` lists, and this one) or `none`. With `partners` or `none` other servers get no identity or key package of anyone here |
+| `RIM_DM_OUTBOUND` | `allowed` | Whom on other servers people here may start a DM with: `allowed`, `partners` or `none` |
+| `RIM_DM_PARTNERS` | empty | Comma-separated server ids the `partners` settings name |
 | `RIM_S2S_PEER_RATE_PER_MIN` | 600 | Requests accepted per peer per minute, per node |
 | `RIM_S2S_MAX_BODY_BYTES` | 8388608 | Largest request body from a peer |
 | `RIM_S2S_ALLOW_HTTP` | false | Development and tests only: allow `http` |

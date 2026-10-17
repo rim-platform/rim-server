@@ -158,8 +158,11 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains(
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
-         signupRequiresKeys: Boolean! }"
+         signupRequiresKeys: Boolean! dmInbound: DmInbound! dmOutbound: DmOutbound! \
+         dmPartners: [String!]! }"
     ));
+    assert!(sdl.contains("enum DmInbound { OPEN REQUESTS PARTNERS NONE }"));
+    assert!(sdl.contains("enum DmOutbound { ALLOWED PARTNERS NONE }"));
     assert!(sdl.contains(
         "type ServerLimits { workspacesPerUser: Int membersPerWorkspace: Int \
          channelsPerWorkspace: Int devicesPerUser: Int dmRequestsPerDay: Int \
@@ -291,6 +294,60 @@ async fn server_info_reports_the_instance_limits() {
             "pendingInvitesPerUser": 50,
         })
     );
+}
+
+/// `serverInfo` reports the operator's DM settings.
+#[tokio::test]
+async fn server_info_reports_the_dm_settings() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(
+            Request::new("{ serverInfo { dmInbound dmOutbound dmPartners } }").data(
+                rim_services::dm_policy::dto::DmOperatorPolicy {
+                    inbound: rim_core::dm_policy::model::DmInbound::Partners,
+                    outbound: rim_core::dm_policy::model::DmOutbound::None,
+                    partners: vec!["rims1_partner".to_string()],
+                },
+            ),
+        )
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert_eq!(
+        data["serverInfo"],
+        serde_json::json!({
+            "dmInbound": "PARTNERS",
+            "dmOutbound": "NONE",
+            "dmPartners": ["rims1_partner"],
+        })
+    );
+}
+
+/// The DM settings' types, fields and roots, with their exact signatures; `Server` ends with
+/// its DM rules.
+#[test]
+fn dm_policy_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "dmOutsideFloor: DmOutsideFloor dmMemberDefault: DmMembers }",
+        "myDmSettings: MyDmSettings!",
+        "setWorkspaceDmPolicy(workspaceId: ID!, outsideFloor: DmOutsideFloor!, \
+         memberDefault: DmMembers!): WorkspaceDmPolicy!",
+        "setMyDmSettings(outside: DmOutside!): MyDmSettings!",
+        "setMyWorkspaceDmSetting(workspaceId: ID!, members: DmMembers!): MyDmSettings!",
+        "type MyDmSettings { outside: DmOutside! workspaces: [WorkspaceDmSetting!]! \
+         effectiveOutside: DmOutside! outsideFloorFrom: DmFloorSource }",
+        "type WorkspaceDmSetting { workspaceId: ID! members: DmMembers! memberDefault: DmMembers! }",
+        "type DmFloorSource { kind: DmFloorSourceKind! workspaceId: ID workspaceName: String }",
+        "type WorkspaceDmPolicy { workspaceId: ID! outsideFloor: DmOutsideFloor! \
+         memberDefault: DmMembers! }",
+        "enum DmOutsideFloor { NONE REQUESTS CLOSED }",
+        "enum DmMembers { DIRECT REQUESTS }",
+        "enum DmOutside { REQUESTS NONE }",
+        "enum DmFloorSourceKind { OPERATOR WORKSPACE }",
+    ] {
+        assert!(sdl.contains(expected), "the SDL lacks {expected}");
+    }
 }
 
 /// Both signup inputs end with the optional `acceptedTermsUrl`.

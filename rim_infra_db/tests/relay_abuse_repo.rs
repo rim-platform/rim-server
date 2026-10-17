@@ -249,6 +249,8 @@ async fn the_migration_refuses_down_while_blocks_or_reports_exist() {
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a block stops the down migration"
     );
+    // Each migration commits on its own: the later ones rolled back before the refusal.
+    Migrator::up(&conn, None).await.expect("up again");
     abuse.unblock_principal(SPAMMER).await.unwrap();
     let report = abuse
         .insert_report(NewAbuseReport {
@@ -264,6 +266,7 @@ async fn the_migration_refuses_down_while_blocks_or_reports_exist() {
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a report stops the down migration"
     );
+    Migrator::up(&conn, None).await.expect("up again");
     assert_eq!(
         count(
             &ctx.db,

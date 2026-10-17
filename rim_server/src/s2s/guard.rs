@@ -368,7 +368,7 @@ async fn dispatch(
                 .next()
                 .unwrap_or_default()
                 .to_string();
-            match state.relay.local_identity(principal_id).await {
+            match state.relay.identity_for_peer(peer, principal_id).await {
                 Ok(Some(document)) => Reply::ok(serde_json::to_value(document).unwrap_or_default()),
                 Ok(None) => Reply::error(StatusCode::NOT_FOUND, "not_found", "unknown principal"),
                 Err(e) => Reply::from_service_error(e),

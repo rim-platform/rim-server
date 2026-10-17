@@ -17,6 +17,7 @@ pub mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
 #[cfg(test)]
 mod probation_fixtures;

@@ -89,6 +89,7 @@ fn test_registration_context() -> crate::RegistrationContext {
         audit_retention_days: None,
         instance_policy: Default::default(),
         instance_limits: Default::default(),
+        dm_policy: Default::default(),
     }
 }
 
@@ -560,6 +561,11 @@ impl AppServiceProvider for TestAppServiceProvider {
     ) -> Arc<dyn rim_services::operator::InstanceOperatorService> {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::operator::MockInstanceOperatorService::new())
+    }
+
+    fn dm_policy_service(&self) -> Arc<dyn rim_services::dm_policy::service::DmPolicyService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::dm_policy::service::MockDmPolicyService::new())
     }
 }
 

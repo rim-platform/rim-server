@@ -507,6 +507,7 @@ fn schema_with_policy(
             audit_retention_days: None,
             instance_policy,
             instance_limits: Default::default(),
+            dm_policy: Default::default(),
         },
         None,
     )
@@ -679,6 +680,9 @@ fn test_provider(
         ),
         relay_abuse_repo: Arc::new(
             rim_infra_db::sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(db.clone()),
+        ),
+        dm_policy_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::dm_policy::SeaOrmDmPolicyRepository::new(db.clone()),
         ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(

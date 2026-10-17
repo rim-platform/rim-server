@@ -181,6 +181,7 @@ pub(crate) async fn build_s2s(
     let allowed_relays = config
         .host_allowed_relays()
         .map_err(io_error("RIM_HOST_ALLOWED_RELAYS"))?;
+    let dm_policy = config.dm_policy().map_err(io_error("RIM_DM_*"))?;
     let s2s_origin = config.s2s_origin();
     let key_files = config.key_files();
     let identity_repo: Arc<dyn ServerIdentityRepository> =
@@ -241,18 +242,21 @@ pub(crate) async fn build_s2s(
         .ensure_direct_space(DIRECT_SPACE_NAME)
         .await
         .map_err(|e| io_error("direct space")(e.to_string()))?;
-    let relay = Arc::new(DefaultRelayService::new(
-        repos.for_relay(),
-        Some(raw_db.clone()),
-        identity.clone(),
-        Arc::clone(&peers),
-        Arc::clone(&client),
-        RelaySettings {
-            queue_bytes_per_user: config.relay_queue_bytes_per_user(),
-            retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
-            quotas: config.quotas(),
-        },
-    ));
+    let relay = Arc::new(
+        DefaultRelayService::new(
+            repos.for_relay(),
+            Some(raw_db.clone()),
+            identity.clone(),
+            Arc::clone(&peers),
+            Arc::clone(&client),
+            RelaySettings {
+                queue_bytes_per_user: config.relay_queue_bytes_per_user(),
+                retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
+                quotas: config.quotas(),
+            },
+        )
+        .with_dm_policy(dm_policy.clone()),
+    );
     let host = Arc::new(
         DefaultHostService::new(
             repos.for_host(),
@@ -265,6 +269,7 @@ pub(crate) async fn build_s2s(
         )
         .with_quotas(config.quotas())
         .with_limits(config.instance_limits().map_err(std::io::Error::other)?)
+        .with_dm_policy(dm_policy.clone())
         .with_delegations(Arc::new(RepoDelegationCheck::new(Arc::clone(
             &repos.delegation_repo,
         )))),
@@ -327,6 +332,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .map_err(std::io::Error::other)?;
     let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
     let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
+    let dm_policy = config.dm_policy().map_err(std::io::Error::other)?;
     let account_deletion_grace_days = config
         .account_deletion_grace_days()
         .map_err(std::io::Error::other)?;
@@ -467,6 +473,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             password_hashing,
             terms_url: instance_policy.terms_url.clone(),
             signup_requires_keys: instance_policy.signup_requires_keys,
+            dm_policy: dm_policy.clone(),
         },
         Arc::clone(&feature_gate),
         instance_limits,
@@ -632,7 +639,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             Arc::clone(&refusals),
             Arc::clone(&wake),
         )
-        .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>);
+        .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>)
+        .with_dm_policy(dm_policy.clone());
         let sender = OutboxSender::new(repos.for_host(), Arc::clone(&s2s.client), refusals, wake);
         tokio::spawn(writer.run(events, shutdown_tx.subscribe()));
         tokio::spawn(sender.run(shutdown_tx.subscribe()));
@@ -831,6 +839,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             audit_retention_days,
             instance_policy,
             instance_limits,
+            dm_policy: dm_policy.clone(),
         },
         Some(FederationContext {
             relay: Arc::clone(&s2s.relay) as Arc<dyn RelayService>,

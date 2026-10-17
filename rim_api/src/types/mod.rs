@@ -14,6 +14,7 @@ pub(crate) mod command_result;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
@@ -58,6 +59,10 @@ pub use conversation::{
 pub use custom_emoji::CustomEmoji;
 pub use device_link::{
     DeviceLink, DeviceLinkState, SealedMessage, SealedMessageInput, StartedDeviceLink,
+};
+pub use dm_policy::{
+    DmFloorSource, DmFloorSourceKind, DmInbound, DmMembers, DmOutbound, DmOutside, DmOutsideFloor,
+    MyDmSettings, WorkspaceDmPolicy, WorkspaceDmSetting,
 };
 pub use e2ee::{
     ClaimMlsKeyPackagesInput, ClaimedKeyPackage, EditEncryptedMessageInput, MessageEncryption,

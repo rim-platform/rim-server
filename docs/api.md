@@ -504,6 +504,10 @@ each list.
 - **`signupRequiresKeys`**: true when new accounts sign up with a key only and
   `signupWithInvite` answers `FORBIDDEN` (`RIM_SIGNUP_REQUIRE_KEYS`, on by default). A client
   then offers only the key signup.
+- **`dmInbound`**, **`dmOutbound`**, **`dmPartners`**: the operator's DM settings, floors for
+  every account (`RIM_DM_INBOUND`, `RIM_DM_OUTBOUND`, `RIM_DM_PARTNERS`; "Who May Start A DM" in
+  `messaging.md`). A client shows them read-only and explains a greyed choice with
+  `myDmSettings.outsideFloorFrom`.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

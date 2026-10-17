@@ -7,6 +7,8 @@ pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
 pub mod device_link;
+// pub: rim_infra_services implements it, rim_api serves it, rim_server configures it.
+pub mod dm_policy;
 pub mod e2ee;
 pub mod events;
 pub mod feature;

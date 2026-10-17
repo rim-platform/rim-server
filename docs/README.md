@@ -46,6 +46,8 @@ Normative, versioned contracts in `specs/`:
 - `self-hosting.md`: running a server with `deploy/compose.yml`: first start, updates, backups,
   monitoring.
 - `operations/relay-public.md`: the public relay's runbook: keys, backups, quotas, incidents, abuse.
+- `operations/closed-company-server.md`: a server closed to DMs from outside, or open to partner
+  servers only.
 - `operations/upgrade.md`: moving a server to a new release and back, and why migrations only go
   forward.
 - `operations/release-checklist.md`: the steps that cut a release.

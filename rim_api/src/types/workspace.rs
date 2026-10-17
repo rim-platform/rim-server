@@ -93,6 +93,46 @@ impl Server {
             None => Ok(None),
         }
     }
+
+    /// The workspace's floor for DMs to its members from people outside their workspaces;
+    /// null in the direct space, which has no rules. Every member sees it.
+    async fn dm_outside_floor(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<crate::types::DmOutsideFloor>> {
+        Ok(dm_policy_of(ctx, &self.id)
+            .await?
+            .map(|p| p.outside_floor.into()))
+    }
+
+    /// How a DM from a fellow member arrives unless the recipient chose; null in the direct
+    /// space. Every member sees it.
+    async fn dm_member_default(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<crate::types::DmMembers>> {
+        Ok(dm_policy_of(ctx, &self.id)
+            .await?
+            .map(|p| p.member_default.into()))
+    }
+}
+
+/// A workspace's DM rules for the caller, a member; `None` in the direct space, which has none.
+async fn dm_policy_of(
+    ctx: &Context<'_>,
+    id: &ID,
+) -> Result<Option<rim_services::dm_policy::dto::WorkspaceDmPolicyDto>> {
+    let actor = crate::auth_context::require_actor(ctx)?;
+    let server_id = crate::ids::parse_uuid_id::<rim_core::server::model::ServerId>(id)?;
+    match ctx
+        .data::<std::sync::Arc<dyn rim_services::dm_policy::service::DmPolicyService>>()?
+        .workspace_dm_policy(rim_services::Actor::new(actor), server_id)
+        .await
+    {
+        Ok(policy) => Ok(Some(policy)),
+        Err(rim_services::ServiceError::NotFound) => Ok(None),
+        Err(e) => Err(crate::errors::map_service_error(e)),
+    }
 }
 
 impl From<rim_services::server::dto::ServerDto> for Server {
