@@ -334,6 +334,31 @@ stops the server at boot. Changing the terms URL does not ask existing accounts 
 that signups and profile edits refuse, ignoring case, so nobody can pose as your maintainers;
 set it once their accounts exist, since it refuses those names to new signups too.
 
+## A default workspace
+
+`RIM_DEFAULT_WORKSPACE` (commented out in `deploy/.env.example`) names a workspace on this
+server that every new account joins as a Member, whichever way it signs up: open,
+proof-of-work, with an instance invite or a workspace invite, with a key or a password. The
+account joins as soon as it exists and gets the workspace's public channels like any new member,
+so people land where others already are instead of in an empty direct space. Clients read the
+workspace from `serverInfo.defaultWorkspace`. Unset, nothing changes: a new account joins only
+the workspace its invite names.
+
+Create the workspace in the app, look its id up, set it in `deploy/.env` and run `dc up -d`:
+
+```sh
+dc exec -T postgres psql -U rim -d rim -c "SELECT id, name FROM server WHERE kind = 'workspace'"
+```
+
+A value that is not a workspace id, a workspace that does not exist on this server, and the
+direct space each stop the server at boot. Accounts that existed before are not added; invite
+them. An account already in the workspace, or banned from it, is left as it is.
+`RIM_LIMIT_MEMBERS_PER_WORKSPACE` does not keep a new account out of the default workspace, but
+an invite to it still follows the cap. A workspace deleted while the server runs stops the joins
+until the setting changes, and the next start refuses its id. The workspace's channels are
+ordinary plaintext channels; DMs and encrypted groups are untouched, and other servers see an
+ordinary membership.
+
 ## Who may start a DM
 
 `RIM_DM_INBOUND`, `RIM_DM_OUTBOUND` and `RIM_DM_PARTNERS` (commented out in

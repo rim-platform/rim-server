@@ -134,6 +134,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   unread. `Notification.reactionEmoji`, `Notification.reactedBy`, the setting
   `NotificationSettings.reactions` / `UpdateNotificationSettingsInput.reactions` (default on),
   and `reaction_emoji` / `reaction_by` on the `NotificationDue` event.
+- `RIM_DEFAULT_WORKSPACE`: the id of a workspace on this server that every new account joins as
+  a Member, with its public channels, whichever way it signs up, so people land where others
+  already are. GraphQL `ServerInfo.defaultWorkspace` names it, null when unset. A workspace that
+  does not exist here, or the direct space, stops the server at boot.
 
 ### Changed
 

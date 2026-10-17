@@ -218,6 +218,11 @@ them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup witho
 another URL, answers `VALIDATION`. The server records the acceptance and its time on the
 account. Without terms on the server the field is ignored.
 
+When the server names a default workspace (`serverInfo.defaultWorkspace` is set), every signup
+makes the new account a Member of it, with its public channels, before the signup answers. The
+payload's `serverId` still names only the workspace of a workspace invite; a client opens the
+default workspace from `serverInfo`.
+
 `logout` ends the session and clears both cookies; `logoutOtherSessions` ends every other
 session of the account, and so does `enrollIdentityKey`, which binds the calling session to the
 new device. Each also closes the WebSocket connections of the sessions it ends (see
@@ -508,6 +513,9 @@ each list.
   every account (`RIM_DM_INBOUND`, `RIM_DM_OUTBOUND`, `RIM_DM_PARTNERS`; "Who May Start A DM" in
   `messaging.md`). A client shows them read-only and explains a greyed choice with
   `myDmSettings.outsideFloorFrom`.
+- **`defaultWorkspace`**: the id of the workspace every new account joins as a Member
+  (`RIM_DEFAULT_WORKSPACE`), or null when the server names none. After a signup a client can
+  open it instead of the empty direct space.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

@@ -28,6 +28,15 @@ only, and the operator invites each person (`rim-server invite create`, "The fir
 colleagues reach each other at once; its Owner can still set `REQUESTS` for a large workspace
 (`setWorkspaceDmPolicy`).
 
+Name the company's workspace as the server's default workspace, so every person the operator
+invites joins it, with its public channels, the moment their account exists ("A default
+workspace" in `docs/self-hosting.md`):
+
+```sh
+# The id of the company's workspace on this server.
+RIM_DEFAULT_WORKSPACE=0199...
+```
+
 A partner's server id is what `rim-server server-key show` prints on that server as its server
 id, or the `serverId` of its `/.well-known/rim-server`. An id that is not one (`rims1_` and 43 characters)
 stops the server at start, as do values these settings do not take.
