@@ -140,7 +140,9 @@ may start a worker inside its frame; it inherits the frame's origin and policy.)
 A fixed page in rim-ui, `public/plugin-frame/v1/index.html` and `shell.js`. The web app serves it
 from its own origin at `/plugin-frame/v1/`; the desktop serves the same files through
 `rim-plugin://shell/v1/index.html` (the authority `shell` cannot collide with a plugin id, which
-has at least three dot-separated segments).
+has at least three dot-separated segments). The frame loads `shell.js` with `crossorigin`, and the
+servers send `Access-Control-Allow-Origin: *` for it: WebKit refuses a no-cors load from a
+custom scheme into a null-origin frame.
 
 | Option | Verdict |
 |---|---|
@@ -173,10 +175,13 @@ cookies the user has there.
 The baseline, a `<meta http-equiv="Content-Security-Policy">` in the shell file:
 
 ```
-default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' blob: 'unsafe-inline';
+default-src 'none'; script-src 'self' rim-plugin://shell blob: 'wasm-unsafe-eval'; style-src 'self' blob: 'unsafe-inline';
 img-src 'self' blob: data: https:; font-src blob: data:; media-src blob: data:; connect-src https: wss:;
 worker-src blob:; frame-src 'none'; form-action 'none'; base-uri 'none'
 ```
+
+`script-src` names `rim-plugin://shell` because WebKit does not match a sandboxed frame's
+custom-scheme page to `'self'`; the scheme serves only the shell's own files.
 
 `connect-src` lists `wss:` beside `https:` because the scheme source `https:` does not match a
 `wss:` URL, and policies intersect: without it no `wss://` origin a plugin lists could connect.
@@ -192,7 +197,9 @@ ships, not what a plugin downloads later.
 
 ### The load rule
 
-The host counts the iframe's `load` events. The first triggers the init message. Any later one
+The host counts the iframe's `load` events. The first triggers the init message; a panel frame
+instead waits for the `{type: "rim.frame.hello", v: 1}` the shell posts to its parent before any
+plugin byte runs, and gets its init once, after a hello whose source is that frame. Any later load
 means the frame navigated, which only the plugin's own code can do: the host removes the frame at
 once, marks the plugin stopped with "the plugin navigated its frame", and does not restart it. The
 port was transferred once, so a navigated document never holds it.
