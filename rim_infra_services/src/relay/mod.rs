@@ -1491,6 +1491,14 @@ impl RelayService for DefaultRelayService {
             .await?)
     }
 
+    async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> ServiceResult<bool> {
+        Ok(self
+            .repos
+            .relay_repo
+            .request_pending(user_id, conversation_id)
+            .await?)
+    }
+
     async fn pending_holders(&self, conversation_id: Uuid) -> ServiceResult<Vec<String>> {
         Ok(self
             .repos

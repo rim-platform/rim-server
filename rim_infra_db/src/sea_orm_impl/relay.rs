@@ -659,6 +659,15 @@ impl RelayRepository for SeaOrmRelayRepository {
             .collect())
     }
 
+    async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool> {
+        self.flag(
+            "SELECT EXISTS (SELECT 1 FROM relay_dm_request \
+             WHERE conversation_id = $2 AND user_id = $1 AND status = 'pending') AS flag",
+            vec![uuid(user_id), conversation_id.into()],
+        )
+        .await
+    }
+
     async fn conversation_hidden(
         &self,
         user_id: UserId,

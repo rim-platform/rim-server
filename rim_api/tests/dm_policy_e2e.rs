@@ -129,6 +129,17 @@ async fn listed(person: &Person, server: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `person` reads as `dmRequestPending` of `conversation` in `server`.
+async fn request_pending(person: &Person, server: &str, conversation: &str) -> Value {
+    person
+        .ok(
+            "query($s: ID!, $c: ID!) { conversation(serverId: $s, conversationId: $c) { dmRequestPending } }",
+            json!({ "s": server, "c": conversation }),
+        )
+        .await["conversation"]["dmRequestPending"]
+        .clone()
+}
+
 async fn direct_space(person: &Person) -> String {
     person.direct_space().await
 }
@@ -177,6 +188,25 @@ async fn a_co_members_dm_is_a_request_when_the_recipient_chose_requests() {
         "a request is not a live conversation"
     );
     assert!(listed(&carol, &acme).await.contains(&from_carol));
+    // Carol sees her DM wait for Bob; Bob, its recipient, has nothing pending from her side.
+    assert_eq!(
+        request_pending(&carol, &acme, &from_carol).await,
+        json!(true)
+    );
+    assert_eq!(
+        request_pending(&bob, &acme, &from_carol).await,
+        json!(false)
+    );
+    // A channel has no DM request at all.
+    let channels = carol
+        .ok(
+            "query($s: ID!) { channels(serverId: $s, dir: AFTER, limit: 10) { items { id dmRequestPending } } }",
+            json!({ "s": acme }),
+        )
+        .await;
+    let channel = &channels["channels"]["items"][0];
+    assert!(channel["id"].is_string(), "{channels}");
+    assert_eq!(channel["dmRequestPending"], Value::Null);
 
     // Alice, the owner, is never held.
     let from_alice = created(&dm(&a, &alice, &acme, &bob).await);
@@ -198,6 +228,10 @@ async fn a_co_members_dm_is_a_request_when_the_recipient_chose_requests() {
     )
     .await;
     assert!(listed(&bob, &acme).await.contains(&from_carol));
+    assert_eq!(
+        request_pending(&carol, &acme, &from_carol).await,
+        json!(false)
+    );
 
     // Carol messaged Bob first, so he is her contact: his DM back is no request, even once she
     // takes Acme's members' DMs as requests.

@@ -34,6 +34,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   `DmOutsideFloor`, `DmMembers`, `DmOutside`, `DmFloorSourceKind`. A workspace DM a member takes
   as a request now goes through their request inbox. `docs/operations/closed-company-server.md`
   is the recipe for a server closed to DMs from outside or open to partners only.
+- GraphQL `Conversation.dmRequestPending`: for a DM, true while the other member's DM request
+  for it is pending, so the sender can show that their messages wait for acceptance; null for
+  groups and channels.
 
 - GraphQL `ServerInfo.signupRequiresKeys`: true when new accounts sign up with a key only and
   `signupWithInvite` is refused, so a client offers only the key signup.

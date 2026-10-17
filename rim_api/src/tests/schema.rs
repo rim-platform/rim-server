@@ -324,12 +324,13 @@ async fn server_info_reports_the_dm_settings() {
 }
 
 /// The DM settings' types, fields and roots, with their exact signatures; `Server` ends with
-/// its DM rules.
+/// its DM rules and `Conversation` with `dmRequestPending`.
 #[test]
 fn dm_policy_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "dmOutsideFloor: DmOutsideFloor dmMemberDefault: DmMembers }",
+        "predecessor: ConversationPredecessor dmRequestPending: Boolean }",
         "myDmSettings: MyDmSettings!",
         "setWorkspaceDmPolicy(workspaceId: ID!, outsideFloor: DmOutsideFloor!, \
          memberDefault: DmMembers!): WorkspaceDmPolicy!",

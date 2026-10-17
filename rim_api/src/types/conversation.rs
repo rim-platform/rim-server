@@ -144,6 +144,40 @@ impl Conversation {
             .map_err(crate::errors::map_service_error)?;
         Ok(predecessor.map(Into::into))
     }
+
+    /// For a DM: whether the other member's DM request for it is still pending, so the caller
+    /// sees their messages wait for acceptance; false once it is accepted or ignored, when
+    /// there is none, and for another member whose relay is another server. Null for groups
+    /// and channels.
+    async fn dm_request_pending(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<bool>> {
+        if self.conversation_type != ConversationTypeEnum::Direct {
+            return Ok(None);
+        }
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let Ok(federation) = ctx.data::<crate::federation::FederationContext>() else {
+            return Ok(Some(false));
+        };
+        let me = async_graphql::ID(actor.to_string());
+        let Some(other) = self
+            .member_ids
+            .iter()
+            .chain(&self.pending_member_ids)
+            .find(|id| **id != me)
+        else {
+            return Ok(Some(false));
+        };
+        let conversation_id =
+            crate::ids::parse_uuid_id::<rim_core::conversation::model::ConversationId>(&self.id)?;
+        let pending = federation
+            .relay
+            .request_pending(crate::ids::parse_uuid_id(other)?, conversation_id.into())
+            .await
+            .map_err(crate::errors::map_service_error)?;
+        Ok(Some(pending))
+    }
 }
 
 impl Conversation {

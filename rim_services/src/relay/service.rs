@@ -148,6 +148,13 @@ pub trait RelayService: Send + Sync {
         conversation_id: uuid::Uuid,
     ) -> ServiceResult<bool>;
 
+    /// Whether a local user's DM request for a conversation is pending.
+    async fn request_pending(
+        &self,
+        user_id: UserId,
+        conversation_id: uuid::Uuid,
+    ) -> ServiceResult<bool>;
+
     /// Local users whose request for a direct-space conversation is pending, by principal id.
     async fn pending_holders(&self, conversation_id: uuid::Uuid) -> ServiceResult<Vec<String>>;
 

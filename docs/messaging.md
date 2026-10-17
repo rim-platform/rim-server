@@ -93,6 +93,9 @@ decide, and each may only tighten the one above it:
   `inboxConversations` and `workspaceEvents`, and its notifications and unread counts out of
   theirs. Like the request inbox it needs server-to-server traffic to be on; without it workspace
   DMs arrive directly. Groups are unchanged: their members are added by someone already in them.
+- **The sender's view.** `Conversation.dmRequestPending` is true for a DM whose other member,
+  on this server, has not yet accepted it as a request; false once they did or when it was no
+  request, null for groups and channels.
 - **The settings.** `setMyDmSettings(outside: REQUESTS)` under a floor that refuses DMs from
   outside answers `VALIDATION` naming it; `myDmSettings.effectiveOutside` says what applies and
   `outsideFloorFrom` where a refusing floor comes from (`OPERATOR`, or `WORKSPACE` with its id and

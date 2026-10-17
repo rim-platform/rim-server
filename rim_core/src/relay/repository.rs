@@ -135,6 +135,9 @@ pub trait RelayRepository: Send + Sync {
     /// with their principal ids.
     async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
 
+    /// Whether a local user's request for a conversation is pending.
+    async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool>;
+
     /// Whether a conversation stays out of a local user's list: their request for it is pending
     /// or ignored, or they blocked the direct-space conversation's creator.
     async fn conversation_hidden(&self, user_id: UserId, conversation_id: Uuid)
