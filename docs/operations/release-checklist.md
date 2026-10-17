@@ -1,10 +1,10 @@
 # Release checklist
 
 The steps that cut a rim-server release `v<version>`, in order. Copy the list into the release
-pull request and tick it there. Steps marked **FILL** wait for decisions not taken yet, such as
-the key that signs release tags; until then they are done by hand or skipped, and the pull
-request says which. Only the maintainer tags and publishes;
-`CONTRIBUTING.md`, "Who can merge and publish", lists the repository settings that enforce it.
+pull request and tick it there. Steps marked **FILL** wait for decisions not taken yet; until
+then they are done by hand or skipped, and the pull request says which. Only the maintainer
+tags and publishes; `CONTRIBUTING.md`, "Who can merge and publish", lists the repository settings
+that enforce it.
 
 The gates run locally on the release commit. CI counts only when it ran on that same commit.
 
@@ -122,9 +122,12 @@ yet, so the new images are built from the release commits with `deploy/compose.d
 - [ ] Roll the binary back to the previous release with `dc up -d --no-deps rim web`.
       `/readyz` answers 200 and the previous client still works.
 - [ ] Upgrade again: `migrate` has nothing to run and the server starts.
-- [ ] `deploy/restore-drill.sh` on a production backup (FILL: which server's backups), built from
-      the release commit: the new image applies its migrations to real data and reaches
-      `/readyz`.
+- [ ] `deploy/restore-drill.sh` on the latest nightly backup of the public relay
+      `relay.rim-platform.org`, with the image built from the release commit: the new image
+      applies its migrations to real data and reaches `/readyz`. The backup is encrypted with
+      `age`, and the identity that decrypts it is held offline by the maintainer, never on the
+      relay. Copy the archive to the scratch host and point `RIM_BACKUP_AGE_IDENTITY` at the
+      identity there for the drill.
 - [ ] Record the drill in the release pull request: `Drill run: <YYYY-MM-DD>`, the host, and the
       previous release it started from.
 
@@ -154,14 +157,31 @@ yet, so the new images are built from the release commits with `deploy/compose.d
 
 ## 7. Tag
 
+Release tags are signed with the maintainer's SSH key: the ed25519 key on the maintainer's GitHub
+account, registered there as a signing key as well as an authentication key, so GitHub marks the
+tag as verified. Git signs with it once it is set up on the machine:
+
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub   # the key's public key file
+```
+
 ```sh
 git checkout master && git pull
-git tag -s v<version> -m "rim-server <version>"       # FILL: the key that signs release tags
+git tag -s v<version> -m "rim-server <version>"
 git push origin v<version>
 ```
 
 - [ ] The tag points at the merged release commit, and `rim-server --version` built from it
       prints `<version>`. Only the maintainer can push a `v*` tag.
+- [ ] The tag shows "Verified" on GitHub. `git tag -v` checks it locally once an allowed-signers
+      file lists the key:
+
+      ```sh
+      echo "$(git config user.email) $(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
+      git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+      git tag -v v<version>
+      ```
 - [ ] rim-ui is tagged `v<version>` at its release commit the same way.
 
 ## 8. Publish
@@ -225,8 +245,10 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
 
 ## 9. After
 
-- [ ] Upgrade the public relay `relay.rim-platform.org` and the other servers the project runs
-      (FILL: which servers besides the relay) as `docs/operations/upgrade.md` says, a backup
-      first.
+- [ ] Upgrade the public relay `relay.rim-platform.org`, and any other server the project runs,
+      as `docs/operations/upgrade.md` says, a backup first.
 - [ ] Watch `/readyz`, the logs and the metrics (`docs/operations/metrics.md`) for a day.
-- [ ] Announce the release. FILL: where.
+- [ ] Announce the release on GitHub Releases, with the release notes the workflow creates, and
+      on the site's changelog page, `https://rim-platform.org/docs/changelog.html`, which renders
+      `CHANGELOG.md`: rebuild rim-platform.github.io from the release commit in its own pull
+      request so the page shows the release.
