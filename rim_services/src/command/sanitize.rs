@@ -19,8 +19,8 @@
 //!      silent redaction: the author learns their metadata is bad.
 //!
 //! This is defense-in-depth, not a silver bullet. The LLM provider's own
-//! jailbreak defenses handle novel payloads. Our job is to stop the
-//! obvious blunderbus attacks and keep the tool-definition surface clean.
+//! jailbreak defenses handle novel payloads. This module stops the
+//! obvious blunderbus attacks and keeps the tool-definition surface clean.
 
 use std::sync::LazyLock;
 
@@ -41,7 +41,7 @@ pub const MAX_INTENT_SAMPLE_LEN: usize = 200;
 pub const MAX_INTENT_SAMPLES_COUNT: usize = 5;
 
 /// Patterns that resemble LLM control tokens or structural markers. If any
-/// of these appear in NL metadata, we reject — there is no legitimate
+/// of these appear in NL metadata, the text is rejected — there is no legitimate
 /// reason for a command description to contain them.
 ///
 /// Covers: Anthropic-style `<system>` / `<tool_result>` / `<tool_use>`
@@ -102,15 +102,15 @@ pub enum SanitizeError {
 /// structural tag / instruction-override pattern.
 pub fn sanitize_nl_text(input: &str, max_len: usize) -> Result<String, SanitizeError> {
     // Length check first — before allocating a cleaned copy, reject giant
-    // inputs so we don't waste CPU on adversarial multi-MB payloads.
+    // inputs so no CPU is wasted on adversarial multi-MB payloads.
     // `chars().count()` iterates once, not twice — no size_hint shortcut
     // exists for UTF-8, but bounded by `max_len + 1` via `take`.
     let char_count = input.chars().take(max_len + 1).count();
     if char_count > max_len {
         // Report the true length so operators can distinguish "barely
         // over" from "obviously adversarial" when triaging a noisy
-        // plugin. CPU cost is bounded by the input we've already
-        // accepted from the caller; the error value itself is small.
+        // plugin. CPU cost is bounded by the input already accepted
+        // from the caller; the error value itself is small.
         let reported_len = input.chars().count();
         return Err(SanitizeError::TooLong {
             len: reported_len,
@@ -127,7 +127,7 @@ pub fn sanitize_nl_text(input: &str, max_len: usize) -> Result<String, SanitizeE
 
     // Pattern rejection runs on the CLEANED text, not the raw input. An
     // attacker might stash `</sys\u{200B}tem>` using zero-width joiners;
-    // by stripping those first we ensure the regex sees the normalized
+    // stripping those first ensures the regex sees the normalized
     // payload. This is the whole point of ordering these steps.
     if let Some(m) = STRUCTURAL_TAG_RE.find(&cleaned) {
         return Err(SanitizeError::StructuralTag {
@@ -176,10 +176,10 @@ pub fn sanitize_command_ai_fields(
     Ok(())
 }
 
-/// Return `true` if `c` is a control character we strip unconditionally.
+/// Return `true` if `c` is a control character stripped unconditionally.
 ///
-/// We allow `\t`, `\n`, `\r` (common whitespace) and reject everything
-/// else in the C0/C1 + zero-width / bidi-override ranges.
+/// `\t`, `\n`, `\r` (common whitespace) are allowed; everything else in
+/// the C0/C1 + zero-width / bidi-override ranges is stripped.
 fn is_disallowed_control_char(c: char) -> bool {
     match c {
         '\t' | '\n' | '\r' => false,
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn command_sanitizer_leaves_input_untouched_on_mid_list_error() {
         // If the second sample fails, the first sample's pre-sanitization
-        // value must survive — we build a cleaned vec and only swap on
+        // value must survive — the sanitizer builds a cleaned vec and only swaps on
         // success, so callers can retry with a fixed manifest.
         let mut def = dummy_command();
         let original = vec![

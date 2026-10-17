@@ -712,7 +712,7 @@ mod tests {
         let actor_id = UserId::new();
 
         let mut repo = MockMessageAttachmentRepository::new();
-        // Another request completed the attachment between our checks and our update.
+        // Another request completed the attachment between the service's checks and its update.
         repo.expect_try_complete_upload()
             .returning(|_, _, _, _, _, _| Ok(None));
         let mut storage = storing_storage();

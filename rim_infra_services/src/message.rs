@@ -869,7 +869,7 @@ impl DefaultMessageService {
             std::collections::HashMap::new()
         };
 
-        // Batch-load threads for messages that are thread replies, so we can
+        // Batch-load threads for messages that are thread replies, to
         // resolve thread_root_message_id (= thread.first_message_id).
         let thread_ids_from_messages: Vec<rim_core::message_thread::model::MessageThreadId> =
             messages
@@ -1425,7 +1425,7 @@ impl MessageService for DefaultMessageService {
         // Boundary computation mirrors the (SortOrder::Desc, dir) branches in
         // SeaOrmMessageRepository::list_messages — search results are always ordered
         // (sent_at DESC, id DESC), so only those two branches apply. The repo already fetched
-        // up to `clamped_limit + 1` rows so we can detect a next page here.
+        // up to `clamped_limit + 1` rows so a next page can be detected here.
         let has_cursor = query.cursor.is_some();
         let has_more_in_dir = hits.len() > clamped_limit as usize;
         if has_more_in_dir {

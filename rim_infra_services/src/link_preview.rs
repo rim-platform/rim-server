@@ -50,7 +50,7 @@ impl DefaultLinkPreviewService {
             // connect time — no check-then-connect gap for DNS rebinding.
             .dns_resolver(Arc::new(PublicOnlyResolver))
             // A proxy would make the resolver vet the proxy host instead of the target, and
-            // the proxy would then happily fetch internal URLs for us. Connect directly.
+            // the proxy would then happily fetch internal URLs. Connect directly.
             .no_proxy()
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 // Block redirects to private IPs (hostnames are vetted by the resolver)
@@ -201,7 +201,7 @@ impl LinkPreviewService for DefaultLinkPreviewService {
                 }
             };
 
-            // Skip if we got nothing useful
+            // Skip a page with nothing useful
             if og.title.is_none() && og.description.is_none() && og.image_url.is_none() {
                 continue;
             }

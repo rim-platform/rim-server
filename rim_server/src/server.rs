@@ -251,8 +251,8 @@ async fn graphql_handler(
         if let Err(resp) = enforce_csrf_for_batch(&req, &batch) {
             return resp;
         }
-        // `Schema::data` is only available via GraphQL execution context, so we inject auth here via
-        // AppData instead.
+        // `Schema::data` is only available via GraphQL execution context, so auth is injected here
+        // via AppData instead.
         let request_authenticator = req
             .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
             .map(|d| Arc::clone(d.get_ref()));

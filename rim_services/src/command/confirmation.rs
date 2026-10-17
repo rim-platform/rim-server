@@ -40,8 +40,7 @@ pub const DEFAULT_CONFIRMATION_TTL_SECS: i64 = 5;
 
 /// Maximum token lifetime accepted by `issue_in_band` regardless of caller
 /// preference. Defends against an upstream config bug minting tokens that
-/// outlive the user's intent. 60 s is generous; bump only with security
-/// review.
+/// outlive the user's intent. 60 s is generous.
 pub const MAX_CONFIRMATION_TTL_SECS: i64 = 60;
 
 // ---------------------------------------------------------------------------
@@ -49,8 +48,8 @@ pub const MAX_CONFIRMATION_TTL_SECS: i64 = 60;
 // ---------------------------------------------------------------------------
 
 /// A proof submitted by a caller to attempt execution of a dangerous command:
-/// the server previously issued `token` along with `args_hash`, and the
-/// caller now submits both.
+/// the `token` and `args_hash` the server issued in its challenge, submitted
+/// back together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmationProof {
     InBandToken {
@@ -140,8 +139,8 @@ pub trait ConfirmationStore: Send + Sync + std::fmt::Debug {
     fn take(&self, token: &str) -> Option<ClaimRecord>;
 }
 
-/// Public projection of [`IssuedClaims`] — the trait surface needs a
-/// concrete type but we don't want callers building claims by hand. Always
+/// Public projection of [`IssuedClaims`]: the trait surface needs a
+/// concrete type, and callers do not build claims by hand. Always
 /// construct via [`issue_in_band`].
 #[derive(Debug, Clone)]
 pub struct ClaimRecord(IssuedClaims);
@@ -187,11 +186,10 @@ impl ConfirmationStore for InMemoryConfirmationStore {
     fn put(&self, token: String, claims: ClaimRecord) {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
-            // Mutex poisoned ⇒ a previous holder panicked. We recover the
-            // guard rather than propagate, because losing the entire token
-            // store on a single bad insert would block every dangerous
-            // command site-wide. The poisoned data is still valid; we just
-            // continue.
+            // Mutex poisoned ⇒ a previous holder panicked. The guard is
+            // recovered rather than the error propagated, because losing the
+            // entire token store on a single bad insert would block every
+            // dangerous command site-wide. The poisoned data is still valid.
             Err(poisoned) => poisoned.into_inner(),
         };
         Self::sweep_expired_locked(&mut guard, Utc::now());
@@ -217,8 +215,8 @@ impl ConfirmationStore for InMemoryConfirmationStore {
 ///
 /// Canonicalization is critical: `{"a":1,"b":2}` and `{"b":2,"a":1}` are
 /// the same value but `serde_json::to_string` does not guarantee key order.
-/// We sort object keys recursively before serializing so the hash is stable
-/// across serializer versions and platforms.
+/// Object keys are sorted recursively before serializing so the hash is
+/// stable across serializer versions and platforms.
 pub fn canonical_args_hash(args: &Option<serde_json::Value>) -> String {
     let canonical = match args {
         None => serde_json::Value::Null,
@@ -227,8 +225,8 @@ pub fn canonical_args_hash(args: &Option<serde_json::Value>) -> String {
     let serialized = serde_json::to_string(&canonical)
         // Canonicalize never produces a non-serializable value (it only
         // sorts keys / preserves structure), so this `unwrap_or_default`
-        // is unreachable in practice. Defensive default keeps us out of
-        // panic territory per the no-unwrap rule.
+        // is unreachable in practice. The default avoids a panic in library
+        // code.
         .unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(serialized.as_bytes());
@@ -286,8 +284,8 @@ fn canonicalize_number(n: &serde_json::Number) -> serde_json::Value {
             // Round-tripped via i64 — the integer-equivalent canonical form.
             return Value::Number((f as i64).into());
         }
-        // Lossless f64 string repr; not parseable back as a JSON number
-        // but we never re-parse — only re-hash. Wrapping as String is
+        // Lossless f64 string repr; not parseable back as a JSON number,
+        // but it is only hashed, never re-parsed. Wrapping as String is
         // safe because this canonical form never leaves the hasher.
         return Value::String(format!("__f64__{f:?}"));
     }
@@ -305,11 +303,9 @@ fn canonicalize_number(n: &serde_json::Number) -> serde_json::Value {
 /// issued token could swap `selected_message_id` between issue and
 /// verify and delete a different message than the one the user OK'd.
 ///
-/// `selected_text`, `focused_surface`, and `active_panel` remain
-/// excluded: they're presentation-layer state that no dispatchable
-/// command consumes for security-relevant decisions. Adding any new
-/// command that does should re-bump the prefix to `v3|` and update this
-/// docstring + the corresponding test.
+/// `selected_text`, `focused_surface`, and `active_panel` are excluded:
+/// they're presentation-layer state that no dispatchable command consumes
+/// for security-relevant decisions.
 pub fn context_fingerprint(ctx: &Option<CommandContextDto>) -> String {
     let mut hasher = Sha256::new();
     match ctx {
@@ -458,7 +454,7 @@ pub fn verify_in_band(
 
     // Recompute args_hash from the *actual* args being executed. This is
     // what prevents time-of-check/time-of-use swaps: a caller can lie about `claimed_args_hash` all
-    // day, but it must match what we recompute.
+    // day, but it must match what the server recomputes.
     let actual_args_hash = canonical_args_hash(args);
     if actual_args_hash != claims.args_hash || claimed_args_hash != &claims.args_hash {
         return Err(ConfirmationError::ArgsMismatch);
@@ -566,7 +562,7 @@ mod tests {
         let args = None;
         let ctx = None;
 
-        // 1ms TTL — short enough to expire while we sleep, but
+        // 1ms TTL — short enough to expire while the test sleeps, but
         // representable as chrono::Duration.
         let challenge = issue_in_band_with_ttl(
             &store,
@@ -933,7 +929,7 @@ mod tests {
             args_hash: challenge.args_hash,
         };
         // Caller submits int-valued-floats at verify time — must succeed
-        // because we normalize.
+        // because numbers are normalized.
         let result = verify_in_band(&store, &proof, &actor, "x", &float_args, &None);
         assert!(
             result.is_ok(),

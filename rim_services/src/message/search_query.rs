@@ -4,7 +4,7 @@
 //! applied *in-memory* over a bounded batch and has neither date-range fields nor comparison
 //! operators, so it is the wrong tool for a SQL full-text-search predicate. Field *names/semantics*
 //! are aligned with lenses (author, has-link, has-attachment) for consistency, but this parser and
-//! its SQL application (see `rim_infra_db::sea_orm_impl::message`) are new and independent.
+//! its SQL application (see `rim_infra_db::sea_orm_impl::message`) are independent of them.
 //!
 //! This module is pure (no I/O): it only tokenizes and validates the raw query string. Resolving
 //! `from:`/`in:` tokens to concrete `UserId`/`ConversationId` values (and applying visibility) is

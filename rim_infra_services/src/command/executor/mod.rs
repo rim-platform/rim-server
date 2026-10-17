@@ -216,7 +216,7 @@ where
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             // Present and non-blank: parse strictly. A bad UUID here is a
-            // hard error; we don't fall through to context because that
+            // hard error, with no fall-through to context, because that
             // would mask LLM tool-call bugs.
             let uuid = uuid::Uuid::parse_str(trimmed)
                 .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{arg_name}`")))?;
@@ -368,7 +368,7 @@ pub(super) async fn resolve_channel_titles(
 /// Given the current reaction groups on a message, return whether the
 /// actor already has a reaction with the target emoji. `chat.toggle_reaction`
 /// uses this to decide whether a toggle call added or removed (the backend
-/// mutation is bidirectional; it doesn't hand us back a verb).
+/// mutation is bidirectional; it doesn't hand back a verb).
 pub(super) fn reaction_has_actor(
     groups: &[rim_services::message_reaction::dto::ReactionGroupDto],
     emoji: &str,

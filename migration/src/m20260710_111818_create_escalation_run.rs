@@ -73,8 +73,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Backs the boot-recovery scan (`EscalationRunRepository::list_active`) and any future
-        // "next due" poller.
+        // Backs the boot-recovery scan (`EscalationRunRepository::list_active`).
         manager
             .get_connection()
             .execute_unprepared(

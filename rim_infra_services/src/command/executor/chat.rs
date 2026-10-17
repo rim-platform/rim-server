@@ -27,8 +27,8 @@ pub(super) async fn list_channels(
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
-    // The capability gate already verified `chat.read` before we got
-    // here; this arm is a thin adapter from typed args → ConversationService
+    // The capability gate already verified `chat.read` before this
+    // point; this arm is a thin adapter from typed args → ConversationService
     // query → JSON payload. `dir = After` + a generous `limit` returns a
     // single page of channels; the command takes no cursor.
     let server_id = resolve_workspace_id::<rim_core::server::model::ServerId>(
@@ -94,9 +94,9 @@ pub(super) async fn create_channel(
     )?;
     let name = require_string_arg(&args, "name")?;
     // Optional `description` arg, stored as the channel topic.
-    // The conversation create call has no description field, so we
-    // create-then-update_topic. If `update_topic` fails after the
-    // channel is already created we propagate the error — the
+    // The conversation create call has no description field, so this
+    // creates, then calls update_topic. If `update_topic` fails after the
+    // channel is already created, the error is propagated — the
     // partial-success is visible to the caller (channel exists,
     // topic missing) which matches what they'd see in the UI if
     // they did this manually.

@@ -82,8 +82,8 @@ impl AuditLogService for DefaultAuditLogService {
         let caller_uuid: uuid::Uuid = caller.user_id.into();
         let workspace_id = query.server_id.map(ServerId::from);
 
-        // Track whether the cross-user+workspace branch fired so we can
-        // strip the targeted actor_user_id from the repo query below.
+        // Whether the cross-user+workspace branch fired, so the targeted
+        // actor_user_id is stripped from the repo query below.
         let mut strip_actor_filter = false;
 
         // SAFETY: keep in sync with the doc table above. The arm order encodes
@@ -274,7 +274,7 @@ mod tests {
     /// before any capability check fires.
     #[tokio::test]
     async fn cross_user_no_server_forbidden() {
-        // No capability check should fire — we short-circuit to PermissionDenied.
+        // No capability check should fire — the service short-circuits to PermissionDenied.
         let repo = MockAuditLogRepository::new();
         let cap_svc = MockCapabilityService::new();
 
@@ -641,7 +641,7 @@ mod tests {
         );
     }
 
-    // ── Legacy regression tests (updated for new gate) ────────────────────────
+    // ── Cross-user reads through the capability check ─────────────────────────
 
     /// Regression: mallory (no audit.read in W1) passes alice's user_id +
     /// workspace W1. Must be denied via the capability check.
@@ -684,9 +684,9 @@ mod tests {
     ///
     /// Mallory has `audit.read` in W1. She queries `actor_user_id=Alice,
     /// server_id=W1`. The cap check passes and the service returns Ok.
-    /// This test pins the happy path so a future arm-swap refactor (e.g.
-    /// accidentally flipping the `Some(other)` / `None` arms) breaks the build
-    /// rather than silently allowing or silently denying.
+    /// This test pins the happy path so swapping the arms (e.g. accidentally
+    /// flipping the `Some(other)` / `None` arms) breaks the build rather
+    /// than silently allowing or silently denying.
     #[tokio::test]
     async fn cross_user_member_workspace_ok() {
         let mut repo = MockAuditLogRepository::new();

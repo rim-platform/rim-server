@@ -280,7 +280,7 @@ pub(crate) async fn claim_token(
     match token {
         CheckedToken::InstanceInvite(invite) => {
             if !repos.instance_invite_repo.try_consume(invite.id).await? {
-                // Exhausted since we last checked — treat as invalid.
+                // Exhausted since the check — treat as invalid.
                 return Err(ServiceError::InvalidToken);
             }
             repos

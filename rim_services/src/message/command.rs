@@ -99,8 +99,7 @@ pub struct SearchMessagesQuery {
     pub limit: u32,
     pub cursor: Option<MessagePageCursor>,
     pub dir: PageDir,
-    // `include_deleted` intentionally removed: search never returns deleted messages, matching
-    // the forced behavior the old implementation already had. See `DefaultMessageService::search_messages`.
+    // No `include_deleted`: search never returns deleted messages.
 }
 
 #[derive(Debug, Clone)]

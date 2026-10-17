@@ -9,9 +9,9 @@ use crate::command::verb::TypedVerb;
 /// All writers (command.rs, macro_def.rs) MUST use the typed variant — never
 /// string literals — so the single definition here is the source of truth.
 ///
-/// The DB column remains `text` with a CHECK constraint (migration
+/// The DB column is `text` with a CHECK constraint (migration
 /// `m20260427_…_audit_outcome_widen_check`). The `AuditLogEntryDto.outcome`
-/// field is now this typed enum. Conversion to/from `String` happens only
+/// field is this typed enum. Conversion to/from `String` happens only
 /// at the repo boundary via `as_str()` / `TryFrom<&str>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditOutcome {

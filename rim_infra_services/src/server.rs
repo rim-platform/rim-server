@@ -149,8 +149,7 @@ impl DefaultServerService {
 /// as `max_channels` allows.
 ///
 /// If channel creation fails, a warning is logged but the error is **not**
-/// propagated — we never want a default-channel failure to abort server
-/// creation.
+/// propagated, so a default-channel failure never aborts server creation.
 async fn create_default_channels(
     conversation_repo: &dyn ConversationRepository,
     observers: &Observers,

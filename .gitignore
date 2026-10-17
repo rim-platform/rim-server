@@ -35,7 +35,7 @@ target/
 
 data/
 
-# Local tooling / generated (added during C1 commit)
+# Local tooling and generated output
 audit.log
 coverage/
 .claude/
