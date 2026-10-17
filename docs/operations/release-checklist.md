@@ -177,11 +177,11 @@ git push origin v<version>
 - [ ] The tag shows "Verified" on GitHub. `git tag -v` checks it locally once an allowed-signers
       file lists the key:
 
-      ```sh
-      echo "$(git config user.email) $(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
-      git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
-      git tag -v v<version>
-      ```
+    ```sh
+    echo "$(git config user.email) $(cat ~/.ssh/id_ed25519.pub)" >> ~/.ssh/allowed_signers
+    git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+    git tag -v v<version>
+    ```
 - [ ] rim-ui is tagged `v<version>` at its release commit the same way.
 
 ## 8. Publish
@@ -204,15 +204,15 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
 - [ ] Verify the signatures. The certificate must name each repository's release workflow at
       the tag; any other identity fails:
 
-      ```sh
-      v=<version>
-      cosign verify ghcr.io/rim-platform/rim-server:$v \
-        --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
-        --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      cosign verify ghcr.io/rim-platform/rim-web:$v \
-        --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
-        --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      ```
+    ```sh
+    v=<version>
+    cosign verify ghcr.io/rim-platform/rim-server:$v \
+      --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    cosign verify ghcr.io/rim-platform/rim-web:$v \
+      --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
 
       The digest cosign prints matches the one in the GitHub release notes, and
       `cosign verify-attestation --type spdxjson` with the same flags passes.
@@ -229,16 +229,16 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
 - [ ] Verify the checksums and the provenance. The certificate must name rim-ui's release
       workflow at the tag:
 
-      ```sh
-      v=<version>
-      gh release download v$v --repo rim-platform/rim-ui --dir rim-ui-$v
-      cd rim-ui-$v
-      cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
-        --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
-        --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      sha256sum --check --ignore-missing SHA256SUMS
-      gh attestation verify <one bundle> --repo rim-platform/rim-ui
-      ```
+    ```sh
+    v=<version>
+    gh release download v$v --repo rim-platform/rim-ui --dir rim-ui-$v
+    cd rim-ui-$v
+    cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+      --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    sha256sum --check --ignore-missing SHA256SUMS
+    gh attestation verify <one bundle> --repo rim-platform/rim-ui
+    ```
 - [ ] A broken desktop release is rolled back by marking its GitHub release as a pre-release,
       which moves the updater's `latest` back to the previous release, or by deleting its
       assets. Its version and images are never reused: the fix goes out as the next patch.
