@@ -383,6 +383,23 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
 
+    // The default workspace must be an ordinary workspace of this server; checked once the
+    // direct space exists, before any signup can run.
+    if let Some(workspace) = instance_policy.default_workspace {
+        rim_infra_services::default_workspace::check(
+            repos.server_repo.as_ref(),
+            s2s.direct_space_id,
+            workspace,
+        )
+        .await
+        .map_err(io_error("RIM_DEFAULT_WORKSPACE"))?;
+        tracing::info!(
+            target: "audit",
+            server_id = %workspace,
+            "RIM_DEFAULT_WORKSPACE is set: every new account joins this workspace"
+        );
+    }
+
     // The deny list is in force before the listener binds.
     let ip_block_service: Arc<dyn rim_services::ip_block::service::IpBlockService> =
         Arc::new(rim_infra_services::ip_block::DefaultIpBlockService::new(
@@ -474,6 +491,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             terms_url: instance_policy.terms_url.clone(),
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
+            default_workspace: instance_policy.default_workspace,
         },
         Arc::clone(&feature_gate),
         instance_limits,

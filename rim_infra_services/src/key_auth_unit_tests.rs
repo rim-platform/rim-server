@@ -537,6 +537,7 @@ mod tests {
         SignupRepos {
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             invite_repo: Arc::new(MockInviteRepository::new()),
+            server_repo: Arc::new(rim_core::server::repository::MockServerRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
@@ -2907,5 +2908,174 @@ mod tests {
             .publish_profile_card(card("Ada"))
             .await
             .expect("a small card");
+    }
+
+    // ── Default workspace ────────────────────────────────────────────────────────────────
+
+    /// Every workspace membership [`default_workspace_repos`] inserted.
+    type MemberLog = Arc<Mutex<Vec<(ServerId, UserId, ServerMemberRole)>>>;
+
+    /// Signup repositories holding the workspaces `default` and `invited_to`, one usable
+    /// instance invite and one usable workspace invite to `invited_to`, with a membership store
+    /// whose inserts are logged.
+    fn default_workspace_repos(
+        default: ServerId,
+        invited_to: ServerId,
+    ) -> (SignupRepos, MemberLog) {
+        let log: MemberLog = Arc::default();
+        let mut members = MockServerMemberRepository::new();
+        let seen = Arc::clone(&log);
+        members
+            .expect_is_member()
+            .returning(move |server_id, user_id| {
+                Ok(seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(s, u, _)| *s == server_id && *u == user_id))
+            });
+        let seen = Arc::clone(&log);
+        members
+            .expect_add_member()
+            .returning(move |server_id, user_id, member_role| {
+                seen.lock().unwrap().push((server_id, user_id, member_role));
+                Ok(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role,
+                    joined_at: Utc::now(),
+                })
+            });
+        let mut servers = rim_core::server::repository::MockServerRepository::new();
+        servers.expect_get_by_id().returning(move |id| {
+            Ok([default, invited_to]
+                .contains(&id)
+                .then(|| rim_core::server::model::Server {
+                    id,
+                    name: "Lobby".to_string(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }))
+        });
+        let mut conversations = MockConversationRepository::new();
+        conversations
+            .expect_list_public_channel_ids()
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        let mut instance_invites = MockInstanceInviteRepository::new();
+        instance_invites
+            .expect_get_by_token_hash()
+            .returning(|_| Ok(Some(instance_invite(Duration::minutes(15), None))));
+        instance_invites
+            .expect_try_consume()
+            .returning(|_| Ok(true));
+        let mut invites = MockInviteRepository::new();
+        invites.expect_get_by_token_hash().returning(move |_| {
+            Ok(Some(Invite {
+                id: InviteId::new(),
+                server_id: invited_to,
+                created_by_user_id: UserId::new(),
+                token_hash: hash_token("rim_inv"),
+                created_at: Utc::now(),
+                expires_at: None,
+                max_uses: 1,
+                use_count: 0,
+                revoked_at: None,
+                role: ServerMemberRole::Member,
+            }))
+        });
+        invites.expect_try_consume().returning(|_| Ok(true));
+        let (users, _) = crate::signup::tests::chain_recorder();
+        let signup = SignupRepos {
+            instance_invite_repo: Arc::new(instance_invites),
+            invite_repo: Arc::new(invites),
+            server_repo: Arc::new(servers),
+            server_member_repo: Arc::new(members),
+            conversation_repo: Arc::new(conversations),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            moderation_repo: Arc::new(MockModerationRepository::permissive()),
+            user_repo: Arc::new(users),
+        };
+        (signup, log)
+    }
+
+    /// Every key-only signup, open, proof-of-work, with an instance invite and with a
+    /// workspace invite, makes the new account a Member of the default workspace and announces
+    /// it there; the workspace invite also joins its own workspace.
+    #[tokio::test]
+    async fn every_key_signup_joins_the_default_workspace() {
+        let default = ServerId::new();
+        let invited_to = ServerId::new();
+        for path in ["open", "pow", "instance invite", "workspace invite"] {
+            let (signup, log) = default_workspace_repos(default, invited_to);
+            let events = Arc::new(Recording::default());
+            let h = signup_harness(signup, Arc::clone(&events) as Arc<dyn Broadcaster>);
+            let h = Harness {
+                state: h.state,
+                svc: h
+                    .svc
+                    .with_server_id(A8_RELAY.to_string())
+                    .with_default_workspace(Some(default)),
+                revocations: h.revocations,
+            };
+            let p = h.present(1).await;
+            let cmd = match path {
+                "open" => open_cmd(&p, "ada"),
+                "pow" => pow_cmd(&p, "ada", 16, "AAAAAAAAkaM"),
+                "instance invite" => signup_cmd(
+                    &p,
+                    "ada",
+                    RegistrationMode::InviteOnly,
+                    Some(SignupToken::InstanceInvite("rim_iinv".to_string())),
+                ),
+                _ => signup_cmd(
+                    &p,
+                    "ada",
+                    RegistrationMode::InviteOnly,
+                    Some(SignupToken::WorkspaceInvite("rim_inv".to_string())),
+                ),
+            };
+            let res = h.svc.signup_with_key(cmd).await.expect(path);
+            let mut expected = vec![(default, res.user_id, ServerMemberRole::Member)];
+            let mut announced = vec![default];
+            if path == "workspace invite" {
+                expected.insert(0, (invited_to, res.user_id, ServerMemberRole::Member));
+                announced.insert(0, invited_to);
+                assert_eq!(res.server_id, Some(invited_to), "{path}");
+            } else {
+                assert_eq!(res.server_id, None, "{path}");
+            }
+            assert_eq!(*log.lock().unwrap(), expected, "{path}");
+            let joined: Vec<ServerId> = events
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    WorkspaceEvent::MemberJoined {
+                        workspace_id,
+                        user_id,
+                        ..
+                    } if *user_id == res.user_id => Some(*workspace_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(joined, announced, "{path}");
+        }
+    }
+
+    /// Without a default workspace a key-only signup joins nothing.
+    #[tokio::test]
+    async fn without_a_default_workspace_a_key_signup_joins_nothing() {
+        let (signup, log) = default_workspace_repos(ServerId::new(), ServerId::new());
+        let events = Arc::new(Recording::default());
+        let h = signup_harness(signup, Arc::clone(&events) as Arc<dyn Broadcaster>);
+        let p = h.present(1).await;
+        h.svc
+            .signup_with_key(open_cmd(&p, "ada"))
+            .await
+            .expect("open signup");
+        assert!(log.lock().unwrap().is_empty());
+        assert!(events.0.lock().unwrap().is_empty());
     }
 }

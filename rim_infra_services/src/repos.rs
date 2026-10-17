@@ -163,6 +163,7 @@ impl AuthRepos {
         crate::signup::SignupRepos {
             instance_invite_repo: Arc::clone(&self.instance_invite_repo),
             invite_repo: Arc::clone(&self.invite_repo),
+            server_repo: Arc::clone(&self.server_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),

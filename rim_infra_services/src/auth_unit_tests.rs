@@ -2931,4 +2931,266 @@ mod tests {
             "6.6.6.6 must still be held to alice's backstop"
         );
     }
+
+    // ── Default workspace ────────────────────────────────────────────────────
+
+    /// Every workspace membership a [`members_recording`] store inserted.
+    type MemberLog = Arc<std::sync::Mutex<Vec<(ServerId, UserId, ServerMemberRole)>>>;
+
+    /// Server membership backed by a log: `is_member` reads it and `add_member` appends to it.
+    fn members_recording() -> (MockServerMemberRepository, MemberLog) {
+        let log: MemberLog = Arc::default();
+        let mut repo = MockServerMemberRepository::new();
+        let seen = Arc::clone(&log);
+        repo.expect_is_member()
+            .returning(move |server_id, user_id| {
+                Ok(seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(s, u, _)| *s == server_id && *u == user_id))
+            });
+        let seen = Arc::clone(&log);
+        repo.expect_add_member()
+            .returning(move |server_id, user_id, member_role| {
+                seen.lock().unwrap().push((server_id, user_id, member_role));
+                Ok(ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role,
+                    joined_at: Utc::now(),
+                })
+            });
+        (repo, log)
+    }
+
+    /// A workspace store holding the workspaces `ids`.
+    fn servers_holding(ids: Vec<ServerId>) -> MockServerRepository {
+        let mut repo = MockServerRepository::new();
+        repo.expect_get_by_id().returning(move |id| {
+            Ok(ids.contains(&id).then(|| Server {
+                id,
+                name: "Lobby".to_string(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }))
+        });
+        repo
+    }
+
+    /// Keeps every event broadcast.
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<rim_services::events::WorkspaceEvent>>);
+
+    impl rim_services::events::Broadcaster for Recording {
+        fn broadcast(&self, event: rim_services::events::WorkspaceEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// The workspaces a `MemberJoined` event announced `user_id` in.
+    fn joined_events(events: &Recording, user_id: UserId) -> Vec<ServerId> {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                rim_services::events::WorkspaceEvent::MemberJoined {
+                    workspace_id,
+                    user_id: u,
+                    ..
+                } if *u == user_id => Some(*workspace_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A user store for one password signup creating `user_id`.
+    fn user_repo_creating(user_id: UserId) -> MockUserRepository {
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_find_by_username().returning(|_| Ok(None));
+        user_repo.expect_is_email_blocked().returning(|_| Ok(false));
+        user_repo.expect_find_by_email().returning(|_| Ok(None));
+        user_repo
+            .expect_record_invite_chain()
+            .returning(|_, _, _| Ok(()));
+        user_repo
+            .expect_create_user()
+            .returning(move |new| Ok(make_user(user_id, &new.username)));
+        user_repo
+    }
+
+    /// A password signup service over `members` and `servers`, with one usable instance invite
+    /// and one usable workspace invite to `invited_to`, joining new accounts to `default`.
+    fn default_workspace_svc(
+        user_id: UserId,
+        members: MockServerMemberRepository,
+        servers: MockServerRepository,
+        invited_to: ServerId,
+        default: Option<ServerId>,
+        events: &Arc<Recording>,
+    ) -> DefaultAuthService {
+        let invite = make_instance_invite(InstanceInviteId::new(), 1, 0);
+        let mut instance_invites = MockInstanceInviteRepository::new();
+        instance_invites
+            .expect_get_by_token_hash()
+            .returning(move |_| Ok(Some(invite.clone())));
+        instance_invites
+            .expect_try_consume()
+            .returning(|_| Ok(true));
+        let mut invites = MockInviteRepository::new();
+        invites.expect_get_by_token_hash().returning(move |_| {
+            Ok(Some(Invite {
+                id: InviteId::new(),
+                server_id: invited_to,
+                created_by_user_id: UserId::new(),
+                token_hash: "hash".to_string(),
+                expires_at: None,
+                max_uses: 1,
+                use_count: 0,
+                revoked_at: None,
+                created_at: Utc::now(),
+                role: ServerMemberRole::Member,
+            }))
+        });
+        invites.expect_try_consume().returning(|_| Ok(true));
+        DefaultAuthService::new(
+            make_auth_repos_with_registration(
+                user_repo_creating(user_id),
+                servers,
+                members,
+                session_repo_creating(),
+                invites,
+                mock_conversation_repo(),
+                instance_invites,
+            ),
+            None,
+            Duration::hours(1),
+            Observers::new(Arc::clone(events) as Arc<dyn rim_services::events::Broadcaster>),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+        .with_default_workspace(default)
+    }
+
+    /// Open signup, instance invite and workspace invite each make the new account a Member of
+    /// the default workspace and announce it there; the workspace invite also joins its own
+    /// workspace.
+    #[tokio::test]
+    async fn every_password_signup_joins_the_default_workspace() {
+        let default = ServerId::new();
+        let invited_to = ServerId::new();
+        for path in 0..3 {
+            let user_id = UserId::new();
+            let (members, log) = members_recording();
+            let events = Arc::new(Recording::default());
+            let svc = default_workspace_svc(
+                user_id,
+                members,
+                servers_holding(vec![default, invited_to]),
+                invited_to,
+                Some(default),
+                &events,
+            );
+            let mut expected = vec![(default, user_id, ServerMemberRole::Member)];
+            match path {
+                0 => {
+                    svc.signup_open(SignupOpenCmd {
+                        username: "carol".to_string(),
+                        password: "s3cur3p4ss!".to_string(),
+                        remote_ip: "1.2.3.4".to_string(),
+                        email: "carol@example.com".to_string(),
+                        display_name: None,
+                        terms_accepted_url: None,
+                    })
+                    .await
+                    .expect("open signup");
+                }
+                1 => {
+                    svc.signup_with_instance_invite(SignupWithInstanceInviteCmd {
+                        instance_invite_token: "raw_token".to_string(),
+                        username: "carol".to_string(),
+                        password: "s3cur3p4ss!".to_string(),
+                        email: "carol@example.com".to_string(),
+                        display_name: None,
+                        terms_accepted_url: None,
+                    })
+                    .await
+                    .expect("instance invite signup");
+                }
+                _ => {
+                    svc.accept_invite(AcceptInviteCmd {
+                        invite_token: "token".to_string(),
+                        username: "carol".to_string(),
+                        password: "s3cur3p4ss!".to_string(),
+                        terms_accepted_url: None,
+                    })
+                    .await
+                    .expect("workspace invite signup");
+                    expected.insert(0, (invited_to, user_id, ServerMemberRole::Member));
+                }
+            }
+            assert_eq!(*log.lock().unwrap(), expected, "path {path}");
+            assert!(
+                joined_events(&events, user_id).contains(&default),
+                "path {path}"
+            );
+        }
+    }
+
+    /// A workspace invite to the default workspace itself joins it once, announced once.
+    #[tokio::test]
+    async fn a_workspace_invite_to_the_default_workspace_joins_it_once() {
+        let default = ServerId::new();
+        let user_id = UserId::new();
+        let (members, log) = members_recording();
+        let events = Arc::new(Recording::default());
+        let svc = default_workspace_svc(
+            user_id,
+            members,
+            servers_holding(vec![default]),
+            default,
+            Some(default),
+            &events,
+        );
+        svc.accept_invite(AcceptInviteCmd {
+            invite_token: "token".to_string(),
+            username: "carol".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            terms_accepted_url: None,
+        })
+        .await
+        .expect("workspace invite signup");
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![(default, user_id, ServerMemberRole::Member)]
+        );
+        assert_eq!(joined_events(&events, user_id), vec![default]);
+    }
+
+    /// Without a default workspace an open signup joins nothing and announces nothing.
+    #[tokio::test]
+    async fn without_a_default_workspace_a_signup_joins_nothing() {
+        let user_id = UserId::new();
+        let mut members = MockServerMemberRepository::new();
+        members.expect_is_member().never();
+        members.expect_add_member().never();
+        let mut servers = MockServerRepository::new();
+        servers.expect_get_by_id().never();
+        let events = Arc::new(Recording::default());
+        let svc = default_workspace_svc(user_id, members, servers, ServerId::new(), None, &events);
+        svc.signup_open(SignupOpenCmd {
+            username: "carol".to_string(),
+            password: "s3cur3p4ss!".to_string(),
+            remote_ip: "1.2.3.4".to_string(),
+            email: "carol@example.com".to_string(),
+            display_name: None,
+            terms_accepted_url: None,
+        })
+        .await
+        .expect("open signup");
+        assert!(events.0.lock().unwrap().is_empty());
+    }
 }

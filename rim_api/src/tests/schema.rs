@@ -159,7 +159,7 @@ fn server_info_sdl_matches_the_contract() {
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
          signupRequiresKeys: Boolean! dmInbound: DmInbound! dmOutbound: DmOutbound! \
-         dmPartners: [String!]! }"
+         dmPartners: [String!]! defaultWorkspace: ID }"
     ));
     assert!(sdl.contains("enum DmInbound { OPEN REQUESTS PARTNERS NONE }"));
     assert!(sdl.contains("enum DmOutbound { ALLOWED PARTNERS NONE }"));
@@ -222,20 +222,23 @@ async fn server_info_reports_the_audit_retention() {
     assert_eq!(data["serverInfo"]["auditRetentionDays"], 90);
 }
 
-/// `serverInfo.instanceNotice`, `termsUrl` and `signupRequiresKeys` report the configured
-/// instance policy.
+/// `serverInfo.instanceNotice`, `termsUrl`, `signupRequiresKeys` and `defaultWorkspace` report
+/// the configured instance policy.
 #[tokio::test]
 async fn server_info_reports_the_instance_notice_and_terms() {
     let schema = schema_with_user_mock(MockUserService::new());
+    let workspace = rim_core::server::model::ServerId::new();
     let res = schema
         .execute(
-            Request::new("{ serverInfo { instanceNotice termsUrl signupRequiresKeys } }").data(
-                crate::types::InstancePolicy {
-                    notice: Some("Run by the Example club.".to_string()),
-                    terms_url: Some("https://rim.example.org/terms".to_string()),
-                    signup_requires_keys: true,
-                },
-            ),
+            Request::new(
+                "{ serverInfo { instanceNotice termsUrl signupRequiresKeys defaultWorkspace } }",
+            )
+            .data(crate::types::InstancePolicy {
+                notice: Some("Run by the Example club.".to_string()),
+                terms_url: Some("https://rim.example.org/terms".to_string()),
+                signup_requires_keys: true,
+                default_workspace: Some(workspace),
+            }),
         )
         .await;
     assert_no_errors(&res);
@@ -246,8 +249,24 @@ async fn server_info_reports_the_instance_notice_and_terms() {
             "instanceNotice": "Run by the Example club.",
             "termsUrl": "https://rim.example.org/terms",
             "signupRequiresKeys": true,
+            "defaultWorkspace": workspace.to_string(),
         })
     );
+}
+
+/// `serverInfo.defaultWorkspace` is null when the server names no default workspace.
+#[tokio::test]
+async fn server_info_default_workspace_is_null_when_unset() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(
+            Request::new("{ serverInfo { defaultWorkspace } }")
+                .data(crate::types::InstancePolicy::default()),
+        )
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert!(data["serverInfo"]["defaultWorkspace"].is_null());
 }
 
 /// `serverInfo.limits` reports the configured caps, null where none is set.

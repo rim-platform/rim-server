@@ -16,6 +16,7 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::server::model::ServerId;
+use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::{NewUser, User, UserId};
 use rim_core::user::repository::UserRepository;
@@ -34,6 +35,8 @@ use crate::util::{add_workspace_member, ensure_not_banned};
 pub struct SignupRepos {
     pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
     pub invite_repo: Arc<dyn InviteRepository>,
+    /// Finds the default workspace a new account joins.
+    pub server_repo: Arc<dyn ServerRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
@@ -503,6 +506,7 @@ pub(crate) mod tests {
         SignupRepos {
             instance_invite_repo: Arc::new(MockInstanceInviteRepository::new()),
             invite_repo: Arc::new(MockInviteRepository::new()),
+            server_repo: Arc::new(rim_core::server::repository::MockServerRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),

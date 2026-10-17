@@ -29,6 +29,7 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
+use crate::default_workspace;
 use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
 use crate::password_hashing::PasswordHashing;
@@ -71,6 +72,8 @@ pub struct DefaultAuthService {
     terms_url: Option<String>,
     /// Refuse every password signup.
     signup_requires_keys: bool,
+    /// The workspace every new account joins as a Member; `None` when there is none.
+    default_workspace: Option<rim_core::server::model::ServerId>,
 }
 
 impl DefaultAuthService {
@@ -109,6 +112,7 @@ impl DefaultAuthService {
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
             signup_requires_keys: false,
+            default_workspace: None,
         }
     }
 
@@ -196,6 +200,15 @@ impl DefaultAuthService {
         self
     }
 
+    /// Makes every new account a Member of `workspace`.
+    pub fn with_default_workspace(
+        mut self,
+        workspace: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.default_workspace = workspace;
+        self
+    }
+
     /// `Forbidden` ([`signup::KEYS_REQUIRED_REFUSAL`]) when password signups are refused.
     fn ensure_password_signup_allowed(&self, path: &str) -> ServiceResult<()> {
         if !self.signup_requires_keys {
@@ -266,6 +279,7 @@ impl DefaultAuthService {
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
             signup_requires_keys: false,
+            default_workspace: None,
         }
     }
 
@@ -777,13 +791,16 @@ impl AuthService for DefaultAuthService {
         signup::record_terms(repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // Joins the server, then consumes the invite; a failure rolls the transaction back.
+        let signup_repos = repos.signup_repos();
         signup::claim_token(
-            &repos.signup_repos(),
+            &signup_repos,
             &token,
             user.id,
             self.limits.members_per_workspace,
         )
         .await?;
+        let joined_default =
+            default_workspace::join(&signup_repos, self.default_workspace, user.id).await?;
 
         let (sess, raw_token, csrf) =
             Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
@@ -793,6 +810,7 @@ impl AuthService for DefaultAuthService {
         }
 
         signup::announce_claimed(&token, user.id, username, &self.observers);
+        default_workspace::announce(joined_default, user.id, username, &self.observers);
 
         Ok(AcceptInviteResultDto {
             user_id: user.id,
@@ -967,13 +985,16 @@ impl AuthService for DefaultAuthService {
         signup::record_terms(txn_repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
 
         // An invite used up since the pre-check is `InvalidToken`.
+        let signup_repos = txn_repos.signup_repos();
         signup::claim_token(
-            &txn_repos.signup_repos(),
+            &signup_repos,
             &token,
             user.id,
             self.limits.members_per_workspace,
         )
         .await?;
+        let joined_default =
+            default_workspace::join(&signup_repos, self.default_workspace, user.id).await?;
 
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
@@ -983,6 +1004,7 @@ impl AuthService for DefaultAuthService {
         }
 
         signup::announce_claimed(&token, user.id, username, &self.observers);
+        default_workspace::announce(joined_default, user.id, username, &self.observers);
 
         Ok(SignupResultDto {
             user_id: user.id,
@@ -1043,6 +1065,9 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
         signup::record_terms(txn_repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
+        let joined_default =
+            default_workspace::join(&txn_repos.signup_repos(), self.default_workspace, user.id)
+                .await?;
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
 
@@ -1050,6 +1075,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        default_workspace::announce(joined_default, user.id, username, &self.observers);
         // Audit: successful open-mode signup.
         tracing::info!(
             target: "audit",

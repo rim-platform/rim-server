@@ -75,6 +75,8 @@ pub struct FederationHooks {
     pub signup_requires_keys: bool,
     /// The operator's DM settings.
     pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
+    /// The workspace every new account joins as a Member; `None` when there is none.
+    pub default_workspace: Option<rim_core::server::model::ServerId>,
 }
 
 #[derive(Clone)]
@@ -162,7 +164,8 @@ impl DefaultAppServiceProvider {
             .with_password_hashing(federation.password_hashing.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
-            .with_signup_requires_keys(federation.signup_requires_keys),
+            .with_signup_requires_keys(federation.signup_requires_keys)
+            .with_default_workspace(federation.default_workspace),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -195,7 +198,8 @@ impl DefaultAppServiceProvider {
             .with_limits(limits)
             .with_reserved_names(federation.reserved_names.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
-            .with_terms_url(federation.terms_url.clone());
+            .with_terms_url(federation.terms_url.clone())
+            .with_default_workspace(federation.default_workspace);
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }

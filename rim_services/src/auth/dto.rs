@@ -61,8 +61,8 @@ pub struct RequestAuthResultDto {
 
 /// Result of any signup path (instance invite, workspace invite, open).
 ///
-/// `server_id` is `Some` only when a workspace invite was used; the other signups land in
-/// "no workspaces yet" state.
+/// `server_id` is `Some` only when a workspace invite was used. The server's default workspace,
+/// which every signup joins when one is set, is not reported here.
 #[derive(Debug, Clone)]
 pub struct SignupResultDto {
     pub user_id: UserId,

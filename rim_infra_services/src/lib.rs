@@ -16,6 +16,9 @@ pub(crate) mod clock;
 pub mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
+/// Public for `rim_server`, whose composition root checks the configured default workspace at
+/// start.
+pub mod default_workspace;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
