@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::notification::model::{
-    DigestFrequency, DndPause, DndWindow, NotificationLevel, NotificationReason, UserNotification,
-    UserNotificationId, UserNotificationSettings,
+    DigestFrequency, DndPause, DndWindow, NotificationLevel, NotificationReaction,
+    NotificationReason, UserNotification, UserNotificationId, UserNotificationSettings,
 };
 use rim_core::notification::repository::UserNotificationCursor;
 use rim_core::server::model::ServerId;
@@ -18,6 +18,7 @@ pub struct NotificationSettingsDto {
     pub dnd: Option<DndWindow>,
     pub dnd_pause: DndPause,
     pub digest: DigestFrequency,
+    pub reactions: bool,
 }
 
 impl From<UserNotificationSettings> for NotificationSettingsDto {
@@ -29,6 +30,7 @@ impl From<UserNotificationSettings> for NotificationSettingsDto {
             dnd: s.dnd,
             dnd_pause: s.dnd_pause,
             digest: s.digest,
+            reactions: s.reactions,
         }
     }
 }
@@ -54,6 +56,8 @@ pub struct NotificationDto {
     pub reason: NotificationReason,
     pub created_at: DateTime<Utc>,
     pub read_at: Option<DateTime<Utc>>,
+    /// The latest reaction of a reaction notification; `None` for every other reason.
+    pub reaction: Option<NotificationReaction>,
 }
 
 impl From<UserNotification> for NotificationDto {
@@ -66,6 +70,7 @@ impl From<UserNotification> for NotificationDto {
             reason: n.reason,
             created_at: n.created_at,
             read_at: n.read_at,
+            reaction: n.reaction,
         }
     }
 }

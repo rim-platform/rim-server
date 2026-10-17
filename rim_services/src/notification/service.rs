@@ -8,8 +8,9 @@ use rim_core::repository::pagination::Page;
 use crate::ServiceResult;
 use crate::notification::command::{
     GetConversationNotificationLevelQuery, GetNotificationSettingsQuery, ListNotificationsQuery,
-    MarkNotificationsReadCmd, NotifyForMessageCmd, SetConversationNotificationLevelCmd,
-    SetDndPauseCmd, UnreadNotificationCountQuery, UpdateNotificationSettingsCmd,
+    MarkNotificationsReadCmd, NotifyForMessageCmd, NotifyForReactionCmd,
+    SetConversationNotificationLevelCmd, SetDndPauseCmd, UnreadNotificationCountQuery,
+    UpdateNotificationSettingsCmd,
 };
 use crate::notification::dto::{
     ConversationNotificationLevelDto, NotificationDto, NotificationPageCursor,
@@ -59,6 +60,12 @@ pub trait NotificationService: Send + Sync {
     /// their notifications and emit one `NotificationDue` per recipient. Returns the number of
     /// notifications created. Callers treat errors as best-effort (log, never fail the send).
     async fn notify_for_message(&self, cmd: NotifyForMessageCmd) -> ServiceResult<usize>;
+
+    /// Internal (not exposed over GraphQL): tell a message's author that someone reacted to it,
+    /// store or re-surface their one reaction notification for the message and emit
+    /// `NotificationDue`. Returns whether a notification was stored. Callers treat errors as
+    /// best-effort (log, never fail the reaction).
+    async fn notify_for_reaction(&self, cmd: NotifyForReactionCmd) -> ServiceResult<bool>;
 
     /// Internal: a message was deleted; drop its unread notifications (read ones stay).
     async fn forget_message(&self, message_id: MessageId) -> ServiceResult<u64>;

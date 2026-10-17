@@ -442,3 +442,19 @@ fn instance_moderation_sdl_describes_every_type_field_and_argument() {
     }
     assert!(undocumented.is_empty(), "undocumented: {undocumented:?}");
 }
+
+/// Reaction notifications: the reason, the notification's reaction fields and the setting, each
+/// appended after the existing members.
+#[test]
+fn notification_sdl_ends_with_the_reaction_fields() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "enum NotificationReason { DIRECT MENTION KEYWORD THREAD_REPLY ALL REACTION }",
+        "readAt: DateTime conversation: Conversation message: Message reactionEmoji: String \
+         reactedBy: User }",
+        "digest: DigestFrequency! reactions: Boolean! }",
+        "dnd: DndWindowInput digest: DigestFrequency! reactions: Boolean }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}

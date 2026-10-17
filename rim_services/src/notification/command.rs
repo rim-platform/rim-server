@@ -20,7 +20,7 @@ pub struct GetNotificationSettingsQuery {
 
 /// Replaces the editable settings. Keywords: at most 20, each 2 to 40 characters after
 /// trimming, stored lower-cased and deduplicated. The window's timezone must be an IANA name.
-/// The manual pause (`SetDndPauseCmd`) is left alone.
+/// The manual pause (`SetDndPauseCmd`) is left alone, and so is `reactions` when `None`.
 #[derive(Debug, Clone)]
 pub struct UpdateNotificationSettingsCmd {
     pub actor: Actor,
@@ -29,6 +29,7 @@ pub struct UpdateNotificationSettingsCmd {
     pub keywords: Vec<String>,
     pub dnd: Option<DndWindow>,
     pub digest: DigestFrequency,
+    pub reactions: Option<bool>,
 }
 
 /// Turns the manual do-not-disturb pause on (indefinitely or until an instant in the future)
@@ -102,6 +103,18 @@ pub struct NotifyForMessageCmd {
     /// The mentions of an encrypted message, from its authenticated data; `None` for a
     /// plaintext message, whose mentions are read from its text.
     pub encrypted_mentions: Option<EncryptedMentions>,
+}
+
+/// Internal: sent by the reaction service after `by` added `emoji` to `message`.
+/// `member_user_ids` is the conversation's member list (the same list its events go to).
+#[derive(Debug, Clone)]
+pub struct NotifyForReactionCmd {
+    pub server_id: ServerId,
+    pub conversation: Conversation,
+    pub message: Message,
+    pub member_user_ids: Vec<UserId>,
+    pub emoji: String,
+    pub by: UserId,
 }
 
 /// Who an encrypted message mentions, as its sender declared.

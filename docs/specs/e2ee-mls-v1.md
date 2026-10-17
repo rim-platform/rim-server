@@ -544,7 +544,7 @@ as one `EDITED` entry carrying the newest envelope.
   member with that `user.principal_id`; ids that are not current members are ignored; the author is
   skipped. `mentionAll` is treated as `@channel` / `@here`.
 - Notification rules run as today with what the server knows: `direct`, `mention`,
-  `thread_reply` and `all` work; `keyword` cannot (the desktop and web clients match keywords after
+  `thread_reply`, `all` and `reaction` (reactions are not encrypted) work; `keyword` cannot (the desktop and web clients match keywords after
   decrypting and show a local notification, without an inbox entry, only where the server sends
   none: a group at the `MENTIONS` level, for a message that does not mention the reader; the web
   client only where the person already allowed the site's notifications). Edits replace mention

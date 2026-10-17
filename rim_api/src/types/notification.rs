@@ -4,7 +4,7 @@ use async_graphql::{
     ComplexObject, Context, Enum, Error, ErrorExtensions, InputObject, Result, SimpleObject,
 };
 
-use super::{Conversation, Message, PageInfo};
+use super::{Conversation, Message, PageInfo, User};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::resolve::ResolveExt;
@@ -14,8 +14,8 @@ use crate::resolve::ResolveExt;
 pub enum NotificationLevel {
     /// Every message.
     All,
-    /// Direct messages, mentions (`<@user>`, `@channel`, `@here`), keyword hits and replies in
-    /// the viewer's threads.
+    /// Direct messages, mentions (`<@user>`, `@channel`, `@here`), keyword hits, replies in
+    /// the viewer's threads and reactions to the viewer's messages.
     Mentions,
     /// Nothing, mentions included.
     None,
@@ -50,6 +50,9 @@ pub enum NotificationReason {
     Keyword,
     ThreadReply,
     All,
+    /// Someone reacted to the viewer's message; one entry per message, re-surfaced by each new
+    /// reaction.
+    Reaction,
 }
 
 impl From<rim_core::notification::model::NotificationReason> for NotificationReason {
@@ -61,6 +64,7 @@ impl From<rim_core::notification::model::NotificationReason> for NotificationRea
             D::Keyword => Self::Keyword,
             D::ThreadReply => Self::ThreadReply,
             D::All => Self::All,
+            D::Reaction => Self::Reaction,
         }
     }
 }
@@ -149,6 +153,8 @@ pub struct NotificationSettings {
     /// When the manual pause ends; null while `dndPaused` is false or the pause has no end.
     pub dnd_paused_until: Option<chrono::DateTime<chrono::Utc>>,
     pub digest: DigestFrequency,
+    /// Whether reactions to the viewer's messages notify them (level `MENTIONS` or `ALL`).
+    pub reactions: bool,
 }
 
 impl From<rim_services::notification::dto::NotificationSettingsDto> for NotificationSettings {
@@ -171,6 +177,7 @@ impl From<rim_services::notification::dto::NotificationSettingsDto> for Notifica
             dnd_paused,
             dnd_paused_until,
             digest: value.digest.into(),
+            reactions: value.reactions,
         }
     }
 }
@@ -184,6 +191,8 @@ pub struct UpdateNotificationSettingsInput {
     /// Null turns the daily window off.
     pub dnd: Option<DndWindowInput>,
     pub digest: DigestFrequency,
+    /// Whether reactions to the viewer's messages notify them; null keeps the current value.
+    pub reactions: Option<bool>,
 }
 
 /// The viewer's level for one conversation, as returned by `setConversationNotificationLevel`.
@@ -221,6 +230,10 @@ pub struct Notification {
     pub reason: NotificationReason,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub read_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[graphql(skip)]
+    pub reaction_emoji: Option<String>,
+    #[graphql(skip)]
+    pub reacted_by_id: Option<async_graphql::ID>,
 }
 
 #[ComplexObject]
@@ -252,6 +265,19 @@ impl Notification {
             .map_err(map_service_error)?;
         Ok(messages.into_iter().next().map(Into::into))
     }
+
+    /// The latest reaction's emoji; null unless `reason` is `REACTION`.
+    async fn reaction_emoji(&self) -> Option<&str> {
+        self.reaction_emoji.as_deref()
+    }
+
+    /// Who added the latest reaction; null unless `reason` is `REACTION`.
+    async fn reacted_by(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        match &self.reacted_by_id {
+            Some(id) => ctx.load_user(id).await,
+            None => Ok(None),
+        }
+    }
 }
 
 impl From<rim_services::notification::dto::NotificationDto> for Notification {
@@ -264,6 +290,11 @@ impl From<rim_services::notification::dto::NotificationDto> for Notification {
             reason: value.reason.into(),
             created_at: value.created_at,
             read_at: value.read_at,
+            reacted_by_id: value
+                .reaction
+                .as_ref()
+                .map(|r| async_graphql::ID(r.by.to_string())),
+            reaction_emoji: value.reaction.map(|r| r.emoji),
         }
     }
 }

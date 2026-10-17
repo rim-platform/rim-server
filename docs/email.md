@@ -102,7 +102,8 @@ HTML part, linked to the message permalink
 `/threads/{thread}` for a reply; no links when the base URL is unset). The subject is only
 "`N unread notification(s) in <workspace>`", so `LogEmailSender`, which logs recipient and subject,
 never logs message text. After a successful send the listed notifications get `emailed_at`; a
-failed send leaves them pending for the next run. Deleted messages are skipped. The job assumes it
+failed send leaves them pending for the next run. Deleted messages are skipped. Reaction
+notifications are never part of a digest: they neither make one due nor appear in it. The job assumes it
 runs on one node.
 
 Notifications older than 90 days are deleted by an hourly retention task in the same loop.

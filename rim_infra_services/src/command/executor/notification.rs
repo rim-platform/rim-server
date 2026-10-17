@@ -232,6 +232,7 @@ mod tests {
             dnd: None,
             dnd_pause: pause,
             digest: rim_core::notification::model::DigestFrequency::Off,
+            reactions: true,
         }
     }
 

@@ -623,6 +623,8 @@ mod tests {
             message_id: MessageId::new(),
             reason: "mention".to_string(),
             quiet: true,
+            reaction_emoji: None,
+            reaction_by: None,
             member_user_ids: vec![recipient],
         }
     }
@@ -655,6 +657,8 @@ mod tests {
             message_id: MessageId::new(),
             reason: "all".to_string(),
             quiet: false,
+            reaction_emoji: None,
+            reaction_by: None,
             member_user_ids: vec![intruder],
         };
         assert!(!user_can_see_event(&event, &intruder.to_string()));
@@ -685,6 +689,40 @@ mod tests {
         assert_eq!(json["reason"], "mention");
         assert_eq!(json["quiet"], true);
         assert_eq!(json["user_id"], recipient.to_string());
+    }
+
+    /// A reaction notification adds the emoji and the reactor to the wire shape.
+    #[test]
+    fn reaction_notification_due_wire_shape() {
+        let recipient = UserId::new();
+        let reactor = UserId::new();
+        let WorkspaceEvent::NotificationDue {
+            workspace_id,
+            notification_id,
+            conversation_id,
+            message_id,
+            ..
+        } = notification_due(recipient)
+        else {
+            unreachable!("notification_due builds a NotificationDue");
+        };
+        let event = WorkspaceEvent::NotificationDue {
+            workspace_id,
+            user_id: recipient,
+            notification_id,
+            conversation_id,
+            message_id,
+            reason: "reaction".to_string(),
+            quiet: false,
+            reaction_emoji: Some("\u{1f44d}".to_string()),
+            reaction_by: Some(reactor),
+            member_user_ids: vec![recipient],
+        };
+        let json = serde_json::to_value(event).expect("serialize");
+        assert_eq!(json["reason"], "reaction");
+        assert_eq!(json["reaction_emoji"], "\u{1f44d}");
+        assert_eq!(json["reaction_by"], reactor.to_string());
+        assert!(json.get("member_user_ids").is_none());
     }
 
     #[test]

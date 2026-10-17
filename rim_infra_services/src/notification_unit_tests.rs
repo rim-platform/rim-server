@@ -12,8 +12,9 @@ use rim_core::message::model::{Message, MessageId};
 use rim_core::message::repository::MockMessageRepository;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::notification::model::{
-    DigestFrequency, DndPause, DndWindow, NewUserNotification, NotificationLevel,
-    NotificationReason, UserNotification, UserNotificationId, UserNotificationSettings,
+    DigestFrequency, DndPause, DndWindow, NewReactionNotification, NewUserNotification,
+    NotificationLevel, NotificationReaction, NotificationReason, UserNotification,
+    UserNotificationId, UserNotificationSettings,
 };
 use rim_core::notification::repository::MockNotificationRepository;
 use rim_core::notification_preference::model::NotificationPreference;
@@ -23,8 +24,8 @@ use rim_core::server_member::repository::MockServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
 use rim_services::notification::command::{
-    MarkNotificationsReadCmd, MarkNotificationsReadTarget, NotifyForMessageCmd, SetDndPauseCmd,
-    UpdateNotificationSettingsCmd,
+    MarkNotificationsReadCmd, MarkNotificationsReadTarget, NotifyForMessageCmd,
+    NotifyForReactionCmd, SetDndPauseCmd, UpdateNotificationSettingsCmd,
 };
 use rim_services::notification::service::NotificationService;
 use rim_services::{Actor, ServiceError};
@@ -128,6 +129,7 @@ fn stored(new: &NewUserNotification) -> UserNotification {
         created_at: Utc::now(),
         read_at: None,
         emailed_at: None,
+        reaction: None,
     }
 }
 
@@ -384,6 +386,7 @@ fn update_cmd(
         keywords,
         dnd,
         digest: DigestFrequency::Daily,
+        reactions: None,
     }
 }
 
@@ -562,4 +565,217 @@ async fn forget_message_deletes_unread_rows() {
         .returning(|_| Box::pin(async { Ok(2) }));
     let (svc, _) = mocks.build();
     assert_eq!(svc.forget_message(message_id).await.expect("forget"), 2);
+}
+
+/// The row `upsert_reaction_notification` stores for `new`.
+fn stored_reaction(new: &NewReactionNotification) -> UserNotification {
+    UserNotification {
+        id: UserNotificationId::new(),
+        user_id: new.user_id,
+        server_id: new.server_id,
+        conversation_id: new.conversation_id,
+        message_id: new.message_id,
+        reason: NotificationReason::Reaction,
+        created_at: Utc::now(),
+        read_at: None,
+        emailed_at: None,
+        reaction: Some(new.reaction.clone()),
+    }
+}
+
+/// Bob reacts to alice's message in a channel both are members of.
+struct ReactionSetup {
+    server_id: ServerId,
+    alice: UserId,
+    bob: UserId,
+    cmd: NotifyForReactionCmd,
+}
+
+fn reaction_setup() -> ReactionSetup {
+    let server_id = ServerId::new();
+    let conv = conversation(server_id, ConversationType::Channel);
+    let alice = UserId::new();
+    let bob = UserId::new();
+    let msg = message(conv.id, alice, "ship it");
+    ReactionSetup {
+        server_id,
+        alice,
+        bob,
+        cmd: NotifyForReactionCmd {
+            server_id,
+            conversation: conv,
+            message: msg,
+            member_user_ids: vec![alice, bob],
+            emoji: "\u{1f44d}".to_string(),
+            by: bob,
+        },
+    }
+}
+
+/// Mocks for the author's preference (none) and settings.
+fn reaction_mocks(settings: Option<UserNotificationSettings>) -> Mocks {
+    let mut mocks = Mocks::new();
+    mocks
+        .preference_repo
+        .expect_get_preference()
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+    mocks
+        .notification_repo
+        .expect_get_settings()
+        .returning(move |_, _| {
+            let s = settings.clone();
+            Box::pin(async move { Ok(s) })
+        });
+    mocks
+}
+
+/// The stored (inserted or re-surfaced) row is announced to the author only, with the emoji
+/// and the reactor; inside do-not-disturb the event is quiet.
+#[tokio::test]
+async fn reaction_notifies_the_author_with_emoji_and_reactor() {
+    for paused in [false, true] {
+        let s = reaction_setup();
+        let settings = paused.then(|| UserNotificationSettings {
+            dnd_pause: DndPause::Indefinite,
+            ..UserNotificationSettings::defaults(s.alice, s.server_id, Utc::now())
+        });
+        let mut mocks = reaction_mocks(settings);
+        let (alice, bob, message_id) = (s.alice, s.bob, s.cmd.message.id);
+        mocks
+            .notification_repo
+            .expect_upsert_reaction_notification()
+            .withf(move |n, _| {
+                n.user_id == alice
+                    && n.message_id == message_id
+                    && n.reaction
+                        == NotificationReaction {
+                            emoji: "\u{1f44d}".to_string(),
+                            by: bob,
+                        }
+            })
+            .times(1)
+            .returning(|n, _| {
+                let row = stored_reaction(&n);
+                Box::pin(async move { Ok(Some(row)) })
+            });
+        let (svc, events) = mocks.build();
+        assert!(svc.notify_for_reaction(s.cmd).await.expect("notify"));
+
+        let events = events.0.lock().expect("lock").clone();
+        let [
+            WorkspaceEvent::NotificationDue {
+                user_id,
+                message_id: event_message,
+                reason,
+                quiet,
+                reaction_emoji,
+                reaction_by,
+                member_user_ids,
+                ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("expected one NotificationDue, got {events:?}");
+        };
+        assert_eq!(*user_id, alice);
+        assert_eq!(*event_message, message_id);
+        assert_eq!(reason, "reaction");
+        assert_eq!(*quiet, paused);
+        assert_eq!(reaction_emoji.as_deref(), Some("\u{1f44d}"));
+        assert_eq!(*reaction_by, Some(bob));
+        assert_eq!(member_user_ids, &vec![alice]);
+    }
+}
+
+/// A row the message already has for another reason is left alone: nothing is announced.
+#[tokio::test]
+async fn reaction_on_a_message_with_another_notification_announces_nothing() {
+    let s = reaction_setup();
+    let mut mocks = reaction_mocks(None);
+    mocks
+        .notification_repo
+        .expect_upsert_reaction_notification()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+    let (svc, events) = mocks.build();
+    assert!(!svc.notify_for_reaction(s.cmd).await.expect("notify"));
+    assert!(events.0.lock().expect("lock").is_empty());
+}
+
+/// The `reactions` setting off stores nothing.
+#[tokio::test]
+async fn reactions_setting_off_stores_nothing() {
+    let s = reaction_setup();
+    let mut mocks = reaction_mocks(Some(UserNotificationSettings {
+        reactions: false,
+        ..UserNotificationSettings::defaults(s.alice, s.server_id, Utc::now())
+    }));
+    mocks
+        .notification_repo
+        .expect_upsert_reaction_notification()
+        .never();
+    let (svc, events) = mocks.build();
+    assert!(!svc.notify_for_reaction(s.cmd).await.expect("notify"));
+    assert!(events.0.lock().expect("lock").is_empty());
+}
+
+/// An own reaction, or one on the message of an author who left the conversation, loads and
+/// stores nothing.
+#[tokio::test]
+async fn own_reaction_or_departed_author_touches_nothing() {
+    let own = {
+        let mut s = reaction_setup();
+        s.cmd.by = s.alice;
+        s.cmd
+    };
+    let departed = {
+        let mut s = reaction_setup();
+        s.cmd.member_user_ids = vec![s.bob];
+        s.cmd
+    };
+    for cmd in [own, departed] {
+        let mut mocks = Mocks::new();
+        mocks.preference_repo.expect_get_preference().never();
+        mocks.notification_repo.expect_get_settings().never();
+        mocks
+            .notification_repo
+            .expect_upsert_reaction_notification()
+            .never();
+        let (svc, _) = mocks.build();
+        assert!(!svc.notify_for_reaction(cmd).await.expect("notify"));
+    }
+}
+
+/// `reactions: None` keeps the stored value; `Some` replaces it.
+#[tokio::test]
+async fn update_settings_keeps_reactions_unless_given() {
+    for (given, expected) in [(None, false), (Some(true), true)] {
+        let server_id = ServerId::new();
+        let mut mocks = Mocks::new().member(true);
+        mocks
+            .notification_repo
+            .expect_get_settings()
+            .returning(move |user, server| {
+                let s = UserNotificationSettings {
+                    reactions: false,
+                    ..UserNotificationSettings::defaults(user, server, Utc::now())
+                };
+                Box::pin(async move { Ok(Some(s)) })
+            });
+        mocks
+            .notification_repo
+            .expect_upsert_settings()
+            .withf(move |s| s.reactions == expected)
+            .times(1)
+            .returning(|s| Box::pin(async move { Ok(s) }));
+        let (svc, _) = mocks.build();
+        let dto = svc
+            .update_settings(UpdateNotificationSettingsCmd {
+                reactions: given,
+                ..update_cmd(server_id, vec![], None)
+            })
+            .await
+            .expect("update");
+        assert_eq!(dto.reactions, expected);
+    }
 }

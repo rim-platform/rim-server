@@ -11,8 +11,8 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::model::MessageId;
 use rim_core::message::repository::MessageRepository;
 use rim_core::notification::model::{
-    DndPause, DndWindow, KEYWORD_LEN, MAX_KEYWORDS, NewUserNotification, NotificationLevel,
-    UserNotificationSettings,
+    DndPause, DndWindow, KEYWORD_LEN, MAX_KEYWORDS, NewReactionNotification, NewUserNotification,
+    NotificationLevel, NotificationReaction, UserNotificationSettings,
 };
 use rim_core::notification::repository::{ListUserNotificationsParams, NotificationRepository};
 use rim_core::notification_preference::model::NotificationPreference;
@@ -25,8 +25,8 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::notification::command::{
     GetConversationNotificationLevelQuery, GetNotificationSettingsQuery, ListNotificationsQuery,
     MarkNotificationsReadCmd, MarkNotificationsReadTarget, NotifyForMessageCmd,
-    SetConversationNotificationLevelCmd, SetDndPauseCmd, UnreadNotificationCountQuery,
-    UpdateNotificationSettingsCmd,
+    NotifyForReactionCmd, SetConversationNotificationLevelCmd, SetDndPauseCmd,
+    UnreadNotificationCountQuery, UpdateNotificationSettingsCmd,
 };
 use rim_services::notification::dto::{
     ConversationNotificationLevelDto, NotificationDto, NotificationPageCursor,
@@ -35,7 +35,7 @@ use rim_services::notification::dto::{
 use rim_services::notification::service::NotificationService;
 use rim_services::{ServiceError, ServiceResult};
 
-use super::decide::{DecisionInput, decide};
+use super::decide::{DecisionInput, ReactionDecisionInput, decide, decide_reaction};
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
@@ -213,6 +213,7 @@ impl NotificationService for DefaultNotificationService {
                 keywords,
                 dnd,
                 digest: cmd.digest,
+                reactions: cmd.reactions.unwrap_or(current.reactions),
                 updated_at: Utc::now(),
                 ..current
             })
@@ -450,10 +451,77 @@ impl NotificationService for DefaultNotificationService {
                 message_id: row.message_id,
                 reason: row.reason.as_str().to_string(),
                 quiet: quiet_by_user.get(&row.user_id).copied().unwrap_or(false),
+                reaction_emoji: None,
+                reaction_by: None,
                 member_user_ids: vec![row.user_id],
             });
         }
         Ok(inserted.len())
+    }
+
+    #[instrument(name = "notification.notify_for_reaction", skip_all, fields(server_id = %cmd.server_id, conversation_id = %cmd.conversation.id, message_id = %cmd.message.id))]
+    async fn notify_for_reaction(&self, cmd: NotifyForReactionCmd) -> ServiceResult<bool> {
+        let author = cmd.message.sent_by;
+        // Skips the loads when no rule could pass; `decide_reaction` applies the same checks.
+        if author == cmd.by || cmd.message.is_deleted || !cmd.member_user_ids.contains(&author) {
+            return Ok(false);
+        }
+        let pref = self
+            .repos
+            .notification_preference_repo
+            .get_preference(author, cmd.conversation.id)
+            .await?;
+        let settings = self
+            .repos
+            .notification_repo
+            .get_settings(author, cmd.server_id)
+            .await?;
+        let now = Utc::now();
+        let Some(decision) = decide_reaction(&ReactionDecisionInput {
+            message: &cmd.message,
+            by: cmd.by,
+            members: &cmd.member_user_ids,
+            pref: pref.as_ref(),
+            settings: settings.as_ref(),
+            now,
+        }) else {
+            return Ok(false);
+        };
+
+        let Some(row) = self
+            .repos
+            .notification_repo
+            .upsert_reaction_notification(
+                NewReactionNotification {
+                    user_id: author,
+                    server_id: cmd.server_id,
+                    conversation_id: cmd.conversation.id,
+                    message_id: cmd.message.id,
+                    reaction: NotificationReaction {
+                        emoji: cmd.emoji,
+                        by: cmd.by,
+                    },
+                },
+                now,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        let reaction = row.reaction.clone();
+        self.observers.emit(WorkspaceEvent::NotificationDue {
+            workspace_id: row.server_id,
+            user_id: row.user_id,
+            notification_id: row.id,
+            conversation_id: row.conversation_id,
+            message_id: row.message_id,
+            reason: row.reason.as_str().to_string(),
+            quiet: decision.quiet,
+            reaction_emoji: reaction.as_ref().map(|r| r.emoji.clone()),
+            reaction_by: reaction.map(|r| r.by),
+            member_user_ids: vec![row.user_id],
+        });
+        Ok(true)
     }
 
     async fn forget_message(&self, message_id: MessageId) -> ServiceResult<u64> {

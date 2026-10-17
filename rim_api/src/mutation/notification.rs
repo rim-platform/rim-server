@@ -34,7 +34,8 @@ impl NotificationMutations {
     // ── Notification rules ────────────────────────────────────────────
 
     /// Replace the viewer's notification settings in the workspace (default level, keywords,
-    /// daily do-not-disturb window, digest). Keywords: at most 20, each 2 to 40 characters.
+    /// daily do-not-disturb window, digest, reactions). Keywords: at most 20, each 2 to 40
+    /// characters.
     async fn update_notification_settings(
         &self,
         ctx: &Context<'_>,
@@ -50,6 +51,7 @@ impl NotificationMutations {
                 keywords: input.keywords,
                 dnd: input.dnd.map(TryFrom::try_from).transpose()?,
                 digest: input.digest.into(),
+                reactions: input.reactions,
             })
             .await
             .map_err(map_service_error)?;

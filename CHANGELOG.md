@@ -129,6 +129,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   `-`, `_`, `.` or a space (`rim` reserves `rim-admin`, not `rimmer`). An account whose own
   username is reserved may still take a reserved display name. An empty entry stops the server
   at boot.
+- Reaction notifications: a reaction on someone's message tells its author with the new
+  `NotificationReason.REACTION`, one entry per message that each later reaction re-surfaces
+  unread. `Notification.reactionEmoji`, `Notification.reactedBy`, the setting
+  `NotificationSettings.reactions` / `UpdateNotificationSettingsInput.reactions` (default on),
+  and `reaction_emoji` / `reaction_by` on the `NotificationDue` event.
 
 ### Changed
 

@@ -4,8 +4,8 @@ use entity::{user_notification, user_notification_settings};
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::notification::model::{
-    DigestCandidate, DigestFrequency, DndPause, NewUserNotification, UserNotification,
-    UserNotificationId, UserNotificationSettings,
+    DigestCandidate, DigestFrequency, DndPause, NewReactionNotification, NewUserNotification,
+    NotificationReason, UserNotification, UserNotificationId, UserNotificationSettings,
 };
 use rim_core::notification::repository::{
     ListUserNotificationsParams, NotificationRepository, UserNotificationCursor,
@@ -109,6 +109,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
             dnd_paused_until: Set(dnd_paused_until),
             digest: Set(settings.digest.into()),
             updated_at: Set(settings.updated_at.into()),
+            reactions: Set(settings.reactions),
         };
         let model = user_notification_settings::Entity::insert(active)
             .on_conflict(
@@ -126,6 +127,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
                     user_notification_settings::Column::DndPausedUntil,
                     user_notification_settings::Column::Digest,
                     user_notification_settings::Column::UpdatedAt,
+                    user_notification_settings::Column::Reactions,
                 ])
                 .to_owned(),
             )
@@ -171,7 +173,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
                     AS t(id, user_id, server_id, conversation_id, message_id, reason)
                ON CONFLICT (user_id, message_id) DO NOTHING
                RETURNING id, user_id, server_id, conversation_id, message_id, reason, created_at,
-                         read_at, emailed_at"#,
+                         read_at, emailed_at, reaction_emoji, reaction_by"#,
             [
                 ids.into(),
                 user_ids.into(),
@@ -186,6 +188,45 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         .await
         .map_err(map_db_err)?;
         Ok(models.into_iter().map(Into::into).collect())
+    }
+
+    async fn upsert_reaction_notification(
+        &self,
+        notification: NewReactionNotification,
+        created_at: DateTime<Utc>,
+    ) -> RepoResult<Option<UserNotification>> {
+        let created_at: DateTimeWithTimeZone = created_at.into();
+        // The conditional update leaves a row with another reason alone and returns nothing.
+        let model = user_notification::Model::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"INSERT INTO user_notification
+                   (id, user_id, server_id, conversation_id, message_id, reason, created_at,
+                    reaction_emoji, reaction_by)
+               VALUES ($1, $2, $3, $4, $5, $6::notification_reason, $7, $8, $9)
+               ON CONFLICT (user_id, message_id) DO UPDATE
+               SET reaction_emoji = EXCLUDED.reaction_emoji,
+                   reaction_by = EXCLUDED.reaction_by,
+                   created_at = EXCLUDED.created_at,
+                   read_at = NULL
+               WHERE user_notification.reason = EXCLUDED.reason
+               RETURNING id, user_id, server_id, conversation_id, message_id, reason, created_at,
+                         read_at, emailed_at, reaction_emoji, reaction_by"#,
+            [
+                Uuid::from(UserNotificationId::new()).into(),
+                Uuid::from(notification.user_id).into(),
+                Uuid::from(notification.server_id).into(),
+                Uuid::from(notification.conversation_id).into(),
+                Uuid::from(notification.message_id).into(),
+                NotificationReason::Reaction.as_str().into(),
+                created_at.into(),
+                notification.reaction.emoji.into(),
+                Uuid::from(notification.reaction.by).into(),
+            ],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(model.map(Into::into))
     }
 
     async fn list_notifications(
@@ -427,7 +468,8 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         let daily_cutoff: DateTimeWithTimeZone = daily_cutoff.into();
         // `pending` aggregates unread, un-emailed rows; `last` is the newest `emailed_at` (the
         // previous digest) per user and workspace. The cutoff is the frequency's interval.
-        // Users without an email address (key-only accounts) are never candidates.
+        // Users without an email address (key-only accounts) are never candidates. Reaction
+        // notifications never count: digests list messages only.
         // Rows of conversations hidden by the request inbox wait until they are accepted.
         let rows = self
             .db
@@ -440,6 +482,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
                               COUNT(*) AS pending_count
                        FROM user_notification
                        WHERE read_at IS NULL AND emailed_at IS NULL
+                         AND reason <> 'reaction'
                          AND NOT {}
                        GROUP BY user_id, server_id
                    ),
@@ -513,6 +556,10 @@ impl NotificationRepository for SeaOrmNotificationRepository {
             .filter(user_notification::Column::ServerId.eq(Uuid::from(server_id)))
             .filter(user_notification::Column::ReadAt.is_null())
             .filter(user_notification::Column::EmailedAt.is_null())
+            .filter(
+                user_notification::Column::Reason
+                    .ne(entity::sea_orm_active_enums::NotificationReason::Reaction),
+            )
             .filter(not_hidden(user_id))
             .order_by_asc(user_notification::Column::CreatedAt)
             .order_by_asc(user_notification::Column::Id)

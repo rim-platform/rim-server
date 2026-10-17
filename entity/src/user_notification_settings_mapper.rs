@@ -26,6 +26,7 @@ impl From<user_notification_settings::Model> for UserNotificationSettings {
             dnd_pause,
             digest: m.digest.into(),
             updated_at: m.updated_at.into(),
+            reactions: m.reactions,
         }
     }
 }

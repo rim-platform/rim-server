@@ -11,6 +11,9 @@
 //! Access is checked again when the digest is composed: a recipient who is no longer a member
 //! of the workspace gets nothing, and a notification of a conversation they can no longer read
 //! is left out. Both kinds of rows are deleted so they stop qualifying.
+//!
+//! Digests list messages only: reaction notifications never make a user a candidate, are never
+//! listed and are never marked emailed.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -23,7 +26,7 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::model::Message;
 use rim_core::message::repository::MessageRepository;
-use rim_core::notification::model::{DigestCandidate, UserNotification};
+use rim_core::notification::model::{DigestCandidate, NotificationReason, UserNotification};
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
@@ -128,7 +131,8 @@ fn message_link(base_url: Option<&str>, server_id: ServerId, message: &Message) 
 }
 
 /// Group pending notifications by conversation (first-seen order) with one item per message
-/// that still exists and is not deleted.
+/// that still exists and is not deleted. Reaction notifications are skipped: the queries
+/// already leave them out, and a digest lists messages only.
 pub(crate) fn build_digest_groups(
     server_id: ServerId,
     pending: &[UserNotification],
@@ -140,6 +144,9 @@ pub(crate) fn build_digest_groups(
     let mut groups: Vec<DigestGroup> = Vec::new();
     let mut index: HashMap<ConversationId, usize> = HashMap::new();
     for notification in pending {
+        if notification.reason == NotificationReason::Reaction {
+            continue;
+        }
         let Some(message) = messages
             .get(&notification.message_id)
             .filter(|m| !m.is_deleted)
@@ -569,6 +576,7 @@ mod tests {
             created_at: now() - Duration::hours(2),
             read_at: None,
             emailed_at: None,
+            reaction: None,
         }
     }
 
@@ -651,6 +659,47 @@ mod tests {
             None,
         );
         assert!(without_base[0].items[0].link.is_none());
+    }
+
+    #[test]
+    fn reaction_notifications_are_left_out_of_the_digest() {
+        let server = ServerId::new();
+        let user = UserId::new();
+        let general = ConversationId::new();
+        let reacted = message(general, "reacted to", false);
+        let mentioned = message(general, "mentioned", false);
+        let reaction = UserNotification {
+            reason: NotificationReason::Reaction,
+            reaction: Some(rim_core::notification::model::NotificationReaction {
+                emoji: "\u{1f44d}".to_string(),
+                by: UserId::new(),
+            }),
+            ..notification(user, server, &reacted)
+        };
+        let messages: HashMap<_, _> = [&reacted, &mentioned]
+            .into_iter()
+            .map(|m| (m.id, m.clone()))
+            .collect();
+        let groups = build_digest_groups(
+            server,
+            &[reaction.clone(), notification(user, server, &mentioned)],
+            &messages,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].items.len(), 1);
+        assert_eq!(groups[0].items[0].snippet, "mentioned");
+        let only_reactions = build_digest_groups(
+            server,
+            &[reaction],
+            &messages,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert!(only_reactions.is_empty());
     }
 
     /// The jobs' collaborators; each test sets the expectations it relies on.

@@ -13,6 +13,10 @@
 //! 5. `MENTIONS` admits every reason but `all`; `ALL` admits everything.
 //! 6. Inside the user's do-not-disturb window or pause the notification is still recorded, but
 //!    marked `quiet`.
+//!
+//! A reaction tells the message's author only ([`decide_reaction`]): never about their own
+//! reaction or a deleted message; the author must still be a member; a timed mute, effective
+//! level `NONE` or the `reactions` setting off yields nothing; do-not-disturb marks it `quiet`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -20,7 +24,9 @@ use chrono::{DateTime, Utc};
 
 use rim_core::conversation::model::{Conversation, ConversationType};
 use rim_core::message::model::Message;
-use rim_core::notification::model::{NotificationReason, UserNotificationSettings};
+use rim_core::notification::model::{
+    NotificationLevel, NotificationReason, UserNotificationSettings,
+};
 use rim_core::notification_preference::model::NotificationPreference;
 use rim_core::user::model::UserId;
 
@@ -101,7 +107,7 @@ pub(crate) fn decide(input: &DecisionInput<'_>) -> Vec<Decision> {
         let level = pref
             .and_then(|p| p.level)
             .or(settings.map(|s| s.default_level))
-            .unwrap_or(rim_core::notification::model::NotificationLevel::All);
+            .unwrap_or(NotificationLevel::All);
 
         let reason = if is_direct {
             NotificationReason::Direct
@@ -131,6 +137,48 @@ pub(crate) fn decide(input: &DecisionInput<'_>) -> Vec<Decision> {
         });
     }
     decisions
+}
+
+/// Everything [`decide_reaction`] needs, loaded by the caller.
+pub(crate) struct ReactionDecisionInput<'a> {
+    pub message: &'a Message,
+    /// The reactor.
+    pub by: UserId,
+    /// The conversation's members.
+    pub members: &'a [UserId],
+    /// The author's preference for the conversation, if any.
+    pub pref: Option<&'a NotificationPreference>,
+    /// The author's settings; `None` means the defaults.
+    pub settings: Option<&'a UserNotificationSettings>,
+    pub now: DateTime<Utc>,
+}
+
+/// Whether the message's author is told about a reaction, and whether quietly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReactionDecision {
+    pub quiet: bool,
+}
+
+/// The reaction decision for the author of `input.message`; `None` when they are not told.
+pub(crate) fn decide_reaction(input: &ReactionDecisionInput<'_>) -> Option<ReactionDecision> {
+    let author = input.message.sent_by;
+    if input.message.is_deleted || author == input.by || !input.members.contains(&author) {
+        return None;
+    }
+    if input.pref.is_some_and(|p| p.is_timed_muted_at(input.now)) {
+        return None;
+    }
+    let level = input
+        .pref
+        .and_then(|p| p.level)
+        .or(input.settings.map(|s| s.default_level))
+        .unwrap_or(NotificationLevel::All);
+    if !level.admits(NotificationReason::Reaction) || input.settings.is_some_and(|s| !s.reactions) {
+        return None;
+    }
+    Some(ReactionDecision {
+        quiet: input.settings.is_some_and(|s| s.is_quiet_at(input.now)),
+    })
 }
 
 /// `text` with every `<@...>` mention token removed (replaced by a space).
@@ -365,6 +413,7 @@ mod tests {
                 ..Case::default()
             },
             R::All => Case::default(),
+            R::Reaction => unreachable!("messages never notify with reason `reaction`"),
         }
     }
 
@@ -703,5 +752,150 @@ mod tests {
         assert_eq!(strip_mention_tokens("a <@x> b"), "a   b");
         assert_eq!(strip_mention_tokens("a <@x b"), "a <@x b");
         assert_eq!(strip_mention_tokens("plain"), "plain");
+    }
+
+    /// Settings and preference of the reacted-to author `alice` for a reaction case.
+    #[derive(Default)]
+    struct ReactionCase {
+        default_level: Option<NotificationLevel>,
+        override_level: Option<NotificationLevel>,
+        muted_until: Option<DateTime<Utc>>,
+        reactions: Option<bool>,
+        pause: Option<DndPause>,
+        author_left: bool,
+        own_reaction: bool,
+        deleted: bool,
+    }
+
+    fn react(case: ReactionCase) -> Option<ReactionDecision> {
+        let alice = UserId::new();
+        let bob = UserId::new();
+        let mut msg = message(alice, "ship it", false);
+        msg.is_deleted = case.deleted;
+        let pref = (case.override_level.is_some() || case.muted_until.is_some()).then(|| {
+            NotificationPreference {
+                muted_until: case.muted_until,
+                ..pref(alice, case.override_level)
+            }
+        });
+        let settings =
+            (case.default_level.is_some() || case.reactions.is_some() || case.pause.is_some())
+                .then(|| UserNotificationSettings {
+                    reactions: case.reactions.unwrap_or(true),
+                    dnd_pause: case.pause.unwrap_or(DndPause::Off),
+                    ..settings(alice, case.default_level.unwrap_or(L::All), &[])
+                });
+        let members = if case.author_left {
+            vec![bob]
+        } else {
+            vec![alice, bob]
+        };
+        decide_reaction(&ReactionDecisionInput {
+            message: &msg,
+            by: if case.own_reaction { alice } else { bob },
+            members: &members,
+            pref: pref.as_ref(),
+            settings: settings.as_ref(),
+            now: now(),
+        })
+    }
+
+    #[test]
+    fn reaction_notifies_the_author_under_all_and_mentions() {
+        let loud = Some(ReactionDecision { quiet: false });
+        assert_eq!(react(ReactionCase::default()), loud);
+        for level in [L::All, L::Mentions] {
+            let via_default = react(ReactionCase {
+                default_level: Some(level),
+                ..ReactionCase::default()
+            });
+            assert_eq!(via_default, loud, "default {level:?}");
+            let via_override = react(ReactionCase {
+                default_level: Some(L::None),
+                override_level: Some(level),
+                ..ReactionCase::default()
+            });
+            assert_eq!(via_override, loud, "override {level:?}");
+        }
+    }
+
+    #[test]
+    fn own_reaction_deleted_message_or_departed_author_notifies_nobody() {
+        for case in [
+            ReactionCase {
+                own_reaction: true,
+                ..ReactionCase::default()
+            },
+            ReactionCase {
+                deleted: true,
+                ..ReactionCase::default()
+            },
+            ReactionCase {
+                author_left: true,
+                ..ReactionCase::default()
+            },
+        ] {
+            assert_eq!(react(case), None);
+        }
+    }
+
+    #[test]
+    fn reaction_respects_mute_none_and_the_reactions_setting() {
+        assert_eq!(
+            react(ReactionCase {
+                muted_until: Some(now() + Duration::minutes(10)),
+                ..ReactionCase::default()
+            }),
+            None
+        );
+        assert!(
+            react(ReactionCase {
+                muted_until: Some(now() - Duration::minutes(1)),
+                ..ReactionCase::default()
+            })
+            .is_some()
+        );
+        assert_eq!(
+            react(ReactionCase {
+                default_level: Some(L::None),
+                ..ReactionCase::default()
+            }),
+            None
+        );
+        assert_eq!(
+            react(ReactionCase {
+                default_level: Some(L::All),
+                override_level: Some(L::None),
+                ..ReactionCase::default()
+            }),
+            None
+        );
+        assert_eq!(
+            react(ReactionCase {
+                reactions: Some(false),
+                ..ReactionCase::default()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn reaction_inside_do_not_disturb_is_quiet() {
+        assert_eq!(
+            react(ReactionCase {
+                pause: Some(DndPause::Indefinite),
+                ..ReactionCase::default()
+            }),
+            Some(ReactionDecision { quiet: true })
+        );
+        // Do-not-disturb does not override the setting.
+        assert_eq!(
+            react(ReactionCase {
+                pause: Some(DndPause::Indefinite),
+                reactions: Some(false),
+                ..ReactionCase::default()
+            }),
+            None
+        );
     }
 }

@@ -14,8 +14,8 @@ use rim_core::conversation::model::{Conversation, ConversationType};
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::notification::model::{
-    DigestFrequency, DndPause, DndWindow, NewUserNotification, NotificationLevel,
-    NotificationReason, UserNotificationSettings,
+    DigestFrequency, DndPause, DndWindow, NewReactionNotification, NewUserNotification,
+    NotificationLevel, NotificationReaction, NotificationReason, UserNotificationSettings,
 };
 use rim_core::notification::repository::{ListUserNotificationsParams, NotificationRepository};
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
@@ -83,6 +83,7 @@ async fn settings_round_trip_and_batch_lookup() {
         dnd_pause: DndPause::Until(t(60)),
         digest: DigestFrequency::Daily,
         updated_at: t(0),
+        reactions: false,
     };
     assert_eq!(repo.upsert_settings(saved.clone()).await.unwrap(), saved);
     assert_eq!(
@@ -95,6 +96,7 @@ async fn settings_round_trip_and_batch_lookup() {
         dnd: None,
         dnd_pause: DndPause::Indefinite,
         keywords: vec![],
+        reactions: true,
         ..saved.clone()
     };
     repo.upsert_settings(replaced.clone()).await.unwrap();
@@ -186,6 +188,198 @@ async fn one_notification_per_user_and_message() {
             .unwrap()
             .is_empty()
     );
+}
+
+fn reaction_row(
+    user_id: UserId,
+    server_id: ServerId,
+    conversation: &Conversation,
+    message_id: rim_core::message::model::MessageId,
+    emoji: &str,
+    by: UserId,
+) -> NewReactionNotification {
+    NewReactionNotification {
+        user_id,
+        server_id,
+        conversation_id: conversation.id,
+        message_id,
+        reaction: NotificationReaction {
+            emoji: emoji.to_string(),
+            by,
+        },
+    }
+}
+
+/// A reaction inserts one row; a later reaction replaces its emoji and reactor, marks it
+/// unread and moves it to the top; a row the message already has for another reason stays.
+#[tokio::test]
+async fn reaction_notification_is_inserted_then_resurfaced_never_replacing_another_reason() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmNotificationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("reactions").await;
+    let author = ctx.create_user("author").await.id;
+    let bob = ctx.create_user("bob").await.id;
+    let carol = ctx.create_user("carol").await.id;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let msg = ctx.create_message(conv.id, author, "ship it").await;
+
+    let earlier = t(-10);
+    let first = repo
+        .upsert_reaction_notification(
+            reaction_row(author, server.id, &conv, msg.id, "\u{1f44d}", bob),
+            earlier,
+        )
+        .await
+        .unwrap()
+        .expect("inserted");
+    assert_eq!(first.reason, NotificationReason::Reaction);
+    assert_eq!(
+        first.reaction,
+        Some(NotificationReaction {
+            emoji: "\u{1f44d}".to_string(),
+            by: bob,
+        })
+    );
+    assert_eq!(first.created_at, earlier);
+    repo.mark_read_by_ids(author, server.id, &[first.id], t(-5))
+        .await
+        .unwrap();
+    assert_eq!(repo.unread_count(author, server.id).await.unwrap(), 0);
+
+    let later = t(0);
+    let second = repo
+        .upsert_reaction_notification(
+            reaction_row(author, server.id, &conv, msg.id, "\u{1f389}", carol),
+            later,
+        )
+        .await
+        .unwrap()
+        .expect("re-surfaced");
+    assert_eq!(second.id, first.id, "the same row");
+    assert_eq!(second.read_at, None);
+    assert_eq!(second.created_at, later);
+    assert_eq!(
+        second.reaction,
+        Some(NotificationReaction {
+            emoji: "\u{1f389}".to_string(),
+            by: carol,
+        })
+    );
+    assert_eq!(repo.unread_count(author, server.id).await.unwrap(), 1);
+
+    // A message bob was mentioned in keeps its mention row when someone reacts.
+    let mention = ctx.create_message(conv.id, author, "<@bob>").await;
+    let mentioned = repo
+        .create_notifications(
+            &[new_row(
+                bob,
+                server.id,
+                &conv,
+                mention.id,
+                NotificationReason::Mention,
+            )],
+            t(-1),
+        )
+        .await
+        .unwrap();
+    assert!(
+        repo.upsert_reaction_notification(
+            reaction_row(bob, server.id, &conv, mention.id, "\u{1f44d}", carol),
+            t(0),
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    let page = repo
+        .list_notifications(ListUserNotificationsParams {
+            user_id: bob,
+            server_id: server.id,
+            unread_only: false,
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items, mentioned);
+
+    // A message notification never replaces a reaction row either.
+    assert!(
+        repo.create_notifications(
+            &[new_row(
+                author,
+                server.id,
+                &conv,
+                msg.id,
+                NotificationReason::All,
+            )],
+            t(0),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+/// Unread reaction notifications neither make a user a digest candidate nor appear in the
+/// pending digest list.
+#[tokio::test]
+async fn digests_leave_reaction_notifications_out() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmNotificationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("Acme").await;
+    let author = ctx.create_user("author").await.id;
+    let reactor = ctx.create_user("reactor").await.id;
+    let only_reactions = ctx.create_user("only_reactions").await.id;
+    let mixed = ctx.create_user("mixed").await.id;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    for user in [only_reactions, mixed] {
+        repo.upsert_settings(settings(user, server.id, DigestFrequency::Hourly))
+            .await
+            .unwrap();
+        let own = ctx.create_message(conv.id, user, "mine").await;
+        repo.upsert_reaction_notification(
+            reaction_row(user, server.id, &conv, own.id, "\u{1f44d}", reactor),
+            t(-120),
+        )
+        .await
+        .unwrap()
+        .expect("inserted");
+    }
+    let msg = ctx.create_message(conv.id, author, "hello").await;
+    let mention = repo
+        .create_notifications(
+            &[new_row(
+                mixed,
+                server.id,
+                &conv,
+                msg.id,
+                NotificationReason::Mention,
+            )],
+            t(-90),
+        )
+        .await
+        .unwrap();
+
+    let now = t(0);
+    let candidates = repo
+        .list_digest_candidates(now - Duration::minutes(60), now - Duration::hours(24))
+        .await
+        .unwrap();
+    let users: Vec<UserId> = candidates.iter().map(|c| c.user_id).collect();
+    assert_eq!(users, vec![mixed]);
+    assert_eq!(candidates[0].pending_count, 1);
+    assert_eq!(candidates[0].oldest_pending_at, mention[0].created_at);
+    let pending = repo
+        .list_pending_digest(mixed, server.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(pending, mention);
 }
 
 #[tokio::test]
