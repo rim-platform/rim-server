@@ -27,6 +27,7 @@ pub(crate) mod command;
 pub(crate) mod conversation;
 pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
+pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
@@ -55,6 +56,7 @@ pub struct Mutation(
     MutationGroup6,
     MutationGroup7,
     MutationGroup8,
+    MutationGroup9,
 );
 
 #[derive(MergedObject, Default)]
@@ -120,3 +122,6 @@ pub(crate) struct MutationGroup8(
     instance_moderation::InstanceModerationMutations,
     conversation::ConversationInviteMutations,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct MutationGroup9(dm_policy::DmPolicyMutations);

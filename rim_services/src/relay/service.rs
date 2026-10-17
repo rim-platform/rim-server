@@ -96,6 +96,15 @@ pub trait RelayService: Send + Sync {
     async fn local_identity(&self, principal_id: String)
     -> ServiceResult<Option<IdentityDocument>>;
 
+    /// A local user's identity as served to the server `peer_server_id`: `None` for anyone
+    /// else, and for a server the operator's inbound DM setting does not admit unless the user
+    /// holds an active subscription to a workspace it hosts.
+    async fn identity_for_peer(
+        &self,
+        peer_server_id: String,
+        principal_id: String,
+    ) -> ServiceResult<Option<IdentityDocument>>;
+
     /// A principal's identity: a local one directly, else fetched from `relay_url` (or the
     /// relay that served it before) and cached for 24 hours.
     async fn remote_identity(
@@ -116,22 +125,31 @@ pub trait RelayService: Send + Sync {
         items: Vec<DeliverItem>,
     ) -> ServiceResult<DeliverResponse>;
 
-    /// Hand out key packages of a local user's devices to a host.
+    /// Hand out key packages of a local user's devices to a host; `Forbidden` for a host the
+    /// operator's inbound DM setting does not admit unless the user holds an active
+    /// subscription to a workspace it hosts.
     async fn claim_for_peer(
         &self,
         peer_server_id: String,
         request: PeerClaimRequest,
     ) -> ServiceResult<PeerClaimResponse>;
 
-    /// File an event of this server's direct space for local members through the request
-    /// inbox: an invite from a stranger files a request and is held, and a pending request holds
-    /// the conversation's events. What a member already accepted flows live, not through the
-    /// queue.
+    /// File an event of this server's direct space, or of a DM in a workspace it hosts, for
+    /// local members through the request inbox: an invite files by the member's DM settings (a
+    /// request is held), and a pending request holds the conversation's events. What a member
+    /// accepted flows live, not through the queue.
     async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()>;
 
     /// Whether a conversation stays out of a local user's list and live events: its request is
     /// pending or ignored, or the user blocked the direct-space conversation's creator.
     async fn conversation_hidden(
+        &self,
+        user_id: UserId,
+        conversation_id: uuid::Uuid,
+    ) -> ServiceResult<bool>;
+
+    /// Whether a local user's DM request for a conversation is pending.
+    async fn request_pending(
         &self,
         user_id: UserId,
         conversation_id: uuid::Uuid,

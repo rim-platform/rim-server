@@ -3,6 +3,8 @@
 
 use rim_core::relay::model::{DmRequestId, DmRequestStatus};
 
+use crate::relay::policy::DmPolicy;
+
 /// Most pending requests per recipient.
 pub(crate) const MAX_PENDING_PER_USER: i64 = 100;
 /// Most items a pending request holds; later ones are dropped until it is accepted.
@@ -17,8 +19,8 @@ pub(crate) struct InboxFacts {
     pub conversation_scoped: bool,
     /// The recipient blocked the invite's sender.
     pub blocked: bool,
-    /// The invite's sender is a contact of the recipient or was accepted before.
-    pub trusted: bool,
+    /// How the recipient's effective DM setting takes the invite's sender.
+    pub policy: DmPolicy,
     /// The recipient's request for the item's conversation, and how many items it holds.
     pub request: Option<(DmRequestId, DmRequestStatus, i64)>,
     pub pending_for_user: i64,
@@ -35,7 +37,7 @@ pub(crate) enum Filing {
     Drop,
     /// Refused with a reason the host sees.
     Refuse(&'static str),
-    /// Record the conversation as accepted (an invite from a contact) and deliver.
+    /// Record the conversation as accepted (an invite the policy delivers) and deliver.
     FileAccepted,
     /// File a pending request and hold the invite.
     FileRequest,
@@ -62,7 +64,8 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
                 Filing::Deliver
             }
         }
-        None if facts.trusted => Filing::FileAccepted,
+        None if facts.policy == DmPolicy::Deliver => Filing::FileAccepted,
+        None if facts.policy == DmPolicy::Refuse => Filing::Refuse("blocked"),
         None if facts.pending_for_user >= MAX_PENDING_PER_USER
             || facts.filed_by_sender_today >= facts.sender_daily_limit =>
         {
@@ -83,7 +86,7 @@ mod tests {
             is_invite: true,
             conversation_scoped: true,
             blocked: false,
-            trusted: false,
+            policy: DmPolicy::Request,
             request: None,
             pending_for_user: 0,
             filed_by_sender_today: 0,
@@ -100,26 +103,46 @@ mod tests {
     }
 
     #[test]
-    fn a_strangers_invite_files_a_request_and_a_contacts_is_accepted() {
+    fn an_invite_files_as_the_policy_says() {
         assert_eq!(file(&invite()), Filing::FileRequest);
         assert_eq!(
             file(&InboxFacts {
-                trusted: true,
+                policy: DmPolicy::Deliver,
                 ..invite()
             }),
             Filing::FileAccepted
         );
-    }
-
-    #[test]
-    fn a_blocked_sender_is_refused_even_as_a_contact() {
         assert_eq!(
             file(&InboxFacts {
-                blocked: true,
-                trusted: true,
+                policy: DmPolicy::Refuse,
                 ..invite()
             }),
             Filing::Refuse("blocked")
+        );
+    }
+
+    #[test]
+    fn a_blocked_sender_is_refused_even_when_the_policy_delivers() {
+        assert_eq!(
+            file(&InboxFacts {
+                blocked: true,
+                policy: DmPolicy::Deliver,
+                ..invite()
+            }),
+            Filing::Refuse("blocked")
+        );
+    }
+
+    #[test]
+    fn a_decided_conversation_ignores_the_policy() {
+        let id = DmRequestId::new();
+        assert_eq!(
+            file(&InboxFacts {
+                policy: DmPolicy::Refuse,
+                request: Some((id, DmRequestStatus::Accepted, 0)),
+                ..invite()
+            }),
+            Filing::Deliver
         );
     }
 

@@ -9,6 +9,7 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::device_link::repository::DeviceLinkRepository;
+use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::repository::{DelegationRepository, HostRepository};
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
@@ -74,6 +75,7 @@ pub struct AppRepos {
     pub delegation_repo: Arc<dyn DelegationRepository>,
     pub subscription_repo: Arc<dyn SubscriptionRepository>,
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
 }
 
 #[derive(Clone)]
@@ -356,6 +358,7 @@ impl AppRepos {
             user_repo: Arc::clone(&self.user_repo),
             subscription_repo: Arc::clone(&self.subscription_repo),
             relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
+            dm_policy_repo: Arc::clone(&self.dm_policy_repo),
         }
     }
 
@@ -380,6 +383,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
             delegation_repo: Arc::clone(&self.delegation_repo),
+            dm_policy_repo: Arc::clone(&self.dm_policy_repo),
         }
     }
 
@@ -708,6 +712,9 @@ impl AppRepos {
                 sea_orm_impl::remote_workspace::SeaOrmSubscriptionRepository::new(handle.clone()),
             ),
             relay_abuse_repo: Arc::new(sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository::new(
+                handle.clone(),
+            )),
+            dm_policy_repo: Arc::new(sea_orm_impl::dm_policy::SeaOrmDmPolicyRepository::new(
                 handle.clone(),
             )),
         }

@@ -55,6 +55,55 @@ This document describes the backend contract for conversations, messages, thread
   can read but has not joined carries no unread badge; after joining, messages count from the
   join time.
 
+## Who May Start A DM
+
+A first DM from someone arrives directly, as a request the recipient accepts, ignores, blocks or
+reports (`dmRequests`, see "The request inbox" in `docs/relay.md`), or not at all. Three layers
+decide, and each may only tighten the one above it:
+
+| Layer | Set by | People outside the recipient's workspaces | Fellow members of a workspace |
+|---|---|---|---|
+| Server | The operator: `RIM_DM_INBOUND`, `RIM_DM_OUTBOUND`, `RIM_DM_PARTNERS` (read-only in `serverInfo.dmInbound`, `dmOutbound`, `dmPartners`) | Inbound `OPEN`, `REQUESTS` (default), `PARTNERS` (people on the listed servers and on this one) or `NONE`; outbound `ALLOWED` (default), `PARTNERS` or `NONE` | Not the server's matter |
+| Workspace | Its Owner: `setWorkspaceDmPolicy` (`Server.dmOutsideFloor`, `Server.dmMemberDefault`) | A floor for its members: `NONE` (default, no floor), `REQUESTS` or `CLOSED` | A default: `DIRECT` (default) or `REQUESTS` |
+| Person | Each user: `setMyDmSettings`, `setMyWorkspaceDmSetting` (read in `myDmSettings`) | `REQUESTS` (default) or `NONE`, within the floors | Per workspace `DIRECT` or `REQUESTS`, either way |
+
+- **A fellow member** shares a workspace hosted here with the recipient. Their DM is delivered
+  when they are an Owner or Moderator of one shared workspace, when they are a contact, or when
+  the recipient's choice (else the workspace's default) for one shared workspace is `DIRECT`;
+  otherwise it is a request.
+- **Anyone else.** From another server, `RIM_DM_INBOUND` must admit their server or the DM is
+  refused, contacts included: `PARTNERS` admits the listed servers, `NONE` none. Then a contact's
+  DM is delivered. Otherwise the strictest of the operator's floor (`NONE` refuses strangers on
+  this server too), the floors of the recipient's workspaces and the recipient's choice decides
+  between a request and a refusal. `OPEN` sets no floor; with the choices a person has today it
+  works as `REQUESTS`.
+- **A contact** is someone the recipient added (`addContact`), accepted, or messaged first:
+  creating a DM records the other person as the creator's contact, so their DM back is never a
+  request.
+- **Outbound.** A DM with someone on another server needs `RIM_DM_OUTBOUND` to admit their
+  relay: `createConversation` with `remoteMembers` answers `FORBIDDEN` ("this server starts no
+  direct messages with that server") otherwise, before their relay is asked anything, and so do
+  key package claims for their devices. With `NONE` nothing of the direct space reaches another
+  server; with `PARTNERS` it goes to the listed servers only.
+- **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
+  when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
+  server is answered as for a block, so its server stops addressing the recipient.
+- **Workspace DMs.** In a workspace hosted here, a DM a member whose relay is this server takes
+  as a request is held in their request inbox like a DM from outside: until they accept it, it stays out of their
+  `inboxConversations` and `workspaceEvents`, and its notifications and unread counts out of
+  theirs. Like the request inbox it needs server-to-server traffic to be on; without it workspace
+  DMs arrive directly. Groups are unchanged: their members are added by someone already in them.
+- **The sender's view.** `Conversation.dmRequestPending` is true for a DM whose other member,
+  on this server, has not yet accepted it as a request; false once they did or when it was no
+  request, null for groups and channels.
+- **The settings.** `setMyDmSettings(outside: REQUESTS)` under a floor that refuses DMs from
+  outside answers `VALIDATION` naming it; `myDmSettings.effectiveOutside` says what applies and
+  `outsideFloorFrom` where a refusing floor comes from (`OPERATOR`, or `WORKSPACE` with its id and
+  name). `setWorkspaceDmPolicy` is the Owner's alone (`FORBIDDEN` for anyone else);
+  `setMyWorkspaceDmSetting` needs membership of the workspace (`NOT_FOUND`). `Server.dmOutsideFloor`
+  and `Server.dmMemberDefault` are null in the direct space. A person whose relay is another server
+  sets their choices there; both personal mutations are refused through the forward path.
+
 ## Archived Channels
 
 - Owner/Moderator archive and unarchive channels (`setConversationArchived`); other roles get

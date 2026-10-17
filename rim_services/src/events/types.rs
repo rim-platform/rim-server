@@ -515,6 +515,47 @@ impl WorkspaceEvent {
         }
     }
 
+    /// The type of the conversation an event is about (`Direct`, `Group` or `Channel`), for the
+    /// events that carry it.
+    pub fn conversation_type(&self) -> Option<&str> {
+        match self {
+            Self::NewMessage {
+                conversation_type, ..
+            }
+            | Self::MessageUpdated {
+                conversation_type, ..
+            }
+            | Self::MessageDeleted {
+                conversation_type, ..
+            }
+            | Self::ReactionsUpdated {
+                conversation_type, ..
+            }
+            | Self::ConversationCreated {
+                conversation_type, ..
+            }
+            | Self::ThreadCreated {
+                conversation_type, ..
+            }
+            | Self::ConversationUpdated {
+                conversation_type, ..
+            }
+            | Self::MessagePinned {
+                conversation_type, ..
+            }
+            | Self::MessageUnpinned {
+                conversation_type, ..
+            }
+            | Self::TypingStarted {
+                conversation_type, ..
+            }
+            | Self::LinkPreviewReady {
+                conversation_type, ..
+            } => Some(conversation_type),
+            _ => None,
+        }
+    }
+
     /// Returns `true` for events emitted by the pipeline evaluator itself.
     /// Used to prevent infinite loops in the evaluator task.
     pub fn is_pipeline_event(&self) -> bool {

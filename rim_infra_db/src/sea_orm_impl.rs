@@ -7,6 +7,7 @@ pub mod conversation_member;
 pub mod conversation_read_state;
 pub mod custom_emoji;
 pub mod device_link;
+pub mod dm_policy;
 pub mod e2ee;
 pub mod host;
 pub mod instance_invite;

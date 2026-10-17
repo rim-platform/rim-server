@@ -815,6 +815,8 @@ async fn the_migration_refuses_down_while_remote_users_or_items_exist() {
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a remote user blocks the down migration"
     );
+    // Each migration commits on its own: the later ones rolled back before the refusal.
+    Migrator::up(&conn, None).await.expect("up again");
     assert!(table_exists(&conn, "relay_item").await);
     ctx.db
         .execute_unprepared(&format!(

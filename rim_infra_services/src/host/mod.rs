@@ -18,6 +18,8 @@ use uuid::Uuid;
 use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::dm_policy::model::DmOutbound;
+use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{SeqDecision, UserKind};
 use rim_core::host::repository::{DelegationRepository, HostRepository};
@@ -31,6 +33,7 @@ use rim_identity::{SignedStatement, UnverifiedDeviceRequest};
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_s2s::SharedIdentity;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
     ConversationPredecessorDto, ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest,
@@ -50,6 +53,7 @@ use crate::clock::Clock;
 use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{IdentityStore, Stored, store_remote, verify_identity};
+use crate::relay::policy::{DmPolicy, PolicySource, outbound_refused};
 use crate::relay::{
     MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, card_relays, check_relay_urls, fetch_from_relays,
     origin_of,
@@ -82,6 +86,8 @@ pub struct HostRepos {
     pub delegation_repo: Arc<dyn DelegationRepository>,
     /// Principals this server refuses.
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
+    /// Workspaces' DM rules and each user's choices.
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
 }
 
 pub struct DefaultHostService {
@@ -103,6 +109,8 @@ pub struct DefaultHostService {
     /// The probation of new accounts, during which they send no DM request to a stranger.
     limits: InstanceLimits,
     clock: Clock,
+    /// The operator's DM settings.
+    dm_policy: DmOperatorPolicy,
 }
 
 fn upstream(server_id: &str) -> ServiceError {
@@ -133,7 +141,80 @@ impl DefaultHostService {
             dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
             limits: InstanceLimits::default(),
             clock: Clock::default(),
+            dm_policy: DmOperatorPolicy::default(),
         }
+    }
+
+    /// Apply the operator's DM settings.
+    pub fn with_dm_policy(mut self, dm_policy: DmOperatorPolicy) -> Self {
+        self.dm_policy = dm_policy;
+        self
+    }
+
+    /// Whether a local user may start DMs with people on `server_id`.
+    fn admits_outbound(&self, server_id: &str) -> bool {
+        crate::relay::policy::outbound(&self.dm_policy, &self.own_id(), server_id)
+            == DmPolicy::Deliver
+    }
+
+    /// `Forbidden` unless one of a remote user's relays is a server local users may start DMs
+    /// with.
+    async fn ensure_outbound_to(&self, user_id: UserId) -> ServiceResult<()> {
+        let card = self
+            .repos
+            .key_identity_repo
+            .get_profile_card(user_id)
+            .await?;
+        let home = self.repos.host_repo.home_relay(user_id).await?;
+        let relays = Self::relays_of(
+            self.repos.host_repo.as_ref(),
+            &self.own_id(),
+            card.as_ref().map(|c| c.payload.as_str()),
+            home.as_deref(),
+        )
+        .await?;
+        if relays.iter().any(|r| self.admits_outbound(r)) {
+            Ok(())
+        } else {
+            Err(outbound_refused())
+        }
+    }
+
+    /// `Forbidden` when a local recipient's DM settings refuse a DM from `sender`.
+    async fn ensure_recipient_takes(&self, sender: UserId, recipient: UserId) -> ServiceResult<()> {
+        let Some(principal_id) = self
+            .repos
+            .user_repo
+            .get_by_id(sender)
+            .await?
+            .and_then(|u| u.principal_id)
+        else {
+            return Ok(());
+        };
+        let own_id = self.own_id();
+        let sender_server = match self.repos.host_repo.user_kind(sender).await? {
+            Some(UserKind::Remote) => self
+                .repos
+                .host_repo
+                .home_relay(sender)
+                .await?
+                .unwrap_or_default(),
+            _ => own_id.clone(),
+        };
+        let policy = PolicySource {
+            relay_repo: self.repos.relay_repo.as_ref(),
+            dm_policy_repo: self.repos.dm_policy_repo.as_ref(),
+            operator: &self.dm_policy,
+            own_server_id: &own_id,
+        }
+        .inbound(recipient, &principal_id, &sender_server)
+        .await?;
+        if policy == DmPolicy::Refuse {
+            return Err(ServiceError::Forbidden(
+                "they do not take direct messages from you".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Apply the per-user quotas: invites to people on other servers per day.
@@ -582,6 +663,9 @@ impl HostService for DefaultHostService {
             Some((user_id, UserKind::Local)) => (user_id, false),
             existing => {
                 check_relay_urls(&member.relay_urls)?;
+                if self.dm_policy.outbound == DmOutbound::None {
+                    return Err(outbound_refused());
+                }
                 self.refuse_strangers_in_probation(
                     actor,
                     std::slice::from_ref(&member.principal_id),
@@ -593,6 +677,7 @@ impl HostService for DefaultHostService {
                     self.client.as_ref(),
                     &member.principal_id,
                     &member.relay_urls,
+                    &|server_id| self.admits_outbound(server_id),
                 )
                 .await;
                 let user_id = match (fetched, existing) {
@@ -602,9 +687,11 @@ impl HostService for DefaultHostService {
                             .ok_or(ServiceError::NotFound)?
                             .user_id
                     }
+                    (Err(e @ ServiceError::Forbidden(_)), _) => return Err(e),
                     // Their relays are down: the stored copy still names them.
                     (Err(e), Some((user_id, _))) => {
                         warn!(error = %e, user_id = %user_id, "using a stored identity; the relays did not answer");
+                        self.ensure_outbound_to(user_id).await?;
                         user_id
                     }
                     (Err(e), None) => return Err(e),
@@ -885,13 +972,20 @@ impl HostService for DefaultHostService {
     }
 
     async fn ensure_may_request(&self, actor: Actor, user_ids: Vec<UserId>) -> ServiceResult<()> {
-        if self.limits.probation_hours.is_none() {
-            return Ok(());
-        }
         let others: Vec<UserId> = user_ids
             .into_iter()
             .filter(|id| *id != actor.user_id)
             .collect();
+        for other in &others {
+            match self.repos.host_repo.user_kind(*other).await? {
+                Some(UserKind::Remote) => self.ensure_outbound_to(*other).await?,
+                Some(UserKind::Local) => self.ensure_recipient_takes(actor.user_id, *other).await?,
+                None => {}
+            }
+        }
+        if self.limits.probation_hours.is_none() {
+            return Ok(());
+        }
         let principal_ids: Vec<String> = self
             .repos
             .user_repo
@@ -928,13 +1022,19 @@ impl RemoteKeyPackages for DefaultHostService {
             .host_repo
             .home_relay(claim.target_user_id)
             .await?;
-        let relays = Self::relays_of(
+        let mut relays = Self::relays_of(
             self.repos.host_repo.as_ref(),
             &self.own_id(),
             card.as_ref().map(|c| c.payload.as_str()),
             home.as_deref(),
         )
         .await?;
+        if !relays.is_empty() {
+            relays.retain(|relay| self.admits_outbound(relay));
+            if relays.is_empty() {
+                return Err(outbound_refused());
+            }
+        }
         let response = self
             .claim_from_relays(
                 &relays,

@@ -107,6 +107,26 @@ pub struct RIMConfig {
     /// `RIM_S2S_DENIED_PEERS`.
     pub s2s_denied_peers: Option<String>,
 
+    // ── Who may start a DM (RIM_DM_*) ───────────────────────────────────────
+    //
+    // Floors for every account here; each workspace's owner and each person may only tighten
+    // them. See [`RIMConfig::dm_policy`].
+    /// DMs from people on other servers, and from people here who share no workspace with the
+    /// recipient: `open` (no floor), `requests` (default: their first message is a request the
+    /// recipient accepts), `partners` (only people on the servers `RIM_DM_PARTNERS` lists, and
+    /// on this one, with a request; other servers get no identity or key package of anyone
+    /// here) or `none` (nobody outside a shared workspace; other servers get no identity or
+    /// key package). Members of a shared workspace follow the workspace's rules instead.
+    /// Controlled by `RIM_DM_INBOUND`.
+    pub dm_inbound: Option<String>,
+    /// DMs people here start with people on other servers: `allowed` (default), `partners`
+    /// (only with people on the servers `RIM_DM_PARTNERS` lists) or `none`. Controlled by
+    /// `RIM_DM_OUTBOUND`.
+    pub dm_outbound: Option<String>,
+    /// Comma-separated server ids the `partners` settings of `RIM_DM_INBOUND` and
+    /// `RIM_DM_OUTBOUND` name. Controlled by `RIM_DM_PARTNERS`.
+    pub dm_partners: Option<String>,
+
     /// Server-to-server requests accepted per peer per minute, per node. Default 600.
     /// Controlled by `RIM_S2S_PEER_RATE_PER_MIN`.
     pub s2s_peer_rate_per_min: Option<u32>,
@@ -361,6 +381,7 @@ impl fmt::Debug for RIMConfig {
             .field("franking_key_file", &self.franking_key_file)
             .field("host_allowed_relays", &self.host_allowed_relays)
             .field("s2s_denied_peers", &self.s2s_denied_peers)
+            .field("dm_policy", &self.dm_policy())
             .field("s2s_peer_rate_per_min", &self.s2s_peer_rate_per_min())
             .field("s2s_max_body_bytes", &self.s2s_max_body_bytes())
             .field(
@@ -422,6 +443,9 @@ impl Default for RIMConfig {
             franking_key_file: None,
             host_allowed_relays: None,
             s2s_denied_peers: None,
+            dm_inbound: None,
+            dm_outbound: None,
+            dm_partners: None,
             s2s_peer_rate_per_min: None,
             s2s_max_body_bytes: None,
             s2s_allow_private_addresses: None,
@@ -880,6 +904,34 @@ impl RIMConfig {
     /// A message naming the first entry that is not a server id.
     pub fn s2s_denied_peers(&self) -> Result<Vec<String>, String> {
         server_id_list("RIM_S2S_DENIED_PEERS", self.s2s_denied_peers.as_deref())
+    }
+
+    /// `RIM_DM_INBOUND`, `RIM_DM_OUTBOUND` and `RIM_DM_PARTNERS`: `requests`, `allowed` and no
+    /// partners when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable whose value is not one it takes, or the first partner
+    /// that is not a server id.
+    pub fn dm_policy(&self) -> Result<rim_services::dm_policy::dto::DmOperatorPolicy, String> {
+        use rim_core::dm_policy::model::{DmInbound, DmOutbound};
+
+        let inbound = match non_blank(self.dm_inbound.as_deref()) {
+            None => DmInbound::default(),
+            Some(value) => DmInbound::parse(&value.to_ascii_lowercase()).ok_or_else(|| {
+                format!("RIM_DM_INBOUND={value} is not open, requests, partners or none")
+            })?,
+        };
+        let outbound = match non_blank(self.dm_outbound.as_deref()) {
+            None => DmOutbound::default(),
+            Some(value) => DmOutbound::parse(&value.to_ascii_lowercase()).ok_or_else(|| {
+                format!("RIM_DM_OUTBOUND={value} is not allowed, partners or none")
+            })?,
+        };
+        Ok(rim_services::dm_policy::dto::DmOperatorPolicy {
+            inbound,
+            outbound,
+            partners: server_id_list("RIM_DM_PARTNERS", self.dm_partners.as_deref())?,
+        })
     }
 
     /// `RIM_HOST_ALLOWED_RELAYS` as server ids; empty allows any relay.
@@ -1486,6 +1538,56 @@ mod tests {
             config.franking_key_file(),
             std::path::PathBuf::from("/secrets/franking.json")
         );
+    }
+
+    #[test]
+    fn dm_settings_default_to_requests_and_allowed_and_refuse_unknown_values() {
+        use rim_core::dm_policy::model::{DmInbound, DmOutbound};
+
+        let defaults = RIMConfig::default().dm_policy().expect("defaults");
+        assert_eq!(defaults.inbound, DmInbound::Requests);
+        assert_eq!(defaults.outbound, DmOutbound::Allowed);
+        assert!(defaults.partners.is_empty());
+
+        let id = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
+        let set = RIMConfig {
+            dm_inbound: Some(" Partners ".to_string()),
+            dm_outbound: Some("none".to_string()),
+            dm_partners: Some(format!("{id},")),
+            ..Default::default()
+        }
+        .dm_policy()
+        .expect("set");
+        assert_eq!(set.inbound, DmInbound::Partners);
+        assert_eq!(set.outbound, DmOutbound::None);
+        assert_eq!(set.partners, vec![id.to_string()]);
+
+        for (config, named) in [
+            (
+                RIMConfig {
+                    dm_inbound: Some("closed".to_string()),
+                    ..Default::default()
+                },
+                "RIM_DM_INBOUND=closed",
+            ),
+            (
+                RIMConfig {
+                    dm_outbound: Some("open".to_string()),
+                    ..Default::default()
+                },
+                "RIM_DM_OUTBOUND=open",
+            ),
+            (
+                RIMConfig {
+                    dm_partners: Some("partner.example".to_string()),
+                    ..Default::default()
+                },
+                "RIM_DM_PARTNERS",
+            ),
+        ] {
+            let err = config.dm_policy().expect_err("refused");
+            assert!(err.starts_with(named), "{err}");
+        }
     }
 
     #[test]

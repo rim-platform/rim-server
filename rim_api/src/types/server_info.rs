@@ -2,6 +2,7 @@
 
 use async_graphql::*;
 use rim_core::server_feature::model::{FeatureState, ServerFeature};
+use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::feature::service::FeatureGate;
 use rim_services::limits::InstanceLimits;
 
@@ -33,6 +34,13 @@ pub struct ServerInfo {
     /// `FORBIDDEN` and `signupWithKey` is the signup. Password sign-in of existing accounts
     /// works either way.
     pub signup_requires_keys: bool,
+    /// DMs from people on other servers, and from people here outside the recipient's
+    /// workspaces (`RIM_DM_INBOUND`): a floor for every account here.
+    pub dm_inbound: crate::types::DmInbound,
+    /// DMs people here start with people on other servers (`RIM_DM_OUTBOUND`).
+    pub dm_outbound: crate::types::DmOutbound,
+    /// The server ids the `PARTNERS` settings name (`RIM_DM_PARTNERS`).
+    pub dm_partners: Vec<String>,
 }
 
 /// The instance-wide caps; each is null when this instance sets none, but devices and DM
@@ -110,12 +118,13 @@ pub struct InstancePolicy {
 
 impl ServerInfo {
     /// This build's version and API version, with the features `gate` reports, the audit
-    /// `retention`, the instance `policy` and its `limits`.
+    /// `retention`, the instance `policy`, its `limits` and its DM settings.
     pub fn current(
         gate: &dyn FeatureGate,
         retention: AuditRetention,
         policy: &InstancePolicy,
         limits: &InstanceLimits,
+        dm_policy: &DmOperatorPolicy,
     ) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -130,6 +139,9 @@ impl ServerInfo {
             terms_url: policy.terms_url.clone(),
             limits: limits.into(),
             signup_requires_keys: policy.signup_requires_keys,
+            dm_inbound: dm_policy.inbound.into(),
+            dm_outbound: dm_policy.outbound.into(),
+            dm_partners: dm_policy.partners.clone(),
         }
     }
 }

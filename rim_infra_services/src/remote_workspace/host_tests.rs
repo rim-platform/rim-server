@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use rim_core::auth::repository::{MockInviteRepository, MockSessionRepository};
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
+use rim_core::dm_policy::repository::MockDmPolicyRepository;
 use rim_core::e2ee::repository::MockE2eeRepository;
 use rim_core::host::model::{DelegationStored, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
@@ -249,6 +250,7 @@ fn setup(facts: Facts) -> Setup {
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
             relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
         },
         None,
         host_identity.clone(),

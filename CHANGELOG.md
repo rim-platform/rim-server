@@ -23,6 +23,21 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Who may start a DM, in three layers where each only tightens the one above ("Who May Start A
+  DM" in `docs/messaging.md`). The operator sets `RIM_DM_INBOUND` (`open`, `requests` by default,
+  `partners`, `none`), `RIM_DM_OUTBOUND` (`allowed` by default, `partners`, `none`) and
+  `RIM_DM_PARTNERS`, shown in the new `ServerInfo.dmInbound`, `dmOutbound` and `dmPartners`; a
+  workspace's Owner sets a floor for DMs from outside and a default for members' DMs with the new
+  `setWorkspaceDmPolicy` (`Server.dmOutsideFloor`, `Server.dmMemberDefault`); each person chooses
+  with the new `setMyDmSettings` and `setMyWorkspaceDmSetting`, read with `myDmSettings`
+  (`effectiveOutside`, `outsideFloorFrom`). New enums `DmInbound`, `DmOutbound`,
+  `DmOutsideFloor`, `DmMembers`, `DmOutside`, `DmFloorSourceKind`. A workspace DM a member takes
+  as a request now goes through their request inbox. `docs/operations/closed-company-server.md`
+  is the recipe for a server closed to DMs from outside or open to partners only.
+- GraphQL `Conversation.dmRequestPending`: for a DM, true while the other member's DM request
+  for it is pending, so the sender can show that their messages wait for acceptance; null for
+  groups and channels.
+
 - GraphQL `ServerInfo.signupRequiresKeys`: true when new accounts sign up with a key only and
   `signupWithInvite` is refused, so a client offers only the key signup.
 - Invitations to encrypted conversations: an encrypted DM or group may now include members who
@@ -116,6 +131,15 @@ tag `v<version>`, the version every crate in the workspace carries.
   at boot.
 
 ### Changed
+
+- Workspace members are no longer always delivered: a member's DM follows the recipient's choice
+  for that workspace, `DIRECT` unless the workspace or the person set `REQUESTS`; Owners and
+  Moderators are always delivered. With the defaults everything arrives as before.
+- Creating a DM records the other person as the creator's contact (`contacts`), so their DM back
+  is never a request.
+- With `RIM_DM_INBOUND=partners` or `none`, `GET /s2s/v1/principals/<id>` answers `404` and key
+  package claims answer `403` to servers that are not partners, except a server hosting a
+  workspace the person subscribed to (`server-to-server-v1.md`, "The request inbox").
 
 - **Upgrade:** password signups are refused by default. `RIM_SIGNUP_REQUIRE_KEYS` (default
   `true`) makes `signupWithInvite` answer `FORBIDDEN` in every registration mode, so new

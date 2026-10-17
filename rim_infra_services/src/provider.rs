@@ -73,6 +73,8 @@ pub struct FederationHooks {
     pub terms_url: Option<String>,
     /// Refuse every password signup, so new accounts sign up with a key.
     pub signup_requires_keys: bool,
+    /// The operator's DM settings.
+    pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
 }
 
 #[derive(Clone)]
@@ -114,6 +116,7 @@ pub struct DefaultAppServiceProvider {
     relay_abuse_service: Arc<dyn RelayAbuseService>,
     ip_block_service: Arc<dyn IpBlockService>,
     instance_operator_service: Arc<dyn InstanceOperatorService>,
+    dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -479,6 +482,12 @@ impl DefaultAppServiceProvider {
         let instance_operator_service: Arc<dyn InstanceOperatorService> = Arc::new(
             crate::operator::DefaultInstanceOperatorService::new(repos.for_relay_abuse()),
         );
+        let dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService> =
+            Arc::new(crate::dm_policy::DefaultDmPolicyService::new(
+                Arc::clone(&repos.dm_policy_repo),
+                Arc::clone(&repos.server_member_repo),
+                federation.dm_policy.clone(),
+            ));
 
         Self {
             audit_log_service,
@@ -518,6 +527,7 @@ impl DefaultAppServiceProvider {
             relay_abuse_service,
             ip_block_service,
             instance_operator_service,
+            dm_policy_service,
         }
     }
 
@@ -660,5 +670,8 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn instance_operator_service(&self) -> Arc<dyn InstanceOperatorService> {
         Arc::clone(&self.instance_operator_service)
+    }
+    fn dm_policy_service(&self) -> Arc<dyn rim_services::dm_policy::service::DmPolicyService> {
+        Arc::clone(&self.dm_policy_service)
     }
 }

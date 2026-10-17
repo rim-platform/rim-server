@@ -119,6 +119,8 @@ async fn the_migration_refuses_down_while_blocks_exist() {
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a block stops the down migration"
     );
+    // Each migration commits on its own: the later ones rolled back before the refusal.
+    Migrator::up(&conn, None).await.expect("up again");
     assert_eq!(repo.list().await.unwrap().len(), 1, "the block survives");
 
     repo.delete("192.0.2.1/32").await.unwrap();

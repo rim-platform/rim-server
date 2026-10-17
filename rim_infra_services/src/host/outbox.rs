@@ -1,7 +1,9 @@
 //! Host events for relays: the writer turns each workspace event into signed envelopes on the
 //! streams its remote recipients see and appends one outbox row per relay (for a workspace,
 //! each relay holding an active delegation of a recipient; for the direct space, the relays a
-//! recipient's card lists); the sender delivers each relay's rows in order with backoff.
+//! recipient's card lists, those the operator's outbound DM setting admits); it files what local
+//! members get through the request inbox: invites and held events of the direct space and of
+//! workspace DMs. The sender delivers each relay's rows in order with backoff.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -14,12 +16,14 @@ use tokio::sync::{Notify, mpsc, watch};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use rim_core::host::model::RemoteMember;
+use rim_core::conversation::model::ConversationType;
+use rim_core::host::model::{RemoteMember, UserKind};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_s2s::SharedIdentity;
 use rim_s2s::host::{HostEventFields, sign_host_event};
+use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
 use rim_services::relay::dto::{DeliverItem, DeliverRequest, DeliverResponse, SignedJson};
@@ -29,7 +33,8 @@ use rim_services::s2s::service::S2sClient;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::host::{DefaultHostService, HostRepos};
-use crate::relay::{MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS};
+use crate::relay::policy::{DmPolicy, outbound};
+use crate::relay::{MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, contact_relays};
 use crate::repos::AppRepos;
 
 /// Largest host event payload.
@@ -215,8 +220,11 @@ pub struct HostEventWriter {
     direct_space_id: ServerId,
     refusals: Arc<RefusalCache>,
     wake: Arc<Notify>,
-    /// Files direct-space events for local members through the request inbox.
+    /// Files direct-space events, and workspace DMs, for local members through the request
+    /// inbox.
     relay: Option<Arc<dyn RelayService>>,
+    /// The operator's DM settings: direct-space events go only to relays they admit.
+    dm_policy: DmOperatorPolicy,
 }
 
 /// Who a `DmInvite` is for.
@@ -243,11 +251,18 @@ impl HostEventWriter {
             refusals,
             wake,
             relay: None,
+            dm_policy: DmOperatorPolicy::default(),
         }
     }
 
-    /// Let local members of the direct space get invites and held events through the request
-    /// inbox.
+    /// Send direct-space events only to relays the operator's outbound DM setting admits.
+    pub fn with_dm_policy(mut self, dm_policy: DmOperatorPolicy) -> Self {
+        self.dm_policy = dm_policy;
+        self
+    }
+
+    /// Let local members of the direct space, and of a workspace's DMs, get invites and held
+    /// events through the request inbox.
     pub fn with_relay(mut self, relay: Arc<dyn RelayService>) -> Self {
         self.relay = Some(relay);
         self
@@ -280,8 +295,13 @@ impl HostEventWriter {
             return Ok(0);
         };
         let workspace_id = ServerId::from(workspace_id);
-        let direct = workspace_id == self.direct_space_id && self.relay.is_some();
-        let (members, delegated) = if workspace_id == self.direct_space_id {
+        let in_direct_space = workspace_id == self.direct_space_id;
+        let direct = in_direct_space && self.relay.is_some();
+        // A workspace's DMs go through its local members' request inbox too.
+        let workspace_dm = !in_direct_space
+            && self.relay.is_some()
+            && event.conversation_type() == Some(ConversationType::Direct.as_str());
+        let (members, delegated) = if in_direct_space {
             (
                 self.repos.host_repo.remote_members(workspace_id).await?,
                 None,
@@ -289,21 +309,23 @@ impl HostEventWriter {
         } else {
             self.delegated(workspace_id, event).await?
         };
-        if members.is_empty() && !direct {
+        if members.is_empty() && !direct && !workspace_dm {
             return Ok(0);
         }
         let event_json = serde_json::to_value(event).map_err(ServiceError::internal)?;
         let mut rows = 0;
-        if workspace_id == self.direct_space_id {
+        if in_direct_space || workspace_dm {
             for (invite, invitee) in self.dm_invites(event, &members).await? {
                 let planned = match invitee {
+                    // A workspace's remote members get its events through their delegations.
+                    Invitee::Remote(_) if workspace_dm => continue,
                     Invitee::Remote(member) => Planned {
                         stream: user_stream(&member),
                         recipients: vec![member],
                         device_id: None,
                         local: Vec::new(),
                     },
-                    Invitee::Local(principal_id) if direct => Planned {
+                    Invitee::Local(principal_id) if direct || workspace_dm => Planned {
                         stream: format!("u:{principal_id}"),
                         recipients: Vec::new(),
                         device_id: None,
@@ -317,7 +339,7 @@ impl HostEventWriter {
             }
         }
         let mut plans = plan(event, &event_json, &members);
-        if direct
+        if (direct || workspace_dm)
             && let Route::Conversation(conversation_id) = route(event, &event_json)
             && let Some(relay) = &self.relay
         {
@@ -400,8 +422,9 @@ impl HostEventWriter {
         Ok((members, Some(relays)))
     }
 
-    /// `DmInvite` events for the members a direct-space conversation was created with or added
-    /// them to, but its creator: remote members, and local ones with a principal id.
+    /// `DmInvite` events for the members a conversation of the direct space, or a workspace DM,
+    /// was created with or added them to, but its creator: remote members, and local ones with a
+    /// principal id. Creating a DM records them as the creator's contacts.
     async fn dm_invites(
         &self,
         event: &WorkspaceEvent,
@@ -438,15 +461,6 @@ impl HostEventWriter {
         let Some(from_principal_id) = creator_user.and_then(|u| u.principal_id) else {
             return Ok(Vec::new());
         };
-        let Some(card) = self
-            .repos
-            .key_identity_repo
-            .get_profile_card(creator)
-            .await?
-        else {
-            warn!(conversation_id = %conversation_id, "no DM invite: the creator has no profile card");
-            return Ok(Vec::new());
-        };
         let member_ids = self
             .repos
             .conversation_member_repo
@@ -457,17 +471,34 @@ impl HostEventWriter {
             .iter()
             .filter_map(|u| u.principal_id.clone())
             .collect();
-        let invitees = added.iter().filter(|id| **id != creator).filter_map(|id| {
-            match members.iter().find(|m| m.user_id == *id) {
+        let invitees: Vec<Invitee> = added
+            .iter()
+            .filter(|id| **id != creator)
+            .filter_map(|id| match members.iter().find(|m| m.user_id == *id) {
                 Some(member) => Some(Invitee::Remote(member.clone())),
                 None => users
                     .iter()
                     .find(|u| u.id == *id)
                     .and_then(|u| u.principal_id.clone())
                     .map(Invitee::Local),
-            }
-        });
+            })
+            .collect();
+        if matches!(event, WorkspaceEvent::ConversationCreated { .. })
+            && conversation.conversation_type == ConversationType::Direct
+        {
+            self.record_contacts(creator, &invitees).await?;
+        }
+        let Some(card) = self
+            .repos
+            .key_identity_repo
+            .get_profile_card(creator)
+            .await?
+        else {
+            warn!(conversation_id = %conversation_id, "no DM invite: the creator has no profile card");
+            return Ok(Vec::new());
+        };
         Ok(invitees
+            .into_iter()
             .map(|m| {
                 (
                     json!({
@@ -485,6 +516,45 @@ impl HostEventWriter {
                 )
             })
             .collect())
+    }
+
+    /// Record the other party of a DM a local user created as their contact, so a DM back from
+    /// them is no request. An existing contact keeps its relay URLs.
+    async fn record_contacts(&self, creator: UserId, invitees: &[Invitee]) -> ServiceResult<()> {
+        if self.repos.host_repo.user_kind(creator).await? != Some(UserKind::Local) {
+            return Ok(());
+        }
+        for invitee in invitees {
+            let (principal_id, card) = match invitee {
+                Invitee::Remote(member) => (&member.principal_id, member.card_payload.clone()),
+                Invitee::Local(principal_id) => {
+                    let card = match self.repos.host_repo.find_user(principal_id).await? {
+                        Some((user_id, _)) => self
+                            .repos
+                            .key_identity_repo
+                            .get_profile_card(user_id)
+                            .await?
+                            .map(|c| c.payload),
+                        None => None,
+                    };
+                    (principal_id, card)
+                }
+            };
+            if self
+                .repos
+                .relay_repo
+                .is_contact(creator, principal_id)
+                .await?
+            {
+                continue;
+            }
+            let relays = card.as_deref().map(contact_relays).unwrap_or_default();
+            self.repos
+                .relay_repo
+                .upsert_contact(creator, principal_id, relays)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Sign one envelope and add an outbox row for each relay its recipients use, in one
@@ -518,6 +588,11 @@ impl HostEventWriter {
             };
             for relay in relays {
                 if self.refusals.is_refused(&relay, &member.principal_id) {
+                    continue;
+                }
+                if workspace_id == self.direct_space_id
+                    && outbound(&self.dm_policy, &own_id, &relay) == DmPolicy::Refuse
+                {
                     continue;
                 }
                 by_relay

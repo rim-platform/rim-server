@@ -179,6 +179,10 @@ Per local user, set in `deploy/.env`; the compose file has the public relay's va
 | `RIM_RELAY_RETENTION_DAYS` | 30 | Queued items and DM requests are deleted |
 | `RIM_REGISTRATION_POW_BITS` | 24 | Signups without a registration token need a proof-of-work of that many leading zero bits (about 2^24 hashes); the open-signup limit of 20 per IP per 10 minutes applies too |
 
+The public relay keeps the DM defaults, `RIM_DM_INBOUND=requests` and
+`RIM_DM_OUTBOUND=allowed`: a stranger's first message is a request, from anywhere ("Who May Start
+A DM" in `docs/messaging.md`).
+
 To change one, edit `deploy/.env` and run `dc up -d`: the server restarts in seconds and apps
 reconnect. The per-minute and per-day counters are in memory, so a restart starts them afresh.
 Each extra bit of proof-of-work doubles a signup's cost; the descriptor tells apps the new value

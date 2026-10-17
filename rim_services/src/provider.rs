@@ -76,4 +76,6 @@ pub trait AppServiceProvider: Send + Sync {
     fn ip_block_service(&self) -> Arc<dyn IpBlockService>;
     /// Who is an instance operator.
     fn instance_operator_service(&self) -> Arc<dyn InstanceOperatorService>;
+    /// Workspaces' DM rules and each person's choice of who may start a DM with them.
+    fn dm_policy_service(&self) -> Arc<dyn crate::dm_policy::service::DmPolicyService>;
 }

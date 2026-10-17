@@ -1,7 +1,8 @@
 # The relay
 
 A relay is the server a person's app talks to. It keeps their account, devices and profile card,
-queues what other servers send them, files conversations from strangers in a request inbox, and
+queues what other servers send them, files the conversations their DM settings take as requests
+in a request inbox, and
 forwards their requests to the servers that host the spaces they use. Every server is the relay of
 its local users unless it runs with `RIM_ROLE=host`. This page explains what a relay and a host
 do, for operators and for client authors. The contract is `docs/specs/server-to-server-v1.md`;
@@ -84,16 +85,21 @@ while the relay was down arrives on the next pull.
 
 ### The request inbox
 
-A relay files a conversation as a DM request when its invite (`DmInvite`) comes from someone who
-is not the recipient's contact, was never accepted by them and shares no workspace this server
-hosts with them. The request keeps the sender's card
-and holds up to three items of the conversation; later ones are dropped until it is accepted.
-Conversations from contacts are recorded as accepted at once. Items of a conversation the relay
-has no invite for are refused (`not_subscribed`), so a host cannot skip the inbox.
+A relay files a conversation's invite (`DmInvite`) by the recipient's effective DM setting, the
+three layers of `docs/messaging.md` ("Who May Start A DM"): the operator's `RIM_DM_INBOUND`, then
+the floors of the recipient's workspaces, then the recipient's choice, with fellow members of a
+workspace hosted here judged by the recipient's choice for that workspace (or its default) and
+delivered when they are its Owner or a Moderator. What the setting delivers is recorded as
+accepted at once; what it takes as a request is filed as a DM request; what it refuses is
+answered `blocked`. A request keeps the sender's card and holds up to three items of the
+conversation; later ones are dropped until it is accepted. Items of a conversation the relay has
+no invite for are refused (`not_subscribed`), so a host cannot skip the inbox. A decided
+conversation keeps its decision when the settings change later.
 
 The same rule covers conversations of this server's own direct space whose creator is someone
-else: a person from another relay creating a DM with a local user through the forward path, or a
-local stranger. The server files its own invite for the local member; until they accept, the
+else (a person from another relay creating a DM with a local user through the forward path, or a
+local user), and DMs between members of a workspace this server hosts. The server files its own
+invite for the local member; until they accept, the
 conversation is left out of their `inboxConversations`, its events out of their
 `workspaceEvents`, and its notifications, mentions and unread counts out of the notification
 list, the bell, `unreadCounts` and the email digest; its first events are held with
@@ -113,6 +119,14 @@ Limits: 100 pending requests per recipient and `RIM_RELAY_DM_REQUESTS_PER_DAY` (
 principal per day on this relay; past them invites are refused as `limited`. A claim of a local user's key packages by a stranger
 (not a contact, never accepted, sharing no workspace here) gets last-resort packages only, at
 most 20 claims per stranger per day.
+
+With `RIM_DM_INBOUND=partners` the identity endpoint (`GET /s2s/v1/principals/<id>`) answers
+only the servers `RIM_DM_PARTNERS` lists, and with `none` no server; everyone else gets `404` as
+for an unknown principal, so a leaked directory reaches nobody. Key package claims from those
+servers are refused (`403`). A server where the person holds an active subscription to a
+workspace is answered either way: they joined it. Outbound, `RIM_DM_OUTBOUND` decides which
+servers a local user may start a DM with, claim key packages from, and have direct-space events
+sent to (`docs/messaging.md`).
 
 ### Forwarded requests
 

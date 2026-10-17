@@ -9,6 +9,8 @@ pub mod conversation_member;
 pub mod conversation_read_state;
 pub mod custom_emoji;
 pub mod device_link;
+// pub: rim_infra_db stores it, rim_services and rim_infra_services apply it, rim_api shows it.
+pub mod dm_policy;
 pub mod e2ee;
 pub mod host;
 pub mod ip_block;

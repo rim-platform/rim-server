@@ -592,6 +592,8 @@ async fn the_migration_refuses_down_while_delegations_or_subscriptions_exist() {
         Migrator::down(&conn, Some(steps)).await.is_err(),
         "a subscription blocks the down migration"
     );
+    // Each migration commits on its own: the later ones rolled back before the refusal.
+    Migrator::up(&conn, None).await.expect("up again");
     assert!(table_exists(&conn, "host_delegation").await);
     ctx.db
         .execute_unprepared("DELETE FROM relay_subscription")

@@ -294,6 +294,9 @@ Actix's request types.
 | `RIM_SERVER_KEY_FILE` | `<RIM_DATA_DIR>/server-key.json` | The server key seed |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids allowed on host endpoints (`join`, `subscriptions`, `forward`, `revocations`, `presence`) |
 | `RIM_S2S_DENIED_PEERS` | empty | Server ids refused everywhere |
+| `RIM_DM_INBOUND` | `requests` | DMs from other servers and from strangers here: `open`, `requests`, `partners`, `none` ("The request inbox") |
+| `RIM_DM_OUTBOUND` | `allowed` | DMs local users start with other servers: `allowed`, `partners`, `none` |
+| `RIM_DM_PARTNERS` | empty | Server ids the `partners` settings name |
 | `RIM_S2S_PEER_RATE_PER_MIN` | 600 | Requests per peer (in memory, per node) |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations per relay on a host |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device |
@@ -603,8 +606,25 @@ the earlier) and members leave the other. Members learn a conversation is a succ
 
 ### The request inbox
 
-R_B files a `DmInvite` from a principal outside Bob's contacts, never accepted and sharing no
-workspace R_B hosts with him as a **DM request** (`relay_dm_request`): the sender's card, the conversation, and up to 3 held items of it,
+R_B files a `DmInvite` by Bob's **effective DM setting**, three layers where each may only
+tighten the one above:
+
+| Layer | Senders outside Bob's workspaces on R_B | Members of a workspace R_B hosts with Bob |
+|---|---|---|
+| R_B's operator | `RIM_DM_INBOUND`: `open`, `requests` (default), `partners` (the servers `RIM_DM_PARTNERS` lists, and R_B), `none` | none |
+| Each of Bob's workspaces on R_B | A floor: none, `requests` or `closed` | A default: `direct` or `requests` |
+| Bob | `requests` or `none`, within the floors | Per workspace `direct` or `requests` |
+
+A member of a shared workspace is delivered when they are its Owner or a Moderator, Bob's
+contact, or when Bob's choice (else the workspace's default) for one shared workspace is
+`direct`; otherwise the invite is a request. Anyone else is refused (`blocked`) when the
+conversation's host is a server `RIM_DM_INBOUND` does not admit, contacts included; then a contact
+or a principal Bob accepted before is delivered, and otherwise the strictest of the operator's
+floor (`none` refuses senders on R_B too), the workspaces' floors and Bob's choice makes it a
+request or a refusal (`blocked`). A **contact** is someone Bob added, accepted, or messaged first:
+the home records each other member of a DM as its creator's contact.
+
+A request is a `relay_dm_request` row: the sender's card, the conversation, and up to 3 held items of it,
 the `DmInvite` first (later ones dropped until accepted; the app reads them from the host). The
 app verifies the held `DmInvite` like any relay item to bind the conversation's space to its home
 before it reads or leaves it; ignoring or blocking keeps it with the request until the row
@@ -615,7 +635,10 @@ items of any other conversation are refused.
 
 When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
 its creator is someone else, from another relay or not), the home files its own `DmInvite` for
-Bob through the same rule instead of delivering it. The invite and the conversation's events are
+Bob through the same rule instead of delivering it; the creator's server is the home, or the home
+relay of a creator from another server. A DM between members of a workspace R_B hosts is filed
+the same way, its `DmInvite` naming the workspace as `workspace_id`. A DM the rule refuses for a
+member of the home is refused when it is created (`FORBIDDEN`). The invite and the conversation's events are
 held as above, and until Bob accepts, the conversation is left out of his `inboxConversations`,
 its events out of his `workspaceEvents`, and its notifications, mentions and unread messages out
 of his `myNotifications`, `myUnreadNotificationCount`, `unreadCounts` and email
@@ -632,12 +655,21 @@ Once accepted it is an ordinary conversation of the space he uses directly.
 The app shows the card's name (verified against the sender's key log) and a fingerprint of the
 principal id, `base32(first 10 bytes of SHA-256("rim.principal-fingerprint.v1\0" || principal id))`
 in four groups of four, the same on every device, and may process the Welcome to read the held
-messages before deciding. It accepts on its own when the sender shares a workspace
-with the person (checked on host-signed member lists): workspace members are never strangers.
+messages before deciding. It may accept on its own a request from someone the person's settings
+for a shared workspace deliver directly (`myDmSettings`, checked on host-signed member lists),
+such as a member of a workspace hosted on another server, which R_B cannot see.
 Limits: 100 pending per recipient, 20 per sender principal per day per relay
 (`RIM_RELAY_DM_REQUESTS_PER_DAY`); `reportDmRequest(id, reason)` reports abuse: it files a
 `relay_abuse_report` row naming the reporter, the sender, the host and the request (audit
 `relay.dm_request_reported`), and a pending request is ignored.
+
+Under `RIM_DM_INBOUND=partners` R_B answers `GET /s2s/v1/principals/<id>` only to the servers
+`RIM_DM_PARTNERS` lists (the S2S signature names the caller), under `none` to no server: `404`
+as for an unknown principal. `POST /s2s/v1/key-packages/claim` from those servers is refused with
+`403`. A server where the principal holds an active subscription to a workspace is answered
+either way. Outbound, `RIM_DM_OUTBOUND` (`allowed`, `partners`, `none`) limits the servers whose
+people R_B's users may add to a conversation of its direct space and claim key packages from, and
+the relays R_B sends direct-space events to.
 
 ## Remote workspace members (7.4b)
 

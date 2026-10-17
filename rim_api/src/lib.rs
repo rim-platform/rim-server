@@ -48,6 +48,8 @@ pub struct RegistrationContext {
     pub instance_policy: crate::types::InstancePolicy,
     /// The instance-wide caps `serverInfo.limits` reports.
     pub instance_limits: rim_services::limits::InstanceLimits,
+    /// The operator's DM settings `serverInfo` reports.
+    pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
 }
 
 /// The GraphQL schema with its loaders, services and per-deployment context wired in, limited
@@ -128,6 +130,7 @@ pub fn build_schema(
         .data(service_provider.relay_abuse_service())
         .data(service_provider.ip_block_service())
         .data(service_provider.instance_operator_service())
+        .data(service_provider.dm_policy_service())
         .data(presence_manager)
         .data(typing_tracker)
         .data(observers)
@@ -145,6 +148,7 @@ pub fn build_schema(
         .extension(crate::subscriptions_only::SubscriptionsOnly)
         .data(registration.instance_policy)
         .data(registration.instance_limits)
+        .data(registration.dm_policy)
         .limit_depth(10)
         .limit_complexity(200);
     match federation {

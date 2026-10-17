@@ -103,13 +103,13 @@ impl Subscription {
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();
         let subscriber_user_id = actor.to_string();
-        // In the direct space, a conversation in the subscriber's request inbox (or from a
-        // creator they blocked) stays quiet until they accept it.
-        let inbox = ctx
-            .data::<crate::federation::FederationContext>()
-            .ok()
-            .filter(|f| f.info.direct_space_id.to_string() == ws_id)
-            .map(|f| Arc::clone(&f.relay));
+        // A conversation in the subscriber's request inbox (in the direct space also one from a
+        // creator they blocked) stays quiet until they accept it. In a workspace only its DMs
+        // go through the inbox: events of channels and groups are not checked.
+        let federation = ctx.data::<crate::federation::FederationContext>().ok();
+        let in_direct_space =
+            federation.is_some_and(|f| f.info.direct_space_id.to_string() == ws_id);
+        let inbox = federation.map(|f| Arc::clone(&f.relay));
 
         // Use async_stream to handle Lagged errors gracefully without ending the stream.
         // BroadcastStream ends on Lagged, so we use the raw receiver directly.
@@ -137,7 +137,11 @@ impl Subscription {
                         );
                         if user_can_see_event_as(&event, &subscriber_user_id, is_guest)
                             && let Ok(json) = serde_json::to_string(&event) {
-                                let conversation_id = inbox.as_ref().and_then(|_| {
+                                let through_inbox = in_direct_space
+                                    || event.conversation_type().is_none_or(|t| {
+                                        t == rim_core::conversation::model::ConversationType::Direct.as_str()
+                                    });
+                                let conversation_id = inbox.as_ref().filter(|_| through_inbox).and_then(|_| {
                                     serde_json::to_value(&event)
                                         .ok()?
                                         .get("conversation_id")?

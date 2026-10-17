@@ -1,5 +1,6 @@
-//! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), its
-//! queue cap, contacts, identity fetches and remote server lookups, and the host's checks of forwarded
+//! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), the
+//! operator's DM settings at its claims, identities and request inbox, its queue cap,
+//! contacts, identity fetches and remote server lookups, and the host's checks of forwarded
 //! device requests (the device, its signature, the forwarded body, the `seq` window, and which
 //! relay may carry a user's traffic).
 
@@ -10,6 +11,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration, Utc};
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
+use rim_core::dm_policy::model::DmInbound;
+use rim_core::dm_policy::repository::MockDmPolicyRepository;
 use rim_core::e2ee::model::{ClaimedKeyPackage, MlsKeyPackageId};
 use rim_core::e2ee::repository::MockE2eeRepository;
 use rim_core::host::model::{SeqDecision, UserKind};
@@ -32,6 +35,7 @@ use rim_s2s::{
     Endpoints, Limits, Registration, RegistrationMode, Role, ServerDescriptor, ServerIdentity,
     ServerKeyState, ServerSigner, SharedIdentity, sign_descriptor, sign_inception, timestamp,
 };
+use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::host::dto::{ForwardRefusal, ForwardRequest};
 use rim_services::host::service::{HostService, MockDelegationCheck};
 use rim_services::relay::dto::{ClaimConversation, Claimer, PeerClaimRequest};
@@ -131,6 +135,7 @@ fn empty_repos() -> RelayRepos {
         user_repo: Arc::new(MockUserRepository::new()),
         subscription_repo: Arc::new(MockSubscriptionRepository::new()),
         relay_abuse_repo: Arc::new(blocks(&[])),
+        dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
     }
 }
 
@@ -168,6 +173,20 @@ fn relay_with_blocks(
     one_time: Arc<Mutex<Vec<bool>>>,
     server_blocks: &[&str],
 ) -> DefaultRelayService {
+    relay_service(
+        claim_repos(contact, blocked, one_time, server_blocks),
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    )
+}
+
+/// The repositories of [`relay_with_blocks`].
+fn claim_repos(
+    contact: bool,
+    blocked: bool,
+    one_time: Arc<Mutex<Vec<bool>>>,
+    server_blocks: &[&str],
+) -> RelayRepos {
     let bob = UserId::new();
     let mut host = MockHostRepository::new();
     host.expect_find_user()
@@ -202,18 +221,14 @@ fn relay_with_blocks(
                 }))
             })
         });
-    relay_service(
-        RelayRepos {
-            relay_repo: Arc::new(relay),
-            host_repo: Arc::new(host),
-            key_identity_repo: Arc::new(keys),
-            e2ee_repo: Arc::new(e2ee),
-            relay_abuse_repo: Arc::new(blocks(server_blocks)),
-            ..empty_repos()
-        },
-        MockPeerService::new(),
-        MockS2sClient::new(),
-    )
+    RelayRepos {
+        relay_repo: Arc::new(relay),
+        host_repo: Arc::new(host),
+        key_identity_repo: Arc::new(keys),
+        e2ee_repo: Arc::new(e2ee),
+        relay_abuse_repo: Arc::new(blocks(server_blocks)),
+        ..empty_repos()
+    }
 }
 
 fn claim(host: &str) -> PeerClaimRequest {
@@ -325,6 +340,267 @@ fn a_strangers_refused_claim_is_counted_under_its_limiter() {
         ),
         1
     );
+}
+
+// ── The operator's DM settings at the relay ──────────────────────────────────────────────
+
+const OTHER: &str = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
+
+fn inbound(inbound: DmInbound, partners: &[&str]) -> DmOperatorPolicy {
+    DmOperatorPolicy {
+        inbound,
+        partners: partners.iter().map(|p| p.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+/// Subscriptions where the user holds an active one at `hosts` only.
+fn subscribed_at(hosts: &[&str]) -> MockSubscriptionRepository {
+    let hosts: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_subscribed_hosts()
+        .returning(move |_, _| {
+            let hosts = hosts.clone();
+            Box::pin(async move { Ok(hosts) })
+        });
+    subscriptions
+}
+
+/// A claiming relay under `policy` whose user is subscribed at `hosts`.
+fn gated_relay(policy: DmOperatorPolicy, hosts: &[&str]) -> DefaultRelayService {
+    relay_service(
+        RelayRepos {
+            subscription_repo: Arc::new(subscribed_at(hosts)),
+            ..claim_repos(false, false, Arc::default(), &[])
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    )
+    .with_dm_policy(policy)
+}
+
+#[tokio::test]
+async fn a_host_the_operator_does_not_admit_claims_only_where_the_user_is_subscribed() {
+    for policy in [
+        inbound(DmInbound::None, &[]),
+        inbound(DmInbound::Partners, &[OTHER]),
+    ] {
+        let err = gated_relay(policy.clone(), &[OTHER])
+            .claim_for_peer(PEER.to_string(), claim(PEER))
+            .await
+            .expect_err("not admitted");
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+        gated_relay(policy, &[PEER])
+            .claim_for_peer(PEER.to_string(), claim(PEER))
+            .await
+            .expect("the user's own host");
+    }
+    gated_relay(inbound(DmInbound::Partners, &[PEER]), &[])
+        .claim_for_peer(PEER.to_string(), claim(PEER))
+        .await
+        .expect("a partner");
+}
+
+#[tokio::test]
+async fn a_server_the_operator_does_not_admit_reads_no_identity() {
+    let svc = gated_relay(inbound(DmInbound::Partners, &[OTHER]), &[]);
+    assert_eq!(
+        svc.identity_for_peer(PEER.to_string(), BOB.to_string())
+            .await
+            .expect("answered"),
+        None
+    );
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    let unknown = relay_service(
+        RelayRepos {
+            host_repo: Arc::new(host),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    );
+    assert_eq!(
+        unknown
+            .identity_for_peer(PEER.to_string(), BOB.to_string())
+            .await
+            .expect("answered"),
+        None,
+        "nobody local holds the principal"
+    );
+}
+
+/// A `DmInvite` from `PEER` to Bob from Alice, signed by `signer`.
+fn invite_item(signer: &ServerSigner) -> DeliverItem {
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let event = serde_json::json!({
+        "type": "DmInvite",
+        "workspace_id": workspace_id,
+        "conversation_id": Uuid::from_u128(9),
+        "from_principal_id": ALICE,
+        "from_card": { "payload": "{}", "signature": "ed25519:c" },
+        "member_principal_ids": [ALICE, BOB],
+    })
+    .to_string();
+    let stream = format!("u:{BOB}");
+    let statement = sign_host_event(
+        signer,
+        &HostEventFields {
+            host: PEER,
+            key_seq: 0,
+            workspace_id: &workspace_id,
+            stream: &stream,
+            seq: Some(1),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    DeliverItem {
+        id: "1".to_string(),
+        envelope: SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        recipients: vec![BOB.to_string()],
+        device_id: None,
+    }
+}
+
+/// A relay under `policy` where Alice is a stranger to Bob with default settings; `filed`
+/// records the status of each request it files.
+fn inbox_relay(
+    policy: DmOperatorPolicy,
+    filed: Arc<Mutex<Vec<rim_core::relay::model::DmRequestStatus>>>,
+) -> DefaultRelayService {
+    use rim_core::relay::model::{DmRequest, DmRequestId};
+
+    let bob = UserId::new();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_find_request()
+        .returning(|_, _, _| Box::pin(async { Ok(None) }));
+    relay
+        .expect_is_blocked()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay
+        .expect_is_contact()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay
+        .expect_accepted_from()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay
+        .expect_count_pending_requests()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_count_requests_from()
+        .returning(|_, _| Box::pin(async { Ok(0) }));
+    relay.expect_insert_request().returning(move |new| {
+        filed.lock().expect("lock").push(new.status);
+        Box::pin(async move {
+            Ok(DmRequest {
+                id: DmRequestId::new(),
+                user_id: new.user_id,
+                from_principal_id: new.from_principal_id,
+                card_payload: new.card_payload,
+                card_signature: new.card_signature,
+                host_server_id: new.host_server_id,
+                conversation_id: new.conversation_id,
+                status: new.status,
+                created_at: Utc::now(),
+                decided_at: None,
+                expires_at: new.expires_at,
+            })
+        })
+    });
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_insert_item()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    let mut dm = MockDmPolicyRepository::new();
+    dm.expect_shared_workspaces()
+        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+    dm.expect_user_workspaces()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    dm.expect_outside()
+        .returning(|_| Box::pin(async { Ok(rim_core::dm_policy::model::OutsideDm::Requests) }));
+    let signer = host_signer(40);
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            dm_policy_repo: Arc::new(dm),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&signer, 0), None),
+        MockS2sClient::new(),
+    )
+    .with_dm_policy(policy)
+}
+
+/// What Bob's relay does with Alice's invite from `PEER` under `policy`: the refusal reason
+/// and the requests filed.
+async fn file_invite(
+    policy: DmOperatorPolicy,
+) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
+    let filed = Arc::default();
+    let svc = inbox_relay(policy, Arc::clone(&filed));
+    let response = svc
+        .deliver(PEER.to_string(), vec![invite_item(&host_signer(40))])
+        .await
+        .expect("delivered");
+    let refused = response.refused.into_iter().map(|r| r.reason).collect();
+    let filed = filed.lock().expect("lock").clone();
+    (refused, filed)
+}
+
+#[tokio::test]
+async fn an_invite_from_a_server_the_operator_admits_files_a_request() {
+    use rim_core::relay::model::DmRequestStatus;
+    for policy in [
+        DmOperatorPolicy::default(),
+        inbound(DmInbound::Open, &[]),
+        inbound(DmInbound::Partners, &[PEER]),
+    ] {
+        assert_eq!(
+            file_invite(policy).await,
+            (Vec::new(), vec![DmRequestStatus::Pending])
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_invite_from_a_server_the_operator_refuses_is_refused_as_blocked() {
+    for policy in [
+        inbound(DmInbound::None, &[PEER]),
+        inbound(DmInbound::Partners, &[OTHER]),
+    ] {
+        assert_eq!(
+            file_invite(policy).await,
+            (vec!["blocked".to_string()], Vec::new())
+        );
+    }
 }
 
 // ── The relay queue ──────────────────────────────────────────────────────────────────────
@@ -1013,6 +1289,7 @@ fn host(facts: Facts, delegated: Option<bool>) -> (DefaultHostService, String) {
             server_member_repo: Arc::new(members),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
             relay_abuse_repo: Arc::new(blocks(if facts.server_blocked { &[BOB] } else { &[] })),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
         },
         None,
         shared,
@@ -1219,6 +1496,9 @@ fn probation_host(
     let mut host = MockHostRepository::new();
     host.expect_find_user()
         .returning(|_| Box::pin(async { Ok(None) }));
+    // Users it knows by id only: no DM settings or relays to check.
+    host.expect_user_kind()
+        .returning(|_| Box::pin(async { Ok(None) }));
     host.expect_shares_workspace()
         .returning(move |user, principal| {
             let shared = user == ada && principal == coworker;
@@ -1236,6 +1516,7 @@ fn probation_host(
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
             relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
         },
         None,
         identity(41),
@@ -1309,4 +1590,24 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     off.ensure_may_request(Actor::new(ada), vec![stranger])
         .await
         .expect("no probation on this instance");
+}
+
+#[tokio::test]
+async fn outbound_none_refuses_a_person_on_another_server_before_reaching_their_relay() {
+    let ada = UserId::new();
+    let host = probation_host(ada, Vec::new(), Utc::now()).with_dm_policy(DmOperatorPolicy {
+        outbound: rim_core::dm_policy::model::DmOutbound::None,
+        ..Default::default()
+    });
+    let err = host
+        .ensure_remote_member(
+            Actor::new(ada),
+            rim_services::host::dto::RemoteMemberRef {
+                principal_id: TestIdentity::new(64).principal_id(),
+                relay_urls: vec!["https://relay.example".to_string()],
+            },
+        )
+        .await
+        .expect_err("refused");
+    assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
 }
