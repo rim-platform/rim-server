@@ -24,7 +24,7 @@ pub const AUDIT_TARGET: &str = "audit";
 const DEFAULT_AUDIT_LOG_PATH: &str = "audit.log";
 
 /// Env var that overrides the audit log path. Accepts either a directory
-/// (file is named `audit.log` inside) or a full file path; we always pass
+/// (file is named `audit.log` inside) or a full file path; the logger always passes
 /// a (directory, file_name) tuple to `tracing_appender` so the override is
 /// directory-only — full-path is interpreted as the parent dir's
 /// `audit.log` to keep the convention stable.
@@ -103,7 +103,7 @@ where
 
 /// Resolves the directory to write `audit.log` into. `RIM_AUDIT_LOG_PATH`
 /// override is interpreted as the parent directory; if it points at a
-/// file, we strip the file name and use the parent. Empty / unset →
+/// file, the file name is stripped and the parent used. Empty / unset →
 /// current working directory.
 fn audit_log_dir() -> PathBuf {
     match std::env::var(AUDIT_LOG_PATH_ENV) {

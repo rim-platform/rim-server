@@ -161,8 +161,8 @@ async fn ai_surface_lists_chat_list_channels_when_actor_has_chat_read() {
 /// stopped honouring `check_many=false` would only show up at execute time
 /// without this.
 ///
-/// The DesktopLocal commands have empty `required_capabilities`, so when we
-/// deny `chat.read` and `chat.write` the cap-gated commands drop but the
+/// The DesktopLocal commands have empty `required_capabilities`, so when the
+/// test denies `chat.read` and `chat.write` the cap-gated commands drop but the
 /// nav/settings DesktopLocal commands survive; `chat.list_channels` must be
 /// dropped.
 #[tokio::test]

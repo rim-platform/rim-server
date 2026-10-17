@@ -61,8 +61,8 @@ pub fn verify_csrf_token(csrf_token: &str, session_token: &str) -> bool {
     let mut mac =
         HmacSha256::new_from_slice(session_token.as_bytes()).expect("HMAC accepts any key size");
     mac.update(&nonce);
-    // verify_slice performs constant-time comparison internally.
-    // We still need to check against the provided signature, not the expected one.
+    // verify_slice performs constant-time comparison internally; it is given the
+    // provided signature, not the expected one.
     drop(expected_sig);
     let mut verify_mac =
         HmacSha256::new_from_slice(session_token.as_bytes()).expect("HMAC accepts any key size");
