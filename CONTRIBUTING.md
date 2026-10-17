@@ -96,9 +96,10 @@ most:
   binary back. Removing or renaming takes two releases: one stops using the column or table, the
   next drops it, with an **Upgrade:** line in the changelog. Every `down` undoes its `up`.
   `docs/operations/upgrade.md` is the operator's side of this.
-- **Comments** say what an item is and what it does, briefly. No history ("was", "used to",
-  "now"), no references to plans, tickets, stages or pull requests, and no "see section N of the
-  spec". The commit message and the pull request carry the why of a change.
+- **Comments** say what an item is and does, what it accepts and what it returns; rustdoc opens
+  with a summary sentence and has `# Errors` and `# Panics` where they apply. No history, no
+  references to docs, plans, tickets or pull requests, no finding ids, persona names or TODOs.
+  `cargo test --workspace` fails on a comment that breaks this and names the line.
 
 ## Commit messages
 
