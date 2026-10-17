@@ -29,7 +29,7 @@
 //! confirmation gate and capability gate compose correctly under the
 //! dispatch ordering (cap → confirmation → execute), and that a real
 //! challenge issued by the service round-trips cleanly through a real proof
-//! on a follow-up call. Moving the cap gate inside the confirmation block
+//! on a later call. Moving the cap gate inside the confirmation block
 //! would silently break the anti-probe ordering — this test catches it.
 
 use std::sync::Arc;
@@ -237,7 +237,7 @@ async fn dispatch_gates_end_to_end_smoke_test() {
     //     the gate ordering (confirmation BEFORE cap) would still surface
     //     PermissionDenied to the caller — masking the actual security
     //     leak: a token minted for the denied actor now sits in the store,
-    //     and a follow-up call could submit it. The `store.is_empty()`
+    //     and a later call could submit it. The `store.is_empty()`
     //     assertion below is the only way to catch this — observable
     //     behavior alone (return value) is insufficient.
     {
@@ -261,8 +261,8 @@ async fn dispatch_gates_end_to_end_smoke_test() {
     // ── Scenario 2 ────────────────────────────────────────────────────────
     // Capability passes. No proof submitted. Server must issue a fresh
     // challenge and return `ConfirmationRequired` — `delete_message` MUST
-    // NOT be called (no expectation set; mock would panic if invoked). We
-    // also assert the challenge shape (non-empty token + 64-char hex hash)
+    // NOT be called (no expectation set; mock would panic if invoked). The
+    // challenge shape (non-empty token + 64-char hex hash) is asserted too
     // so a regression that returns an empty token slips here, not silently
     // through to S3.
     {
@@ -295,10 +295,10 @@ async fn dispatch_gates_end_to_end_smoke_test() {
     // ── Scenario 3 ────────────────────────────────────────────────────────
     // Cap passes. Caller submits a *valid* proof. Dispatch reaches
     // `delete_message`. The challenge from S2 was issued by a DIFFERENT
-    // service instance, so its store is gone — we must re-issue here. The
+    // service instance, so its store is gone and this scenario re-issues it. The
     // realistic flow is: (a) first call to a single service issues the
-    // challenge, (b) second call to the *same* service consumes it. We
-    // model that with one service + two sequential calls.
+    // challenge, (b) second call to the *same* service consumes it. This
+    // scenario models that with one service + two sequential calls.
     {
         let mut message_service = MockMessageService::new();
         let expected_msg_id = fx.message_id;
@@ -454,8 +454,8 @@ async fn dispatch_gates_end_to_end_smoke_test() {
         let mut audit_svc = MockAuditLogService::new();
         audit_svc
             .expect_write_entry()
-            // The dispatcher emits one entry per execute_command call. We
-            // expect exactly 2: one for the ConfirmationRequired challenge
+            // The dispatcher emits one entry per execute_command call, so
+            // exactly 2 are expected: one for the ConfirmationRequired challenge
             // call and one for the successful dispatch call.
             .returning(move |entry: AuditLogEntryDto| {
                 if entry.outcome == AuditOutcome::Success {

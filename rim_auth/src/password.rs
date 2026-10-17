@@ -142,7 +142,7 @@ mod tests {
         // Pre-computed with argon2 default (m=19456, t=2, p=1), password = "oldpassword".
         // If this hash is ever regenerated, make sure to use the OLD params.
         // The string below was generated with: Argon2::default().hash_password(b"oldpassword", &salt)
-        // We compute it dynamically here using old params to avoid hardcoding a salt.
+        // The test computes it with the old params at run time to avoid hardcoding a salt.
         let old_params = Params::new(19 * 1024, 2, 1, None).expect("valid params");
         let old_argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, old_params);
         let salt = argon2::password_hash::SaltString::generate(&mut OsRng);

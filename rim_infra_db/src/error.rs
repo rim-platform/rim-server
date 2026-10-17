@@ -76,7 +76,7 @@ fn classify_error_chain(err: &(dyn StdError + 'static)) -> Option<(RepoErrorKind
 
 fn classify_db_err_by_display(err: &DbErr) -> Option<(RepoErrorKind, Option<String>)> {
     // Fallback for cases where the error chain doesn't expose `sqlx_core::Error` as a concrete
-    // type we can downcast to.
+    // type to downcast to.
     let s = err.to_string();
     if s.contains("violates foreign key constraint") {
         return Some((RepoErrorKind::Conflict, None));

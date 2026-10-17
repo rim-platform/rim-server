@@ -12,8 +12,8 @@
 //!     palette pattern). They're inert at the backend executor (return
 //!     `Validation` per the executor's "must run in client runtime" arm) —
 //!     the AI agent's tool call would route through the frontend
-//!     dispatcher, NOT the executor, for these. We assert the executor
-//!     rejection here so a refactor that accidentally makes them
+//!     dispatcher, NOT the executor, for these. The executor rejection
+//!     is asserted here so a refactor that accidentally makes them
 //!     server-executable surfaces immediately.
 //!
 //!   - **Backend-executable commands** — `chat.post_message` and
@@ -228,7 +228,7 @@ async fn ai_surface_preserves_desktop_local_target_on_navigation_commands() {
 async fn execute_command_post_message_round_trips_through_executor() {
     // chat.post_message is `ai_callable: true, sensitivity: Mutating`.
     // Agent initiator + Mutating sensitivity requires a ConfirmationProof.
-    // We pre-issue a proof against the service's own store and pass it in.
+    // A proof is pre-issued against the service's own store and passed in.
     use rim_services::command::confirmation::ConfirmationProof;
 
     let workspace = ServerId::new();
@@ -440,9 +440,9 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
 
 #[tokio::test]
 async fn execute_command_create_channel_without_description_skips_update_topic() {
-    // Mirror of the above for the no-description path. We do NOT set up
-    // an `expect_update_topic` — mockall will panic on any unexpected
-    // call, which is exactly the regression we want to catch.
+    // Mirror of the above for the no-description path. No
+    // `expect_update_topic` is set up — mockall will panic on any unexpected
+    // call, which is exactly the regression this test catches.
     // Agent + Mutating requires a pre-issued ConfirmationProof.
     use rim_services::command::confirmation::ConfirmationProof;
 

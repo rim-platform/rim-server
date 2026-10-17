@@ -5014,6 +5014,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "migration",
  "mime_guess",
+ "regex",
  "rim_api",
  "rim_auth",
  "rim_core",

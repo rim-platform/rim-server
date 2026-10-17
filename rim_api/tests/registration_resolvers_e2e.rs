@@ -194,8 +194,8 @@ async fn query_preview_invite_token_workspace_happy_path() {
     assert_eq!(code, "INVALID_TOKEN", "error code mismatch: {code}");
 
     // ── 31st request from same IP → RATE_LIMITED ──────────────────────────
-    // The rate limit is 30/5 min/IP. We drive 31 requests with the same
-    // (unknown) token and the same IP injected via RemoteIp context data.
+    // The rate limit is 30/5 min/IP. 31 requests carry the same (unknown)
+    // token and the same IP, injected via RemoteIp context data.
     // The first 30 return INVALID_TOKEN (unknown token), the 31st should
     // return RATE_LIMITED.
     {

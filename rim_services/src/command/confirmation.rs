@@ -605,7 +605,7 @@ mod tests {
         let challenge = issue_in_band(&store, &actor, "chat.delete_message", &args_a, &ctx);
         let proof = ConfirmationProof::InBandToken {
             token: challenge.token,
-            args_hash: challenge.args_hash, // hash of args_a, but we'll execute with args_b
+            args_hash: challenge.args_hash, // hash of args_a, but the call executes with args_b
         };
 
         let err = verify_in_band(&store, &proof, &actor, "chat.delete_message", &args_b, &ctx)
