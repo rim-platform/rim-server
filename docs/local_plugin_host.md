@@ -98,8 +98,14 @@ The implementation lives in `rim-ui/src-tauri/src/plugin_host/` (`git_source.rs`
 
 ### Iframe Sandbox
 
-Plugin UI panels are hosted in sandboxed iframes served via a Tauri custom protocol
-(`rim-plugin://{plugin_id}/{panel_id}/index.html`).
+Plugin UI panels are hosted in sandboxed iframes that load the frame shell web plugins use
+(see `docs/specs/web-plugins-v1.md`), at `rim-plugin://shell/v1/local-panel.html`. The desktop
+host reads the panel folder `panels/{panel_id}/` of an enabled plugin that declares that panel
+(the `plugin_panel_files` command) and hands the files to the shell, which runs them as `blob:`
+URLs; the scheme serves no plugin file itself. `local-panel.html` is sent with a policy header
+that closes the network (`connect-src 'none'`, images, fonts and media only from `blob:`/`data:`):
+a local panel reaches the network only through its plugin's process. Only the files `index.html`
+names are mapped to the panel's own files; inline event handlers do not run.
 
 Sandbox attributes: `allow-scripts` only. No `allow-same-origin`, no `allow-top-navigation`,
 no `allow-popups`.
