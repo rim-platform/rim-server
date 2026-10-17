@@ -29,11 +29,7 @@ jobs:
       - name: Format Check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Clippy (feature-gated test code)
-        # Lints the test code behind db-tests/infra-db-tests/e2e-tests. The plain run above is
-        # not redundant: code that only feature-gated tests call is dead (and warned about)
-        # only when the features are off, which is how the server itself is built.
+        # Lints all code, including the test code behind db-tests/infra-db-tests/e2e-tests.
         run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
       - name: Release version script
         run: scripts/release/test-set-version.sh
@@ -61,20 +57,29 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install lcov
         run: sudo apt-get update && sudo apt-get install -y lcov
-      - name: Test with coverage
-        # One instrumented build runs every suite (unit, infra_db, API e2e, infra_services):
-        # enabling all three test features in a single invocation keeps one feature set, so
-        # the workspace compiles once instead of once per suite. The features only gate test
-        # files, never library code. Cargo runs test binaries one after another, and
-        # --test-threads=1 keeps the shared-database suites isolated within each binary.
+      - name: Test with coverage (unit tests)
+        # Runs the workspace tests without the database features, with default test parallelism.
+        # The clean drops profiles of earlier runs; --no-report keeps this run's under
+        # target/llvm-cov-target for the report step.
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --workspace --no-report
+      - name: Test with coverage (database suites)
+        # Runs the workspace with the three database test features (infra_db, API e2e,
+        # infra_services). The features only gate test files, never library code. These suites
+        # share one database, so --test-threads=1 keeps them isolated within each binary; cargo
+        # runs the binaries one after another.
         env:
           DATABASE_URL: "postgres://postgres:postgres@localhost:5432/testdb"
         run: |
-          mkdir -p coverage
-          cargo llvm-cov --workspace \
+          cargo llvm-cov --workspace --no-report \
             --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" \
-            --lcov --output-path coverage/lcov.info \
             -- --test-threads=1
+      - name: Coverage report
+        # Merges the profiles of both runs into one lcov file.
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Generate HTML Report
         run: genhtml coverage/lcov.info --output-directory coverage/html
       - name: Upload Coverage Artifact
