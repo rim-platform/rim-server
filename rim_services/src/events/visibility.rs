@@ -401,7 +401,7 @@ mod tests {
         ]
     }
 
-    /// Spec case: alice posts in a private channel with bob; carol (a workspace member, subscribed
+    /// Alice posts in a private channel with bob; carol (a workspace member, subscribed
     /// to the same workspace) must not receive the `NewMessage`.
     #[test]
     fn private_channel_new_message_not_delivered_to_non_member() {

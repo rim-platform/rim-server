@@ -16,14 +16,14 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // NOTE: We intentionally do NOT add a FK from conversation.main_thread_id -> message_thread.id.
-        // A conversation requires a main thread, and a thread requires a conversation (message_thread.conversation_id FK).
-        // Enforcing both as immediate FKs creates a cycle that makes inserts impossible without DEFERRABLE constraints.
+        // No FK from conversation.main_thread_id to message_thread.id:
+        // message_thread.conversation_id already references conversation, and a second immediate
+        // FK would form a cycle that makes inserts impossible without DEFERRABLE constraints.
 
         // Backfill main thread for existing conversations.
         //
         // For each conversation, create a dedicated main thread and set `conversation.main_thread_id`.
-        // We keep it nullable for now to avoid failing on partially migrated environments.
+        // The column starts nullable so existing rows stay valid until this backfill fills it.
         manager
             .get_connection()
             .execute_unprepared(

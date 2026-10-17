@@ -33,7 +33,7 @@ impl LocalFileStorage {
             full_path.canonicalize().map_err(StorageError::Io)?
         } else {
             // Path doesn't exist yet — this is a store operation.
-            // We already rejected ".." and null bytes above.
+            // ".." and null bytes are already rejected above.
             // Verify the joined path starts with canonical root by canonicalizing
             // the deepest existing ancestor.
             // Walk up to find the deepest existing ancestor, canonicalize it,

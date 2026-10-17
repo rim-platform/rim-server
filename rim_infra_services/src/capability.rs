@@ -139,7 +139,7 @@ impl CapabilityService for DefaultCapabilityService {
         capability: &str,
     ) -> ServiceResult<()> {
         // Step 1: empty / whitespace input is a programming error AND a
-        // potential capability-bypass primitive (a future contributor doing
+        // potential capability-bypass primitive (a command declaring
         // `required_capabilities: vec![String::new()]` would otherwise pass
         // the gate with no real check). Reject.
         let key = capability.trim();
@@ -150,7 +150,7 @@ impl CapabilityService for DefaultCapabilityService {
         }
 
         // Step 2: registry lookup — single `get()` call returns the full row
-        // (including `is_self_scoped` and `retired_at`) so we can enforce
+        // (including `is_self_scoped` and `retired_at`) to enforce
         // both strict default-deny and workspace scope in one
         // round-trip instead of two. `get()` returns `None` for unregistered
         // keys; a row with `retired_at IS NOT NULL` is treated as unregistered.
@@ -245,8 +245,8 @@ impl CapabilityService for DefaultCapabilityService {
                 out.insert(cap.clone(), false);
                 continue;
             }
-            // Use `get()` to obtain the full registry row: we need
-            // the DB-stored `is_self_scoped` flag to enforce workspace-context
+            // Use `get()` to obtain the full registry row: the DB-stored
+            // `is_self_scoped` flag is needed to enforce workspace-context
             // requirements. Workspace-scoped cap with no workspace_id → deny
             // without reaching the membership leg (same enforcement as
             // `check()`). Self-scoped caps pass through even with None.
@@ -540,7 +540,7 @@ mod tests {
             .with(eq("plugin.unknown.x"))
             .returning(|_| Ok(None));
         // Crucial — bulk path looks up the role exactly once even
-        // though we ask for two caps. Catches an N+1 regression.
+        // though two caps are asked for. Catches an N+1 regression.
         let members = members_with(Some(ServerMemberRole::Member), 1);
 
         let svc = build(registry, members);

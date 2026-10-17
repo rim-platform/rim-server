@@ -389,7 +389,7 @@ mod tests {
     use rim_core::server_member::repository::ServerMemberRepository;
     use rim_core::user::model::UserId;
 
-    // Ensure we cover the "unsupported" stubs so `cargo llvm-cov` doesn't flag them.
+    // Covers the "unsupported" stubs so `cargo llvm-cov` doesn't flag them.
     #[tokio::test]
     async fn fake_repos_unsupported_paths_are_internal_errors() {
         let server_id = ServerId::new();

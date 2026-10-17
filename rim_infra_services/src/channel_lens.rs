@@ -101,7 +101,7 @@ fn validate_filter_spec(spec: &FilterSpec) -> ServiceResult<()> {
 
 /// Check whether a message matches a single filter condition.
 ///
-/// For the `IsPinned` field we need an external set of pinned message IDs.
+/// The `IsPinned` field needs an external set of pinned message IDs.
 fn matches_condition(
     msg: &Message,
     cond: &FilterCondition,
@@ -338,7 +338,7 @@ impl ChannelLensService for DefaultChannelLensService {
         let limit = query.limit.clamp(1, DEFAULT_APPLY_LIMIT);
 
         // Fetch a batch of recent messages to filter.
-        // We fetch a larger batch and then apply the filter in-memory.
+        // The batch is larger than the page; the filter is applied in-memory.
         let fetch_limit = limit * 10;
         let params = rim_core::message::repository::ListMessagesParams {
             conversation_id: query.conversation_id,
@@ -354,7 +354,7 @@ impl ChannelLensService for DefaultChannelLensService {
 
         let messages = page.items;
 
-        // Determine if we need pinned IDs for filtering
+        // Determine if pinned IDs are needed for filtering
         let needs_pinned = lens
             .filter_spec
             .conditions
@@ -389,7 +389,7 @@ impl ChannelLensService for DefaultChannelLensService {
 }
 
 /// Convert a Message to a simple MessageDto without loading attachments/threads.
-/// For lens results we keep it lightweight.
+/// Lens results stay lightweight.
 fn to_simple_dto(msg: Message, server_id: rim_core::server::model::ServerId) -> MessageDto {
     MessageDto {
         id: msg.id,

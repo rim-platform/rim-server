@@ -496,7 +496,7 @@ fn host_rotation_and_rotated_descriptor() {
         "ed25519:Yuy9VdOS78e8fL4sMDT9PHmBkZcuzeJEvLlfdD8dRhDjJeJiivU4FcatDrlwEKaB3l9Beado7Qi6_33D7UN0AA"
     );
     verify_descriptor(&rotated, &descriptor).expect("verify");
-    // The A.2 descriptor, signed at seq 0, no longer verifies against the rotated log.
+    // The A.2 descriptor, signed at seq 0, does not verify against the rotated log.
     let old = sign_descriptor(&server(40), &host_descriptor(0, 1, T)).expect("sign");
     assert!(verify_descriptor(&rotated, &old).is_err());
 }

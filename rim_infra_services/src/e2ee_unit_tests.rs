@@ -737,7 +737,7 @@ mod tests {
             .await
             .expect("a DM member upgrades");
 
-        // A group created encrypted a moment ago: only the creator, for now.
+        // A group created encrypted a moment ago: only the creator may.
         let mut f = Fixture::new();
         f.conv.created_at = Utc::now();
         f.conv.encrypted_at = Some(f.conv.created_at);

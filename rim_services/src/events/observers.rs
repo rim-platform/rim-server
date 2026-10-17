@@ -26,9 +26,6 @@ pub trait EventObserver: Send + Sync {
 
 /// Single observer that holds the broadcaster and emits any WorkspaceEvent.
 ///
-/// Replaces the previous 6 typed sub-observer structs (MessageObserver,
-/// ReactionObserver, ThreadObserver, WorkspaceObserver, ReadStateObserver,
-/// MentionObserver) and their 9+ positional-arg `on_*` trampolines.
 /// Call sites construct WorkspaceEvent variants inline and call `observers.emit(event)`.
 #[derive(Clone)]
 pub struct Observers {

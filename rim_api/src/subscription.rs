@@ -112,7 +112,7 @@ impl Subscription {
         let inbox = federation.map(|f| Arc::clone(&f.relay));
 
         // Use async_stream to handle Lagged errors gracefully without ending the stream.
-        // BroadcastStream ends on Lagged, so we use the raw receiver directly.
+        // BroadcastStream ends on Lagged, so the raw receiver is used directly.
         let inner = async_stream::stream! {
             let mut rx = rx;
             // The subscriber's guest status follows their role changes, and the

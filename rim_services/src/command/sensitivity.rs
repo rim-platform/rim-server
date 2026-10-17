@@ -28,8 +28,8 @@ pub static SENSITIVE_ARG_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// JWT detection: `header.payload.signature`, each segment base64url.
 ///
 /// Segment chars: `[A-Za-z0-9_-]`. Each segment 1+ chars, separated by `.`.
-/// Kept liberal — we want false positives (mask a non-JWT that looks like one)
-/// rather than false negatives.
+/// Kept liberal: false positives (mask a non-JWT that looks like one) are
+/// preferred over false negatives.
 static JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
         .expect("JWT_RE regex is a compile-time constant")
@@ -45,8 +45,8 @@ static B64_LIKE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Minimum length for the high-entropy base64 detector to fire.
-/// Shorter than this and we won't guess a value is secret without a name
-/// or prefix signal.
+/// A shorter value is not guessed to be secret without a name or prefix
+/// signal.
 const B64_LIKE_MIN_CHARS: usize = 40;
 
 /// Classification tier for a command's execution sensitivity.
@@ -505,8 +505,8 @@ mod tests {
     fn redacts_array_items_under_sensitive_key_even_if_short() {
         // Without key-context propagation into arrays,
         // short-but-harmless-looking strings inside `tokens: [...]` would
-        // survive unredacted. We preserve array shape and redact every
-        // item by inheritance from the parent key.
+        // survive unredacted. Array shape is preserved and every item is
+        // redacted by inheritance from the parent key.
         let args = json!({
             "tokens": ["short1", "plain-value", "abc"],
             "message": "hi",

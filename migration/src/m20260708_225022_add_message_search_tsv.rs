@@ -3,25 +3,17 @@ use sea_orm_migration::prelude::*;
 /// Adds `message.search_tsv`, a `GENERATED ALWAYS ... STORED` `tsvector` column backing Postgres
 /// full-text search, plus a GIN index on it.
 ///
-/// **Why a STORED generated column, not a trigger:** `to_tsvector('english', …)` with a constant
-/// config literal is IMMUTABLE, so a `GENERATED ALWAYS AS … STORED` column is valid and stays in
-/// sync automatically with zero trigger maintenance. `sea-query` can't express generated columns,
-/// so `up`/`down` use raw `execute_unprepared` (consistent with how this codebase adds CHECK
-/// constraints/indexes elsewhere, e.g. `m20260427_000001_audit_outcome_widen_check`).
+/// The column needs no trigger: `to_tsvector('english', …)` with a constant config literal is
+/// IMMUTABLE, so a `GENERATED ALWAYS AS … STORED` column is valid and stays in sync with
+/// `message.text`. `sea-query` cannot express generated columns, so `up` and `down` use raw
+/// `execute_unprepared`.
 ///
-/// **Ops / rollback note:** adding a `STORED` generated column rewrites the entire `message` table
-/// and takes an `ACCESS EXCLUSIVE` lock for the duration of the backfill. At RIM's current
-/// self-hosted scale this is acceptable during a deploy window. For a large existing table, the
-/// low-lock alternative is: add a plain nullable `tsvector` column, backfill in batches, add a
-/// `BEFORE INSERT/UPDATE` trigger, then `CREATE INDEX CONCURRENTLY`. Do **not** attempt the
-/// concurrent variant inside a sea-orm migration — migrations run inside a transaction, and
-/// `CREATE INDEX CONCURRENTLY` cannot run inside one. This migration uses the simpler
-/// generated-column form; the alternative is noted here for a future scale-driven revisit.
-/// Forward-only: the column backfills existing rows automatically as part of `up`; no separate
-/// data migration is needed.
+/// Adding a `STORED` generated column rewrites the whole `message` table and holds an
+/// `ACCESS EXCLUSIVE` lock while existing rows are backfilled, so no separate data migration is
+/// needed. The index is not built with `CREATE INDEX CONCURRENTLY`: migrations run inside a
+/// transaction, and that statement cannot run inside one.
 ///
-/// **Config note:** `'english'` is hardcoded as the text-search configuration. If multilingual
-/// content matters later, that's a follow-up (per-workspace config, or a `simple` fallback).
+/// The text-search configuration is the hardcoded `'english'`.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

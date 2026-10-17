@@ -7,10 +7,9 @@
 //! MUST fail the build.
 //!
 //! The test wires a full `DefaultCommandService` and exercises the public
-//! `execute_command` entry point — not a unit shortcut around the gate.
-//! That distinction is deliberate: a refactor that moves the gate lower in
-//! the stack (or accidentally bypasses it for "trusted" call paths) is only
-//! caught here.
+//! `execute_command` entry point, not a unit shortcut around the gate, so a
+//! refactor that moves the gate lower in the stack (or accidentally bypasses
+//! it for "trusted" call paths) fails here.
 
 use std::sync::Arc;
 
@@ -80,7 +79,7 @@ fn actor() -> Actor {
 /// **The canonical capability gate regression test.**
 ///
 /// `chat.post_message` declares `required_capabilities = ["chat.write"]`.
-/// We wire a CapabilityService that explicitly denies `chat.write`
+/// The test wires a CapabilityService that explicitly denies `chat.write`
 /// (simulating either: actor not a workspace member, OR the cap not in the
 /// registry). The gate must turn the
 /// denial into `ServiceError::PermissionDenied` AND prevent the message
@@ -146,8 +145,8 @@ async fn execute_command_proceeds_when_capability_check_passes() {
         .withf(|_actor, _ws, cap| cap == "chat.write")
         .returning(|_, _, _| Ok(()));
 
-    // Now we DO need send_message to be wired — the dispatch should reach
-    // it. Build a fresh service with an explicit message-service mock.
+    // The dispatch reaches send_message here, so the service is built with
+    // an explicit message-service mock.
     use rim_core::command::repository::MockUserCommandRepository;
     use rim_core::macro_def::repository::MockMacroRepository;
     use rim_infra_services::CommandRepos;

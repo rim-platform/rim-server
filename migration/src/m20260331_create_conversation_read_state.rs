@@ -64,7 +64,7 @@ impl MigrationTrait for Migration {
             .await?;
 
         // Partial index for efficient unread count queries.
-        // SeaORM doesn't support WHERE clauses on indexes, so we use raw SQL.
+        // SeaORM doesn't support WHERE clauses on indexes, so this is raw SQL.
         manager
             .get_connection()
             .execute_unprepared(

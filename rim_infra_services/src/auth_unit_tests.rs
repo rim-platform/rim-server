@@ -2078,7 +2078,7 @@ mod tests {
         ];
 
         for bad_email in &bad_emails {
-            // Each iteration builds a fresh service — we only need the validation to fire,
+            // Each iteration builds a fresh service — only the validation needs to fire,
             // which happens before any repo calls.
             let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
 

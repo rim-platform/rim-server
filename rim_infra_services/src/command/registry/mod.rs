@@ -179,8 +179,8 @@ mod tests {
     ///
     /// 1. A CI run on a feature branch fails *before* the change reaches main
     ///    instead of panicking at server bootstrap post-deploy, and
-    /// 2. Future refactors that move sanitization into `builtin_commands_raw()`
-    ///    by mistake are caught here rather than relying on
+    /// 2. A refactor that moves sanitization into `builtin_commands_raw()`
+    ///    by mistake is caught here rather than relying on
     ///    `builtin_commands_ids_are_unique` to incidentally exercise the
     ///    wrapper's panic path.
     ///

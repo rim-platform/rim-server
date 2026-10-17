@@ -19,7 +19,7 @@ use crate::graphql_support::{extract_auth, validate_csrf_header};
 
 /// Map a ServiceError to an HTTP response for REST endpoints.
 ///
-/// Shared by the non-GraphQL (FL2) file transports in `rim_server` so REST error shapes stay
+/// Shared by the non-GraphQL file transports in `rim_server` so REST error shapes stay
 /// consistent.
 pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> HttpResponse {
     match err {

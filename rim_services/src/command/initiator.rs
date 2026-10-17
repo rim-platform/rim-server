@@ -40,8 +40,8 @@ use std::fmt;
 /// transport-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandInitiator {
-    /// User typed/clicked in the command palette. Default for any callsite
-    /// that has not been audited and explicitly tagged.
+    /// User typed/clicked in the command palette. The default when a caller
+    /// does not set an initiator.
     Palette,
     /// AI agent issued the command via the dispatcher. Triggers the
     /// always-confirm-for-Mutating policy.
@@ -98,12 +98,12 @@ impl fmt::Display for CommandInitiator {
 }
 
 impl Default for CommandInitiator {
-    /// Default to `Palette` — back-compat for any caller that constructs
-    /// `ExecuteCommandCmd` without setting initiator explicitly. This is the
-    /// **conservative** default because `Palette` is human-attributed and
-    /// does not trigger the agent-only confirmation rules.
-    /// A genuine missing-initiator bug surfaces as "human action attributed
-    /// to a non-human caller" rather than the more dangerous reverse.
+    /// Returns `Palette`, the initiator of an `ExecuteCommandCmd` built
+    /// without one. This is the **conservative** default because `Palette` is
+    /// human-attributed and does not trigger the agent-only confirmation
+    /// rules. A genuine missing-initiator bug surfaces as "human action
+    /// attributed to a non-human caller" rather than the more dangerous
+    /// reverse.
     fn default() -> Self {
         Self::Palette
     }
@@ -130,10 +130,10 @@ mod tests {
 
     #[test]
     fn default_is_palette() {
-        // The conservative default. If this ever changes, every call site
-        // that uses `..Default::default()` for ExecuteCommandCmd needs a
-        // security re-review — flipping the default would silently re-tag
-        // human actions as agentic (or vice versa).
+        // The conservative default. Every call site that uses
+        // `..Default::default()` for ExecuteCommandCmd relies on it: flipping
+        // the default would silently re-tag human actions as agentic (or vice
+        // versa).
         assert_eq!(CommandInitiator::default(), CommandInitiator::Palette);
     }
 
@@ -171,10 +171,9 @@ mod tests {
 
     #[test]
     fn initiator_is_copy() {
-        // Copy is intentional — initiator is a tiny tag passed through every
-        // recursive command call (macros expand to N nested `execute_command`
-        // invocations); requiring `.clone()` would be noise. If a future
-        // variant gets a payload, this test breaks and forces a re-review.
+        // Initiator is a tiny tag passed through every recursive command call
+        // (macros expand to N nested `execute_command` invocations), so it is
+        // Copy. A variant with a non-Copy payload fails this test.
         let a = CommandInitiator::Agent;
         let b = a; // Copy
         assert_eq!(a, b);

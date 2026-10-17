@@ -271,7 +271,7 @@ impl RegistrationRateLimiter {
         // Track insertion order and evict when over the cap.
         if is_new && let Ok(mut order) = self.insertion_order.lock() {
             order.push_back(map_key);
-            // Evict oldest bucket(s) until we're within the cap.
+            // Evict oldest bucket(s) until the store is within the cap.
             while order.len() > MAX_BUCKETS {
                 if let Some(oldest_key) = order.pop_front() {
                     self.store.remove(&oldest_key);
@@ -498,21 +498,21 @@ mod tests {
     #[test]
     fn cap_evicts_oldest_entry() {
         // Build a limiter with the same logic but a tiny cap.
-        // We can't override MAX_BUCKETS, so we test the eviction indirectly by
+        // MAX_BUCKETS can't be overridden, so the eviction is tested indirectly by
         // verifying that after inserting cap+1 distinct IPs, the total entry
         // count in the store is bounded.
         //
-        // Since MAX_BUCKETS = 100_000 we can't fill it in a unit test.
+        // Since MAX_BUCKETS = 100_000, a unit test can't fill it.
         // Instead, test the eviction logic via white-box access to the store.
 
         let rl = RegistrationRateLimiter::new(300, 100);
         let key = "k";
 
         // Insert MAX_BUCKETS + 1 distinct IPs. The first one should be evicted.
-        // This is too slow for MAX_BUCKETS = 100_000, so we just verify that
+        // This is too slow for MAX_BUCKETS = 100_000, so the test just verifies that
         // the store size is at most MAX_BUCKETS after inserting MAX_BUCKETS + 10.
         //
-        // For a practical unit test we verify the FIFO eviction directly by
+        // For a practical unit test, the FIFO eviction is verified directly by
         // observing the insertion_order queue length.
 
         // Insert 5 distinct IPs.
@@ -529,7 +529,7 @@ mod tests {
 
     /// The eviction logic removes the oldest bucket when the limit is hit.
     ///
-    /// We white-box test by manually pre-filling insertion_order to simulate
+    /// A white-box test: it pre-fills insertion_order by hand to simulate
     /// being at the cap, then verify one more insert evicts the oldest.
     #[test]
     fn cap_eviction_removes_oldest_when_full() {
@@ -538,7 +538,7 @@ mod tests {
 
         // Pre-seed with MAX_BUCKETS synthetic entries so the next real insert
         // triggers eviction. Because seeding MAX_BUCKETS real calls would be
-        // slow, we manipulate the internal structures directly.
+        // slow, the test manipulates the internal structures directly.
         {
             let mut order = rl.insertion_order.lock().unwrap();
             for i in 0..MAX_BUCKETS {

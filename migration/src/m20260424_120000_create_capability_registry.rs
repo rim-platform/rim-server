@@ -94,7 +94,7 @@ impl MigrationTrait for Migration {
         // CHECK constraints.
         //
         // Defense-in-depth at the storage layer. Without these, a buggy
-        // migration / direct SQL / future repo refactor could persist:
+        // migration / direct SQL / repository change could persist:
         //   - `source_kind = 'BUILTIN'` (case mismatch) → strict-deny gate
         //     silently misclassifies every row
         //   - `source_kind = 'builtin'` with `plugin_id IS NOT NULL` →

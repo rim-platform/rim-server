@@ -187,7 +187,7 @@ pub(crate) fn resolve_secure_flag(
     }
     // Priority 2: scheme-based detection, only when a trusted proxy is configured.
     // actix derives the scheme from X-Forwarded-Proto / Forwarded when present,
-    // so we must gate this on trust to prevent header spoofing on bare HTTP.
+    // so this is gated on trust to prevent header spoofing on bare HTTP.
     if trust_forwarded_headers && req.connection_info().scheme() == "https" {
         return true;
     }
@@ -651,7 +651,7 @@ fragment Inner on Mutation {
         let req = TestRequest::default()
             .insert_header(("x-forwarded-proto", "https"))
             .to_http_request();
-        // Even though the header says https, trust=false means we ignore it.
+        // Even though the header says https, trust=false means it is ignored.
         assert!(!resolve_secure_flag(&req, false, false));
     }
 

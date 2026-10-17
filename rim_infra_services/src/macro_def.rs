@@ -1491,8 +1491,8 @@ mod tests {
     // preserved on every inner `execute_command` call that the macro step loop
     // issues. The `.withf` predicate on the mock expectation makes mockall panic
     // if the wrong initiator reaches the inner service — covering the scenario
-    // where a future refactor silently resets the initiator to Palette before
-    // calling `execute_command`.
+    // where the initiator is silently reset to Palette before calling
+    // `execute_command`.
 
     /// Outer initiator=Agent must propagate to every inner
     /// `execute_command` call. The `.withf` predicate proves the inner call
@@ -1659,7 +1659,7 @@ mod tests {
                 // Safe sensitivity so no outer confirmation is required;
                 // outer_proof_verified stays false and step_confirmation is None.
                 // This simulates a step that returns ConfirmationRequired due to
-                // the inner service gating on a dangerous flag we can't intercept.
+                // the inner service gating on a dangerous flag the macro can't intercept.
                 steps_json: serde_json::json!([
                     { "commandId": "cmd.gated", "args": null }
                 ]),
