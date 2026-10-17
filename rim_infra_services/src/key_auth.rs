@@ -49,6 +49,7 @@ use rim_services::remote_workspace::service::RevocationFanout;
 use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::default_workspace;
 use crate::quota::Quotas;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
@@ -141,6 +142,8 @@ pub struct DefaultKeyAuthService {
     session_revocations: Arc<dyn SessionRevocations>,
     /// The terms of service URL every signup must accept; `None` when there are none.
     terms_url: Option<String>,
+    /// The workspace every new account joins as a Member; `None` when there is none.
+    default_workspace: Option<rim_core::server::model::ServerId>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -280,6 +283,7 @@ impl DefaultKeyAuthService {
             reserved_names: ReservedNames::default(),
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
+            default_workspace: None,
         }
     }
 
@@ -307,6 +311,15 @@ impl DefaultKeyAuthService {
     /// Requires every signup to accept the terms at `terms_url`.
     pub fn with_terms_url(mut self, terms_url: Option<String>) -> Self {
         self.terms_url = terms_url;
+        self
+    }
+
+    /// Makes every new account a Member of `workspace`.
+    pub fn with_default_workspace(
+        mut self,
+        workspace: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.default_workspace = workspace;
         self
     }
 
@@ -1107,6 +1120,8 @@ impl KeyAuthService for DefaultKeyAuthService {
             }
             None => None,
         };
+        let joined_default =
+            default_workspace::join(&repos.signup, self.default_workspace, user.id).await?;
         let (session, session_token, csrf_token) = signup::create_session(
             repos.session_repo.as_ref(),
             self.session_ttl,
@@ -1142,6 +1157,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                 "user created via open signup"
             ),
         }
+        default_workspace::announce(joined_default, user.id, username, &self.observers);
         info!(
             target: "audit",
             event = "key_identity_enrolled",

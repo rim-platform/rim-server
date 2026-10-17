@@ -41,6 +41,9 @@ pub struct ServerInfo {
     pub dm_outbound: crate::types::DmOutbound,
     /// The server ids the `PARTNERS` settings name (`RIM_DM_PARTNERS`).
     pub dm_partners: Vec<String>,
+    /// The workspace every new account joins as a Member, so a client can open it after a
+    /// signup; null when the server names none (`RIM_DEFAULT_WORKSPACE`).
+    pub default_workspace: Option<ID>,
 }
 
 /// The instance-wide caps; each is null when this instance sets none, but devices and DM
@@ -105,7 +108,8 @@ impl From<&InstanceLimits> for ServerLimits {
 pub struct AuditRetention(pub Option<u32>);
 
 /// What the operator publishes about the instance, held in the schema data: the notice shown
-/// to people, the terms URL every signup accepts and whether signups need a key.
+/// to people, the terms URL every signup accepts, whether signups need a key and the workspace
+/// every new account joins.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InstancePolicy {
     /// The instance notice; `None` when there is none.
@@ -114,6 +118,8 @@ pub struct InstancePolicy {
     pub terms_url: Option<String>,
     /// Whether password signups are refused.
     pub signup_requires_keys: bool,
+    /// The workspace every new account joins as a Member; `None` when there is none.
+    pub default_workspace: Option<rim_core::server::model::ServerId>,
 }
 
 impl ServerInfo {
@@ -142,6 +148,9 @@ impl ServerInfo {
             dm_inbound: dm_policy.inbound.into(),
             dm_outbound: dm_policy.outbound.into(),
             dm_partners: dm_policy.partners.clone(),
+            default_workspace: policy
+                .default_workspace
+                .map(|workspace| ID(workspace.to_string())),
         }
     }
 }

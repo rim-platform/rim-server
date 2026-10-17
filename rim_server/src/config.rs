@@ -239,6 +239,13 @@ pub struct RIMConfig {
     /// `RIM_SIGNUP_REQUIRE_KEYS`; see [`RIMConfig::signup_requires_keys`].
     pub signup_require_keys: Option<bool>,
 
+    /// The id of a workspace on this server that every new account joins as a member, with its
+    /// public channels, whichever way it signs up. Unset keeps signups as they are: a new
+    /// account joins only the workspace its invite names. The server refuses to start when the
+    /// workspace does not exist here or is the direct space. Controlled by
+    /// `RIM_DEFAULT_WORKSPACE`; see [`RIMConfig::default_workspace`].
+    pub default_workspace: Option<String>,
+
     // ── Instance limits (RIM_LIMIT_*) ───────────────────────────────────────
     //
     // Each caps one thing across the instance; unset or 0 sets no cap. See
@@ -403,6 +410,7 @@ impl fmt::Debug for RIMConfig {
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
             .field("signup_requires_keys", &self.signup_requires_keys())
+            .field("default_workspace", &self.default_workspace)
             .field("instance_limits", &self.instance_limits())
             .field(
                 "account_deletion_grace_days",
@@ -475,6 +483,7 @@ impl Default for RIMConfig {
             instance_notice: None,
             terms_url: None,
             signup_require_keys: None,
+            default_workspace: None,
             limit_workspaces_per_user: None,
             limit_members_per_workspace: None,
             limit_channels_per_workspace: None,
@@ -1034,16 +1043,32 @@ impl RIMConfig {
         self.signup_require_keys.unwrap_or(true)
     }
 
-    /// The instance notice, terms URL and signup policy the GraphQL schema serves and signups
-    /// follow.
+    /// `RIM_DEFAULT_WORKSPACE`, trimmed; `None` when unset or blank. Whether the workspace
+    /// exists is checked against the database at start.
     ///
     /// # Errors
-    /// The messages of [`RIMConfig::instance_notice`] and [`RIMConfig::terms_url`].
+    /// A message naming the variable when the value is not a workspace id.
+    pub fn default_workspace(&self) -> Result<Option<rim_core::server::model::ServerId>, String> {
+        let Some(workspace) = non_blank(self.default_workspace.as_deref()) else {
+            return Ok(None);
+        };
+        uuid::Uuid::parse_str(workspace)
+            .map(|id| Some(id.into()))
+            .map_err(|_| format!("RIM_DEFAULT_WORKSPACE={workspace} is not a workspace id"))
+    }
+
+    /// The instance notice, terms URL, signup policy and default workspace the GraphQL schema
+    /// serves and signups follow.
+    ///
+    /// # Errors
+    /// The messages of [`RIMConfig::instance_notice`], [`RIMConfig::terms_url`] and
+    /// [`RIMConfig::default_workspace`].
     pub fn instance_policy(&self) -> Result<rim_api::types::InstancePolicy, String> {
         Ok(rim_api::types::InstancePolicy {
             notice: self.instance_notice()?,
             terms_url: self.terms_url()?,
             signup_requires_keys: self.signup_requires_keys(),
+            default_workspace: self.default_workspace()?,
         })
     }
 }
@@ -2062,7 +2087,52 @@ mod tests {
                 notice: Some("Run by the Example club, rules at /rules".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
                 signup_requires_keys: true,
+                default_workspace: None,
             })
+        );
+    }
+
+    #[test]
+    fn default_workspace_takes_a_workspace_id_and_is_off_when_unset() {
+        let workspace = |value: &str| {
+            RIMConfig {
+                default_workspace: Some(value.to_string()),
+                ..Default::default()
+            }
+            .default_workspace()
+        };
+        assert_eq!(RIMConfig::default().default_workspace(), Ok(None));
+        assert_eq!(workspace("  "), Ok(None));
+        let id = "0199d1a0-7c2e-7b3a-9f10-2c4d5e6f7a8b";
+        assert_eq!(
+            workspace(&format!(" {id} ")),
+            Ok(Some(uuid::Uuid::parse_str(id).expect("uuid").into()))
+        );
+        for bad in ["lobby", "0199d1a0", "rims1_abc"] {
+            let err = workspace(bad).unwrap_err();
+            assert_eq!(
+                err,
+                format!("RIM_DEFAULT_WORKSPACE={bad} is not a workspace id")
+            );
+        }
+        let config = RIMConfig {
+            default_workspace: Some("lobby".to_string()),
+            ..Default::default()
+        };
+        assert!(config.instance_policy().is_err());
+    }
+
+    #[test]
+    fn default_workspace_is_read_from_its_variable() {
+        let id = "0199d1a0-7c2e-7b3a-9f10-2c4d5e6f7a8b";
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_DEFAULT_WORKSPACE", id),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.instance_policy().map(|p| p.default_workspace),
+            Ok(Some(uuid::Uuid::parse_str(id).expect("uuid").into()))
         );
     }
 
