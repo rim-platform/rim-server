@@ -60,9 +60,9 @@ These are the capabilities that no competing product offers together:
    scoped by context (global, composer, message list, thread view, panel). No other
    team chat app allows this.
 
-3. **Chainable macro commands** — users can compose multi-step workflows from
-   individual commands. One keystroke, multiple actions. No other team chat app offers
-   this.
+3. **User commands and macros** — users compose multi-step workflows from individual
+   commands. A user command bound to a keystroke runs all its steps; a macro runs its
+   steps from Settings or `/macro` in the composer. No other team chat app offers this.
 
 4. **Client-side plugin system** — plugins extend the application itself (new panels,
    commands, context actions, behaviors), not just post messages into channels.

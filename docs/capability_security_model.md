@@ -1,5 +1,11 @@
 # Capability And Security Model
 
+This page records the design direction for capabilities. Its example manifest and capability
+categories name capabilities the plugin host refuses, such as `local.process`, `local.filesystem`,
+`http.outbound`, `action.invoke` and `event.emit`. The names a manifest may declare are in
+[`specs/plugin-protocol-v1.md`, section 12](specs/plugin-protocol-v1.md#12-capabilities) and
+rim-ui's [plugin manifest reference](../../rim-ui/docs/plugin-manifest.md).
+
 This document defines the capability and security model for RIM.
 
 RIM is a chat app on steroids, but plugins, commands, integrations, and local behaviors must not

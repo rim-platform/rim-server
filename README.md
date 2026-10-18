@@ -10,6 +10,9 @@ no server is central. It is not a Discord, Slack or Matrix replacement; it is fo
 a workspace they can program and run themselves. `docs/vision.md` has the product principles and
 `ROADMAP.md` the direction.
 
+The documentation, rendered from this repository and `rim-ui`, is at
+[rim-platform.org](https://rim-platform.org).
+
 This repository is the server: Rust (edition 2024), Actix Web and async-graphql, SeaORM on
 PostgreSQL 17. The desktop and web clients (Tauri v2 and React) live in the separate `rim-ui`
 repository.
@@ -26,10 +29,11 @@ repository.
 - **Notification rules.** One server-side decision per message: per-conversation levels, keyword
   alerts, do-not-disturb, an inbox and an email digest (`docs/messaging.md`, `docs/email.md`).
 - **The programmable layer.** A command registry with typed arguments, sensitivity tiers,
-  capability checks and confirmations; user commands and macros with piping; keybinds with
-  layers; workspace state (key-value with TTL and events); pipelines; channel lenses. The AI
-  agent calls the same registry (`docs/command_model.md`, `docs/keybind_model.md`,
-  `docs/context_model.md`, `docs/capability_security_model.md`).
+  capability checks and confirmations; user commands and macros that run fixed steps, and pipes
+  that pass one command's result to the next; keybinds with layers; workspace state (key-value
+  with TTL and events); pipelines; channel lenses. The AI agent calls the same registry
+  (`docs/command_model.md`, `docs/keybind_model.md`, `docs/context_model.md`,
+  `docs/capability_security_model.md`).
 - **Plugins.** The server stores per-workspace plugin registries whose entries carry manifests
   signed by their publisher, and serves web plugin bundles. Plugins themselves run in the client
   (`docs/plugin_model.md`).

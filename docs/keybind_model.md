@@ -27,7 +27,7 @@ This keeps:
 
 - command logic centralized
 - plugin behavior compatible with built-ins
-- macros bindable
+- user commands, which compose other commands, bindable
 - complex behavior reusable from other invocation surfaces
 
 ## What A Keybind Can Target
@@ -39,8 +39,10 @@ That includes:
 - built-in commands
 - plugin commands
 - integration commands
-- user-defined commands
-- composed commands/macros
+- user-defined commands (`user.<key>`), including ones that compose other commands
+
+A macro (`macro.<id>`) is not in the command registry, so no keybind targets it; a user command
+with the same steps can be bound instead.
 
 Not every command has to be keybind-capable.
 
@@ -127,7 +129,7 @@ Users should be able to create their own keybinds for:
 - built-in commands
 - plugin commands
 - integration commands
-- user-defined commands/macros
+- user-defined commands
 
 Examples:
 
