@@ -683,7 +683,7 @@ A list in the manifest, default `[]`, with one entry per setting:
 | `string` | A JSON string | A text field, masked when `is_secret` |
 | `boolean` | `true` or `false` | A switch |
 | `integer` | A JSON integer from -(2^53 - 1) to 2^53 - 1, within `min` and `max` | A number field |
-| `path` | A JSON string | A text field, with a file picker on the desktop. The host neither opens nor checks the file. |
+| `path` | A JSON string | A text field for a path on the device. The host neither opens nor checks the file. |
 | `enum` | One of `options` | A list to pick from |
 
 A host refuses to install a manifest whose `settings_schema` breaks one of these rules, as for
@@ -883,7 +883,7 @@ This is the complete list. If a method is not in this section, the host does not
 | `rim.command.execute` | host → plugin | request | 9, 10 |
 | `rim.principal.changed` | host → plugin | notification | 11 |
 | `rim.principals.remapped` | host → plugin | notification | 11 |
-| `rim.shutdown` | host → plugin | notification | 15 |
+| `rim.shutdown` | host → plugin | notification | 16 |
 | `rim.log` | plugin → host | request or notification | 14 |
 | `rim.settings.get` | plugin → host | request | 15 |
 | `rim.settings.changed` | host → plugin | notification | 15 |
