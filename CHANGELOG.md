@@ -256,5 +256,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A message on `/api/ws` is at most 256 KiB, whole or in fragments; a larger one closes the
   connection with code `1009` ("message too large"), refused at the frame header where it can
   be. Before, fragments were reassembled without a limit and queued for the server unbounded.
+- Pipelines react only to events their creator may see: a message, edit, deletion or reaction
+  in a private channel, DM or group the creator is not in (for a guest, any conversation they
+  are not in) no longer fires their pipeline or counts towards its cooldown or suspension, and a
+  creator who has left the workspace has no pipeline firing. Only the creator is told when a
+  pipeline fires or is suspended, and `PipelineGql.lastFiredAt` reads null for everyone else.
+  Before, any member could build a pipeline with a text or author filter and learn from its
+  firing when a private conversation they were not in received a matching message.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

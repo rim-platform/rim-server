@@ -35,6 +35,7 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 ///   user); MemberJoined, MemberLeft, MemberRoleChanged and PresenceChanged to all workspace
 ///   members. A guest, who has no full member directory, sees MemberJoined, MemberLeft and
 ///   MemberRoleChanged only about themselves.
+/// - PipelineFired and PipelineSuspended are visible to the pipeline's creator only.
 pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) -> bool {
     match event {
         // Conversation-scoped events — public channel, else membership.
@@ -184,11 +185,17 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
                 .is_some_and(|uid| uid.to_string() == user_id),
         },
 
-        // Pipeline and plugin registry events are visible to all workspace members, guests
-        // included.
-        WorkspaceEvent::PipelineFired { .. }
-        | WorkspaceEvent::PipelineSuspended { .. }
-        | WorkspaceEvent::WorkspacePluginChanged { .. } => true,
+        // Pipeline events reach the pipeline's creator only, since a firing reveals that an
+        // event the creator may read matched the pipeline's filter.
+        WorkspaceEvent::PipelineFired {
+            member_user_ids, ..
+        }
+        | WorkspaceEvent::PipelineSuspended {
+            member_user_ids, ..
+        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+
+        // Plugin registry events are visible to all workspace members, guests included.
+        WorkspaceEvent::WorkspacePluginChanged { .. } => true,
 
         // MLS events: encrypted conversations are DMs and groups, so members only.
         WorkspaceEvent::MlsCommitAccepted {
@@ -795,5 +802,52 @@ mod tests {
         let json = serde_json::to_value(&welcome).expect("serialize");
         assert_eq!(json["device_id"], device_id.to_string());
         assert_eq!(json["user_id"], member.to_string());
+    }
+
+    /// A pipeline's firing and suspension reach its creator, guest or not, and no other member
+    /// or guest. The scoping list stays off the wire.
+    #[test]
+    fn pipeline_events_reach_only_the_pipeline_creator() {
+        let (creator, other) = (UserId::new(), UserId::new());
+        let workspace_id = ServerId::new();
+        let pipeline_id = rim_core::pipeline::model::PipelineId::new();
+        let fired = WorkspaceEvent::PipelineFired {
+            workspace_id,
+            pipeline_id,
+            pipeline_name: "deploys".to_string(),
+            trigger_event: "NewMessage".to_string(),
+            actions_executed: 1,
+            member_user_ids: vec![creator],
+        };
+        let suspended = WorkspaceEvent::PipelineSuspended {
+            workspace_id,
+            pipeline_id,
+            pipeline_name: "deploys".to_string(),
+            reason: "exceeded 10 firings per 60 seconds".to_string(),
+            member_user_ids: vec![creator],
+        };
+        for event in [&fired, &suspended] {
+            assert!(user_can_see_event_as(event, &creator.to_string(), false));
+            assert!(user_can_see_event_as(event, &creator.to_string(), true));
+            assert!(!user_can_see_event_as(event, &other.to_string(), false));
+            assert!(!user_can_see_event_as(event, &other.to_string(), true));
+            assert_eq!(event.member_user_ids(), Some(&[creator][..]));
+            let json = serde_json::to_value(event).expect("serialize");
+            assert!(json.get("member_user_ids").is_none(), "{json}");
+        }
+        let json = serde_json::to_value(&fired).expect("serialize");
+        let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "actions_executed",
+                "pipeline_id",
+                "pipeline_name",
+                "trigger_event",
+                "type",
+                "workspace_id"
+            ]
+        );
     }
 }

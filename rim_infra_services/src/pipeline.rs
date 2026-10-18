@@ -1,9 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
+use rim_core::conversation::model::{Conversation, ConversationId};
+use rim_core::conversation::repository::ConversationRepository;
+use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::pipeline::model::{
     FilterCondition, Pipeline, PipelineAction, PipelineFilter, PipelineId, PipelineTrigger,
     PipelineTriggerKind,
@@ -16,6 +20,7 @@ use rim_services::command::dto::CommandContextDto;
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
+use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::pipeline::dto::{PipelineDto, PipelineFiredResult, PipelineTriggerDto};
@@ -33,6 +38,32 @@ const RATE_LIMIT_MAX_FIRINGS: u32 = 10;
 pub struct PipelineRepos {
     pub pipeline_repo: Arc<dyn PipelineRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
+    /// Loads the conversation an event comes from, to decide whether a creator may read it.
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    /// Answers whether a creator is a member of that conversation.
+    pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+}
+
+/// One workspace event and what has been decided about who may see it, so pipelines that share
+/// a creator cost one lookup per event.
+struct EventAudience<'a> {
+    event: &'a WorkspaceEvent,
+    server_id: ServerId,
+    /// The event's conversation once loaded: `Some(None)` when it is not in the workspace.
+    conversation: Option<Option<Conversation>>,
+    /// Whether each creator asked about so far may see the event.
+    verdicts: HashMap<UserId, bool>,
+}
+
+impl<'a> EventAudience<'a> {
+    fn new(event: &'a WorkspaceEvent, server_id: ServerId) -> Self {
+        Self {
+            event,
+            server_id,
+            conversation: None,
+            verdicts: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -102,6 +133,110 @@ impl DefaultPipelineService {
         } else {
             Err(ServiceError::PermissionDenied)
         }
+    }
+
+    /// Whether `creator` may see `audience`'s event, by the rules a reader of the workspace
+    /// gets: a message, edit, deletion or reaction only in a conversation the creator may read
+    /// (a public channel as a member who is not a guest, any other conversation as its member);
+    /// any other event as a workspace subscriber would see it. A creator who is no longer a
+    /// member of the workspace sees nothing.
+    ///
+    /// # Errors
+    ///
+    /// A repository failure while looking up the creator's standing, the conversation or the
+    /// membership.
+    async fn creator_sees(
+        &self,
+        audience: &mut EventAudience<'_>,
+        creator: UserId,
+    ) -> ServiceResult<bool> {
+        if let Some(verdict) = audience.verdicts.get(&creator) {
+            return Ok(*verdict);
+        }
+        let verdict = self.decide_creator_sees(audience, creator).await?;
+        audience.verdicts.insert(creator, verdict);
+        Ok(verdict)
+    }
+
+    /// The uncached decision behind [`Self::creator_sees`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::creator_sees`].
+    async fn decide_creator_sees(
+        &self,
+        audience: &mut EventAudience<'_>,
+        creator: UserId,
+    ) -> ServiceResult<bool> {
+        let Some(standing) = self
+            .repos
+            .server_member_repo
+            .get_member_standing(audience.server_id, creator)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let Some(conversation_id) = event_conversation_id(audience.event) else {
+            return Ok(user_can_see_event_as(
+                audience.event,
+                &creator.to_string(),
+                standing.role.is_guest(),
+            ));
+        };
+        let Some(conversation) = self
+            .audience_conversation(audience, conversation_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        match crate::util::ensure_conversation_access_as(
+            self.repos.conversation_member_repo.as_ref(),
+            conversation,
+            creator,
+            standing.role,
+        )
+        .await
+        {
+            Ok(()) => Ok(true),
+            Err(ServiceError::NotFound | ServiceError::PermissionDenied) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The event's conversation, loaded on first use; `None` when it is not in the workspace.
+    ///
+    /// # Errors
+    ///
+    /// A repository failure while loading the conversation.
+    async fn audience_conversation<'b>(
+        &self,
+        audience: &'b mut EventAudience<'_>,
+        conversation_id: ConversationId,
+    ) -> ServiceResult<Option<&'b Conversation>> {
+        if audience.conversation.is_none() {
+            let loaded = match crate::util::ensure_conversation_in_server(
+                self.repos.conversation_repo.as_ref(),
+                conversation_id,
+                audience.server_id,
+            )
+            .await
+            {
+                Ok(conversation) => Some(conversation),
+                Err(ServiceError::NotFound) => None,
+                Err(e) => return Err(e),
+            };
+            audience.conversation = Some(loaded);
+        }
+        Ok(audience.conversation.as_ref().and_then(Option::as_ref))
+    }
+
+    /// `pipeline` as `viewer` sees it: only its creator is told when it last fired.
+    fn dto_for(pipeline: Pipeline, viewer: UserId) -> PipelineDto {
+        let mut dto = PipelineDto::from(pipeline);
+        if dto.created_by != viewer {
+            dto.last_fired_at = None;
+        }
+        dto
     }
 
     fn validate_name(name: &str) -> ServiceResult<()> {
@@ -251,9 +386,7 @@ impl DefaultPipelineService {
     }
 }
 
-fn event_conversation_id(
-    event: &WorkspaceEvent,
-) -> Option<rim_core::conversation::model::ConversationId> {
+fn event_conversation_id(event: &WorkspaceEvent) -> Option<ConversationId> {
     match event {
         WorkspaceEvent::NewMessage {
             conversation_id, ..
@@ -384,7 +517,11 @@ impl PipelineService for DefaultPipelineService {
             }
         };
 
-        Ok(pipelines.into_iter().map(Into::into).collect())
+        let viewer = cmd.actor.user_id;
+        Ok(pipelines
+            .into_iter()
+            .map(|p| Self::dto_for(p, viewer))
+            .collect())
     }
 
     async fn update(&self, cmd: UpdatePipelineCmd) -> ServiceResult<PipelineDto> {
@@ -423,7 +560,7 @@ impl PipelineService for DefaultPipelineService {
 
         let stored = self.repos.pipeline_repo.update(&updated).await?;
 
-        Ok(stored.into())
+        Ok(Self::dto_for(stored, cmd.actor.user_id))
     }
 
     async fn delete(&self, cmd: DeletePipelineCmd) -> ServiceResult<()> {
@@ -461,7 +598,7 @@ impl PipelineService for DefaultPipelineService {
             .set_enabled(cmd.pipeline_id, cmd.enabled)
             .await?;
 
-        Ok(stored.into())
+        Ok(Self::dto_for(stored, cmd.actor.user_id))
     }
 
     async fn evaluate_event(
@@ -482,10 +619,25 @@ impl PipelineService for DefaultPipelineService {
             .await?;
 
         let mut results = Vec::new();
+        let mut audience = EventAudience::new(&event, server_id);
 
         for pipeline in &pipelines {
             if !Self::matches_trigger(pipeline, &event) {
                 continue;
+            }
+
+            // A pipeline reacts only to events its creator may see: one they may not see neither
+            // fires it nor counts towards its cooldown or suspension, and is not reported.
+            match self.creator_sees(&mut audience, pipeline.created_by).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        pipeline_id = %pipeline.id,
+                        "could not decide whether the pipeline's creator may see the event; skipped: {e}"
+                    );
+                    continue;
+                }
             }
 
             if !Self::apply_filter(pipeline, &event) {
@@ -538,6 +690,7 @@ impl PipelineService for DefaultPipelineService {
                             "exceeded {} firings per {} seconds",
                             RATE_LIMIT_MAX_FIRINGS, RATE_LIMIT_WINDOW_SECS
                         ),
+                        member_user_ids: vec![pipeline.created_by],
                     });
 
                 results.push(PipelineFiredResult {
@@ -642,6 +795,7 @@ impl PipelineService for DefaultPipelineService {
                 pipeline_name: pipeline.name.clone(),
                 trigger_event: format!("{:?}", pipeline.trigger.kind),
                 actions_executed,
+                member_user_ids: vec![pipeline.created_by],
             });
 
             // Persist last_fired_at so it survives restarts and is visible in queries
@@ -671,16 +825,26 @@ impl PipelineService for DefaultPipelineService {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+    use rim_core::conversation::model::ConversationType;
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::pipeline::model::{PipelineAction, PipelineTrigger, PipelineTriggerKind};
     use rim_core::repository::error::RepoResult;
     use rim_core::server_member::model::{MemberStanding, ServerMember, ServerMemberRole};
     use rim_core::server_member::repository::ServerMemberRepository;
     use rim_services::Actor;
+    use rim_services::command::dto::{CommandResultDto, CommandResultStatusDto};
+    use rim_services::command::service::MockCommandService;
     use rim_services::events::MessageEventData;
     use rim_services::pipeline::dto::{
         PipelineActionDto, PipelineTriggerDto, PipelineTriggerKindDto,
     };
+    use rim_services::workspace_state::dto::WorkspaceStateScopeDto;
 
     mockall::mock! {
         PipelineRepository {}
@@ -733,11 +897,12 @@ mod tests {
         pipeline_repo: MockPipelineRepository,
         member_repo: MockServerMemberRepository,
     ) -> DefaultPipelineService {
-        use rim_services::command::service::MockCommandService;
         DefaultPipelineService::new(
             PipelineRepos {
                 pipeline_repo: Arc::new(pipeline_repo),
                 server_member_repo: Arc::new(member_repo),
+                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             },
             Arc::new(MockCommandService::new()),
             Arc::new(rim_services::events::NoopBroadcaster),
@@ -978,43 +1143,16 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_matches_new_message() {
-        let server_id = ServerId::new();
-        let user_id = UserId::new();
-        let conv_id = rim_core::conversation::model::ConversationId::new();
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[]);
+        let h = world.harness(vec![make_pipeline(world.server_id, creator)]);
 
-        let pipeline = make_pipeline(server_id, user_id);
-        let pipeline_clone = pipeline.clone();
-
-        let mut repo = MockPipelineRepository::new();
-        repo.expect_list_enabled_for_server()
-            .returning(move |_| Ok(vec![pipeline_clone.clone()]));
-        repo.expect_set_last_fired_at().returning(|_, _| Ok(()));
-
-        let mut cmd_svc = rim_services::command::service::MockCommandService::new();
-        cmd_svc.expect_execute_command().returning(|_| {
-            Box::pin(async {
-                Ok(rim_services::command::dto::CommandResultDto {
-                    status: rim_services::command::dto::CommandResultStatusDto::Success,
-                    message: "ok".to_string(),
-                    payload: None,
-                    follow_up_commands: vec![],
-                    pipeline_stages: None,
-                    confirmation_required: None,
-                })
-            })
-        });
-
-        let svc = DefaultPipelineService::new(
-            PipelineRepos {
-                pipeline_repo: Arc::new(repo),
-                server_member_repo: Arc::new(make_member_repo()),
-            },
-            Arc::new(cmd_svc),
-            Arc::new(rim_services::events::NoopBroadcaster),
-        );
-
-        let event = make_new_message_event(server_id, conv_id, user_id);
-        let results = svc.evaluate_event(event).await.unwrap();
+        let results = h
+            .svc
+            .evaluate_event(world.message(channel, "hello"))
+            .await
+            .expect("evaluate");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].actions_executed, 1);
@@ -1023,52 +1161,23 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_respects_cooldown() {
-        let server_id = ServerId::new();
-        let user_id = UserId::new();
-        let conv_id = rim_core::conversation::model::ConversationId::new();
-
-        let mut pipeline = make_pipeline(server_id, user_id);
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[]);
+        let mut pipeline = make_pipeline(world.server_id, creator);
         pipeline.cooldown_secs = Some(60);
-        let pipeline_clone = pipeline.clone();
+        let h = world.harness(vec![pipeline]);
+        let event = world.message(channel, "hello");
 
-        let mut repo = MockPipelineRepository::new();
-        repo.expect_list_enabled_for_server()
-            .returning(move |_| Ok(vec![pipeline_clone.clone()]));
-        repo.expect_set_last_fired_at().returning(|_, _| Ok(()));
-
-        let mut cmd_svc = rim_services::command::service::MockCommandService::new();
-        cmd_svc.expect_execute_command().returning(|_| {
-            Box::pin(async {
-                Ok(rim_services::command::dto::CommandResultDto {
-                    status: rim_services::command::dto::CommandResultStatusDto::Success,
-                    message: "ok".to_string(),
-                    payload: None,
-                    follow_up_commands: vec![],
-                    pipeline_stages: None,
-                    confirmation_required: None,
-                })
-            })
-        });
-
-        let svc = DefaultPipelineService::new(
-            PipelineRepos {
-                pipeline_repo: Arc::new(repo),
-                server_member_repo: Arc::new(make_member_repo()),
-            },
-            Arc::new(cmd_svc),
-            Arc::new(rim_services::events::NoopBroadcaster),
-        );
-
-        let event = make_new_message_event(server_id, conv_id, user_id);
-
-        // First firing should succeed
-        let results = svc.evaluate_event(event.clone()).await.unwrap();
+        let results = h.svc.evaluate_event(event.clone()).await.expect("first");
         assert_eq!(results[0].actions_executed, 1);
 
-        // Second firing should be skipped due to cooldown
-        let results = svc.evaluate_event(event).await.unwrap();
+        let results = h.svc.evaluate_event(event).await.expect("second");
         assert_eq!(results[0].actions_executed, 0);
-        assert!(results[0].skipped_reason.as_deref() == Some("cooldown active"));
+        assert_eq!(
+            results[0].skipped_reason.as_deref(),
+            Some("cooldown active")
+        );
     }
 
     /// One workspace, conversation and author to build events in.
@@ -1324,17 +1433,18 @@ mod tests {
     /// A triggered pipeline whose filter fails is reported as skipped and runs no action.
     #[tokio::test]
     async fn evaluate_reports_a_failed_filter_and_runs_no_action() {
-        let scene = Scene::new();
-        let mut pipeline = scene.pipeline(PipelineTriggerKind::NewMessage, None);
-        pipeline.filter = Some(PipelineFilter {
-            conditions: vec![Scene::contains("bye")],
-        });
-        let mut repo = MockPipelineRepository::new();
-        repo.expect_list_enabled_for_server()
-            .returning(move |_| Ok(vec![pipeline.clone()]));
-        let svc = make_service(repo, make_member_repo());
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[]);
+        let h = world.harness(vec![world.pipeline(creator)]);
 
-        let results = svc.evaluate_event(scene.message()).await.expect("evaluate");
+        let results = h
+            .svc
+            .evaluate_event(world.message(channel, "hello world"))
+            .await
+            .expect("evaluate");
+        assert_eq!(h.commands(), 0);
+        assert!(h.stamped().is_empty());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].actions_executed, 0);
         assert_eq!(
@@ -1439,5 +1549,564 @@ mod tests {
     async fn a_creator_who_left_the_workspace_may_not_change_their_pipeline() {
         let outcomes = manage_outcomes(None, true).await;
         assert!(all_denied(&outcomes), "{outcomes:?}");
+    }
+
+    #[derive(Default)]
+    struct RecordingBroadcaster(Mutex<Vec<WorkspaceEvent>>);
+
+    impl Broadcaster for RecordingBroadcaster {
+        fn broadcast(&self, event: WorkspaceEvent) {
+            self.0.lock().expect("events").push(event);
+        }
+    }
+
+    fn success() -> CommandResultDto {
+        CommandResultDto {
+            status: CommandResultStatusDto::Success,
+            message: "ok".to_string(),
+            payload: None,
+            follow_up_commands: vec![],
+            pipeline_stages: None,
+            confirmation_required: None,
+        }
+    }
+
+    /// A workspace whose members, conversations and conversation members the evaluator's
+    /// repositories report.
+    struct World {
+        server_id: ServerId,
+        roles: HashMap<UserId, ServerMemberRole>,
+        conversations: HashMap<ConversationId, Conversation>,
+        joined: HashSet<(ConversationId, UserId)>,
+    }
+
+    impl World {
+        fn new() -> Self {
+            Self {
+                server_id: ServerId::new(),
+                roles: HashMap::new(),
+                conversations: HashMap::new(),
+                joined: HashSet::new(),
+            }
+        }
+
+        /// A new workspace member holding `role`.
+        fn member(&mut self, role: ServerMemberRole) -> UserId {
+            let user_id = UserId::new();
+            self.roles.insert(user_id, role);
+            user_id
+        }
+
+        /// A new conversation of `kind` in the workspace that `members` have joined.
+        fn conversation(
+            &mut self,
+            kind: ConversationType,
+            is_private: bool,
+            members: &[UserId],
+        ) -> ConversationId {
+            let id = ConversationId::new();
+            let now = chrono::Utc::now();
+            self.conversations.insert(
+                id,
+                Conversation {
+                    id,
+                    conversation_type: kind,
+                    title: None,
+                    topic: None,
+                    created_at: now,
+                    last_activity_at: now,
+                    server_id: self.server_id,
+                    is_private,
+                    archived_at: None,
+                    created_by: None,
+                    slow_mode_seconds: 0,
+                    encrypted_at: None,
+                },
+            );
+            self.joined.extend(members.iter().map(|m| (id, *m)));
+            id
+        }
+
+        /// A new message reading `text` in `conversation_id`, by someone outside the workspace,
+        /// with the event's routing fields taken from the conversation when it exists.
+        fn message(&self, conversation_id: ConversationId, text: &str) -> WorkspaceEvent {
+            let mut event = make_new_message_event(self.server_id, conversation_id, UserId::new());
+            if let WorkspaceEvent::NewMessage {
+                conversation_type,
+                is_private,
+                member_user_ids,
+                message,
+                ..
+            } = &mut event
+            {
+                if let Some(conversation) = self.conversations.get(&conversation_id) {
+                    *conversation_type = conversation.conversation_type.as_str().to_string();
+                    *is_private = conversation.is_private;
+                }
+                *member_user_ids = self
+                    .joined
+                    .iter()
+                    .filter(|(c, _)| *c == conversation_id)
+                    .map(|(_, u)| *u)
+                    .collect();
+                message.text = Some(text.to_string());
+            }
+            event
+        }
+
+        /// A pipeline of `creator` on new messages that contain "bye".
+        fn pipeline(&self, creator: UserId) -> Pipeline {
+            let mut pipeline = make_pipeline(self.server_id, creator);
+            pipeline.filter = Some(PipelineFilter {
+                conditions: vec![FilterCondition::MessageContains {
+                    pattern: "bye".to_string(),
+                }],
+            });
+            pipeline
+        }
+
+        fn member_repo(&self) -> MockServerMemberRepository {
+            let (server_id, roles) = (self.server_id, self.roles.clone());
+            let mut repo = MockServerMemberRepository::new();
+            repo.expect_get_member_standing()
+                .returning(move |server, user| {
+                    Ok(roles
+                        .get(&user)
+                        .filter(|_| server == server_id)
+                        .map(|role| MemberStanding::new(*role)))
+                });
+            repo
+        }
+
+        fn conversation_repo(&self) -> MockConversationRepository {
+            let conversations = self.conversations.clone();
+            let mut repo = MockConversationRepository::new();
+            repo.expect_get_by_id().returning(move |id| {
+                let found = conversations.get(&id).cloned();
+                Box::pin(async move { Ok(found) })
+            });
+            repo
+        }
+
+        fn conversation_member_repo(&self) -> MockConversationMemberRepository {
+            let joined = self.joined.clone();
+            let mut repo = MockConversationMemberRepository::new();
+            repo.expect_is_member().returning(move |c, u| {
+                let member = joined.contains(&(c, u));
+                Box::pin(async move { Ok(member) })
+            });
+            repo
+        }
+
+        /// The evaluator over this workspace running `pipelines`, recording what it does.
+        fn harness(&self, pipelines: Vec<Pipeline>) -> Harness {
+            let stamped = Arc::new(Mutex::new(Vec::new()));
+            let disabled = Arc::new(Mutex::new(Vec::new()));
+            let mut repo = MockPipelineRepository::new();
+            repo.expect_list_enabled_for_server()
+                .returning(move |_| Ok(pipelines.clone()));
+            let record = Arc::clone(&stamped);
+            repo.expect_set_last_fired_at().returning(move |id, _| {
+                record.lock().expect("stamped").push(id);
+                Ok(())
+            });
+            let record = Arc::clone(&disabled);
+            repo.expect_set_enabled().returning(move |id, _| {
+                record.lock().expect("disabled").push(id);
+                Ok(make_pipeline(ServerId::new(), UserId::new()))
+            });
+
+            let commands = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&commands);
+            let mut command_service = MockCommandService::new();
+            command_service
+                .expect_execute_command()
+                .returning(move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(success()) })
+                });
+
+            let events = Arc::new(RecordingBroadcaster::default());
+            let svc = DefaultPipelineService::new(
+                PipelineRepos {
+                    pipeline_repo: Arc::new(repo),
+                    server_member_repo: Arc::new(self.member_repo()),
+                    conversation_repo: Arc::new(self.conversation_repo()),
+                    conversation_member_repo: Arc::new(self.conversation_member_repo()),
+                },
+                Arc::new(command_service),
+                Arc::clone(&events) as Arc<dyn Broadcaster>,
+            );
+            Harness {
+                svc,
+                commands,
+                stamped,
+                disabled,
+                events,
+            }
+        }
+    }
+
+    /// The evaluator with what it did recorded: commands run, pipelines stamped as fired or
+    /// switched off, events broadcast.
+    struct Harness {
+        svc: DefaultPipelineService,
+        commands: Arc<AtomicUsize>,
+        stamped: Arc<Mutex<Vec<PipelineId>>>,
+        disabled: Arc<Mutex<Vec<PipelineId>>>,
+        events: Arc<RecordingBroadcaster>,
+    }
+
+    impl Harness {
+        /// The ids of the pipelines that fired on `event`, sorted.
+        async fn fired(&self, event: WorkspaceEvent) -> Vec<String> {
+            let mut fired: Vec<String> = self
+                .svc
+                .evaluate_event(event)
+                .await
+                .expect("evaluate")
+                .into_iter()
+                .filter(|r| r.skipped_reason.is_none())
+                .map(|r| r.pipeline_id)
+                .collect();
+            fired.sort();
+            fired
+        }
+
+        fn commands(&self) -> usize {
+            self.commands.load(Ordering::SeqCst)
+        }
+
+        fn stamped(&self) -> Vec<PipelineId> {
+            self.stamped.lock().expect("stamped").clone()
+        }
+
+        fn disabled(&self) -> Vec<PipelineId> {
+            self.disabled.lock().expect("disabled").clone()
+        }
+
+        fn events(&self) -> Vec<WorkspaceEvent> {
+            self.events.0.lock().expect("events").clone()
+        }
+    }
+
+    /// The sorted ids of `pipelines`.
+    fn ids<'a>(pipelines: impl IntoIterator<Item = &'a Pipeline>) -> Vec<String> {
+        let mut ids: Vec<String> = pipelines.into_iter().map(|p| p.id.to_string()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// A message in a private channel fires the pipeline of a creator who joined the channel and
+    /// not that of a workspace member who did not: the skipped pipeline runs nothing, is not
+    /// stamped as fired, and its creator is told nothing.
+    #[tokio::test]
+    async fn a_private_channel_message_fires_only_its_members_pipelines() {
+        let mut world = World::new();
+        let inside = world.member(ServerMemberRole::Member);
+        let outside = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, true, &[inside]);
+        let (theirs, snooper) = (world.pipeline(inside), world.pipeline(outside));
+        let h = world.harness(vec![theirs.clone(), snooper.clone()]);
+
+        let fired = h.fired(world.message(channel, "goodbye")).await;
+
+        assert_eq!(fired, ids([&theirs]));
+        assert_eq!(h.commands(), 1);
+        assert_eq!(h.stamped(), [theirs.id]);
+        let events = h.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(
+            matches!(
+                &events[0],
+                WorkspaceEvent::PipelineFired { pipeline_id, member_user_ids, .. }
+                    if *pipeline_id == theirs.id && member_user_ids == &[inside]
+            ),
+            "{events:?}"
+        );
+    }
+
+    /// A public channel's message fires the pipeline of every member who is not a guest,
+    /// whether or not they joined the channel.
+    #[tokio::test]
+    async fn a_public_channel_message_fires_every_members_pipeline() {
+        let mut world = World::new();
+        let owner = world.member(ServerMemberRole::Owner);
+        let moderator = world.member(ServerMemberRole::Moderator);
+        let member = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[owner]);
+        let pipelines: Vec<Pipeline> = [owner, moderator, member]
+            .iter()
+            .map(|u| world.pipeline(*u))
+            .collect();
+        let h = world.harness(pipelines.clone());
+
+        let fired = h.fired(world.message(channel, "goodbye")).await;
+
+        assert_eq!(fired, ids(&pipelines));
+        assert_eq!(h.commands(), 3);
+    }
+
+    /// A DM or group message fires only its participants' pipelines; the workspace's Owner is
+    /// no exception.
+    #[tokio::test]
+    async fn a_dm_or_group_message_fires_only_its_participants_pipelines() {
+        for kind in [ConversationType::Direct, ConversationType::Group] {
+            let mut world = World::new();
+            let owner = world.member(ServerMemberRole::Owner);
+            let a = world.member(ServerMemberRole::Member);
+            let b = world.member(ServerMemberRole::Member);
+            let conversation = world.conversation(kind, false, &[a, b]);
+            let participants = [world.pipeline(a), world.pipeline(b)];
+            let owners = world.pipeline(owner);
+            let mut pipelines = participants.to_vec();
+            pipelines.push(owners);
+            let h = world.harness(pipelines);
+
+            let fired = h.fired(world.message(conversation, "goodbye")).await;
+
+            assert_eq!(fired, ids(&participants), "{kind}");
+            assert_eq!(h.stamped().len(), 2, "{kind}");
+        }
+    }
+
+    /// A guest's pipeline fires only in conversations the guest joined, a public channel
+    /// included; a public channel they did not join or a DM between others fires nothing.
+    #[tokio::test]
+    async fn a_guest_pipeline_fires_only_where_the_guest_is_a_member() {
+        let mut world = World::new();
+        let guest = world.member(ServerMemberRole::Guest);
+        let other = world.member(ServerMemberRole::Member);
+        let third = world.member(ServerMemberRole::Member);
+        let joined_public = world.conversation(ConversationType::Channel, false, &[guest]);
+        let joined_private = world.conversation(ConversationType::Channel, true, &[guest]);
+        let their_dm = world.conversation(ConversationType::Direct, false, &[guest, other]);
+        let unjoined_public = world.conversation(ConversationType::Channel, false, &[other]);
+        let others_dm = world.conversation(ConversationType::Direct, false, &[other, third]);
+        let pipeline = world.pipeline(guest);
+        let h = world.harness(vec![pipeline.clone()]);
+
+        for (conversation, fires) in [
+            (joined_public, true),
+            (joined_private, true),
+            (their_dm, true),
+            (unjoined_public, false),
+            (others_dm, false),
+        ] {
+            let fired = h.fired(world.message(conversation, "goodbye")).await;
+            let expected = if fires { ids([&pipeline]) } else { vec![] };
+            assert_eq!(fired, expected, "{conversation}");
+        }
+        assert_eq!(h.stamped().len(), 3);
+    }
+
+    /// A creator who is no longer a member of the workspace has no pipeline firing, not even on
+    /// a public channel, and a message from a conversation outside the workspace fires nothing.
+    #[tokio::test]
+    async fn a_departed_creator_or_a_foreign_conversation_fires_nothing() {
+        let mut world = World::new();
+        let member = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[]);
+        let departed = world.pipeline(UserId::new());
+        let present = world.pipeline(member);
+        let h = world.harness(vec![departed, present.clone()]);
+
+        assert_eq!(
+            h.fired(world.message(channel, "goodbye")).await,
+            ids([&present])
+        );
+        assert!(
+            h.fired(world.message(ConversationId::new(), "goodbye"))
+                .await
+                .is_empty()
+        );
+        assert_eq!(h.stamped(), [present.id]);
+    }
+
+    /// Events the creator may not see neither start the cooldown nor count towards the
+    /// suspension: after more of them than the firing limit, the first visible message still
+    /// fires and the pipeline stays enabled.
+    #[tokio::test]
+    async fn unseen_events_count_towards_neither_cooldown_nor_suspension() {
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let other = world.member(ServerMemberRole::Member);
+        let hidden = world.conversation(ConversationType::Channel, true, &[other]);
+        let public = world.conversation(ConversationType::Channel, false, &[]);
+        let mut pipeline = world.pipeline(creator);
+        pipeline.cooldown_secs = Some(60);
+        let h = world.harness(vec![pipeline.clone()]);
+
+        for _ in 0..=RATE_LIMIT_MAX_FIRINGS {
+            assert!(h.fired(world.message(hidden, "goodbye")).await.is_empty());
+        }
+        assert_eq!(
+            h.fired(world.message(public, "goodbye")).await,
+            ids([&pipeline])
+        );
+        assert!(h.disabled().is_empty());
+        assert_eq!(h.stamped(), [pipeline.id]);
+        assert_eq!(h.events().len(), 1);
+    }
+
+    /// Pipelines that share a creator cost one standing, one conversation and one membership
+    /// lookup per event.
+    #[tokio::test]
+    async fn pipelines_sharing_a_creator_are_decided_once_per_event() {
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, true, &[creator]);
+        let pipelines: Vec<Pipeline> = (0..3).map(|_| world.pipeline(creator)).collect();
+        let mut repo = MockPipelineRepository::new();
+        let listed = pipelines.clone();
+        repo.expect_list_enabled_for_server()
+            .returning(move |_| Ok(listed.clone()));
+        repo.expect_set_last_fired_at()
+            .times(3)
+            .returning(|_, _| Ok(()));
+        let mut members = MockServerMemberRepository::new();
+        members
+            .expect_get_member_standing()
+            .times(1)
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Member))));
+        let mut conversations = MockConversationRepository::new();
+        let stored = world.conversations[&channel].clone();
+        conversations
+            .expect_get_by_id()
+            .times(1)
+            .returning(move |_| {
+                let stored = stored.clone();
+                Box::pin(async move { Ok(Some(stored)) })
+            });
+        let mut conversation_members = MockConversationMemberRepository::new();
+        conversation_members
+            .expect_is_member()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        let mut command_service = MockCommandService::new();
+        command_service
+            .expect_execute_command()
+            .times(3)
+            .returning(|_| Box::pin(async { Ok(success()) }));
+        let svc = DefaultPipelineService::new(
+            PipelineRepos {
+                pipeline_repo: Arc::new(repo),
+                server_member_repo: Arc::new(members),
+                conversation_repo: Arc::new(conversations),
+                conversation_member_repo: Arc::new(conversation_members),
+            },
+            Arc::new(command_service),
+            Arc::new(rim_services::events::NoopBroadcaster),
+        );
+
+        let results = svc
+            .evaluate_event(world.message(channel, "goodbye"))
+            .await
+            .expect("evaluate");
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.actions_executed == 1));
+    }
+
+    /// Workspace-wide events reach a pipeline as a subscriber would see them: a guest's pipeline
+    /// fires when the guest joins and not when someone else does, and a state change kept for
+    /// one user fires only that user's pipeline.
+    #[tokio::test]
+    async fn workspace_events_fire_a_pipeline_as_its_creator_would_see_them() {
+        let mut world = World::new();
+        let guest = world.member(ServerMemberRole::Guest);
+        let member = world.member(ServerMemberRole::Member);
+        let on = |kind, creator| {
+            let mut pipeline = make_pipeline(world.server_id, creator);
+            pipeline.trigger = PipelineTrigger {
+                kind,
+                conversation_id: None,
+            };
+            pipeline
+        };
+        let guest_joins = on(PipelineTriggerKind::MemberJoined, guest);
+        let member_joins = on(PipelineTriggerKind::MemberJoined, member);
+        let guest_state = on(PipelineTriggerKind::WorkspaceStateChanged, guest);
+        let member_state = on(PipelineTriggerKind::WorkspaceStateChanged, member);
+        let h = world.harness(vec![
+            guest_joins.clone(),
+            member_joins.clone(),
+            guest_state.clone(),
+            member_state.clone(),
+        ]);
+        let joined = |user_id| WorkspaceEvent::MemberJoined {
+            workspace_id: world.server_id,
+            user_id,
+            username: "newcomer".to_string(),
+        };
+        let state = |scope, user_id| WorkspaceEvent::WorkspaceStateChanged {
+            workspace_id: world.server_id,
+            key: "k".to_string(),
+            value: serde_json::json!(1),
+            scope,
+            user_id,
+            version: 1,
+        };
+
+        assert_eq!(h.fired(joined(UserId::new())).await, ids([&member_joins]));
+        assert_eq!(
+            h.fired(joined(guest)).await,
+            ids([&guest_joins, &member_joins])
+        );
+        assert_eq!(
+            h.fired(state(WorkspaceStateScopeDto::User, Some(member)))
+                .await,
+            ids([&member_state])
+        );
+        assert_eq!(
+            h.fired(state(WorkspaceStateScopeDto::Server, Some(member)))
+                .await,
+            ids([&guest_state, &member_state])
+        );
+    }
+
+    /// When a pipeline last fired is shown to its creator only: another member listing the
+    /// workspace's pipelines, or a moderator switching one off, reads none.
+    #[tokio::test]
+    async fn only_the_creator_reads_when_a_pipeline_last_fired() {
+        let creator = UserId::new();
+        let mut pipeline = make_pipeline(ServerId::new(), creator);
+        pipeline.last_fired_at = Some(chrono::Utc::now());
+        let mut repo = MockPipelineRepository::new();
+        let stored = pipeline.clone();
+        repo.expect_list_for_server()
+            .returning(move |_| Ok(vec![stored.clone()]));
+        let stored = pipeline.clone();
+        repo.expect_get_by_id()
+            .returning(move |_| Ok(Some(stored.clone())));
+        let stored = pipeline.clone();
+        repo.expect_set_enabled()
+            .returning(move |_, _| Ok(stored.clone()));
+        let mut members = make_member_repo();
+        members
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Moderator))));
+        let svc = make_service(repo, members);
+
+        let listed_by = |user_id| {
+            svc.list(ListPipelinesCmd {
+                actor: Actor::new(user_id),
+                server_id: pipeline.server_id,
+                enabled: None,
+            })
+        };
+        let seen = listed_by(creator).await.expect("list");
+        assert_eq!(seen[0].last_fired_at, pipeline.last_fired_at);
+        let seen = listed_by(UserId::new()).await.expect("list");
+        assert_eq!(seen[0].last_fired_at, None);
+
+        let toggled = svc
+            .toggle(TogglePipelineCmd {
+                actor: Actor::new(UserId::new()),
+                pipeline_id: pipeline.id,
+                enabled: false,
+            })
+            .await
+            .expect("toggle");
+        assert_eq!(toggled.last_fired_at, None);
     }
 }

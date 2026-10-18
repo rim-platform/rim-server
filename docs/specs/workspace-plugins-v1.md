@@ -399,8 +399,8 @@ holds five.
 
 **Event.** `WorkspaceEvent::WorkspacePluginChanged { workspace_id, plugin_id, change }`, with
 `change` one of `added`, `updated` or `removed`, serialized like the other events (`{"type":
-"WorkspacePluginChanged", …}`). It is visible to every member, guests included, like
-`PipelineFired`. It carries no entry data: clients refetch `workspacePlugins`.
+"WorkspacePluginChanged", …}`). It is visible to every member, guests included. It carries
+no entry data: clients refetch `workspacePlugins`.
 
 ## Client behaviour (rim-ui)
 
