@@ -24,9 +24,9 @@ registry that web bundles come from._
    navigates itself, floods the host or misses two heartbeats is removed.
 6. The plugin reaches RIM only through host methods behind the same capability prompts. An opaque
    origin has no RIM cookies and cannot read the CSRF token, so it cannot call GraphQL.
-7. `ui.panel`, `ui.notify` and `plugin.<id>.<verb>` are prompted as on the desktop. A new
-   `network.fetch` lets the plugin reach the origins its manifest lists, enforced by CSP.
-   `local.process`, `fs.*` and `network` are refused.
+7. `ui.panel` and `ui.notify` are prompted as on the desktop; `plugin.<id>.<verb>` keys install
+   but, as on the desktop, no prompt lists them. A new `network.fetch` lets the plugin reach the
+   origins its manifest lists, enforced by CSP. `local.process`, `fs.*` and `network` are refused.
 8. New host methods `rim.storage.get` and `rim.storage.set` (not frozen) give 1 MiB per plugin and
    account, because an opaque origin has no `localStorage` or IndexedDB.
 9. The desktop installs web plugins like any plugin or from the workspace registry; the web app
@@ -44,7 +44,7 @@ Same `rim-plugin.json`, same `manifest_version` 1. What differs for this kind:
 |---|---|
 | `runtime_kind` | `"WebSandboxed"` |
 | `entrypoint` | Bundle path of one ES module ending in `.mjs` or `.js`. Self-contained: no static `import` and no `import()` of bundle files, because the shell loads it from a `blob:` URL where relative specifiers resolve to nothing. No `#!` line. |
-| `network_origins` | New, optional. 1 to 16 origins of the form `https://host[:port]` or, for WebSockets, `wss://host[:port]`: lowercase, no path, query, fragment, userinfo or wildcard, no duplicates. Present exactly when `capabilities` lists `network.fetch` (`null` counts as absent, as for every optional field). No origin may share the host and port of the app's or the RIM API's origin. |
+| `network_origins` | New, optional. 1 to 16 origins of the form `https://host[:port]` or, for WebSockets, `wss://host[:port]`: lowercase, no path, query, fragment, userinfo or wildcard, no duplicates. Present exactly when `capabilities` lists `network.fetch` (`null` counts as absent, as for the other optional fields that have no default, `author`, `output_schema`, `preset_args` and `slot`; a list field that defaults to empty, such as `capabilities`, refuses `null`). No origin may share the host and port of the app's or the RIM API's origin. |
 | `capabilities` | See [Capabilities](#capabilities). |
 | `panels` | As today (`id`, `title`, `description`, `slot`). A panel's files live under `panels/<id>/`, so its `id` is one bundle path segment; `index.html` is required. The entrypoint is not under `panels/`. |
 
@@ -52,26 +52,66 @@ Same `rim-plugin.json`, same `manifest_version` 1. What differs for this kind:
 support refuses a web plugin at install with `failed to parse manifest: unknown variant
 WebSandboxed`, because `RuntimeKind` is a closed enum; it never tries to execute the module.
 
-The showcase's manifest, as installed (its source names `main.ts`, which the bundler
-builds into `main.mjs`). A panel reaches its plugin only through commands, so adding and
+The showcase's manifest, as installed (the bundler builds its source, `src/main.ts`, into the
+`main.mjs` it names). A panel reaches its plugin only through commands, so adding and
 removing repositories are commands too; they take an argument, so the palette leaves them
 to the panel:
 
 ```json
-{ "manifest_version": 1, "plugin_id": "chat.rim.github-prs", "display_name": "GitHub Pull Requests",
-  "version": "0.1.0", "author": "RIM team", "runtime_kind": "WebSandboxed", "entrypoint": "main.mjs",
+{
+  "manifest_version": 1,
+  "plugin_id": "chat.rim.github-prs",
+  "display_name": "GitHub Pull Requests",
+  "version": "0.0.1",
+  "author": "RIM team",
+  "runtime_kind": "WebSandboxed",
+  "entrypoint": "main.mjs",
   "description": "Lists the open pull requests of public GitHub repositories you choose. Talks only to GitHub, without a token.",
   "capabilities": ["ui.panel", "network.fetch"],
   "network_origins": ["https://api.github.com", "https://avatars.githubusercontent.com"],
-  "commands": [{ "id": "refresh", "title": "Pull requests: Refresh",
-                 "description": "Fetches the open pull requests again.", "keybind_capable": true },
-               { "id": "add_repo", "title": "Pull requests: Add repository",
-                 "description": "Adds a public GitHub repository to the list, at most 10.",
-                 "arguments": [{ "name": "repo", "type": "string", "required": true }] },
-               { "id": "remove_repo", "title": "Pull requests: Remove repository",
-                 "description": "Removes a repository from the list.",
-                 "arguments": [{ "name": "repo", "type": "string", "required": true }] }],
-  "panels": [{ "id": "prs", "title": "Pull requests", "slot": "tool_panel" }] }
+  "commands": [
+    {
+      "id": "refresh",
+      "title": "Pull requests: Refresh",
+      "description": "Fetches the open pull requests again.",
+      "keybind_capable": true
+    },
+    {
+      "id": "add_repo",
+      "title": "Pull requests: Add repository",
+      "description": "Adds a public GitHub repository to the list, at most 10.",
+      "arguments": [
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "The repository as owner/name, such as rust-lang/rust."
+        }
+      ]
+    },
+    {
+      "id": "remove_repo",
+      "title": "Pull requests: Remove repository",
+      "description": "Removes a repository from the list.",
+      "arguments": [
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "The repository as owner/name."
+        }
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "id": "prs",
+      "title": "Pull requests",
+      "description": "Open pull requests of the repositories on your list.",
+      "slot": "tool_panel"
+    }
+  ]
+}
 ```
 
 ## Bundles
@@ -309,7 +349,8 @@ panels when the plugin stops). Focus and Escape work as for other panels.
 
 | Capability | `WebSandboxed` | Notes |
 |---|---|---|
-| `plugin.<pluginId>.<verb>`, `ui.panel` | Prompted | As on the desktop |
+| `ui.panel` | Prompted | As on the desktop |
+| `plugin.<pluginId>.<verb>` | Accepted at install, not prompted | As on the desktop: the prompt lists only built-in names, so nothing approves one, and a command whose `required_capabilities` names one is always refused |
 | `ui.notify` | Prompted | Panel notifications show the plugin's name, as today |
 | `network.fetch` | Prompted (new) | Lists the origins; this kind only; enforced by the policy |
 | `chat.read`, `chat.write`, `chat.read.encrypted`, `chat.write.encrypted` | Prompted | As on the desktop, one line each; an encrypted one without its plain one is refused at install |
@@ -429,13 +470,14 @@ installs update when the entry's statement changes; link installs only by a new 
 - **Testing.** `startTestHost` gains `transport: "port"`: the plugin runs over a Node
   `MessageChannel` with the same assertions as over stdio.
 
-**Showcase: `plugins/github-prs/`** (`chat.rim.github-prs`, the manifest above), written with the
-SDK. Its panel lists the open pull requests (title, author, age, draft) of up to 10 public
-repositories the user adds, kept with `rim.storage`; `refresh` is keybind-capable. It calls the
-GitHub REST API without a token (60 requests an hour per IP address, so it refreshes at most every
-2 minutes and says when GitHub refuses). It exercises both frames, `network.fetch`, storage, the
-panel bridge and, on the web, a registry install. `plugins/k8s-pods/` stays `DesktopLocalProcess`:
-it runs `kubectl`.
+**Showcase: `plugin-github-prs`** (`chat.rim.github-prs`, the manifest above), written with the SDK
+in [its own repository](https://github.com/rim-platform/plugin-github-prs). Its panel lists the open
+pull requests (title, author, age, draft) of up to 10 public repositories the user adds, kept with
+`rim.storage`; `refresh` is keybind-capable. It calls the GitHub REST API without a token (60
+requests an hour per IP address, so it refreshes at most every 2 minutes and says when GitHub
+refuses). It exercises both frames, `network.fetch`, storage, the panel bridge and, on the web, a
+registry install. [`plugin-k8s-pods`](https://github.com/rim-platform/plugin-k8s-pods) stays
+`DesktopLocalProcess`: it runs `kubectl`.
 
 ## A web plugin without the SDK
 

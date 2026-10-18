@@ -522,15 +522,16 @@ The host enforces capabilities in two places:
 The protocol knows two kinds of capability name. Both are valid in `grantedCapabilities` in v1:
 
 - **Plugin-scoped names**, `plugin.<pluginId>.<verb>`, such as
-  `plugin.dev.example.k8stools.restart_pod`. They exist so the user can approve, say, "restart
-  pods" separately from "list pods", and so `required_capabilities` on a command can point at
+  `plugin.dev.example.k8stools.restart_pod`. `required_capabilities` on a command can point at
   them. The host guards no method of its own with them; it checks them only on commands.
 - **Built-in names**, which guard things the host does for the plugin:
 
 | Capability | Guards |
 |---|---|
-| `chat.read` | `rim.chat.get_messages`, `rim.chat.search_messages` |
-| `chat.write` | `rim.chat.send_message` (and the unimplemented edit and delete calls) |
+| `chat.read` | `rim.chat.list_messages`, `rim.chat.get_message`, `rim.chat.search_messages`, in plaintext conversations |
+| `chat.write` | `rim.chat.post_message`, in plaintext conversations |
+| `chat.read.encrypted` | The `chat.read` methods in end-to-end encrypted conversations too; declared only with `chat.read` |
+| `chat.write.encrypted` | `rim.chat.post_message` in end-to-end encrypted conversations too; declared only with `chat.write` |
 | `events.read` | `rim.events.subscribe` |
 | `ui.panel` | `rim.ui.update_panel` (and the unimplemented `rim.ui.show_panel`) |
 | `ui.notify` | Notifications a plugin's panel sends through the panel bridge; `rim.ui.show_notification` is unimplemented on the process side |
@@ -548,17 +549,25 @@ check `rim-ui/src-tauri/src/plugin_host/validation.rs` in the host version you t
 
 - **Which names a manifest may declare.** A manifest that declares any other name fails to
   install.
-  - From rim-ui #16 onward: the built-in names `ui.panel` and `ui.notify`, and the plugin's own
-    keys `plugin.<pluginId>.<verb>`, where the verb uses only `[a-z0-9_.]` and neither starts
-    nor ends with `.` nor contains `..`. The other built-in names are rejected: `chat.read`,
-    `chat.write` and `events.read` guard calls that nothing serves yet and that are not in v1,
-    and `local.process`, `network`, `fs.read` and `fs.write` guard nothing at all.
+  - From rim-ui #44 onward: the built-in names `ui.panel`, `ui.notify`, `chat.read`,
+    `chat.write`, `chat.read.encrypted` and `chat.write.encrypted`, and the plugin's own keys
+    `plugin.<pluginId>.<verb>`, where the verb uses only `[a-z0-9_.]` and neither starts nor
+    ends with `.` nor contains `..`. An encrypted chat name declared without its plain one is
+    rejected. The other built-in names are rejected: `events.read` guards a call that nothing
+    serves and that is not in v1, and `local.process`, `network`, `fs.read` and `fs.write` guard
+    nothing at all. A `WebSandboxed` plugin may also declare `network.fetch`
+    (`web-plugins-v1.md`).
+  - From rim-ui #16 to #44: the same rules with only `ui.panel` and `ui.notify` of the built-in
+    names; `chat.read` and `chat.write` are rejected too.
   - Before rim-ui #16: only `plugin.<pluginId>.<verb>` keys, with the **whole** key in
     `[a-z0-9_.]`. No plugin could hold a built-in name, so `rim.ui.update_panel` was always
     answered `CAPABILITY_DENIED`, and a plugin id with an uppercase letter or a hyphen could
     declare no capability at all.
   - In both: a key is 4 to 128 bytes long and has no segment named `system`, `internal`,
     `admin` or `audit`.
+- **Approving plugin-scoped names.** The approval prompt lists only built-in names, so a
+  `plugin.<pluginId>.<verb>` key a manifest declares is never approved, and a command whose
+  `required_capabilities` names one is always refused.
 - **Approving while the plugin runs.** `grantedCapabilities` is the approved list when the
   connection started, and v1 has no notification for changes to it. A capability the user
   approves while the plugin runs reaches the command gate at once, but the plugin's own calls to
@@ -704,27 +713,22 @@ This is the complete list. If a method is not in this section, the host does not
 
 ### Routed by the host but not part of v1
 
-The host's broker recognises these names, but their shapes are **not frozen** and will change
-(to camelCase, with a `Principal` for every person) when they are wired end to end. Do not build
-on them.
+The host's broker recognises these names, but their shapes are **not frozen**. The chat methods
+may still change before they are frozen; the others will change (to camelCase, with a
+`Principal` for every person) when they are wired end to end, so do not build on them.
 
 | Method | Direction | Capability | What happens today |
 |---|---|---|---|
-| `rim.chat.send_message` | plugin → host | `chat.write` | Answered `CAPABILITY_DENIED`, since no host lets a manifest request `chat.write` (section 12). Behind the gate it is not wired either. |
-| `rim.chat.get_messages` | plugin → host | `chat.read` | As above, with `chat.read`. |
-| `rim.chat.search_messages` | plugin → host | `chat.read` | As above, with `chat.read`. |
-| `rim.events.subscribe` | plugin → host | `events.read` | As above, with `events.read`. |
+| `rim.chat.list_messages`, `rim.chat.get_message`, `rim.chat.search_messages` | plugin → host | `chat.read`, and `chat.read.encrypted` in an encrypted conversation | Served by the client message service. |
+| `rim.chat.post_message` | plugin → host | `chat.write`, and `chat.write.encrypted` in an encrypted conversation | Served by the client message service. |
+| `rim.events.subscribe` | plugin → host | `events.read` | Answered `CAPABILITY_DENIED`, since no host lets a manifest request `events.read` (section 12). Behind the gate it is not wired either. |
 | `rim.event.<type>` | host → plugin | `events.read` | Never sent today, since nothing can subscribe. |
-| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store. Hosts before rim-ui #16 cannot grant `ui.panel` (section 12) and answer `CAPABILITY_DENIED`. The panel page does not receive the stored state yet. |
+| `rim.ui.update_panel` | plugin → host | `ui.panel` | Wired to the panel state store. Hosts before rim-ui #16 cannot grant `ui.panel` (section 12) and answer `CAPABILITY_DENIED`. The panel page receives the stored state as `panel.state_update` (`docs/local_plugin_host.md`). |
 
-The chat read and send calls are deliberately **not in v1**: they will go through the client's
-single message service, so that a plugin sees exactly what the user sees, before their shapes are
-frozen.
-
-The client message service now serves them as `rim.chat.list_messages`, `rim.chat.get_message`,
-`rim.chat.search_messages` and `rim.chat.post_message`, still routed and not frozen, with the
-capabilities `chat.read`, `chat.write`, `chat.read.encrypted` and `chat.write.encrypted`: see
-`e2ee-mls-v1.md`, "Plugins and the client message service".
+The chat calls are deliberately **not in v1**: they go through the client's single message
+service, so that a plugin sees exactly what the user sees, and their shapes are not frozen yet.
+`e2ee-mls-v1.md`, "Plugins and the client message service", defines what they return and what
+the encrypted capabilities add.
 
 ### Not implemented
 

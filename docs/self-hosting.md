@@ -340,9 +340,9 @@ set it once their accounts exist, since it refuses those names to new signups to
 server that every new account joins as a Member, whichever way it signs up: open,
 proof-of-work, with an instance invite or a workspace invite, with a key or a password. The
 account joins as soon as it exists and gets the workspace's public channels like any new member,
-so people land where others already are instead of in an empty direct space. Clients read the
-workspace from `serverInfo.defaultWorkspace`. Unset, nothing changes: a new account joins only
-the workspace its invite names.
+so people land where others already are instead of in an empty direct space.
+`serverInfo.defaultWorkspace` names the workspace, so a client can open it after a signup.
+Unset, nothing changes: a new account joins only the workspace its invite names.
 
 Create the workspace in the app, look its id up, set it in `deploy/.env` and run `dc up -d`:
 
