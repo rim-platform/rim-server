@@ -1,13 +1,15 @@
 use async_graphql::*;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
-use rim_services::command::request::ListCommandsQuery;
+use rim_services::command::request::{
+    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery,
+};
 use rim_services::command::service::CommandService;
 
 use crate::auth_context::require_actor;
 use crate::features::{feature_state, require_feature, shown_command};
 use crate::ids::parse_uuid_id;
-use crate::types::{Command, CommandContextInput, CommandSurface};
+use crate::types::{Command, CommandContextInput, CommandSurface, UserCommand};
 
 #[derive(Default)]
 pub(crate) struct CommandQueries;
@@ -91,6 +93,46 @@ impl CommandQueries {
                 limit.map(|l| l.max(1) as u32),
                 ws_id,
             )
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(commands.into_iter().map(Into::into).collect())
+    }
+}
+
+/// Reads of the caller's own user commands with their steps.
+#[derive(Default)]
+pub(crate) struct UserCommandQueries;
+
+#[Object]
+impl UserCommandQueries {
+    /// The caller's user command with this id (`user.<key>`), enabled or not, with its steps
+    /// in the order they run. Null when the caller has no user command with that id: a
+    /// built-in id, another user's command and an unknown one all answer null.
+    async fn user_command(&self, ctx: &Context<'_>, id: String) -> Result<Option<UserCommand>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        let command = svc
+            .get_user_command(GetUserCommandQuery {
+                actor: Actor::new(actor),
+                command_id: id,
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(command.map(Into::into))
+    }
+
+    /// The caller's user commands, enabled or not, with their steps, sorted by id.
+    async fn user_commands(&self, ctx: &Context<'_>) -> Result<Vec<UserCommand>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+
+        let commands = svc
+            .list_user_commands(ListUserCommandsQuery {
+                actor: Actor::new(actor),
+            })
             .await
             .map_err(crate::errors::map_service_error)?;
 

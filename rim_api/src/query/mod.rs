@@ -57,6 +57,7 @@ pub struct Query(
     QueryGroup6,
     QueryGroup7,
     QueryGroup8,
+    QueryGroup9,
 );
 
 #[derive(MergedObject, Default)]
@@ -120,3 +121,6 @@ pub(crate) struct QueryGroup8(
     instance_moderation::InstanceModerationQueries,
     dm_policy::DmPolicyQueries,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct QueryGroup9(command::UserCommandQueries);

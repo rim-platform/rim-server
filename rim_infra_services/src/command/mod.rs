@@ -27,7 +27,7 @@ use rim_services::command::dto::{
 };
 use rim_services::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-    ListCommandsQuery, UpdateUserCommandCmd,
+    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
 };
 use rim_services::command::sensitivity::{CommandSensitivityDto, sanitize_args_for_audit};
 use rim_services::command::service::CommandService;
@@ -522,6 +522,38 @@ impl CommandService for DefaultCommandService {
             .delete_user_command(existing.id)
             .await
             .map_err(ServiceError::from)
+    }
+
+    async fn get_user_command(
+        &self,
+        query: GetUserCommandQuery,
+    ) -> ServiceResult<Option<UserCommandDto>> {
+        let key = query.command_id.trim();
+        if !user_commands::user_command_exists_locally(key) {
+            return Ok(None);
+        }
+        self.repos
+            .user_command_repo
+            .get_by_key_for_user(query.actor.user_id, key)
+            .await?
+            .map(Self::parse_user_command)
+            .transpose()
+    }
+
+    async fn list_user_commands(
+        &self,
+        query: ListUserCommandsQuery,
+    ) -> ServiceResult<Vec<UserCommandDto>> {
+        let mut commands = self
+            .repos
+            .user_command_repo
+            .list_for_user(query.actor.user_id)
+            .await?
+            .into_iter()
+            .map(Self::parse_user_command)
+            .collect::<ServiceResult<Vec<_>>>()?;
+        commands.sort_by(|left, right| left.command_key.cmp(&right.command_key));
+        Ok(commands)
     }
 
     async fn command_discover(

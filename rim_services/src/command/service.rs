@@ -9,7 +9,7 @@ use crate::ServiceResult;
 use crate::command::dto::{CommandDefinitionDto, CommandResultDto, UserCommandDto};
 use crate::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-    ListCommandsQuery, UpdateUserCommandCmd,
+    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
 };
 
 #[async_trait]
@@ -29,6 +29,32 @@ pub trait CommandService: Send + Sync {
     async fn update_user_command(&self, cmd: UpdateUserCommandCmd)
     -> ServiceResult<UserCommandDto>;
     async fn delete_user_command(&self, cmd: DeleteUserCommandCmd) -> ServiceResult<()>;
+
+    /// One of the actor's own user commands with its stored steps in order, enabled or not.
+    ///
+    /// Returns `None` when the actor has no user command with that id, which covers an id
+    /// outside the `user.` namespace and another user's command.
+    ///
+    /// # Errors
+    ///
+    /// `ServiceError::Internal` when the stored steps cannot be read; a repository failure as
+    /// the `ServiceError` it maps to.
+    async fn get_user_command(
+        &self,
+        query: GetUserCommandQuery,
+    ) -> ServiceResult<Option<UserCommandDto>>;
+
+    /// The actor's own user commands with their stored steps, enabled or not, sorted by
+    /// command id.
+    ///
+    /// # Errors
+    ///
+    /// `ServiceError::Internal` when stored steps cannot be read; a repository failure as the
+    /// `ServiceError` it maps to.
+    async fn list_user_commands(
+        &self,
+        query: ListUserCommandsQuery,
+    ) -> ServiceResult<Vec<UserCommandDto>>;
 
     /// The AI agent's command-discovery meta-tool.
     ///

@@ -16,6 +16,19 @@ pub struct GetCommandQuery {
     pub command_id: String,
 }
 
+/// Looks up one of the actor's own user commands by its command id (`user.<key>`).
+#[derive(Debug, Clone)]
+pub struct GetUserCommandQuery {
+    pub actor: Actor,
+    pub command_id: String,
+}
+
+/// Lists the actor's own user commands, enabled or not.
+#[derive(Debug, Clone)]
+pub struct ListUserCommandsQuery {
+    pub actor: Actor,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecuteCommandCmd {
     pub actor: Actor,

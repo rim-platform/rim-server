@@ -252,6 +252,45 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
     }
 }
 
+/// One step of a user command: the command it runs and the arguments it passes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct UserCommandStep {
+    pub command_id: String,
+    pub args: Option<async_graphql::Json<serde_json::Value>>,
+}
+
+/// A user command as its owner saved it, in the shape `updateUserCommand` takes.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct UserCommand {
+    /// The command id, `user.<key>`, the same as the listed `Command.id`.
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    /// The steps in the order they run.
+    pub steps: Vec<UserCommandStep>,
+    /// `false` while the command is disabled; a disabled command is not listed by `commands`.
+    pub is_enabled: bool,
+}
+
+impl From<rim_services::command::dto::UserCommandDto> for UserCommand {
+    fn from(value: rim_services::command::dto::UserCommandDto) -> Self {
+        Self {
+            id: value.command_key,
+            title: value.title,
+            description: value.description,
+            steps: value
+                .steps
+                .into_iter()
+                .map(|step| UserCommandStep {
+                    command_id: step.command_id,
+                    args: step.args.map(async_graphql::Json),
+                })
+                .collect(),
+            is_enabled: value.is_enabled,
+        }
+    }
+}
+
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CommandSurface {
     Palette,

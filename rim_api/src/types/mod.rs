@@ -47,7 +47,8 @@ pub use channel_lens::{
 };
 pub use command::{
     Command, CommandArgument, CommandArgumentType, CommandContextInput, CommandExecutionTarget,
-    CommandInitiator, CommandSensitivity, CommandSourceKind, CommandSurface,
+    CommandInitiator, CommandSensitivity, CommandSourceKind, CommandSurface, UserCommand,
+    UserCommandStep,
 };
 pub use command_result::{
     CommandResult, CommandResultStatus, ConfirmationChallenge, ConfirmationProofInput,
