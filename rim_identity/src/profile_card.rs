@@ -165,13 +165,16 @@ mod tests {
             &state,
             3,
             "Jakub",
-            &["https://relay.rim.chat"],
+            &["https://relay.example.org"],
             &[(Uuid::from_u128(1), &signing_key(20))],
         );
         let verified = verify_profile_card(&state, &card).expect("card");
         assert_eq!(verified.version, 3);
         assert_eq!(verified.display_name, "Jakub");
-        assert_eq!(verified.relays, vec!["https://relay.rim.chat".to_string()]);
+        assert_eq!(
+            verified.relays,
+            vec!["https://relay.example.org".to_string()]
+        );
         assert_eq!(verified.devices.len(), 1);
     }
 
@@ -246,7 +249,7 @@ mod tests {
             .enumerate()
             .map(|(i, k)| (Uuid::from_u128(i as u128 + 1), k))
             .collect();
-        let card = id.profile_card(&state, 1, "J", &["https://relay.rim.chat"], &devices);
+        let card = id.profile_card(&state, 1, "J", &["https://relay.example.org"], &devices);
         let verified = verify_profile_card(&state, &card).expect("v2 card");
         assert_eq!(verified.devices.len(), MAX_CARD_DEVICES);
 

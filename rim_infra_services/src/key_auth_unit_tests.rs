@@ -1791,7 +1791,7 @@ mod tests {
                 &e.state,
                 version,
                 name,
-                &["https://relay.rim.chat"],
+                &["https://relay.example.org"],
                 &[(e.device_id, &e.device)],
             )),
         };

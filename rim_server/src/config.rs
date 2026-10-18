@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn key_login_audiences_parses_the_configured_list() {
         let config = RIMConfig {
-            key_login_audiences: Some(" Rim.Example.com , relay.rim.chat:8443,, ".to_string()),
+            key_login_audiences: Some(" Rim.Example.com , relay.example.org:8443,, ".to_string()),
             public_base_url: Some("https://other.example.com".to_string()),
             ..Default::default()
         };
@@ -1405,7 +1405,7 @@ mod tests {
             config.key_login_audiences(),
             Ok(vec![
                 "rim.example.com".to_string(),
-                "relay.rim.chat:8443".to_string()
+                "relay.example.org:8443".to_string()
             ])
         );
     }
