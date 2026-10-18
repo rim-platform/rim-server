@@ -803,8 +803,8 @@ not keep the value from that plugin, which receives it in plain form:
   so the plain value gives it nothing it could not reach.
 
 Panels never receive setting values. The panel bridge has no method that returns them, only
-`rim.settings.open`, which opens the plugin's settings in the plugin manager
-(`docs/local_plugin_host.md`, "PostMessage Bridge").
+`rim.settings.open`, which opens the plugin's settings form over the current view, leaving the
+panel in place (`docs/local_plugin_host.md`, "PostMessage Bridge").
 
 ## 16. Shutdown and app quit
 
