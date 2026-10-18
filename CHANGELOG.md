@@ -214,6 +214,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   them, not only the `signupWithInvite` and `signupWithKey` resolvers.
 - `addContact` refuses the caller's own principal, and `createConversation` with `remoteMembers`
   naming only the caller answers "cannot create DM with yourself" instead of the group message.
+- `executeMacro` asks for one confirmation up front when a step needs one under the command
+  confirmation gate: a dangerous step such as `admin.kick`, `admin.ban`, `admin.set_role` or
+  `chat.remove_conversation_member`, a `Restricted` one, or for an agent a `Mutating` one. That
+  confirmation covers every step of the run, so such a macro no longer fails at the step; the
+  `message` of the `CONFIRMATION_REQUIRED` answer names those steps.
 
 ### Security
 

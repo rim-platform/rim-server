@@ -220,6 +220,14 @@ Neither pipes: each step's payload is collected under its command id in the resu
 receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
 one command's result to the next stage.
 
+A macro run asks for one confirmation up front when the macro's own `sensitivity` is
+`Restricted` or when any step needs one under the confirmation gate below, judged with the
+run's initiator: a dangerous step, a `Restricted` one, or a `Mutating` one the agent or a plugin
+started. Without a proof `executeMacro` runs no step and answers `CONFIRMATION_REQUIRED` with a
+challenge for the macro, and its `message` names the reason: the sensitivity tier, the steps,
+or both. The call made again with that proof runs the steps, and the one confirmation covers
+every step of the run that needs one. A macro with no such step runs without a confirmation.
+
 ## Command Contract
 
 Each command should expose the following metadata.

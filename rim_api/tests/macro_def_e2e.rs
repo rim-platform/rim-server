@@ -72,6 +72,18 @@ query Messages($serverId: ID!, $conversationId: ID!) {
 }
 "#;
 
+const JOIN_CHANNEL: &str = r#"
+mutation Join($serverId: ID!, $conversationId: ID!) {
+  conversation: joinChannel(serverId: $serverId, conversationId: $conversationId) { id }
+}
+"#;
+
+const IS_MEMBER_QUERY: &str = r#"
+query IsMember($serverId: ID!, $conversationId: ID!) {
+  conversation(serverId: $serverId, conversationId: $conversationId) { isMember }
+}
+"#;
+
 struct Fixture {
     ctx: TestCtx,
     schema: AppSchema,
@@ -112,6 +124,19 @@ impl Fixture {
                 "server_id": self.ws.server_id,
                 "conversation_id": self.channel_id,
                 "text": text,
+            },
+        })
+    }
+
+    /// A step removing bob from the fixture channel: a dangerous command of the `Mutating`
+    /// tier that a member may run on themselves.
+    fn leave_step(&self) -> Value {
+        json!({
+            "commandId": "chat.remove_conversation_member",
+            "args": {
+                "server_id": self.ws.server_id,
+                "conversation_id": self.channel_id,
+                "user_id": self.ws.bob.user_id.to_string(),
             },
         })
     }
@@ -204,6 +229,15 @@ impl Fixture {
     async fn execute_code(&self, who: &Caller, macro_id: &str, extra: Value) -> String {
         let vars = self.execute_vars(macro_id, extra);
         exec_err_code(&self.schema, who.request(EXECUTE_MACRO, vars)).await
+    }
+
+    /// Whether bob is a member of the fixture channel.
+    async fn bob_is_member(&self) -> bool {
+        let vars = json!({ "serverId": self.ws.server_id, "conversationId": self.channel_id });
+        let data = exec_ok(&self.schema, self.ws.bob.request(IS_MEMBER_QUERY, vars)).await;
+        data["conversation"]["isMember"]
+            .as_bool()
+            .expect("isMember")
     }
 
     /// The texts of the fixture channel's messages, oldest first.
@@ -531,9 +565,51 @@ async fn execute_restricted_macro_requires_confirmation() {
     );
 }
 
+/// A macro with a step that is dangerous but only `MUTATING` answers `CONFIRMATION_REQUIRED`
+/// up front and runs none of its steps; the same call carrying that challenge as proof runs
+/// every step, the dangerous one included, with that one confirmation.
+#[tokio::test]
+async fn execute_macro_with_a_dangerous_step_asks_for_confirmation_once() {
+    let f = setup().await;
+    let joined = json!({ "serverId": f.ws.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.ws.bob.request(JOIN_CHANNEL, joined)).await;
+    assert!(f.bob_is_member().await);
+
+    let created = f
+        .create(
+            &f.ws.bob,
+            "leave",
+            json!([f.post_step("leaving"), f.leave_step()]),
+        )
+        .await;
+    let id = id(&created);
+
+    let first = f.execute(id, json!({})).await;
+    assert_eq!(first["status"], json!("CONFIRMATION_REQUIRED"), "{first}");
+    assert_eq!(
+        first["message"],
+        json!("macro requires confirmation due to step `chat.remove_conversation_member`")
+    );
+    let challenge = &first["confirmationRequired"];
+    assert!(challenge["expiresAt"].is_string());
+    assert!(f.channel_texts().await.is_empty());
+    assert!(
+        f.bob_is_member().await,
+        "nothing runs before the confirmation"
+    );
+
+    let proof = json!({ "confirmation": { "inBandToken": {
+        "token": challenge["token"], "argsHash": challenge["argsHash"],
+    } } });
+    let second = f.execute(id, proof).await;
+    assert_eq!(second["status"], json!("SUCCESS"), "{second}");
+    assert_eq!(f.channel_texts().await, vec!["leaving"]);
+    assert!(!f.bob_is_member().await, "the dangerous step ran");
+}
+
 /// An agent may run only macros marked AI-callable (`FORBIDDEN` otherwise). In an AI-callable
-/// macro a read-only step runs for the agent, while a step that writes is refused without
-/// a per-step confirmation and the macro answers `ERROR`.
+/// macro a read-only step runs for the agent without a confirmation, while a macro with a
+/// step that writes answers `CONFIRMATION_REQUIRED` up front and runs nothing.
 #[tokio::test]
 async fn execute_macro_by_an_agent_requires_ai_callable() {
     let f = setup().await;
@@ -569,7 +645,8 @@ async fn execute_macro_by_an_agent_requires_ai_callable() {
         )
         .await;
     let result = f.execute(id(&writer), agent()).await;
-    assert_eq!(result["status"], json!("ERROR"));
+    assert_eq!(result["status"], json!("CONFIRMATION_REQUIRED"), "{result}");
+    assert!(result["confirmationRequired"]["token"].is_string());
     assert!(f.channel_texts().await.is_empty());
 }
 
