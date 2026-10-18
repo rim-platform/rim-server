@@ -12,8 +12,9 @@
 //! user approved could differ from the ones executed; binding the proof to all three closes
 //! that gap.
 //!
-//! Each token is single-use, has a short TTL (5 s by default), and is
-//! evicted from the in-memory store on use or on lazy sweep.
+//! Each token is single-use, lasts [`DEFAULT_CONFIRMATION_TTL_SECS`] (at most
+//! [`MAX_CONFIRMATION_TTL_SECS`]), and is evicted from the in-memory store on use or on the
+//! lazy sweep.
 //!
 //! The store is in-memory, so a second backend replica does not see tokens issued on the
 //! first: confirmation works on a single node. This module logs nothing itself; the command
@@ -30,18 +31,17 @@ use sha2::{Digest, Sha256};
 use crate::Actor;
 use crate::command::dto::CommandContextDto;
 
-/// Default token lifetime, 5 s.
+/// Default token lifetime, 60 s: the time a person has to answer the confirmation dialog.
 ///
-/// Short by design: the token only needs to survive the round-trip from
-/// challenge → modal click → second mutation. A user staring at the modal
-/// long enough for this to expire is almost certainly an attacker replaying
-/// a proof scraped from logs or memory.
-pub const DEFAULT_CONFIRMATION_TTL_SECS: i64 = 5;
+/// The dialog lists the command's arguments and, for a `Restricted` command, asks for the
+/// command's verb to be typed, so it needs time to read and answer. The window does not widen
+/// what a proof can do: the token stays single-use and bound to the actor, the command, the
+/// argument hash and the context fingerprint.
+pub const DEFAULT_CONFIRMATION_TTL_SECS: i64 = 60;
 
-/// Maximum token lifetime accepted by `issue_in_band` regardless of caller
-/// preference. Defends against an upstream config bug minting tokens that
-/// outlive the user's intent. 60 s is generous.
-pub const MAX_CONFIRMATION_TTL_SECS: i64 = 60;
+/// Longest token lifetime, 300 s. [`issue_in_band_with_ttl`] clamps any longer TTL it is
+/// given to this, so no caller can mint a token that outlives the person's decision by more.
+pub const MAX_CONFIRMATION_TTL_SECS: i64 = 300;
 
 // ---------------------------------------------------------------------------
 // Public types — wire surface
@@ -745,10 +745,10 @@ mod tests {
         let before = Utc::now();
         let challenge = issue_in_band(&store, &actor, "test.cmd", &None, &None);
         assert!(challenge.expires_at > before);
-        // Should be ≤ DEFAULT_TTL after `before`.
-        let max_expected =
-            before + Duration::seconds(DEFAULT_CONFIRMATION_TTL_SECS) + Duration::seconds(1);
-        assert!(challenge.expires_at <= max_expected);
+        // Lands on DEFAULT_CONFIRMATION_TTL_SECS after `before`, within a second.
+        let default_ttl = Duration::seconds(DEFAULT_CONFIRMATION_TTL_SECS);
+        assert!(challenge.expires_at >= before + default_ttl);
+        assert!(challenge.expires_at <= before + default_ttl + Duration::seconds(1));
     }
 
     /// `context_fingerprint` must include

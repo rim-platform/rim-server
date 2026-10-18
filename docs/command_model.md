@@ -242,6 +242,17 @@ Each command should expose the following metadata.
 - `supports_preview`
 - `supports_dry_run`
 
+### Confirmation gate (H1)
+
+A call needs a confirmation when the command is dangerous or `Restricted`, or when it is
+`Mutating` and the agent or a plugin started it. Without a proof, `executeCommand` answers with
+status `CONFIRMATION_REQUIRED` and the challenge `confirmationRequired { token, argsHash,
+expiresAt }`. The client asks the person to confirm and calls again with
+`confirmation: { inBandToken: { token, argsHash } }` before `expiresAt`, which is 60 seconds
+after the challenge was issued. The proof is good once, for the same caller, command, arguments
+and context; one that expired or was used answers `CONFIRMATION_STALE`, and one made for
+something else `CONFIRMATION_FAILED`.
+
 ### Timeout gate (T1)
 
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or

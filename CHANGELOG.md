@@ -141,6 +141,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- A confirmation of a command now lasts 60 seconds, at most 300, instead of five, so a person
+  has time to read the confirmation dialog and answer it before it lapses. A proof is still good
+  once, for the same caller, command, arguments and context ("Confirmation gate (H1)" in
+  `docs/command_model.md`).
 - Workspace members are no longer always delivered: a member's DM follows the recipient's choice
   for that workspace, `DIRECT` unless the workspace or the person set `REQUESTS`; Owners and
   Moderators are always delivered. With the defaults everything arrives as before.
