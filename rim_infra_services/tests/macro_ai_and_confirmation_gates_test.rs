@@ -1,7 +1,7 @@
 //! Integration tests for the macro AI exposure and confirmation gates.
 //!
 //! These tests drive `DefaultMacroService` through its public `execute_macro`
-//! entry point with mock repos and services. Nine scenarios:
+//! entry point with mock repos and services. Among the scenarios:
 //!
 //! 1. **AI gate** — agentic initiator denied on a non-`ai_callable` macro.
 //! 2. **Sensitivity max-rule** — `effective_sensitivity` raises the macro's
@@ -20,6 +20,9 @@
 //!    encodes `step_error_at_0` (or whichever index failed).
 //! 9. **AI surface includes synthesized macro definitions** — `list_commands`
 //!    with `surface=Ai` delegates to `MacroService::synthesize_command_definitions`.
+//! 10. **Dangerous step confirmed once** — a macro with a dangerous `Mutating` step asks
+//!     for one confirmation up front and, confirmed, runs that step with a proof the step
+//!     gate accepts; a macro without such a step runs unconfirmed.
 //!
 //! All tests use in-process mocks — no running Postgres required.
 
@@ -36,7 +39,7 @@ use rim_services::ServiceError;
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::MockAuditLogService;
 use rim_services::command::confirmation::{
-    ConfirmationStore, issue_in_band, shared_in_memory_store,
+    ConfirmationProof, ConfirmationStore, issue_in_band, shared_in_memory_store, verify_in_band,
 };
 use rim_services::command::dto::{
     CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto, CommandResultStatusDto,
@@ -906,18 +909,205 @@ async fn inner_confirmation_required_from_step_is_partial_failure() {
     );
 }
 
-// ── Macro rollup: AI-callable Mutating steps in agent-run macros ────────────
+// ── Up-front confirmation for steps the command gate stops ───────────────────
+
+fn success() -> CommandResultDto {
+    CommandResultDto {
+        status: CommandResultStatusDto::Success,
+        message: "ok".to_string(),
+        payload: None,
+        follow_up_commands: vec![],
+        pipeline_stages: None,
+        confirmation_required: None,
+    }
+}
+
+/// A macro whose step is dangerous but only `Mutating` (`admin.kick`) asks for one
+/// confirmation up front and runs nothing; the same run carrying that challenge as proof runs
+/// the step, which receives a proof the step's own gate accepts for its exact arguments.
+#[tokio::test]
+async fn dangerous_mutating_step_is_confirmed_up_front_and_then_runs() {
+    let user_id = UserId::new();
+    let macro_id = MacroId::new();
+    let server_id = ServerId::new();
+    let actor = Actor::new(user_id);
+    let kick_args = serde_json::json!({ "server_id": server_id.to_string(), "user_id": "u" });
+    let steps = serde_json::json!([
+        { "commandId": "chat.post_message", "args": { "text": "bye" } },
+        { "commandId": "admin.kick", "args": kick_args.clone() },
+    ]);
+
+    let mut macro_repo = MockTestMacroRepository::new();
+    macro_repo.expect_get_by_id().times(2).returning(move |_| {
+        Ok(Some(make_macro_def(
+            macro_id,
+            user_id,
+            server_id,
+            false,
+            "safe",
+            steps.clone(),
+        )))
+    });
+
+    let mut command_service = MockCommandService::new();
+    command_service
+        .expect_get_command()
+        .times(4)
+        .returning(|query| {
+            Box::pin(async move {
+                Ok(Some(if query.command_id == "admin.kick" {
+                    CommandDefinitionDto {
+                        dangerous: true,
+                        ..stub_command_definition_with_id(
+                            "admin.kick",
+                            CommandSensitivityDto::Mutating,
+                        )
+                    }
+                } else {
+                    stub_command_definition(CommandSensitivityDto::Mutating)
+                }))
+            })
+        });
+
+    let store = shared_in_memory_store();
+    let step_store = Arc::clone(&store);
+    let kicked = Arc::new(AtomicBool::new(false));
+    let kicked_in_step = Arc::clone(&kicked);
+    command_service
+        .expect_execute_command()
+        .times(2)
+        .returning(move |step| {
+            // Stands in for the step's own confirmation gate: the proof must verify against
+            // the shared store for this step's command, arguments and context.
+            let proof = step
+                .confirmation
+                .as_ref()
+                .expect("every step carries a proof");
+            verify_in_band(
+                step_store.as_ref(),
+                proof,
+                &step.actor,
+                &step.command_id,
+                &step.args,
+                &step.context,
+            )
+            .expect("the step gate accepts the macro's per-step proof");
+            if step.command_id == "admin.kick" {
+                assert_eq!(step.initiator, CommandInitiator::Palette);
+                kicked_in_step.store(true, Ordering::SeqCst);
+            }
+            Box::pin(async { Ok(success()) })
+        });
+
+    let svc = build_service_with_store(macro_repo, command_service, None, Some(Arc::clone(&store)));
+
+    let first = svc
+        .execute_macro(ExecuteMacroCmd {
+            actor,
+            macro_id,
+            command_context: None,
+            confirmation: None,
+            initiator: CommandInitiator::Palette,
+        })
+        .await
+        .expect("an unconfirmed run answers with a challenge");
+    assert_eq!(first.status, CommandResultStatusDto::ConfirmationRequired);
+    assert_eq!(
+        first.message,
+        "macro requires confirmation due to step `admin.kick`"
+    );
+    let challenge = first
+        .confirmation_required
+        .expect("the client needs a challenge to re-submit");
+    assert!(
+        !kicked.load(Ordering::SeqCst),
+        "nothing runs before the confirmation"
+    );
+
+    let second = svc
+        .execute_macro(ExecuteMacroCmd {
+            actor,
+            macro_id,
+            command_context: None,
+            confirmation: Some(ConfirmationProof::InBandToken {
+                token: challenge.token,
+                args_hash: challenge.args_hash,
+            }),
+            initiator: CommandInitiator::Palette,
+        })
+        .await
+        .expect("a confirmed run succeeds");
+    assert_eq!(second.status, CommandResultStatusDto::Success, "{second:?}");
+    assert!(kicked.load(Ordering::SeqCst), "the dangerous step ran");
+}
+
+/// A macro whose steps are neither dangerous nor `Restricted` runs from the palette without
+/// a confirmation, even with a store wired, and its steps get no proof.
+#[tokio::test]
+async fn macro_without_a_gated_step_runs_unconfirmed() {
+    let user_id = UserId::new();
+    let macro_id = MacroId::new();
+    let server_id = ServerId::new();
+    let steps = serde_json::json!([
+        { "commandId": "chat.list_channels", "args": null },
+        { "commandId": "chat.post_message", "args": { "text": "hi" } },
+    ]);
+
+    let mut macro_repo = MockTestMacroRepository::new();
+    macro_repo.expect_get_by_id().return_once(move |_| {
+        Ok(Some(make_macro_def(
+            macro_id, user_id, server_id, false, "safe", steps,
+        )))
+    });
+
+    let mut command_service = MockCommandService::new();
+    command_service
+        .expect_get_command()
+        .times(2)
+        .returning(|query| {
+            Box::pin(async move {
+                Ok(Some(if query.command_id == "chat.list_channels" {
+                    stub_command_definition_with_id(
+                        "chat.list_channels",
+                        CommandSensitivityDto::Safe,
+                    )
+                } else {
+                    stub_command_definition(CommandSensitivityDto::Mutating)
+                }))
+            })
+        });
+    command_service
+        .expect_execute_command()
+        .times(2)
+        .withf(|step| step.confirmation.is_none())
+        .returning(|_| Box::pin(async { Ok(success()) }));
+
+    let store = shared_in_memory_store();
+    let svc = build_service_with_store(macro_repo, command_service, None, Some(store));
+
+    let result = svc
+        .execute_macro(ExecuteMacroCmd {
+            actor: Actor::new(user_id),
+            macro_id,
+            command_context: None,
+            confirmation: None,
+            initiator: CommandInitiator::Palette,
+        })
+        .await
+        .expect("an ungated macro runs");
+    assert_eq!(result.status, CommandResultStatusDto::Success, "{result:?}");
+    assert!(result.confirmation_required.is_none());
+}
+
+// ── Agent-run macros with Mutating steps ─────────────────────────────────────
 
 /// An `ai_callable` macro containing a `state.set` step, executed by an `Agent` initiator,
-/// requires per-step confirmation under the existing rollup mechanism.
+/// asks for one confirmation up front and runs nothing without it.
 ///
-/// The macro's declared tier is `Safe`; `state.set`'s tier is `Mutating`, which does not cross
-/// the macro-level `requires_confirmation_by_tier` outer gate (Restricted-only, `macro_def.rs`),
-/// so no outer proof is verified and no per-step token is minted. The mocked `execute_command`
-/// simulates what the real dispatcher's confirmation gate (`requires_confirmation_for_initiator`)
-/// returns for a Mutating command run by an agentic initiator with no proof:
-/// `ConfirmationRequired`. That inner `ConfirmationRequired` is a hard per-step failure, so the
-/// step never silently executes without agent confirmation.
+/// The macro's declared tier is `Safe`; `state.set`'s tier is `Mutating`, which the command
+/// confirmation gate stops when an agentic initiator runs it without a proof. The macro
+/// applies the same rule to its steps before the run, so the step never silently executes
+/// without a confirmation and never reaches the step gate unconfirmed.
 #[tokio::test]
 async fn ai_callable_macro_with_mutating_step_requires_confirmation_for_agent_initiator() {
     let user_id = UserId::new();
@@ -949,24 +1139,10 @@ async fn ai_callable_macro_with_mutating_step_requires_confirmation_for_agent_in
                 )))
             })
         });
-    command_service
-        .expect_execute_command()
-        .times(1)
-        .withf(|cmd| cmd.command_id == "state.set" && cmd.initiator == CommandInitiator::Agent)
-        .returning(|_| {
-            Box::pin(async {
-                Ok(CommandResultDto {
-                    status: CommandResultStatusDto::ConfirmationRequired,
-                    message: "confirmation required for dangerous command".to_string(),
-                    payload: None,
-                    follow_up_commands: vec![],
-                    pipeline_stages: None,
-                    confirmation_required: None,
-                })
-            })
-        });
+    command_service.expect_execute_command().times(0);
 
-    let svc = build_service(macro_repo, command_service, None);
+    let store = shared_in_memory_store();
+    let svc = build_service_with_store(macro_repo, command_service, None, Some(store));
 
     let result = svc
         .execute_macro(ExecuteMacroCmd {
@@ -981,8 +1157,12 @@ async fn ai_callable_macro_with_mutating_step_requires_confirmation_for_agent_in
 
     assert_eq!(
         result.status,
-        CommandResultStatusDto::Error,
-        "an Agent-run macro composing a Mutating step (state.set) must require per-step \
-         confirmation under the existing rollup"
+        CommandResultStatusDto::ConfirmationRequired,
+        "an Agent-run macro composing a Mutating step (state.set) must ask for confirmation"
     );
+    assert_eq!(
+        result.message,
+        "macro requires confirmation due to step `state.set`"
+    );
+    assert!(result.confirmation_required.is_some());
 }

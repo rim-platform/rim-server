@@ -14,6 +14,7 @@ use rim_services::command::dto::{
     CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto, CommandResultStatusDto,
     CommandSourceKindDto,
 };
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, GetCommandQuery};
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
@@ -66,6 +67,49 @@ impl DefaultMacroService {
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Why a run of a macro needs a confirmation proof, or `None` when it runs without one.
+    ///
+    /// A run needs one when the macro's own tier requires one by tier, or when a step's
+    /// definition requires one from `initiator` under the command confirmation gate's rule
+    /// (`CommandDefinitionDto::requires_confirmation_for_initiator`), the same rule that gate
+    /// applies to the step when it runs. `step_definitions` pairs each resolved step's command
+    /// id with its definition; the reason names each such step once, in step order.
+    fn confirmation_reason(
+        macro_sensitivity: CommandSensitivityDto,
+        step_definitions: &[(String, CommandDefinitionDto)],
+        initiator: CommandInitiator,
+    ) -> Option<String> {
+        let mut gated_steps: Vec<&str> = Vec::new();
+        for (command_id, definition) in step_definitions {
+            if definition.requires_confirmation_for_initiator(initiator)
+                && !gated_steps.contains(&command_id.as_str())
+            {
+                gated_steps.push(command_id);
+            }
+        }
+        let mut reasons: Vec<String> = Vec::new();
+        if macro_sensitivity.requires_confirmation_by_tier() {
+            reasons.push("sensitivity tier".to_string());
+        }
+        if !gated_steps.is_empty() {
+            let noun = if gated_steps.len() == 1 {
+                "step"
+            } else {
+                "steps"
+            };
+            let names: Vec<String> = gated_steps.iter().map(|id| format!("`{id}`")).collect();
+            reasons.push(format!("{noun} {}", names.join(", ")));
+        }
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "macro requires confirmation due to {}",
+                reasons.join(" and ")
+            ))
+        }
     }
 
     fn parse_steps(steps_json: &serde_json::Value) -> ServiceResult<Vec<MacroStepDto>> {
@@ -345,11 +389,13 @@ impl MacroService for DefaultMacroService {
 
         let steps = Self::parse_steps(&macro_def.steps_json)?;
 
-        // ── Resolve each step's declared sensitivity via the command
-        // service, then compute effective sensitivity as max(macro_tier, step_tiers).
-        // Prevents a Safe-declared macro from silently wrapping a Restricted step.
+        // ── Resolve each step's definition via the command service. The effective
+        // sensitivity is max(macro_tier, step_tiers), so a Safe-declared macro never runs below
+        // a Restricted step; the definitions also decide whether the run needs a confirmation.
         let macro_sensitivity = CommandSensitivityDto::from(macro_def.sensitivity.as_str());
         let mut step_sensitivities: Vec<CommandSensitivityDto> = Vec::with_capacity(steps.len());
+        let mut step_definitions: Vec<(String, CommandDefinitionDto)> =
+            Vec::with_capacity(steps.len());
         for step in &steps {
             if let Ok(Some(def)) = self
                 .services
@@ -361,24 +407,27 @@ impl MacroService for DefaultMacroService {
                 .await
             {
                 step_sensitivities.push(def.sensitivity);
+                step_definitions.push((step.command_id.clone(), def));
             }
-            // Unknown step command: skip sensitivity — dispatch will error at runtime.
+            // Unknown step command: skip it here; dispatch fails on it at runtime.
         }
         let effective_sensitivity =
             CommandSensitivityDto::effective(macro_sensitivity, &step_sensitivities);
+        let confirmation_reason =
+            Self::confirmation_reason(macro_sensitivity, &step_definitions, cmd.initiator);
 
         // ── Verify the outer confirmation proof and issue per-step tokens.
         //
-        // - Without a proof, return ConfirmationRequired with a challenge token
-        //   the client can re-submit.
-        // - With a verified proof, each step gets its own token derived from it,
-        //   so a dangerous step's inner gate has a proof to consume.
+        // - A run that needs a confirmation (`confirmation_reason`) and has no proof returns
+        //   ConfirmationRequired with a challenge token the client can re-submit.
+        // - With a verified proof, each step gets its own token derived from it, so every step
+        //   the inner gate stops has a proof to consume: one confirmation covers the run.
         // - A step that still returns ConfirmationRequired is a hard failure
         //   (handled in the step loop below).
         let macro_cmd_id = format!("macro.{}", macro_def.id);
         // outer_proof_verified is true when the outer proof was verified against
         // the store (or when there is no store — test context).
-        let outer_proof_verified = if effective_sensitivity.requires_confirmation_by_tier() {
+        let outer_proof_verified = if let Some(reason) = confirmation_reason {
             match &cmd.confirmation {
                 None => {
                     // Issue a token so the client can re-submit with a proof.
@@ -388,7 +437,7 @@ impl MacroService for DefaultMacroService {
                         });
                     return Ok(CommandResultDto {
                         status: CommandResultStatusDto::ConfirmationRequired,
-                        message: "macro requires confirmation due to sensitivity tier".to_string(),
+                        message: reason,
                         payload: None,
                         follow_up_commands: vec![],
                         pipeline_stages: None,
@@ -1709,5 +1758,146 @@ mod tests {
             CommandResultStatusDto::Error,
             "inner step returning ConfirmationRequired must be Error (MacroPartialFailure), not Success"
         );
+    }
+
+    // ── Up-front confirmation rule ───────────────────────────────────────────
+
+    fn step_definition(
+        id: &str,
+        dangerous: bool,
+        sensitivity: CommandSensitivityDto,
+    ) -> (String, CommandDefinitionDto) {
+        (
+            id.to_string(),
+            CommandDefinitionDto {
+                id: id.to_string(),
+                title: id.to_string(),
+                description: String::new(),
+                category: "Test".to_string(),
+                source_kind: CommandSourceKindDto::BuiltIn,
+                execution_target: CommandExecutionTargetDto::Backend,
+                arguments: vec![],
+                required_context: vec![],
+                required_capabilities: vec![],
+                visible_in_palette: true,
+                visible_in_context_menus: false,
+                keybind_capable: true,
+                dangerous,
+                user_command_id: None,
+                nl_description: None,
+                intent_samples: vec![],
+                ai_callable: false,
+                sensitivity,
+                typed_verb: TypedVerb::Other,
+                rate_limit_per_minute: None,
+            },
+        )
+    }
+
+    /// A dangerous `Mutating` step makes a palette run ask for a confirmation, and the reason
+    /// names it; a `Restricted` step is named the same way.
+    #[test]
+    fn confirmation_reason_names_dangerous_and_restricted_steps() {
+        let steps = [
+            step_definition("chat.list_channels", false, CommandSensitivityDto::Safe),
+            step_definition("admin.kick", true, CommandSensitivityDto::Mutating),
+            step_definition("chat.post_message", false, CommandSensitivityDto::Mutating),
+            step_definition("admin.kick", true, CommandSensitivityDto::Mutating),
+            step_definition(
+                "chat.delete_channel",
+                false,
+                CommandSensitivityDto::Restricted,
+            ),
+        ];
+        let reason = DefaultMacroService::confirmation_reason(
+            CommandSensitivityDto::Safe,
+            &steps,
+            CommandInitiator::Palette,
+        );
+        assert_eq!(
+            reason.as_deref(),
+            Some("macro requires confirmation due to steps `admin.kick`, `chat.delete_channel`")
+        );
+    }
+
+    /// The macro's own `Restricted` tier asks for a confirmation even when no step does.
+    #[test]
+    fn confirmation_reason_covers_the_macros_own_tier() {
+        let steps = [step_definition(
+            "chat.post_message",
+            false,
+            CommandSensitivityDto::Mutating,
+        )];
+        assert_eq!(
+            DefaultMacroService::confirmation_reason(
+                CommandSensitivityDto::Restricted,
+                &steps,
+                CommandInitiator::Palette,
+            )
+            .as_deref(),
+            Some("macro requires confirmation due to sensitivity tier")
+        );
+        let dangerous = [step_definition(
+            "admin.ban",
+            true,
+            CommandSensitivityDto::Mutating,
+        )];
+        assert_eq!(
+            DefaultMacroService::confirmation_reason(
+                CommandSensitivityDto::Restricted,
+                &dangerous,
+                CommandInitiator::Palette,
+            )
+            .as_deref(),
+            Some("macro requires confirmation due to sensitivity tier and step `admin.ban`")
+        );
+    }
+
+    /// Without a dangerous or `Restricted` step a human-started run needs no confirmation,
+    /// while the same `Mutating` step started by an agent does, as the step gate decides.
+    #[test]
+    fn confirmation_reason_follows_the_step_gate_for_each_initiator() {
+        let steps = [
+            step_definition("chat.list_channels", false, CommandSensitivityDto::Safe),
+            step_definition("chat.post_message", false, CommandSensitivityDto::Mutating),
+        ];
+        for initiator in [
+            CommandInitiator::Palette,
+            CommandInitiator::Keybind,
+            CommandInitiator::Macro,
+        ] {
+            assert_eq!(
+                DefaultMacroService::confirmation_reason(
+                    CommandSensitivityDto::Safe,
+                    &steps,
+                    initiator,
+                ),
+                None,
+                "{initiator:?}"
+            );
+        }
+        assert_eq!(
+            DefaultMacroService::confirmation_reason(
+                CommandSensitivityDto::Safe,
+                &steps,
+                CommandInitiator::Agent,
+            )
+            .as_deref(),
+            Some("macro requires confirmation due to step `chat.post_message`")
+        );
+        for (id, def) in &steps {
+            let gate_stops = def.requires_confirmation_for_initiator(CommandInitiator::Agent);
+            let one = [(id.clone(), def.clone())];
+            assert_eq!(
+                DefaultMacroService::confirmation_reason(
+                    CommandSensitivityDto::Safe,
+                    &one,
+                    CommandInitiator::Agent,
+                )
+                .is_some(),
+                gate_stops,
+                "{id}"
+            );
+        }
     }
 }

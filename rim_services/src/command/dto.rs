@@ -210,7 +210,9 @@ impl CommandDefinitionDto {
     ///
     /// This is the **single source of truth** for the confirmation gate
     /// predicate. `execute_command` consults it for every call, including each
-    /// step a macro or pipeline runs, so the policy cannot drift.
+    /// step a macro or pipeline runs, and the macro service consults it for
+    /// every step before a run to decide whether the run asks for one
+    /// confirmation up front, so the two cannot disagree.
     pub fn requires_confirmation_for_initiator(
         &self,
         initiator: super::initiator::CommandInitiator,
@@ -282,6 +284,94 @@ impl UserCommandDto {
             sensitivity,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::initiator::CommandInitiator;
+
+    const ALL_INITIATORS: [CommandInitiator; 7] = [
+        CommandInitiator::Palette,
+        CommandInitiator::Agent,
+        CommandInitiator::Macro,
+        CommandInitiator::Keybind,
+        CommandInitiator::ContextMenu,
+        CommandInitiator::Plugin,
+        CommandInitiator::Cli,
+    ];
+
+    fn definition(dangerous: bool, sensitivity: CommandSensitivityDto) -> CommandDefinitionDto {
+        CommandDefinitionDto {
+            id: "admin.kick".to_string(),
+            title: "Kick".to_string(),
+            description: String::new(),
+            category: "Admin".to_string(),
+            source_kind: CommandSourceKindDto::BuiltIn,
+            execution_target: CommandExecutionTargetDto::Backend,
+            arguments: vec![],
+            required_context: vec![],
+            required_capabilities: vec![],
+            visible_in_palette: true,
+            visible_in_context_menus: false,
+            keybind_capable: true,
+            dangerous,
+            user_command_id: None,
+            nl_description: None,
+            intent_samples: vec![],
+            ai_callable: false,
+            sensitivity,
+            typed_verb: TypedVerb::Other,
+            rate_limit_per_minute: None,
+        }
+    }
+
+    /// A dangerous command needs a confirmation from every initiator whatever its tier,
+    /// including the `Macro` initiator and a tier as low as `Mutating`.
+    #[test]
+    fn dangerous_command_requires_confirmation_from_every_initiator() {
+        for sensitivity in [
+            CommandSensitivityDto::Safe,
+            CommandSensitivityDto::Mutating,
+            CommandSensitivityDto::Restricted,
+        ] {
+            let def = definition(true, sensitivity);
+            for initiator in ALL_INITIATORS {
+                assert!(
+                    def.requires_confirmation_for_initiator(initiator),
+                    "dangerous {sensitivity:?} from {initiator:?}"
+                );
+            }
+        }
+    }
+
+    /// A `Restricted` command needs a confirmation from every initiator; a `Mutating` one
+    /// that is not dangerous needs one only from an agentic initiator; `Safe` and `Sensitive`
+    /// never do.
+    #[test]
+    fn tier_decides_when_the_command_is_not_dangerous() {
+        for initiator in ALL_INITIATORS {
+            assert!(
+                definition(false, CommandSensitivityDto::Restricted)
+                    .requires_confirmation_for_initiator(initiator)
+            );
+            assert_eq!(
+                definition(false, CommandSensitivityDto::Mutating)
+                    .requires_confirmation_for_initiator(initiator),
+                initiator.is_agentic(),
+                "Mutating from {initiator:?}"
+            );
+            for sensitivity in [
+                CommandSensitivityDto::Safe,
+                CommandSensitivityDto::Sensitive,
+            ] {
+                assert!(
+                    !definition(false, sensitivity).requires_confirmation_for_initiator(initiator),
+                    "{sensitivity:?} from {initiator:?}"
+                );
+            }
         }
     }
 }
