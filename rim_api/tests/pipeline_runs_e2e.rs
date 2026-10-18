@@ -1,6 +1,7 @@
 //! Pipeline runs on a real server: the evaluator task `rim_server` starts at boot receives
-//! every workspace event and runs the matching pipelines. A firing shows in the pipeline's
-//! `lastFiredAt` and in the audit row of each command it ran.
+//! every workspace event and runs the matching pipelines whose creator may read the event. A
+//! firing shows in the pipeline's `lastFiredAt`, to its creator only, and in the audit row of
+//! each command it ran.
 //!
 //! Run with:
 //! ```sh
@@ -119,19 +120,26 @@ impl Fixture {
     }
 
     async fn send(&self, text: &str) {
+        self.send_to(&self.channel, text).await;
+    }
+
+    /// Send `text` as alice to `conversation_id`.
+    async fn send_to(&self, conversation_id: &str, text: &str) {
         let vars = json!({ "input": {
-            "serverId": self.ws.server_id, "conversationId": self.channel, "text": text,
+            "serverId": self.ws.server_id, "conversationId": conversation_id, "text": text,
         } });
         self.ok(&self.ws.alice, (SEND_MESSAGE, vars)).await;
     }
 
-    /// The pipeline `id` as `pipelines` returns it.
+    /// The pipeline `id` as `pipelines` returns it to alice.
     async fn stored(&self, id: &str) -> Value {
+        self.stored_as(&self.ws.alice, id).await
+    }
+
+    /// The pipeline `id` as `pipelines` returns it to `who`.
+    async fn stored_as(&self, who: &Caller, id: &str) -> Value {
         let data = self
-            .ok(
-                &self.ws.alice,
-                (PIPELINES, json!({ "serverId": self.ws.server_id })),
-            )
+            .ok(who, (PIPELINES, json!({ "serverId": self.ws.server_id })))
             .await;
         data["pipelines"]
             .as_array()
@@ -175,7 +183,10 @@ async fn a_matching_message_runs_the_action_as_the_pipeline_creator() {
     let f = setup().await;
     let args = json!({ "server_id": f.ws.server_id, "key": "probe" });
     let id = f.pipeline(&f.ws.bob, PROBE, args, json!({})).await;
-    assert_eq!(f.stored(&id).await["lastFiredAt"], Value::Null);
+    assert_eq!(
+        f.stored_as(&f.ws.bob, &id).await["lastFiredAt"],
+        Value::Null
+    );
 
     f.send("hello").await;
     f.wait_for_runs(PROBE, 1).await;
@@ -185,9 +196,16 @@ async fn a_matching_message_runs_the_action_as_the_pipeline_creator() {
     assert_eq!(run.initiator, "plugin");
     assert_eq!(run.outcome, "success");
     eventually("lastFiredAt", || async {
-        f.stored(&id).await["lastFiredAt"].as_str().map(|_| ())
+        f.stored_as(&f.ws.bob, &id).await["lastFiredAt"]
+            .as_str()
+            .map(|_| ())
     })
     .await;
+    assert_eq!(
+        f.stored(&id).await["lastFiredAt"],
+        Value::Null,
+        "only the creator reads when the pipeline fired"
+    );
     f.node.stop().await;
 }
 
@@ -310,5 +328,41 @@ async fn a_failing_action_does_not_stop_the_other_pipelines() {
         })
         .await;
     }
+    f.node.stop().await;
+}
+
+/// A member's pipeline does not react to a private channel they are not in, even when the
+/// message matches its filter, and reacts to the same message in a public channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pipeline_ignores_a_private_channel_its_creator_is_not_in() {
+    let f = setup().await;
+    let private = create_channel(&f.node.schema, &f.ws.alice, &f.ws.server_id, "board", true).await;
+    let args = json!({ "server_id": f.ws.server_id, "key": "probe" });
+    let filter = json!({ "filter": { "conditions": [
+        { "conditionType": "MessageContains", "pattern": "layoffs" },
+    ] } });
+    let id = f.pipeline(&f.ws.bob, PROBE, args, filter).await;
+    f.control().await;
+
+    f.send_to(&private, "layoffs on friday").await;
+    f.send_to(&private, "barrier").await;
+    f.wait_for_runs(CONTROL, 2).await;
+    assert!(
+        f.audit(PROBE).await.is_empty(),
+        "the private message fired it"
+    );
+    assert_eq!(
+        f.stored_as(&f.ws.bob, &id).await["lastFiredAt"],
+        Value::Null
+    );
+
+    f.send("layoffs on friday").await;
+    f.wait_for_runs(PROBE, 1).await;
+    eventually("lastFiredAt", || async {
+        f.stored_as(&f.ws.bob, &id).await["lastFiredAt"]
+            .as_str()
+            .map(|_| ())
+    })
+    .await;
     f.node.stop().await;
 }

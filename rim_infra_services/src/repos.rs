@@ -568,6 +568,8 @@ impl AppRepos {
         crate::pipeline::PipelineRepos {
             pipeline_repo: Arc::clone(&self.pipeline_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
         }
     }
 

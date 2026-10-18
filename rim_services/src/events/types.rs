@@ -235,18 +235,26 @@ pub enum WorkspaceEvent {
         scope: WorkspaceStateScopeDto,
         user_id: Option<UserId>,
     },
+    /// A pipeline ran its actions. Delivered to its creator only (`member_user_ids ==
+    /// [created_by]`).
     PipelineFired {
         workspace_id: ServerId,
         pipeline_id: PipelineId,
         pipeline_name: String,
         trigger_event: String,
         actions_executed: usize,
+        #[serde(skip_serializing, default)]
+        member_user_ids: Vec<UserId>,
     },
+    /// A pipeline was switched off for firing too often. Delivered to its creator only
+    /// (`member_user_ids == [created_by]`).
     PipelineSuspended {
         workspace_id: ServerId,
         pipeline_id: PipelineId,
         pipeline_name: String,
         reason: String,
+        #[serde(skip_serializing, default)]
+        member_user_ids: Vec<UserId>,
     },
     /// The server decided to notify `user_id` about a message: emitted once per
     /// recipient after the notification row is stored. Delivered to that user only
@@ -500,10 +508,15 @@ impl WorkspaceEvent {
                 WorkspaceStateScopeDto::Server => None,
                 WorkspaceStateScopeDto::User => user_id.as_ref().map(std::slice::from_ref),
             },
-            // Pipeline and plugin registry events are visible to all workspace members.
-            Self::PipelineFired { .. }
-            | Self::PipelineSuspended { .. }
-            | Self::WorkspacePluginChanged { .. } => None,
+            // Pipeline events are scoped to the pipeline's creator.
+            Self::PipelineFired {
+                member_user_ids, ..
+            }
+            | Self::PipelineSuspended {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            // Plugin registry events are visible to all workspace members.
+            Self::WorkspacePluginChanged { .. } => None,
             // NotificationDue is scoped to its one recipient.
             Self::NotificationDue {
                 member_user_ids, ..
