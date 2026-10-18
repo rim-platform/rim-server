@@ -214,8 +214,9 @@ Joined from the spec tables and the review brief's summary.
 ## Known gaps and review status
 
 - **Outside review open.** The outside cryptographic review of key identity, device linking,
-  recovery, the secret vault, the browser device key and end-to-end encryption is the one outside
-  sign-off still missing before a release ([review brief](security/crypto-review-brief-2026-10.md),
+  recovery, the secret vault, the browser device key and end-to-end encryption is still open. The
+  0.0.x releases come out before it and are pre-review; `0.1.0` and any 1.0 or production-ready
+  claim wait for its sign-off ([review brief](security/crypto-review-brief-2026-10.md),
   [roadmap](../ROADMAP.md)).
 - **Fixed, per the brief's status of 2026-10-14.** Clients pin encrypted conversations and refuse
   plaintext there, remember revocations, and pin key-log heads. The franking keys live in a file
