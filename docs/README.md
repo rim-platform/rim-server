@@ -58,6 +58,8 @@ Normative, versioned contracts in `specs/`:
 
 ## Security
 
+- `security-overview.md`: what RIM protects and from whom, the threat model, the known gaps and
+  the review status, for someone deciding whether to run or join a server.
 - `security/audit-access-matrix.md`: who can read which audit rows.
 - `security/crypto-review-brief-2026-10.md`: the brief for the outside cryptographic review,
   pinned to the commits it describes.
