@@ -37,6 +37,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 - GraphQL `Conversation.dmRequestPending`: for a DM, true while the other member's DM request
   for it is pending, so the sender can show that their messages wait for acceptance; null for
   groups and channels.
+- GraphQL `userCommand(id)` and `userCommands` return the caller's own user commands as the new
+  `UserCommand` type (`UserCommandStep`), enabled or not, with their saved steps in order, so a
+  client can edit a user command without asking for its steps again. `userCommand` answers null
+  for a built-in id or a command that is not the caller's.
 
 - GraphQL `ServerInfo.signupRequiresKeys`: true when new accounts sign up with a key only and
   `signupWithInvite` is refused, so a client offers only the key signup.

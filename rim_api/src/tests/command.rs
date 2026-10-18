@@ -373,3 +373,108 @@ async fn command_discover_rate_limited_on_sixth_call() {
         res.errors[0].message
     );
 }
+
+#[tokio::test]
+async fn user_command_query_returns_steps_and_passes_the_id() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command.expect_get_user_command().returning(move |query| {
+        assert_eq!(query.actor.user_id, actor);
+        assert_eq!(query.command_id, "user.greet");
+        Box::pin(async {
+            Ok(Some(rim_services::command::dto::UserCommandDto {
+                id: rim_core::command::model::UserCommandId::new(),
+                command_key: "user.greet".to_string(),
+                title: "Greet".to_string(),
+                description: "desc".to_string(),
+                steps: vec![
+                    rim_services::command::dto::UserCommandStepDto {
+                        command_id: "chat.list_channels".to_string(),
+                        args: None,
+                    },
+                    rim_services::command::dto::UserCommandStepDto {
+                        command_id: "chat.post_message".to_string(),
+                        args: Some(serde_json::json!({ "body": "hi" })),
+                    },
+                ],
+                is_enabled: false,
+            }))
+        })
+    });
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"query { userCommand(id: "user.greet") { id title description isEnabled steps { commandId args } } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().unwrap()["userCommand"],
+        serde_json::json!({
+            "id": "user.greet", "title": "Greet", "description": "desc", "isEnabled": false,
+            "steps": [
+                { "commandId": "chat.list_channels", "args": null },
+                { "commandId": "chat.post_message", "args": { "body": "hi" } },
+            ],
+        })
+    );
+}
+
+#[tokio::test]
+async fn user_command_query_answers_null_when_the_service_finds_none() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command
+        .expect_get_user_command()
+        .returning(|_| Box::pin(async { Ok(None) }));
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"query { userCommand(id: "chat.post_message") { id } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().unwrap()["userCommand"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn user_commands_query_lists_the_services_commands() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command.expect_list_user_commands().returning(move |query| {
+        assert_eq!(query.actor.user_id, actor);
+        Box::pin(async {
+            Ok(vec![rim_services::command::dto::UserCommandDto {
+                id: rim_core::command::model::UserCommandId::new(),
+                command_key: "user.alpha".to_string(),
+                title: "Alpha".to_string(),
+                description: String::new(),
+                steps: vec![rim_services::command::dto::UserCommandStepDto {
+                    command_id: "chat.list_channels".to_string(),
+                    args: None,
+                }],
+                is_enabled: true,
+            }])
+        })
+    });
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"query { userCommands { id steps { commandId } } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().unwrap()["userCommands"],
+        serde_json::json!([{ "id": "user.alpha", "steps": [{ "commandId": "chat.list_channels" }] }])
+    );
+}

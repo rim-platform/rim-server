@@ -204,6 +204,15 @@ Current v1 backend constraint:
 - persisted user-defined commands may only compose backend-executable commands
 - desktop-local command composition belongs to a later client/runtime slice
 
+A user command belongs to the user who created it and nobody else sees it. `commands` lists it
+as a `Command` while it is enabled, without its steps. `userCommand(id)` returns one of the
+caller's user commands as a `UserCommand`, enabled or not, with its title, description, steps
+in the order they run (each a `commandId` and its `args`) and `isEnabled`: the fields
+`updateUserCommand` takes, so an edit form loads the saved steps instead of asking for them
+again. It answers null for an id that is not one of the caller's user commands: a built-in id,
+another user's command and an unknown one alike. `userCommands` lists the caller's user
+commands in the same shape, enabled or not, sorted by id.
+
 ## Macros
 
 Two things compose commands, and only one of them is a command:

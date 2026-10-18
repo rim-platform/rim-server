@@ -15,7 +15,7 @@ mod tests {
     use rim_services::command::initiator::CommandInitiator;
     use rim_services::command::request::{
         CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-        ListCommandsQuery, UpdateUserCommandCmd,
+        GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
     };
     use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::CommandService;
@@ -761,6 +761,177 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    fn saved_user_command(
+        owner_user_id: rim_core::user::model::UserId,
+        command_key: &str,
+        is_enabled: bool,
+    ) -> UserCommand {
+        UserCommand {
+            id: UserCommandId::new(),
+            owner_user_id,
+            command_key: command_key.to_string(),
+            title: "Stored".to_string(),
+            description: "desc".to_string(),
+            steps_json: serde_json::json!([
+                { "command_id": "chat.create_group", "args": null },
+                { "command_id": "chat.post_message", "args": { "body": "hi" } }
+            ]),
+            is_enabled,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_user_command_returns_own_command_with_steps_in_order() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor_user_id = actor.user_id;
+        let stored = saved_user_command(actor_user_id, "user.greet", false);
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user()
+            .return_once(move |owner_user_id, command_key| {
+                assert_eq!(owner_user_id, actor_user_id);
+                assert_eq!(command_key, "user.greet");
+                Ok(Some(stored))
+            });
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let command = svc
+            .get_user_command(GetUserCommandQuery {
+                actor,
+                command_id: " user.greet ".to_string(),
+            })
+            .await
+            .unwrap()
+            .expect("own user command is returned");
+
+        assert_eq!(command.command_key, "user.greet");
+        assert!(!command.is_enabled);
+        let steps: Vec<&str> = command
+            .steps
+            .iter()
+            .map(|step| step.command_id.as_str())
+            .collect();
+        assert_eq!(steps, ["chat.create_group", "chat.post_message"]);
+        assert_eq!(
+            command.steps[1].args,
+            Some(serde_json::json!({ "body": "hi" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn get_user_command_answers_none_for_another_users_command() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor_user_id = actor.user_id;
+        let mut repo = MockUserCommandRepository::new();
+        // The repository scopes the lookup to the owner, so another user's command of the
+        // same key is never found for the actor.
+        repo.expect_get_by_key_for_user()
+            .return_once(move |owner_user_id, _| {
+                assert_eq!(owner_user_id, actor_user_id);
+                Ok(None)
+            });
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let command = svc
+            .get_user_command(GetUserCommandQuery {
+                actor,
+                command_id: "user.someone_elses".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(command.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_user_command_answers_none_for_builtin_id_without_lookup() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user().never();
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let command = svc
+            .get_user_command(GetUserCommandQuery {
+                actor,
+                command_id: "chat.post_message".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(command.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_user_command_surfaces_unreadable_steps_as_internal() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let mut stored = saved_user_command(actor.user_id, "user.broken", true);
+        stored.steps_json = serde_json::json!("not an array");
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user()
+            .return_once(move |_, _| Ok(Some(stored)));
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let err = svc
+            .get_user_command(GetUserCommandQuery {
+                actor,
+                command_id: "user.broken".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn list_user_commands_returns_own_commands_sorted_including_disabled() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let actor_user_id = actor.user_id;
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_list_for_user()
+            .return_once(move |owner_user_id| {
+                assert_eq!(owner_user_id, actor_user_id);
+                Ok(vec![
+                    saved_user_command(owner_user_id, "user.zeta", true),
+                    saved_user_command(owner_user_id, "user.alpha", false),
+                ])
+            });
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let commands = svc
+            .list_user_commands(ListUserCommandsQuery { actor })
+            .await
+            .unwrap();
+
+        let keys: Vec<&str> = commands
+            .iter()
+            .map(|command| command.command_key.as_str())
+            .collect();
+        assert_eq!(keys, ["user.alpha", "user.zeta"]);
+        assert!(!commands[0].is_enabled);
+        assert_eq!(commands[0].steps.len(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
