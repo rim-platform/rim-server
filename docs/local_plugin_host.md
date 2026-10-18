@@ -133,7 +133,7 @@ Panel → host messages, with what each does today:
 | `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
 | `rim.ui.notification.show` | Gated on `ui.notify`. Shows a toast headed with the plugin's name, and a desktop notification while the window is in the background and the user already allows them. |
 | `rim.ui.dialog.confirm` | Only logged. |
-| `rim.settings.open` | Carries nothing but its `type` and gets no answer. Opens the plugin's own settings in the plugin manager. A panel never receives setting values; its plugin reads them with `rim.settings.get` (protocol v1, section 15). |
+| `rim.settings.open` | Carries nothing but its `type` and gets no answer. Opens the plugin's own settings form over the current view, so the panel stays where it was and is there again when the form closes. A panel never receives setting values; its plugin reads them with `rim.settings.get` (protocol v1, section 15). |
 | `rim.plugin.ui_event` | Not wired: the host queues the event but never delivers it to the plugin process. |
 
 Host → panel messages:
