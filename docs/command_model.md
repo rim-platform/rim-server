@@ -31,7 +31,7 @@ This means:
 - context actions invoke commands
 - plugins register commands
 - automations may invoke commands
-- user-defined workflows are commands too
+- user commands are commands too; a macro runs commands but is not one
 
 ## Current Backend State
 
@@ -40,7 +40,7 @@ The current backend/contracts implementation already provides:
 - built-in command definitions
 - command listing and single-command lookup
 - backend command execution
-- persisted user-defined commands/macros
+- persisted user commands and macros
 - user-defined command create/update/delete flows
 - command context-aware filtering for palette/context-menu/keybind use cases
 
@@ -213,17 +213,18 @@ again. It answers null for an id that is not one of the caller's user commands: 
 another user's command and an unknown one alike. `userCommands` lists the caller's user
 commands in the same shape, enabled or not, sorted by id.
 
-## Macros
+## User Commands And Macros
 
 Two things compose commands, and only one of them is a command:
 
 - a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
-  others, so it shows in the palette and a keybind can name it, and its steps run in the context
-  it runs in
+  others, so it shows in the palette and a keybind can name it; its steps run in order, each
+  with its own arguments, in the context the user command runs in
 - a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a command id with its
   own arguments; it is not in the command registry, so the palette does not list it and no
-  keybind names it, and it runs through `executeMacro`. `commands` on the `AI` surface and
-  `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
+  keybind names it. It runs through `executeMacro` (from Settings or `/macro` in the client),
+  its steps in order, each with its own arguments, in the context of the run. `commands` on the
+  `AI` surface and `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
 
 Neither pipes: each step's payload is collected under its command id in the result, and no step
 receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
@@ -314,7 +315,7 @@ Arguments should be usable by:
 
 - command palette forms
 - plugin-provided UIs
-- macros/user-defined command composition
+- the steps of user commands and macros
 - API surfaces later
 
 ## Context Model For Commands
