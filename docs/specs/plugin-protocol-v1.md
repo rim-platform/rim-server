@@ -60,9 +60,9 @@ in [section 17](#17-method-reference-what-exists-and-what-does-not).
 ## 2. Process and transport
 
 A plugin is a directory with a manifest (`rim-plugin.json`) and an `entrypoint` file. The manifest
-format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`, and comment-header
-"simple mode" in `simple_manifest.rs`), not by this protocol; this document only refers to the
-manifest fields the protocol depends on. Section 19 shows a minimal manifest.
+format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`), not by this
+protocol; this document only refers to the manifest fields the protocol depends on. Section 19
+shows a minimal manifest.
 
 A plugin id (`plugin_id` in the manifest) is reverse-domain: at least three dot-separated
 segments of ASCII letters, digits and hyphens, such as `dev.example.hello-world`. Underscores are
@@ -519,7 +519,8 @@ The host enforces capabilities in two places:
 
 ### Capability names
 
-The protocol knows two kinds of capability name. Both are valid in `grantedCapabilities` in v1:
+The protocol knows two kinds of capability name. Both are valid in `grantedCapabilities` in v1,
+though the rim-ui host declares and grants built-in names only (see "What the host enforces"):
 
 - **Plugin-scoped names**, `plugin.<pluginId>.<verb>`, such as
   `plugin.dev.example.k8stools.restart_pod`. `required_capabilities` on a command can point at
@@ -544,30 +545,40 @@ None of the methods the built-in names guard is part of frozen v1 (section 17).
 ### What the host enforces
 
 These are properties of the rim-ui host, not of the protocol, and a host may change them without
-a protocol change. They changed with the TypeScript SDK PR (rim-ui #16), so both are described;
-check `rim-ui/src-tauri/src/plugin_host/validation.rs` in the host version you target.
+a protocol change. They changed with the TypeScript SDK PR (rim-ui #16), with rim-ui #44 and
+with rim-ui #190, so each version is described; check
+`rim-ui/src-tauri/src/plugin_host/validation.rs` in the host version you target.
 
 - **Which names a manifest may declare.** A manifest that declares any other name fails to
   install.
-  - From rim-ui #44 onward: the built-in names `ui.panel`, `ui.notify`, `chat.read`,
-    `chat.write`, `chat.read.encrypted` and `chat.write.encrypted`, and the plugin's own keys
+  - From rim-ui #190 onward: only the built-in names `ui.panel`, `ui.notify`, `chat.read`,
+    `chat.write`, `chat.read.encrypted` and `chat.write.encrypted`, and for a `WebSandboxed`
+    plugin also `network.fetch` (`web-plugins-v1.md`), in `capabilities` and in every command's
+    `required_capabilities`. A plugin-scoped key `plugin.<pluginId>.<verb>` is refused, since
+    the approval prompt lists only built-in names and could never approve one. An encrypted
+    chat name declared without its plain one is rejected, and the other built-in names are
+    rejected as from #44.
+  - From rim-ui #44 to #190: the same built-in names, and the plugin's own keys
     `plugin.<pluginId>.<verb>`, where the verb uses only `[a-z0-9_.]` and neither starts nor
     ends with `.` nor contains `..`. An encrypted chat name declared without its plain one is
     rejected. The other built-in names are rejected: `events.read` guards a call that nothing
     serves and that is not in v1, and `local.process`, `network`, `fs.read` and `fs.write` guard
-    nothing at all. A `WebSandboxed` plugin may also declare `network.fetch`
-    (`web-plugins-v1.md`).
+    nothing at all. A `WebSandboxed` plugin may also declare `network.fetch`. The approval
+    prompt lists only built-in names, so a plugin-scoped key was never approved, and a command
+    whose `required_capabilities` named one was always refused.
   - From rim-ui #16 to #44: the same rules with only `ui.panel` and `ui.notify` of the built-in
     names; `chat.read` and `chat.write` are rejected too.
   - Before rim-ui #16: only `plugin.<pluginId>.<verb>` keys, with the **whole** key in
     `[a-z0-9_.]`. No plugin could hold a built-in name, so `rim.ui.update_panel` was always
     answered `CAPABILITY_DENIED`, and a plugin id with an uppercase letter or a hyphen could
     declare no capability at all.
-  - In both: a key is 4 to 128 bytes long and has no segment named `system`, `internal`,
-    `admin` or `audit`.
-- **Approving plugin-scoped names.** The approval prompt lists only built-in names, so a
-  `plugin.<pluginId>.<verb>` key a manifest declares is never approved, and a command whose
-  `required_capabilities` names one is always refused.
+  - Before rim-ui #190: a key is 4 to 128 bytes long and has no segment named `system`,
+    `internal`, `admin` or `audit`.
+- **Which names a command may require.** From rim-ui #190 onward, every name in a command's
+  `required_capabilities` must also be in the manifest's `capabilities`; otherwise install fails
+  with `UNDECLARED_CAPABILITY`, naming the command and the key. Before rim-ui #190 the two lists
+  were not compared at install, and a command requiring an undeclared name was refused when it
+  ran.
 - **Approving while the plugin runs.** `grantedCapabilities` is the approved list when the
   connection started, and v1 has no notification for changes to it. A capability the user
   approves while the plugin runs reaches the command gate at once, but the plugin's own calls to
@@ -753,7 +764,7 @@ Arrows show direction; each line is one frame's JSON payload.
 
 ```text
 # 1. The host starts the plugin and handshakes. The plugin logs before answering, which is allowed.
-host → plugin  {"jsonrpc":"2.0","id":1,"method":"rim.handshake","params":{"protocolVersion":1,"supportedVersions":[1],"pluginId":"dev.example.k8stools","hostVersion":"0.1.0","grantedCapabilities":["plugin.dev.example.k8stools.restart_pod"],"principal":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"}}}
+host → plugin  {"jsonrpc":"2.0","id":1,"method":"rim.handshake","params":{"protocolVersion":1,"supportedVersions":[1],"pluginId":"dev.example.k8stools","hostVersion":"0.1.0","grantedCapabilities":["ui.panel"],"principal":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"}}}
 plugin → host  {"jsonrpc":"2.0","method":"rim.log","params":{"level":"info","message":"k8stools starting"}}
 plugin → host  {"jsonrpc":"2.0","id":1,"result":{"accepted":true,"protocolVersion":1,"pluginId":"dev.example.k8stools"}}
 
