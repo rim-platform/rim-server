@@ -102,6 +102,16 @@ USER rim
 #   RIM_SMTP_FROM         — From address, e.g. RIM <noreply@example.org>
 #   RIM_SMTP_TLS          — starttls, implicit or none (default: starttls)
 #   RIM_HOST_ALLOWED_RELAYS — Server ids allowed on host endpoints, comma-separated (default: any)
+#   RIM_DM_INBOUND        — DMs from other servers, and from people here who share no workspace
+#                           with the recipient: open, requests (their first message is a request
+#                           the recipient accepts), partners (only people on the RIM_DM_PARTNERS
+#                           servers and this one, with a request) or none (default: requests);
+#                           with partners or none other servers get no identity of anyone here
+#   RIM_DM_OUTBOUND       — DMs people here start with people on other servers: allowed, partners
+#                           (only with people on the RIM_DM_PARTNERS servers) or none
+#                           (default: allowed)
+#   RIM_DM_PARTNERS       — Server ids the partners settings of RIM_DM_INBOUND and
+#                           RIM_DM_OUTBOUND name, comma-separated (default: none)
 #   RIM_S2S_DENIED_PEERS  — Server ids refused on every server-to-server endpoint, comma-separated
 #   RIM_S2S_PEER_RATE_PER_MIN — Server-to-server requests per peer per minute (default: 600)
 #   RIM_S2S_DEVICE_RATE_PER_MIN — Forwarded requests per device per minute (default: 120)
@@ -141,12 +151,15 @@ USER rim
 #                           RIM_RELAY_DEVICES_PER_USER applies
 #   RIM_LIMIT_DM_REQUESTS_PER_DAY — DM requests to strangers per user per day; the stricter of
 #                           this and RIM_RELAY_DM_REQUESTS_PER_DAY applies
-#   RIM_LIMIT_MACROS_PER_WORKSPACE, RIM_LIMIT_PIPELINES_PER_WORKSPACE,
-#   RIM_LIMIT_PLUGINS_PER_WORKSPACE — macros, pipelines and plugins of a workspace
+#   RIM_LIMIT_MACROS_PER_WORKSPACE — macros of a workspace
+#   RIM_LIMIT_PIPELINES_PER_WORKSPACE — pipelines of a workspace
+#   RIM_LIMIT_PLUGINS_PER_WORKSPACE — plugins of a workspace's registry
 #   RIM_LIMIT_INVITES_PER_USER_PER_DAY — workspace invites one user creates per day
 #   RIM_LIMIT_INVITE_MAX_USES — the uses one invite may have
 #   RIM_LIMIT_MESSAGE_BYTES — bytes of a message's text, at most 65536; more stops the server
 #                           at boot
+#   RIM_LIMIT_PENDING_INVITES_PER_USER — pending invitations to encrypted conversations one user
+#                           holds; unlike the others it is on unless set to 0 (default: 50)
 #   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace
 #                           and sends no DM request to a stranger (default: off)
 #   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,

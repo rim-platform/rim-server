@@ -206,17 +206,19 @@ Current v1 backend constraint:
 
 ## Macros
 
-Macros are not a separate root command type.
+Two things compose commands, and only one of them is a command:
 
-Decision:
+- a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
+  others, so it shows in the palette and a keybind can name it, and its steps run in the context
+  it runs in
+- a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a command id with its
+  own arguments; it is not in the command registry, so the palette does not list it and no
+  keybind names it, and it runs through `executeMacro`. `commands` on the `AI` surface and
+  `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
 
-- a macro is a user-defined command composed from other commands
-
-This keeps the model simpler:
-
-- one command abstraction
-- one invocation system
-- one keybind target model
+Neither pipes: each step's payload is collected under its command id in the result, and no step
+receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
+one command's result to the next stage.
 
 ## Command Contract
 
@@ -507,8 +509,8 @@ Examples:
 
 The command model does not define:
 
-- a scripting language: macros pipe one command's result into the next step, and anything
-  beyond that belongs in a plugin
+- a scripting language: a pipe passes one command's result to the next stage, macros and user
+  commands run fixed steps, and anything beyond that belongs in a plugin
 - dataflow beyond a linear pipe
 - distributed workflow execution
 - a typed payload schema per command result: results share one envelope
@@ -520,7 +522,7 @@ The command model does not define:
   automations.
 - Command ids are namespaced.
 - User-defined commands may compose other commands.
-- Macros are user-defined composed commands, not a separate root type.
+- User commands are composed commands; macros are lists of steps with arguments, not commands.
 - Commands use typed arguments.
 - Commands declare required context.
 - Commands declare execution target.

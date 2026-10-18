@@ -29,11 +29,17 @@ The manifest uses snake_case keys and describes:
   `description`, `author`
 - runtime: `runtime_kind` (`"DesktopLocalProcess"` here; `"WebSandboxed"` is the web plugin
   kind) and `entrypoint`
-- `capabilities` the plugin requests
+- `capabilities` the plugin requests, and `network_origins`, the origins a `WebSandboxed`
+  plugin that requests `network.fetch` may connect to
 - `commands`, each with `id`, `title`, `description`, `arguments`, `dangerous`,
-  `required_capabilities`, `ai_callable`, `output_schema` and `keybind_capable`
-- `keybind_suggestions`, `context_actions` and `panels`
+  `required_context`, `required_capabilities`, `ai_callable`, `output_schema` and
+  `keybind_capable`
+- `keybind_suggestions`, `context_actions` and `panels`, each panel with `id`, `title`,
+  `description` and an optional `slot`
 - `settings_schema`
+
+rim-ui's [plugin manifest reference](../../rim-ui/docs/plugin-manifest.md) describes every field
+and the rules install checks.
 
 A plugin without `rim-plugin.json` can instead put its manifest in comment headers at the top of
 a `main.ts`, `main.js` or `main.py` entrypoint ("simple mode", `simple_manifest.rs`):
@@ -123,7 +129,7 @@ Panel → host messages, with what each does today:
 | Message | Status |
 |---|---|
 | `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
-| `rim.ui.notification.show` | Gated on `ui.notify`; only logged. |
+| `rim.ui.notification.show` | Gated on `ui.notify`. Shows a toast headed with the plugin's name, and a desktop notification while the window is in the background and the user already allows them. |
 | `rim.ui.dialog.confirm` | Only logged. |
 | `rim.settings.get` / `rim.settings.set` | Only logged. |
 | `rim.plugin.ui_event` | Not wired: the host queues the event but never delivers it to the plugin process. |
@@ -133,7 +139,8 @@ Host → panel messages:
 | Message | Status |
 |---|---|
 | `theme.changed` | Sent on mount and on every theme change. |
-| `panel.state_update` | Sent on mount with the panel state the plugin last stored. |
+| `panel.state_update` | Sent on mount with the panel state the plugin last stored, then on every change the plugin makes, and with `state: null` when the plugin stops. |
+| `rim.command.result` | The answer to a panel's `rim.command.execute` that carried a `requestId`: `requestId`, `ok`, `message`, `payload`, and `cancelled: true` when the user declined to confirm a dangerous command. |
 | `panel.state_patch`, `panel.visibility`, `panel.focus`, `panel.blur`, `conversation.changed` | Declared in the bridge's types, never sent. |
 
 ### Focus Management

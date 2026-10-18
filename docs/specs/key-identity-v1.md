@@ -476,8 +476,8 @@ which every client that offers recovery must read.
   removed. The recovery key itself is never stored. After the enrollment the app shows the
   recovery kit ("Recovery kit") and publishes a profile card (display name, this server's URL,
   the active devices). The server has ended every other session of the account.
-- **Key-only signup** (the join pages, next to the password form, with the page's token if it
-  has one): the person picks a username, an optional display name and this device's name; the
+- **Key-only signup** (the join pages, where it is the form shown first, with the page's token if
+  it has one): the person picks a username, an optional display name and this device's name; the
   app creates the keys as for enrollment and writes them, with the kit's entropy, to the
   keyring **before** `signupWithKey` is sent; it shows the recovery kit once the signup
   succeeds. When it fails, the app reads `keyLog` for the new principal: an empty log
@@ -491,7 +491,7 @@ which every client that offers recovery must read.
   opens the workspace its preview named). Unconfirmed keys whose principal has no key log on the
   server (a signup or enrollment that never reached it) are removed when signing in with them
   fails. Where the server allows password signup (`serverInfo.signupRequiresKeys` false), the
-  password form stays as a fallback.
+  password form is a fallback behind "Create account with a password".
 - **Other sessions.** Enrollment ends the account's other sessions itself ("Enrollment", rule 4).
   Account settings offers "Sign out other sessions" (`logoutOtherSessions`) for every account,
   on the desktop and the web.

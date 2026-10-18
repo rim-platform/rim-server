@@ -26,10 +26,15 @@ extensions. It is a package with a manifest (`rim-plugin.json`) that contributes
 - panels, rendered in sandboxed iframes inside the shell;
 - settings.
 
-A plugin with no panels is headless: it contributes commands only. The canonical examples live in
-rim-ui's `plugins/` directory: `k8s-pods` lists the pods of the user's Kubernetes cluster and
-restarts one through a dangerous command, `github-prs` lists pull requests of public GitHub
-repositories, `hello-world` and `template-ts` are starting points.
+A plugin with no panels is headless: it contributes commands only. The four official plugins
+each have their own repository under [github.com/rim-platform](https://github.com/rim-platform):
+[`plugin-k8s-pods`](https://github.com/rim-platform/plugin-k8s-pods) lists the pods of the user's
+Kubernetes cluster and restarts one through a dangerous command,
+[`plugin-github-prs`](https://github.com/rim-platform/plugin-github-prs) lists pull requests of
+public GitHub repositories, [`plugin-releases`](https://github.com/rim-platform/plugin-releases)
+posts the latest GitHub releases of chosen repositories into the open conversation, and
+[`plugin-poll`](https://github.com/rim-platform/plugin-poll) runs a poll whose votes are messages.
+rim-ui's `plugins/` directory holds the starting points, `hello-world` and `template-ts`.
 
 ## Two kinds
 
