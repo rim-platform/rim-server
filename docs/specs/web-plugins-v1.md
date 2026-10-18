@@ -28,7 +28,9 @@ registry that web bundles come from._
    refused at install, as on the desktop. A new `network.fetch` lets the plugin reach the
    origins its manifest lists, enforced by CSP. `local.process`, `fs.*` and `network` are refused.
 8. New host methods `rim.storage.get` and `rim.storage.set` (not frozen) give 1 MiB per plugin and
-   account, because an opaque origin has no `localStorage` or IndexedDB.
+   account, because an opaque origin has no `localStorage` or IndexedDB. The settings the user
+   saves arrive as for a local process, through v1's `rim.settings.get` and
+   `rim.settings.changed`; secret settings only on the desktop.
 9. The desktop installs web plugins like any plugin or from the workspace registry; the web app
    only from a registry entry (signed, `workspace-plugins-v1.md`) or a pasted link carrying the bundle's SHA-256. A
    bundle is one JSON file, hashed again at every start.
@@ -276,11 +278,11 @@ waiting for the handshake timeout. From a plugin frame's window the host accepts
   `Map`, `ArrayBuffer` or `undefined` that JSON lacks, and a size both sides can compute.
 - At most **4 MiB** of UTF-8 per message, both ways; a larger one ends the connection (the frame
   is removed). A message that is not a string, not JSON, or not JSON-RPC is logged and dropped.
-- Sections 4 to 14 and 16 of protocol v1 apply unchanged (envelope, ids, handshake and
+- Sections 4 to 15 and 17 of protocol v1 apply unchanged (envelope, ids, handshake and
   negotiation, errors, commands, the confirmation gate, principals, capabilities, heartbeats,
-  logging, versioning). This section replaces v1's sections 2 and 3, and Shutdown below replaces
-  section 15. `hostVersion` is the app's version. The 10-second handshake timeout counts from the
-  init message, so it includes loading the module.
+  logging, settings, versioning). This section replaces v1's sections 2 and 3, and Shutdown below
+  replaces section 16. `hostVersion` is the app's version. The 10-second handshake timeout counts
+  from the init message, so it includes loading the module.
 - **Heartbeats** stay as in v1 (every 30 s, 5 s to answer): where the browser gives the frame its
   own process, a hung plugin does not hang the host, and the heartbeat is how the host notices.
   Two misses in a row remove the frame ("not responding"); a frame is cheap to remove, unlike a
@@ -303,8 +305,9 @@ changes.
 | `rim.log` | none | As v1; the host keeps at most 120 lines a minute per plugin and drops the rest, with one warning |
 | `rim.ui.update_panel` | `ui.panel` | As for a local process (routed, not frozen): `panel_id`, `state`, optional `patch`; 1 MiB per plugin |
 | `rim.storage.get`, `rim.storage.set` | none | New, not frozen; below |
+| `rim.settings.get`, and `rim.settings.changed` from the host | none | As v1 section 15. In the web app a secret setting never has a value; below |
 | `rim.chat.*` | `chat.*` | The client message service, as for a local process (routed, not frozen; `e2ee-mls-v1.md`, "Plugins and the client message service"). Reads need a local message store; until the web app's service reads the browser's encrypted store, it answers them `INTERNAL_ERROR` with `data.reason: "noCache"` |
-| `rim.events.subscribe` | `events.read` | `CAPABILITY_DENIED`, as v1 section 17 |
+| `rim.events.subscribe` | `events.read` | `CAPABILITY_DENIED`, as v1 section 18 |
 | `rim.process.*`, `rim.fs.*`, `rim.network.*` | `local.process`, `fs.*`, `network` | `CAPABILITY_DENIED`: this kind can never hold them |
 
 **Storage.** An opaque origin has no `localStorage`, IndexedDB or cookies, so the host keeps a
@@ -321,6 +324,23 @@ small store per plugin. `rim.storage.get { key }` answers `{ value }` (the store
   keeps it unencrypted (IndexedDB on the web, the app data directory on the desktop), so a plugin
   must not keep tokens in it.
 - A local-process host answers both with `METHOD_NOT_FOUND`: a process has its own files.
+
+**Settings and storage.** Settings (protocol v1, section 15) are scoped and kept like a store: per
+(plugin id, signed-in account, device), never synced, deleted on uninstall. What differs:
+
+| | `rim.storage` | Settings |
+|---|---|---|
+| Who writes | The plugin, with `rim.storage.set` | Only the user, in the settings form; the plugin has no method to write |
+| Shape | Any key the plugin picks, any JSON | The keys and types of the manifest's `settings_schema`, checked when the user saves |
+| How the plugin reads | One key per `rim.storage.get` | All of them in one `rim.settings.get`, and again in `rim.settings.changed` after every save |
+| Secrets | Never: kept unencrypted, so no tokens | `is_secret` settings, on the desktop only, in the secret vault; the web app has no encrypted store for them, so its form shows them as needing the desktop app |
+| Local-process plugins | `METHOD_NOT_FOUND` | Served the same way |
+
+A web plugin running on the desktop gets its secret settings in plain form, like any plugin. Its
+policy limits where it can send them to its granted `network_origins`, and the channels in
+[Security](#security) that the policy does not close remain. Host-attached secrets, which the
+host would add to the plugin's requests without the plugin seeing them, are
+[deferred](#deferred).
 
 ## Panels
 
@@ -358,7 +378,8 @@ panels when the plugin stops). Focus and Escape work as for other panels.
 | `local.process`, `fs.read`, `fs.write` | Refused, always | `WebSandboxed plugins cannot run programs or read files; use DesktopLocalProcess` |
 | `network` | Refused, always | Names host-brokered requests for local processes |
 
-`rim.log` and `rim.storage.*` need no capability; nothing else is granted without a prompt.
+`rim.log`, `rim.storage.*` and `rim.settings.get` need no capability, since each reaches only the
+plugin's own data; nothing else is granted without a prompt.
 `network.fetch` is a new name rather than `network` because the enforcement differs (a browser
 policy on the plugin's own requests, not a host method), and per-origin rather than broad because
 the policy can enforce origins and a prompt that names hosts is one a person can judge. It is one
@@ -531,11 +552,12 @@ the module loaded is not lost.
 | Reading the host page, the RIM session cookie, the CSRF token, device keys | Yes | Opaque origin, no `allow-same-origin`. Device keys are non-extractable `CryptoKey`s in the host origin's IndexedDB. |
 | Calling GraphQL as the user | Yes | A request from an opaque origin is cross-site, so the `SameSite=Lax` session cookie is not sent; the frame cannot read the CSRF token; the RIM origins are never in its policy. |
 | Reading files, running programs | Yes | The browser |
-| Reading another plugin's data | Yes | Each frame has its own opaque origin; the host scopes panel state and storage by the plugin id it takes from the iframe, never from a message. |
+| Reading another plugin's data | Yes | Each frame has its own opaque origin; the host scopes panel state, storage and settings by the plugin id it takes from the iframe or the port, never from a message. |
 | Drawing over the host, clickjacking host controls | Yes | The iframe's box. Host dialogs render above frames, and frames are `inert` while one is open. |
 | Faking host UI inside its own box | No | A plugin can draw a fake RIM dialog or password form in its box. Rules: RIM never asks for a password, recovery phrase or confirmation inside a plugin's area; host chrome around each panel shows the plugin's name and trust badge; dangerous confirmations are host dialogs naming the plugin. |
 | Sending data to unlisted origins with `fetch`, XHR, WebSocket, images, fonts | Yes | The policy |
 | Leaking data by other channels | No | A frame can navigate itself to any URL (the load rule removes it after the request left); DNS prefetch, WebRTC ICE and timing are outside CSP. Anything shown to a web plugin should be treated as available to its author, which the `network.fetch` description says. |
+| Passing on its own secret settings | No | The plugin that declares a secret setting receives it in plain form (on the desktop; the web app keeps none) and can send it to its listed origins and by the channels above. A secret setting is kept from other plugins and web pages, not from the plugin that owns it. Host-attached secrets are deferred. |
 | Using the user's cookies on a listed site | Partly | `credentialless` where supported, otherwise the browser's third-party cookie rules |
 | CPU and memory exhaustion | Partly | Where the browser gives the frame its own process, missed heartbeats remove it. Where the frame shares the host's thread (WebKit-based webviews), a busy loop freezes the app until reload, and safe start keeps it from starting again. |
 | Flooding the host with messages | Yes | [Limits](#limits) |
@@ -583,8 +605,10 @@ Rules:
   against `plugin-protocol-v1.schema.json`; handshake timeout from init; `rim.frame.error`; a second
   `load`; a non-string message; 4 MiB plus one byte; capability denial and limits; two missed
   heartbeats; none while hidden; shutdown grace; the gates in order; storage quota and scoping;
-  safe start. **Conformance:** the template's browser build over `portTransport` against the host's
-  session code in Node, through every v1 message, as the stdio conformance tests do.
+  `rim.settings.get` returning saved values and defaults, `rim.settings.changed` after a save,
+  no secret value in the web app; safe start. **Conformance:** the template's browser build over
+  `portTransport` against the host's session code in Node, through every v1 message, as the stdio
+  conformance tests do.
 - **Shell** (jsdom): the policy `<meta>` precedes the entry import; panel rendering rewrites
   relative URLs, runs scripts in order, dispatches the load events; messages not from
   `window.parent` are ignored. **Consent:** each kind's line; `network.fetch` lists the hosts.
@@ -594,7 +618,10 @@ Rules:
 
 ## Deferred
 
-- Brokered secrets (a GitHub token for private repositories) and `settings_schema`.
+- Brokered secrets: the host attaching a secret setting to a `network.fetch` request (a GitHub
+  token for private repositories) so that the plugin never holds it. Until then the plugin
+  receives its secret settings in plain form.
+- Secret settings in the web app, which needs an encrypted store for them first.
 - Wildcard origins and an "any origin" grant.
 - `rim.ui.show_notification` from the plugin frame; today only panels notify.
 - Installing a `.rimbundle` file on the web, and live reload for developers.

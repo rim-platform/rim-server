@@ -149,6 +149,12 @@ whose log forks is refused until an operator checks it out of band.
   network and local credentials. Their permissions govern what the app does for them, not what
   the program can do. Install steps such as `npm install` run only after a dialog lists each
   command and warns that it runs the author's code ([plugins](../../rim-ui/docs/plugins.md)).
+- **Plugin settings** stay on the device, scoped to the plugin, the account and the device, and
+  never reach the server or another device. A setting the plugin marks secret is kept in the
+  desktop's secret vault and never shown again once saved; the web app has no encrypted store
+  for them and offers none. The plugin that declares a secret receives it in plain form, so it
+  is kept from other plugins and web pages, not from that plugin or its author
+  ([protocol](specs/plugin-protocol-v1.md#15-settings)).
 - **The permission prompt** lists each capability on its own line. Encrypted DMs and groups need
   `chat.read.encrypted` or `chat.write.encrypted` on top of the plain permission, and a plugin
   never gets keys, franking keys, attachment secrets or ciphertext. Revoking a permission stops

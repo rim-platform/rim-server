@@ -106,12 +106,13 @@ Later candidates may include:
 
 ### Settings
 
-Potential later split:
-
-- `settings.read`
-- `settings.write`
-
-These can be added once the settings model becomes more active.
+There is no `settings.*` capability. A plugin's settings are its own data, like its `rim.log`
+lines and its `rim.storage` store: the host gives a plugin only the settings its manifest
+declares, picks the plugin from the connection rather than from the message, and only the user
+writes them, so there is nothing for a grant to guard. A capability would add a prompt line that
+protects nothing. The contract is
+[`specs/plugin-protocol-v1.md`, section 15](specs/plugin-protocol-v1.md#15-settings), and
+[`decisions/plugin-settings-2026-10-18.md`](decisions/plugin-settings-2026-10-18.md) records why.
 
 ## Decisions
 
@@ -294,3 +295,4 @@ Per-origin network grants for web plugins (`network.fetch`) are defined in
 - partial grant is desirable, but full-set approval is acceptable for the first version
 - admin restriction of dangerous capabilities is expected later
 - trust boundaries must be visible to users
+- plugin settings need no capability: a plugin reads only its own, and only the user writes them

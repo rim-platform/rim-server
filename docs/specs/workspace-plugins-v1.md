@@ -478,6 +478,10 @@ server enforces nothing: `required` is the workspace's strong recommendation.
   removed Kubernetes Pods from its plugins. Remove it from this device?" "Remove" uninstalls it and
   deletes its storage; "Keep" turns it into a local install with no registry source and no updates.
   It is stopped first because a plugin may be removed for being harmful.
+- **Settings.** The manifest an entry embeds carries the plugin's `settings_schema`, so the
+  publisher's signature covers the schema. The registry never carries setting values: they stay
+  on each device (plugin-protocol-v1, section 15). An update keeps the values the person saved,
+  and "Remove" deletes them with the plugin's storage.
 - **Other sources.** Another workspace's entry for an installed plugin id shows "Installed" when
   its statement hash matches, or "Installed from <other workspace>" with an offer to switch
   (verification and consent again). A different publisher than the installed copy's is called out.

@@ -24,7 +24,8 @@ extensions. It is a package with a manifest (`rim-plugin.json`) that contributes
 - keybind suggestions, which the user approves;
 - context actions on messages;
 - panels, rendered in sandboxed iframes inside the shell;
-- settings.
+- settings: fields the user fills in, in a form the host builds from the manifest's
+  `settings_schema`, and the plugin reads with `rim.settings.get` (protocol v1, section 15).
 
 A plugin with no panels is headless: it contributes commands only. The four official plugins
 each have their own repository under [github.com/rim-platform](https://github.com/rim-platform):
@@ -55,14 +56,16 @@ Plugins run in the client. The server never runs plugin code.
 **The client's plugin host owns** installation (from a local folder, a git URL, a pasted bundle
 link or a workspace registry entry), manifest validation, the capability consent and its
 revocation, starting and stopping plugins, routing commands to them, enforcing the
-dangerous-command confirmation, and hosting panels.
+dangerous-command confirmation, hosting panels, and the settings form and the values the user
+saves in it.
 
 **The server owns** what a workspace shares about plugins: the per-workspace registry of
 recommended or required plugins, each entry carrying a manifest its publisher signed with their
 identity key, and the storage of web plugin bundles for those entries. Owners and moderators
 manage the registry; clients verify every entry against the publisher's key log before they offer
 it, so they do not have to trust the server for what a plugin is. The registry can be switched
-off per instance (`workspace_plugins` in `operations/features.md`).
+off per instance (`workspace_plugins` in `operations/features.md`). An entry's manifest carries
+the plugin's settings schema; the values a person saves never reach the server.
 
 Plugins reach shared data only through the host, with the user's own session and under the
 capabilities the user granted. A web plugin's opaque origin has no cookies and cannot read the
@@ -97,6 +100,17 @@ Decrypted text of encrypted DMs and groups reaches a plugin only through the cli
 service and only with the separate `chat.read.encrypted` or `chat.write.encrypted` grant; plugins
 never see keys, MLS state or ciphertext.
 
+Settings are the plugin's own data, so reading them needs no capability, as `rim.storage` needs
+none; the host gives each plugin only its own and takes the plugin's identity from the
+connection. Only the user changes them. They stay on the device: never synced, never sent to the
+server, deleted on uninstall. A setting the manifest marks `is_secret` is kept in the desktop's
+secret vault and never shown again once saved, and is not available in the web app, which has no
+encrypted store for it. A secret is kept from other plugins, from web pages and from the screen,
+not from the plugin that declares it, which receives it in plain form and can send it wherever it
+can send anything: a web plugin to its granted origins and by the channels its policy does not
+close, a local-process plugin anywhere, since it runs as the user and could read the vault itself.
+Panels never receive setting values.
+
 ## Not built
 
 - Panel slots beyond what the manifest's `slot` names today, a plugin UI component kit, and a
@@ -106,4 +120,5 @@ never see keys, MLS state or ciphertext.
 - Lazy start on first use and an idle stop for local-process plugins.
 - Enforcing required registry plugins, and per-workspace limits on what capabilities a plugin
   may be granted.
-- Plugin sync across a person's devices.
+- Plugin sync across a person's devices, settings included: each device keeps its own values.
+- Host-attached secrets for `network.fetch` (`specs/web-plugins-v1.md`, "Deferred").
