@@ -142,6 +142,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   a Member, with its public channels, whichever way it signs up, so people land where others
   already are. GraphQL `ServerInfo.defaultWorkspace` names it, null when unset. A workspace that
   does not exist here, or the direct space, stops the server at boot.
+- Plugin settings in `docs/specs/plugin-protocol-v1.md`, section 15, for plugin and client host
+  authors: the rules of a manifest's `settings_schema` (`value_type` `string`, `boolean`,
+  `integer`, `path` or `enum`, `is_secret`, and the optional `default`, `min`, `max`, `options`
+  and `placeholder`), and `rim.settings.get` and `rim.settings.changed`, added within protocol v1
+  for both plugin kinds, with the panel bridge's `rim.settings.open`. Values stay on the device
+  and never reach the server, so the server does not change. Sections 15 to 20 of that spec are
+  now 16 to 21. `docs/decisions/plugin-settings-2026-10-18.md` records why.
 
 ### Changed
 

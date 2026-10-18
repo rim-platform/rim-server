@@ -909,7 +909,10 @@ Numbered for reference from sections 3 and 4. Each names where it lives at the c
 13. **Local-process plugins can read every secret.** They run as the user; the credential store
     hands an unlocked item to any process of the session and the vault file is readable by the
     user. `chat.read.encrypted` constrains sandboxed web plugins and honest local ones only (ui
-    `docs/plugin-chat-methods.md`, `web-plugins-v1.md` "Security"). Ask: is the consent wording
+    `docs/plugin-chat-methods.md`, `web-plugins-v1.md` "Security"). Plugin secret settings,
+    specified on 2026-10-18 after the commits in 1.1 (`plugin-protocol-v1.md`, section 15), are
+    kept in the same vault and handed to the plugin that declares them in plain form, so they are
+    kept from other plugins and web pages, not from that plugin. Ask: is the consent wording
     enough, or should encrypted grants be refused to local-process plugins?
 
 ### Login and errors

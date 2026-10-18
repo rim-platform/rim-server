@@ -33,12 +33,13 @@ Two later documents build on this one without changing it: `web-plugins-v1.md` (
 12. [Capabilities](#12-capabilities)
 13. [Heartbeats](#13-heartbeats)
 14. [Logging](#14-logging)
-15. [Shutdown and app quit](#15-shutdown-and-app-quit)
-16. [Compatibility and versioning](#16-compatibility-and-versioning)
-17. [Method reference: what exists and what does not](#17-method-reference-what-exists-and-what-does-not)
-18. [Worked example: one whole session](#18-worked-example-one-whole-session)
-19. [A complete plugin in Python](#19-a-complete-plugin-in-python)
-20. [Plugin author checklist](#20-plugin-author-checklist)
+15. [Settings](#15-settings)
+16. [Shutdown and app quit](#16-shutdown-and-app-quit)
+17. [Compatibility and versioning](#17-compatibility-and-versioning)
+18. [Method reference: what exists and what does not](#18-method-reference-what-exists-and-what-does-not)
+19. [Worked example: one whole session](#19-worked-example-one-whole-session)
+20. [A complete plugin in Python](#20-a-complete-plugin-in-python)
+21. [Plugin author checklist](#21-plugin-author-checklist)
 
 ## 1. The protocol in one minute
 
@@ -52,16 +53,18 @@ Two later documents build on this one without changing it: `web-plugins-v1.md` (
 - The host tells you who is signed in with a **`Principal`** (`{ principalId, displayName }`),
   both in the handshake and in **`rim.principal.changed`** when that changes.
 - You may write to the host log with **`rim.log`**.
+- You read the settings the user saved for your plugin with **`rim.settings.get`**, and the host
+  sends **`rim.settings.changed`** when they change.
 - When the host sends **`rim.shutdown`** or closes your stdin, you exit.
 
 That is all of frozen v1. Everything else a plugin can do today is listed, with its real status,
-in [section 17](#17-method-reference-what-exists-and-what-does-not).
+in [section 18](#18-method-reference-what-exists-and-what-does-not).
 
 ## 2. Process and transport
 
 A plugin is a directory with a manifest (`rim-plugin.json`) and an `entrypoint` file. The manifest
 format is defined by the host (`rim-ui/src-tauri/src/plugin_host/manifest.rs`), not by this
-protocol; this document only refers to the manifest fields the protocol depends on. Section 19
+protocol; this document only refers to the manifest fields the protocol depends on. Section 20
 shows a minimal manifest.
 
 A plugin id (`plugin_id` in the manifest) is reverse-domain: at least three dot-separated
@@ -143,7 +146,7 @@ Further rules:
   than fail, so one side's bug does not break the connection. The host does.
 - An unknown **request** is answered with `METHOD_NOT_FOUND` (`-32601`). An unknown
   **notification** is ignored. This is what lets v1 grow new methods without breaking anyone
-  (see [section 16](#16-compatibility-and-versioning)).
+  (see [section 17](#17-compatibility-and-versioning)).
 
 ## 5. Request and response ids
 
@@ -173,6 +176,8 @@ host                                              plugin
  |<-------------------- {} --------------------------|
  |------- rim.principal.changed (notification) ----->|   on sign-in, sign-out, account switch
  |<--------------- rim.log (any time) ---------------|
+ |<---------- rim.settings.get (any time) -----------|
+ |------- rim.settings.changed (notification) ------>|   when the user saves the plugin's settings
  |                                                   |
  |------------- rim.shutdown (notification) -------->|
  | close stdin                                       |   plugin exits
@@ -182,10 +187,11 @@ host                                              plugin
 2. **Handshake.** The host's first frame is `rim.handshake`. Until you have answered it, send
    nothing but `rim.log`. The host waits up to **10 seconds** for the answer; a plugin that does
    not answer in time, refuses, or answers wrongly is stopped (section 7).
-3. **Running.** The host sends commands, heartbeats and principal changes; the plugin answers
-   and may log. A plugin with nothing to do just waits on stdin.
+3. **Running.** The host sends commands, heartbeats, principal changes and settings changes;
+   the plugin answers, may log and may read its settings. A plugin with nothing to do just waits
+   on stdin.
 4. **Stopping.** The host sends `rim.shutdown`, then closes stdin. The plugin exits
-   (section 15). A plugin MUST also exit when stdin reaches end-of-file without a
+   (section 16). A plugin MUST also exit when stdin reaches end-of-file without a
    `rim.shutdown`, because that is how a host that crashed says goodbye.
 
 If the plugin exits or crashes on its own, the connection ends, commands for it fail with
@@ -272,7 +278,7 @@ any plugin, including one from the future.
   `pluginId` differs from the one it sent, when the result does not have the shape above, or when
   the answer is a JSON-RPC `error` instead of a `result`.
 - After a failed handshake the host sends no `rim.shutdown` and does not close stdin first; it
-  goes straight to steps 3 to 5 of section 15 (one second to exit, then `SIGTERM`, then a kill).
+  goes straight to steps 3 to 5 of section 16 (one second to exit, then `SIGTERM`, then a kill).
 - The handshake is the host's first request and happens once per connection. There is no
   re-negotiation; a plugin that wants another version is restarted.
 
@@ -305,7 +311,7 @@ The codes v1 defines:
 
 JSON-RPC 2.0 reserves `-32768` to `-32000`, and RIM uses only the codes above from that range. A
 plugin's own error codes SHOULD lie outside it. A new protocol error code can be added within v1
-only after it is documented in the schema (section 16).
+only after it is documented in the schema (section 17).
 
 How the host surfaces a plugin's error: when your answer to `rim.command.execute` is an error,
 the command fails for the user with your `message`, and your `code` and `data` are passed along
@@ -412,7 +418,7 @@ A confirmed dangerous run looks like this:
 ```
 
 Changing what the gate means (for example letting a confirmation cover several runs) is a v2
-change (section 16).
+change (section 17).
 
 ## 11. People: principals
 
@@ -477,7 +483,7 @@ once.
 
 ### The id switch notice: `rim.principals.remapped`
 
-Added within v1 (section 16) with the desktop client of key identity. Old hosts never send it;
+Added within v1 (section 17) with the desktop client of key identity. Old hosts never send it;
 old plugins ignore it like any notification they do not use.
 
 ```json
@@ -515,7 +521,8 @@ The host enforces capabilities in two places:
   approved list. A call without it is answered with `CAPABILITY_DENIED` (`-32000`); a
   notification without it is dropped. Each capability also has a rate limit, **120 calls per
   minute** by default, counted per plugin; a call over the limit gets `RATE_LIMITED` (`-32001`).
-  `rim.log` needs no capability and has no limit.
+  `rim.log` needs no capability and has no limit; `rim.settings.get` needs none either
+  (section 15).
 
 ### Capability names
 
@@ -540,7 +547,7 @@ though the rim-ui host declares and grants built-in names only (see "What the ho
 | `network` | `rim.network.http_request`, `rim.network.websocket_connect` (unimplemented) |
 | `fs.read`, `fs.write` | `rim.fs.read_file`, `rim.fs.list_dir`, `rim.fs.write_file` (unimplemented) |
 
-None of the methods the built-in names guard is part of frozen v1 (section 17).
+None of the methods the built-in names guard is part of frozen v1 (section 18).
 
 ### What the host enforces
 
@@ -594,7 +601,7 @@ with rim-ui #190, so each version is described; check
 ### Rules for v1
 
 - `grantedCapabilities` is a list of strings. A plugin MUST ignore names it does not know.
-- A new capability name may be added within v1 (section 16). A plugin learns about it only by
+- A new capability name may be added within v1 (section 17). A plugin learns about it only by
   finding it in `grantedCapabilities`.
 - A capability is a host-side permission, not a sandbox. A local plugin process runs as the user
   and can do anything the user can; capabilities govern what the **host** will do for it.
@@ -642,7 +649,164 @@ or as a **request** (with an `id`), which the host answers with `{ "ok": true }`
 
 stderr also works for debugging, but only `rim.log` lines carry the plugin id and a level.
 
-## 15. Shutdown and app quit
+## 15. Settings
+
+A plugin declares its settings in the manifest, `settings_schema`. The host builds a form from
+it in the plugin manager, keeps what the user saves on the device, and hands the values to the
+plugin: `rim.settings.get` reads them, and `rim.settings.changed` says they changed. Only the
+user changes them. A plugin has no method to write its settings; data the plugin itself changes
+belongs in its own files (a process) or in `rim.storage` (a web plugin, `web-plugins-v1.md`).
+
+Both methods were added within v1 (section 17), and both host kinds serve them: a local process
+over stdio, a web plugin over its port. A host from before settings answers `rim.settings.get`
+with `METHOD_NOT_FOUND` and never sends `rim.settings.changed`; a plugin that has to run there
+falls back to its own defaults. The handshake carries no settings, since its fields are frozen.
+
+### The schema: `settings_schema`
+
+A list in the manifest, default `[]`, with one entry per setting:
+
+| Field | Type | Rule |
+|---|---|---|
+| `key` | string, required | 1 to 128 characters of `A-Z a-z 0-9 . _ -`, as a `rim.storage` key; unique within the manifest. The setting's name in `values`. |
+| `title` | string, required | Not empty. The field's label in the form. |
+| `description` | string, default `""` | The help line under the field. |
+| `value_type` | string, required | `string`, `boolean`, `integer`, `path` or `enum` (below). Any other value is refused. |
+| `is_secret` | boolean, default `false` | Allowed only with `string`. The value is kept in the secret store and never shown again once saved. |
+| `default` | optional | The value the plugin gets while the user has saved none. It has the setting's type, lies within `min` and `max`, and is one of `options`. Not allowed with `is_secret`. |
+| `min`, `max` | integer, optional | `integer` only: inclusive bounds for the value. When both are set, `min` is at most `max`. |
+| `options` | list of strings, optional | Required for `enum` and allowed only there: at least one string, no duplicates. The values the user picks from. |
+| `placeholder` | string, optional | `string`, `path` and `integer` only: the hint an empty field shows. |
+
+| `value_type` | The value in `values` | The form shows |
+|---|---|---|
+| `string` | A JSON string | A text field, masked when `is_secret` |
+| `boolean` | `true` or `false` | A switch |
+| `integer` | A JSON integer from -(2^53 - 1) to 2^53 - 1, within `min` and `max` | A number field |
+| `path` | A JSON string | A text field for a path on the device. The host neither opens nor checks the file. |
+| `enum` | One of `options` | A list to pick from |
+
+A host refuses to install a manifest whose `settings_schema` breaks one of these rules, as for
+any other manifest rule. The optional fields an entry leaves out are left out of the manifest's
+content hash too, so a manifest written before they existed keeps its hash. Adding, removing or
+changing an entry changes the hash, and for a plugin with `ai_callable` commands that means the
+user consents to its AI commands again, as after any other manifest change.
+
+The settings of the plugin in section 19:
+
+```json
+"settings_schema": [
+  { "key": "context", "title": "Kubernetes context", "description": "The kubectl context to use. Empty for the current one.", "value_type": "string", "placeholder": "prod-eu" },
+  { "key": "namespace", "title": "Default namespace", "value_type": "string", "default": "default" },
+  { "key": "refresh_seconds", "title": "Refresh every (seconds)", "value_type": "integer", "default": 30, "min": 5, "max": 3600 },
+  { "key": "output", "title": "Output", "value_type": "enum", "options": ["table", "json"], "default": "table" },
+  { "key": "api_token", "title": "API server token", "value_type": "string", "is_secret": true }
+]
+```
+
+### Where the values live
+
+- **On the device, in the host.** The values belong to (plugin id, signed-in account, device),
+  as a `rim.storage` store does. They are never synced to another device and never sent to the
+  server, and uninstalling the plugin deletes them. A workspace registry entry carries the
+  manifest, and so the schema, but never values.
+- **Desktop.** Non-secret values are kept in the host's per-plugin store in the app data
+  directory, secret values in the desktop's secret vault, the encrypted store that holds the
+  app's other secrets.
+- **Web app.** Non-secret values are kept in the browser's storage (IndexedDB), as `rim.storage`
+  is. Secret settings are not available in the web app, which has no encrypted store for them,
+  just as it keeps no AI provider key: the form shows such a field as needing the desktop app,
+  and a plugin running in the web app never receives a value for it.
+- **Saving.** The host checks every value against the schema when the user saves, and refuses
+  the save with the field that is wrong. A saved secret is never shown again: the form says
+  only that it is set, and offers to replace or clear it. Clearing a field removes its saved
+  value, so the setting falls back to its `default` or has none.
+- **Updates.** The host does not rewrite saved values when an update changes the schema. A value
+  may have been saved under an older type, bounds or options, and a new setting without a
+  `default` has no value until the user saves one. A plugin SHOULD check each value it uses,
+  treat one it cannot use as unset, and ignore keys it does not know.
+
+### Request: `rim.settings.get` (plugin to host)
+
+No params; the host ignores any it receives. It needs no capability, because a plugin reads only
+its own settings, like `rim.log` and `rim.storage`. The host knows whose settings to return from
+the connection (the process, or the web plugin's port), never from a field of the message.
+
+```json
+{ "jsonrpc": "2.0", "id": "settings-1", "method": "rim.settings.get" }
+```
+
+| Result field | Type | Meaning |
+|---|---|---|
+| `values` | object | One member per declared setting that has a saved value or a `default`, named by its `key`, with the saved value, or else the default. A setting with neither is left out. A secret's value is included in plain form. |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "settings-1",
+  "result": {
+    "values": {
+      "namespace": "prod",
+      "refresh_seconds": 30,
+      "output": "table",
+      "api_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Ik"
+    }
+  }
+}
+```
+
+Here the user saved `namespace` and `api_token`, `refresh_seconds` and `output` are defaults,
+and `context` is left out: the user saved none and it has no default.
+
+- A plugin without `settings_schema`, or with nothing saved and no defaults, gets
+  `{ "values": {} }`.
+- With nobody signed in, the values belong to no account, and the result holds the defaults
+  only.
+- When the host cannot read a saved secret (the desktop's vault does not open, for example
+  while the keyring is locked), it answers `INTERNAL_ERROR` with
+  `data: { "reason": "secretsLocked" }` instead of leaving the secret out as if it were unset.
+- Like every call but `rim.log`, it is sent only after the handshake answer (section 6).
+
+### Notification: `rim.settings.changed` (host to plugin)
+
+```json
+{ "jsonrpc": "2.0", "method": "rim.settings.changed",
+  "params": { "values": { "namespace": "staging", "refresh_seconds": 30, "output": "json" } } }
+```
+
+| Param | Type | Meaning |
+|---|---|---|
+| `values` | object | The plugin's whole settings, in the shape of the `rim.settings.get` result: every setting, not only the ones that changed. |
+
+- The host sends it to the running plugin after every save of the plugin's settings, and right
+  after every `rim.principal.changed` (section 11) with the new account's values, the defaults
+  only after sign-out, since the values belong to the signed-in account. A plugin that is not
+  running reads its settings with `rim.settings.get` when it starts.
+- A plugin replaces what it held with `params.values`. A setting missing from it has been
+  cleared.
+- The host never sends an older set after a newer one: of the values a plugin has received, in
+  a `rim.settings.get` result or in this notification, the last are the current ones.
+- While the host cannot read a saved secret it sends no `rim.settings.changed`; the next
+  `rim.settings.get` says why.
+
+### What secret settings protect
+
+A secret setting keeps its value from other plugins, from web pages and from the screen: the
+host gives it only to the plugin that declares it, and the form never shows it again. It does
+not keep the value from that plugin, which receives it in plain form:
+
+- A web plugin's frame can send what it receives only to its granted `network_origins`, and
+  through the channels that policy does not close (`web-plugins-v1.md`, "Policy" and
+  "Security"). Host-attached secrets, which the host would add to the plugin's requests without
+  the plugin seeing them, are deferred.
+- A local-process plugin runs as the user and could read the secret vault itself (section 12),
+  so the plain value gives it nothing it could not reach.
+
+Panels never receive setting values. The panel bridge has no method that returns them, only
+`rim.settings.open`, which opens the plugin's settings in the plugin manager
+(`docs/local_plugin_host.md`, "PostMessage Bridge").
+
+## 16. Shutdown and app quit
 
 `rim.shutdown` is a notification from the host: **exit now.**
 
@@ -671,7 +835,7 @@ What a plugin should do:
 - Do not rely on `SIGTERM` handlers for cleanup: Windows never sends one, and a plugin killed at
   the deadline gets no signal it can handle.
 
-## 16. Compatibility and versioning
+## 17. Compatibility and versioning
 
 `protocolVersion` is a single integer. **There are no minor versions**: v1 is everything in the
 schema plus any methods added under the rules below.
@@ -681,7 +845,7 @@ schema plus any methods added under the rules below.
 - A new method or notification in either direction. Old receivers answer an unknown request with
   `METHOD_NOT_FOUND` and ignore an unknown notification, so old plugins and old hosts keep
   working.
-- Freezing a method that is listed as not frozen (section 17), as a new schema entry. Until
+- Freezing a method that is listed as not frozen (section 18), as a new schema entry. Until
   then its shape may change without notice.
 - A new capability name in `grantedCapabilities`.
 - A new error code that is not one of the codes in section 8, documented in the schema before
@@ -706,7 +870,7 @@ schema plus any methods added under the rules below.
 - A plugin that only speaks a newer version than the host offers refuses the handshake, as in
   section 7, and the user sees why.
 
-## 17. Method reference: what exists and what does not
+## 18. Method reference: what exists and what does not
 
 This is the complete list. If a method is not in this section, the host does not implement it.
 
@@ -719,8 +883,10 @@ This is the complete list. If a method is not in this section, the host does not
 | `rim.command.execute` | host → plugin | request | 9, 10 |
 | `rim.principal.changed` | host → plugin | notification | 11 |
 | `rim.principals.remapped` | host → plugin | notification | 11 |
-| `rim.shutdown` | host → plugin | notification | 15 |
+| `rim.shutdown` | host → plugin | notification | 16 |
 | `rim.log` | plugin → host | request or notification | 14 |
+| `rim.settings.get` | plugin → host | request | 15 |
+| `rim.settings.changed` | host → plugin | notification | 15 |
 
 ### Routed by the host but not part of v1
 
@@ -750,17 +916,17 @@ Earlier RIM documents listed methods that the host has never implemented. They d
 - `rim.chat.get_conversations`, `rim.chat.edit_message`, `rim.chat.delete_message`;
 - `rim.ui.register_panel`, `rim.ui.show_panel`, `rim.ui.show_notification` (panels are declared
   in the manifest; notifications are a panel-side feature, see `docs/local_plugin_host.md`);
-- `rim.settings.get`, `rim.settings.set`;
 - `rim.process.*`, `rim.network.*`, `rim.fs.*`;
 - MessagePack framing and any `supported_formats` / `chosen_format` negotiation.
 
 Calling one gets `METHOD_NOT_FOUND`, except that a name in the host's capability table
 (section 12) is checked first and gets `CAPABILITY_DENIED` when the plugin lacks that capability.
 
-## 18. Worked example: one whole session
+## 19. Worked example: one whole session
 
-A plugin `dev.example.k8stools` with two commands, `list_pods` and `restart_pod` (dangerous).
-Arrows show direction; each line is one frame's JSON payload.
+A plugin `dev.example.k8stools` with two commands, `list_pods` and `restart_pod` (dangerous),
+and the settings shown in section 15. Arrows show direction; each line is one frame's JSON
+payload.
 
 ```text
 # 1. The host starts the plugin and handshakes. The plugin logs before answering, which is allowed.
@@ -768,36 +934,41 @@ host → plugin  {"jsonrpc":"2.0","id":1,"method":"rim.handshake","params":{"pro
 plugin → host  {"jsonrpc":"2.0","method":"rim.log","params":{"level":"info","message":"k8stools starting"}}
 plugin → host  {"jsonrpc":"2.0","id":1,"result":{"accepted":true,"protocolVersion":1,"pluginId":"dev.example.k8stools"}}
 
-# 2. The user runs "List pods" from the palette.
+# 2. The plugin reads its settings: two the user saved, two defaults.
+plugin → host  {"jsonrpc":"2.0","id":"s-1","method":"rim.settings.get"}
+host → plugin  {"jsonrpc":"2.0","id":"s-1","result":{"values":{"namespace":"prod","refresh_seconds":30,"output":"table","api_token":"eyJhbGciOiJSUzI1NiIsImtpZCI6Ik"}}}
+
+# 3. The user runs "List pods" from the palette.
 host → plugin  {"jsonrpc":"2.0","id":2,"method":"rim.command.execute","params":{"commandId":"list_pods","args":{"namespace":"prod"},"invoker":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"},"initiator":"user","confirmed":false}}
 plugin → host  {"jsonrpc":"2.0","id":2,"result":{"payload":[{"name":"api-7f9c","status":"Running"}],"message":"1 pod in prod"}}
 
-# 3. The plugin asks for something the host does not implement; the host says so.
+# 4. The plugin asks for something the host does not implement; the host says so.
 plugin → host  {"jsonrpc":"2.0","id":"p-1","method":"rim.kube.config"}
 host → plugin  {"jsonrpc":"2.0","id":"p-1","error":{"code":-32601,"message":"method not found: rim.kube.config"}}
 
-# 4. The AI agent tries to restart a pod. The command is dangerous, so the host refuses it
+# 5. The AI agent tries to restart a pod. The command is dangerous, so the host refuses it
 #    before it reaches the plugin: no frame is sent at all.
 
-# 5. The user restarts the pod and confirms the dialog. The host sets confirmed: true.
+# 6. The user restarts the pod and confirms the dialog. The host sets confirmed: true.
 host → plugin  {"jsonrpc":"2.0","id":3,"method":"rim.command.execute","params":{"commandId":"restart_pod","args":{"namespace":"prod","pod":"api-7f9c"},"invoker":{"principalId":"rimp0_PWcag22GowE59KogGTaUReeoF_q4E5EVi28q83uaGBU","displayName":"Jakub"},"initiator":"user","confirmed":true}}
 plugin → host  {"jsonrpc":"2.0","id":3,"error":{"code":-32002,"message":"kubectl failed: context not found"}}
 
-# 6. Thirty seconds after the connection started, a heartbeat.
+# 7. Thirty seconds after the connection started, a heartbeat.
 host → plugin  {"jsonrpc":"2.0","id":-1,"method":"rim.heartbeat"}
 plugin → host  {"jsonrpc":"2.0","id":-1,"result":{}}
 
-# 7. The user signs out.
+# 8. The user signs out. The settings belonged to the account, so only the defaults remain.
 host → plugin  {"jsonrpc":"2.0","method":"rim.principal.changed","params":{"principal":null}}
+host → plugin  {"jsonrpc":"2.0","method":"rim.settings.changed","params":{"values":{"namespace":"default","refresh_seconds":30,"output":"table"}}}
 
-# 8. The user disables the plugin. The host sends rim.shutdown and closes stdin; the plugin exits.
+# 9. The user disables the plugin. The host sends rim.shutdown and closes stdin; the plugin exits.
 host → plugin  {"jsonrpc":"2.0","method":"rim.shutdown"}
 ```
 
-Step 5 shows the command failing with `PLUGIN_ERROR`: the user sees "kubectl failed: context not
-found". Note in step 3 that the plugin's string id `"p-1"` comes back unchanged.
+Step 6 shows the command failing with `PLUGIN_ERROR`: the user sees "kubectl failed: context not
+found". Note in steps 2 and 4 that the plugin's string ids `"s-1"` and `"p-1"` come back unchanged.
 
-## 19. A complete plugin in Python
+## 20. A complete plugin in Python
 
 A conforming v1 plugin, standard library only, with one command, `greet`. Put two files in one
 directory: the manifest `rim-plugin.json`,
@@ -898,7 +1069,7 @@ if __name__ == "__main__":
 The in-tree reference plugin, `rim-ui/plugins/hello-world/`, does the same with more comments and
 is driven through every v1 message by the host's conformance tests.
 
-## 20. Plugin author checklist
+## 21. Plugin author checklist
 
 - [ ] The entrypoint is executable and writes nothing but frames to stdout.
 - [ ] Frames use a 4-byte **little-endian** length and stay under 4 MiB.
@@ -913,6 +1084,9 @@ is driven through every v1 message by the host's conformance tests.
       `PLUGIN_ERROR` with a message a person can read.
 - [ ] A dangerous command with `confirmed: false` is refused.
 - [ ] `principalId` is stored only where it can be rewritten, and never parsed.
+- [ ] Settings are read with `rim.settings.get` after the handshake and replaced whole on
+      `rim.settings.changed`; a value of the wrong type is treated as unset and an unknown key
+      is ignored.
 - [ ] `rim.shutdown` makes the plugin exit within a second.
 - [ ] Commands answer within 30 seconds; heartbeats keep flowing during long work.
 

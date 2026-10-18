@@ -36,7 +36,9 @@ The manifest uses snake_case keys and describes:
   `keybind_capable`
 - `keybind_suggestions`, `context_actions` and `panels`, each panel with `id`, `title`,
   `description` and an optional `slot`
-- `settings_schema`
+- `settings_schema`, the settings the user fills in, each with `key`, `title`, `description`,
+  `value_type`, `is_secret` and the optional `default`, `min`, `max`, `options` and
+  `placeholder` (protocol v1, section 15)
 
 rim-ui's [plugin manifest reference](../../rim-ui/docs/plugin-manifest.md) describes every field
 and the rules install checks.
@@ -56,7 +58,7 @@ names each host version accepts.
 
 A plugin process starts when the user enables the plugin, and at app start for every plugin that
 was enabled when the app last ran. The connection lifecycle, heartbeats and the shutdown sequence
-with its timeouts are protocol v1, sections 6, 13 and 15. Specific to this host:
+with its timeouts are protocol v1, sections 6, 13 and 16. Specific to this host:
 
 - A plugin that exits on its own stays stopped; commands for it fail with `PLUGIN_NOT_RUNNING`
   until the user enables it again.
@@ -71,6 +73,11 @@ running a command whose manifest lists `required_capabilities` and on every plug
 can: capabilities govern what the host does for it, not what the process can do on the machine.
 Dangerous commands run only after the user confirms each run, and the AI agent can never confirm
 one (protocol v1, section 10).
+
+Reading its own settings needs no capability (protocol v1, section 15). The host keeps a
+plugin's secret settings in the desktop's secret vault and hands them to that plugin in plain
+form: they are kept from other plugins and from the screen, not from the plugin that declares
+them, which as a process of the user could read the vault itself.
 
 ## Install flow (git installs)
 
@@ -126,7 +133,7 @@ Panel → host messages, with what each does today:
 | `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
 | `rim.ui.notification.show` | Gated on `ui.notify`. Shows a toast headed with the plugin's name, and a desktop notification while the window is in the background and the user already allows them. |
 | `rim.ui.dialog.confirm` | Only logged. |
-| `rim.settings.get` / `rim.settings.set` | Only logged. |
+| `rim.settings.open` | Carries nothing but its `type` and gets no answer. Opens the plugin's own settings in the plugin manager. A panel never receives setting values; its plugin reads them with `rim.settings.get` (protocol v1, section 15). |
 | `rim.plugin.ui_event` | Not wired: the host queues the event but never delivers it to the plugin process. |
 
 Host → panel messages:
