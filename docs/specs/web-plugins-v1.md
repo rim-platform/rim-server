@@ -24,8 +24,8 @@ registry that web bundles come from._
    navigates itself, floods the host or misses two heartbeats is removed.
 6. The plugin reaches RIM only through host methods behind the same capability prompts. An opaque
    origin has no RIM cookies and cannot read the CSRF token, so it cannot call GraphQL.
-7. `ui.panel` and `ui.notify` are prompted as on the desktop; `plugin.<id>.<verb>` keys install
-   but, as on the desktop, no prompt lists them. A new `network.fetch` lets the plugin reach the
+7. `ui.panel` and `ui.notify` are prompted as on the desktop; `plugin.<id>.<verb>` keys are
+   refused at install, as on the desktop. A new `network.fetch` lets the plugin reach the
    origins its manifest lists, enforced by CSP. `local.process`, `fs.*` and `network` are refused.
 8. New host methods `rim.storage.get` and `rim.storage.set` (not frozen) give 1 MiB per plugin and
    account, because an opaque origin has no `localStorage` or IndexedDB.
@@ -350,7 +350,7 @@ panels when the plugin stops). Focus and Escape work as for other panels.
 | Capability | `WebSandboxed` | Notes |
 |---|---|---|
 | `ui.panel` | Prompted | As on the desktop |
-| `plugin.<pluginId>.<verb>` | Accepted at install, not prompted | As on the desktop: the prompt lists only built-in names, so nothing approves one, and a command whose `required_capabilities` names one is always refused |
+| `plugin.<pluginId>.<verb>` | Refused at install | As on the desktop: the prompt lists only built-in names and could never approve one, so neither `capabilities` nor a command's `required_capabilities` may name one |
 | `ui.notify` | Prompted | Panel notifications show the plugin's name, as today |
 | `network.fetch` | Prompted (new) | Lists the origins; this kind only; enforced by the policy |
 | `chat.read`, `chat.write`, `chat.read.encrypted`, `chat.write.encrypted` | Prompted | As on the desktop, one line each; an encrypted one without its plain one is refused at install |

@@ -41,21 +41,16 @@ The manifest uses snake_case keys and describes:
 rim-ui's [plugin manifest reference](../../rim-ui/docs/plugin-manifest.md) describes every field
 and the rules install checks.
 
-A plugin without `rim-plugin.json` can instead put its manifest in comment headers at the top of
-a `main.ts`, `main.js` or `main.py` entrypoint ("simple mode", `simple_manifest.rs`):
-
-```text
-# rim-plugin: dev.example.my-tool
-# rim-name: My Tool
-# rim-version: 1.0.0
-# rim-description: Does useful things
-# rim-command: do_thing | Do Thing | Does a thing
-```
+Every plugin needs `rim-plugin.json` at its root: a folder or repository without one fails to
+install.
 
 Install-time validation rejects reserved plugin id prefixes (`dev.rim.`, `com.rim.`), capability
-names other than the plugin's own `plugin.<plugin_id>.<verb>` keys and the built-in names the host
-accepts, and `ai_callable` commands whose `output_schema` could leak a plugin install id. The
-protocol spec, section 12, lists which names each host version accepts.
+names other than the built-in names the host accepts, in `capabilities` and in every command's
+`required_capabilities` (a plugin-scoped `plugin.<plugin_id>.<verb>` key is refused, since the
+approval prompt could never approve one), a command whose `required_capabilities` names a
+capability `capabilities` does not declare (`UNDECLARED_CAPABILITY`), and `ai_callable` commands
+whose `output_schema` could leak a plugin install id. The protocol spec, section 12, lists which
+names each host version accepts.
 
 ## Process lifecycle
 
