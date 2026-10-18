@@ -81,9 +81,12 @@ build and metadata were tidied. The documentation and comment pass (C-4) is merg
 | Showcase vertical | Dropped from the core 2026-10-10; may return as a plugin once bots and webhooks (Track 3) exist |
 | rim-cli | Initial commit only |
 
-**Open:** the outside cryptographic review of Stages 3 and 4, the one outside sign-off still
-missing before release (`docs/security/crypto-review-brief-2026-10.md`), hybrid post-quantum
-signatures after it, the first-run path in the clients (F-1, F-2) and the PWA.
+**Open:** the outside cryptographic review of Stages 3 and 4. The 0.0.x releases ship before
+it and are pre-review releases; `0.1.0` and any 1.0 or production-ready claim wait for its
+sign-off (`docs/operations/release-checklist.md`, section 1).
+`docs/security/crypto-review-brief-2026-10.md` says what the review covers. Also open: hybrid
+post-quantum signatures after the review, the first-run path in the clients (F-1, F-2) and the
+PWA.
 
 **Done since:** the upgrade guide and changelog (D-5: `docs/operations/upgrade.md`,
 `CHANGELOG.md`), the release workflows that sign and publish the images to
@@ -437,9 +440,11 @@ state.
   consent prompt.
 - **Key loss.** Recovery phrase and backup are mandatory at first run with a banner until
   done; the recovery key in the rotation log restores identity even without the drive.
-- **Crypto correctness.** Stages 3 and 4 need an outside review before release, and OpenMLS
-  rather than hand-rolled primitives. The review is the one outside sign-off still missing
-  (`docs/security/crypto-review-brief-2026-10.md`).
+- **Crypto correctness.** Stages 3 and 4 use OpenMLS rather than hand-rolled primitives, and
+  need an outside review before RIM is called 1.0 or production ready; `0.1.0` already waits
+  for it. The 0.0.x releases come out before that review and are explicitly pre-review: nobody
+  outside the project has checked their cryptography yet.
+  `docs/security/crypto-review-brief-2026-10.md` says what the review covers.
 - **Keys in the web app.** A browser has no OS keyring; non-extractable WebCrypto keys in
   IndexedDB are weaker than desktop, and the UI should say so.
 - **Spam without domain reputation.** Request inbox and rate limits per IP, key and server
