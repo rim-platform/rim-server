@@ -208,7 +208,7 @@ omits the revocation changes nothing on that client.
 
 ```json
 {"v":2,"type":"profile-card","principalId":"rimp1_…","version":3,"keySeq":0,"displayName":"Ada",
- "relays":["https://relay.rim.chat"],"devices":[{"deviceId":"<uuid>","deviceKey":"ed25519:…"}],"issuedAt":"…"}
+ "relays":["https://relay.example.org"],"devices":[{"deviceId":"<uuid>","deviceKey":"ed25519:…"}],"issuedAt":"…"}
 ```
 
 What a person publishes about themselves, portable between servers. Signed by the current

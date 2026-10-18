@@ -45,7 +45,7 @@ workspace is hosted on one server that enforces its roles, bans and private chan
 
 | Question | Answer |
 |---|---|
-| Does the project run a public relay? | Yes: `relay.rim.chat`, stock rim-server in relay mode, with a runbook and abuse policy; registering a key needs proof-of-work or an invite |
+| Does the project run a public relay? | Yes: `relay.rim-platform.org`, stock rim-server in relay mode, with a runbook and abuse policy; registering a key needs proof-of-work or an invite |
 | DMs from strangers? | Go to a request inbox first. Workspace members and invited contacts are never strangers |
 | What is a user id? | A stable user id (`principalId`, opaque to plugins) with a signed key log, stable across key changes; it is the hash of an inception key |
 | How does the web app get keys? | It is a linked device of the desktop app (non-extractable WebCrypto keys in IndexedDB; the UI says this is weaker than desktop) |

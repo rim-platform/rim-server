@@ -278,7 +278,7 @@ both encryption and relays depend on them.
    - **7.4b** Remote workspace members: the user's relay subscribes to each workspace host
      with a delegation the user's device signed and forwards traffic both ways, so the client
      keeps one endpoint.
-   - **7.4c** The public relay `relay.rim.chat` with its runbook and abuse policy, where
+   - **7.4c** The public relay `relay.rim-platform.org` with its runbook and abuse policy, where
      registering a key needs proof-of-work or an invite.
 
    The client keeps one GraphQL endpoint and one WebSocket, to its own relay; the relay is an

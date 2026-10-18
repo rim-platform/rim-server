@@ -842,8 +842,7 @@ History is on the devices and the drive, keys on the devices, spaces on their ho
 
 ## Public relay (7.4c)
 
-The public relay (`relay.rim.chat` is its working name; the domain is not registered yet, and
-every mention of it here and in the runbook is a placeholder) runs the stock image with
+The public relay (the project's own is `relay.rim-platform.org`) runs the stock image with
 `RIM_ROLE=relay`. In `pow` mode `signupWithKey` takes a registration token (instance invite or
 workspace invite, as in invite-only mode) or `proofOfWork`, not both: an 8-byte nonce
 (unpadded base64url) such that
