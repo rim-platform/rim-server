@@ -194,6 +194,7 @@ TRUNCATE TABLE
   server_member,
   server_member_timeout,
   session,
+  user_activity,
   user_command,
   user_notification,
   user_notification_settings,

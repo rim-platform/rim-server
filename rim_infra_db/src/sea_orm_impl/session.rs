@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::session;
 use sea_orm::prelude::Expr;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, Set, Statement};
 
 use crate::DbHandle;
 
@@ -86,6 +86,19 @@ impl SessionRepository for SeaOrmSessionRepository {
             .exec(&self.db)
             .await
             .map_err(map_db_err)?;
+        self.db.execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"INSERT INTO user_activity (user_id, last_authenticated_at)
+               SELECT u.id, $2 FROM session s JOIN "user" u ON u.id = s.user_id
+               WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > $2
+                 AND u.kind = 'local' AND u.deleted_at IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM user_activity a WHERE a.user_id = u.id
+                     AND a.last_authenticated_at >= $2 - interval '5 minutes')
+               ON CONFLICT (user_id) DO UPDATE
+               SET last_authenticated_at = EXCLUDED.last_authenticated_at
+               WHERE user_activity.last_authenticated_at < EXCLUDED.last_authenticated_at - interval '5 minutes'"#,
+            vec![sea_orm::Value::Uuid(Some(id.into())), now.into()],
+        )).await.map_err(map_db_err)?;
         Ok(())
     }
 

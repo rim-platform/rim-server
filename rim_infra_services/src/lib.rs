@@ -173,3 +173,5 @@ pub(crate) use repos::{
     AttachmentRepos, AuthRepos, ConversationRepos, MessageRepos, PinRepos, ReactionRepos,
     ReadStateRepos, RequestAuthRepos, ServerMemberRepos, ServerRepos, ThreadRepos, UserRepos,
 };
+// Public for rim_server database metrics sampling.
+pub mod usage_metrics;

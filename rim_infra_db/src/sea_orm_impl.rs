@@ -40,3 +40,5 @@ pub mod user_command;
 pub(crate) mod user_lock;
 pub mod workspace_plugin;
 pub mod workspace_state;
+// Public for rim_server metrics sampler construction.
+pub mod monitoring;

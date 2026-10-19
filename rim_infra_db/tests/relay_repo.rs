@@ -381,6 +381,10 @@ async fn the_oldest_items_go_over_the_cap_and_held_ones_stay() {
         }
     );
     let dropped = repo.drop_oldest(user.id, 150).await.unwrap();
+    assert_eq!(
+        dropped.iter().map(|space| space.removed_items).sum::<u64>(),
+        2
+    );
     let spaces: HashSet<Uuid> = dropped.iter().map(|d| d.workspace_id).collect();
     assert_eq!(spaces, HashSet::from([w1, w2]));
     assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 200);

@@ -683,13 +683,14 @@ impl DefaultRelayService {
         repos: &RelayRepos,
         user_id: UserId,
         notices: &mut Vec<RelayNotice>,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<u64> {
         let queued = repos.relay_repo.queued_bytes(user_id).await?;
         let over = queued - self.settings.queue_bytes_per_user;
         if over <= 0 {
-            return Ok(());
+            return Ok(0);
         }
         let dropped = repos.relay_repo.drop_oldest(user_id, over).await?;
+        let removed_items = dropped.iter().map(|space| space.removed_items).sum();
         if !dropped.is_empty() {
             warn!(user_id = %user_id, spaces = dropped.len(), "relay queue over its cap; dropped the oldest items");
             notices.push(RelayNotice::QueueOverflow {
@@ -703,7 +704,7 @@ impl DefaultRelayService {
                     .collect(),
             });
         }
-        Ok(())
+        Ok(removed_items)
     }
 
     /// The identity a relay serves for a principal, fetched over S2S and verified.
@@ -1040,6 +1041,7 @@ impl RelayService for DefaultRelayService {
             return Err(ServiceError::Validation("upTo is an item id".to_string()));
         }
         self.repos.relay_repo.ack(device, up_to).await?;
+        metrics::counter!("rim_relay_ack_requests_total").increment(1);
         Ok(true)
     }
 
@@ -1310,15 +1312,21 @@ impl RelayService for DefaultRelayService {
             }
             through = id;
         }
+        let mut overflow_items = 0;
         for user_id in users {
-            self.enforce_cap(&repos, user_id, &mut notices).await?;
+            overflow_items += self.enforce_cap(&repos, user_id, &mut notices).await?;
         }
         repos
             .relay_repo
             .advance_received_through(&peer_server_id, through)
             .await?;
         Self::commit(scope).await?;
+        metrics::counter!("rim_relay_removed_items_total", "reason" => "overflow")
+            .increment(overflow_items);
         for notice in notices {
+            if matches!(&notice, RelayNotice::Items { .. }) {
+                metrics::counter!("rim_relay_enqueued_items_total").increment(1);
+            }
             self.notify(notice);
         }
         Ok(DeliverResponse {
@@ -1474,6 +1482,9 @@ impl RelayService for DefaultRelayService {
         }
         Self::commit(scope).await?;
         for notice in notices {
+            if matches!(&notice, RelayNotice::Items { .. }) {
+                metrics::counter!("rim_relay_enqueued_items_total").increment(1);
+            }
             self.notify(notice);
         }
         Ok(())
@@ -1582,9 +1593,15 @@ impl RelayService for DefaultRelayService {
 
     async fn cleanup(&self) -> ServiceResult<RelayCleanup> {
         let now = Utc::now();
+        let acked_items = self.repos.relay_repo.delete_acked_items().await?;
+        metrics::counter!("rim_relay_removed_items_total", "reason" => "acknowledged")
+            .increment(acked_items);
+        let expired_items = self.repos.relay_repo.delete_expired_items(now).await?;
+        metrics::counter!("rim_relay_removed_items_total", "reason" => "expired")
+            .increment(expired_items);
         Ok(RelayCleanup {
-            acked_items: self.repos.relay_repo.delete_acked_items().await?,
-            expired_items: self.repos.relay_repo.delete_expired_items(now).await?,
+            acked_items,
+            expired_items,
             expired_requests: self.repos.relay_repo.delete_expired_requests(now).await?,
             orphan_envelopes: self.repos.relay_repo.delete_orphan_envelopes().await?,
         })

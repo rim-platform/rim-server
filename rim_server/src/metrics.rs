@@ -15,6 +15,7 @@ use metrics::{
     Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use rim_infra_db::sea_orm_impl::monitoring::SeaOrmMonitoringRepository;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use sea_orm::{DatabaseConnection, DbBackend};
 use tokio::sync::watch;
@@ -207,12 +208,25 @@ fn describe() {
         "Always 1; the version label is the server version."
     );
     rim_infra_services::metrics::describe();
+    rim_infra_services::usage_metrics::describe();
 }
 
 /// The exporter configuration: histogram buckets for the request duration.
 fn builder() -> Result<PrometheusBuilder, String> {
     PrometheusBuilder::new()
         .set_buckets_for_metric(Matcher::Full(HTTP_DURATION.to_string()), DURATION_BUCKETS)
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full("rim_graphql_operation_duration_seconds".to_string()),
+                DURATION_BUCKETS,
+            )
+        })
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full("rim_graphql_subscription_duration_seconds".to_string()),
+                &[1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0],
+            )
+        })
         .map_err(|e| format!("metrics buckets: {e}"))
 }
 
@@ -262,16 +276,35 @@ async fn sample_database(db: &DatabaseConnection) {
     )
     .await
     {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "could not read the relay queue for metrics"),
-        Err(_) => tracing::warn!("reading the relay queue for metrics timed out"),
+        Ok(Ok(())) => rim_infra_services::usage_metrics::sample_outcome("relay", true),
+        result => {
+            rim_infra_services::usage_metrics::sample_outcome("relay", false);
+            tracing::warn!(?result, "could not sample the relay queue");
+        }
     }
     match tokio::time::timeout(SAMPLE_TIMEOUT, crate::health::count_pending_migrations(db)).await {
         Ok(Ok(pending)) => {
             gauge!(PENDING_MIGRATIONS).set(pending as f64);
+            rim_infra_services::usage_metrics::sample_outcome("migrations", true);
         }
-        Ok(Err(e)) => tracing::warn!(error = %e, "could not read the pending migrations"),
-        Err(_) => tracing::warn!("reading the pending migrations timed out"),
+        result => {
+            rim_infra_services::usage_metrics::sample_outcome("migrations", false);
+            tracing::warn!(?result, "could not sample the pending migrations");
+        }
+    }
+    let repo = SeaOrmMonitoringRepository::new(db.clone().into());
+    for sample in ["usage", "delivery"] {
+        let result = tokio::time::timeout(SAMPLE_TIMEOUT, async {
+            match sample {
+                "usage" => rim_infra_services::usage_metrics::sample_usage(&repo).await,
+                _ => rim_infra_services::usage_metrics::sample_delivery(&repo).await,
+            }
+        })
+        .await;
+        rim_infra_services::usage_metrics::sample_outcome(sample, matches!(result, Ok(Ok(()))));
+        if !matches!(result, Ok(Ok(()))) {
+            tracing::warn!(sample, ?result, "could not sample database aggregates");
+        }
     }
 }
 

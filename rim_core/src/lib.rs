@@ -45,3 +45,5 @@ pub mod workspace_state;
 
 #[cfg(test)]
 mod tests;
+// Public for rim_infra_db aggregate repositories and rim_infra_services samplers.
+pub mod monitoring;
