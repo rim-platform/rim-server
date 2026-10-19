@@ -705,10 +705,11 @@ async fn signup_with_a_workspace_invite_keeps_a_placeholder_email() {
         serde_json::json!(server.id.to_string())
     );
     let user = SeaOrmUserRepository::new(ctx.db.clone())
-        .find_by_username("Placeholder_User")
+        .find_by_username("placeholder_user")
         .await
         .expect("lookup")
         .expect("user");
+    assert_eq!(user.username, "placeholder_user");
     assert_eq!(
         user.email.as_deref(),
         Some("placeholder_user@local.invalid")
@@ -1036,4 +1037,64 @@ async fn with_signups_requiring_keys_password_signups_are_forbidden_and_password
     )
     .await;
     assert!(data["signupWithKey"]["userId"].is_string());
+}
+
+/// A signup as `Alice` stores the username `alice` and keeps `Alice` as the display name, a
+/// password login as `ALICE` signs that account in, and a later signup as `aLiCe`, with a
+/// password or a key, is refused with `CONFLICT`.
+#[tokio::test]
+async fn a_username_is_stored_lowercase_and_matched_in_any_case() {
+    use rim_core::user::repository::UserRepository;
+    use rim_identity::StatementVersion;
+    use rim_identity::testing::TestIdentity;
+    use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_err, exec_ok};
+    use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::Open).await;
+    let signup = |username: &str, email: &str| {
+        anonymous_request(
+            SIGNUP_WITH_INVITE,
+            json!({ "input": { "username": username, "email": email, "password": PASSWORD } }),
+        )
+    };
+
+    let data = exec_ok(&schema, signup(" Alice ", "alice@test.example.com")).await;
+    let user_id = data["signupWithInvite"]["userId"].clone();
+
+    let stored = SeaOrmUserRepository::new(ctx.db.clone())
+        .find_by_username("alice")
+        .await
+        .expect("lookup")
+        .expect("user");
+    assert_eq!(json!(stored.id.to_string()), user_id);
+    assert_eq!(stored.username, "alice");
+    assert_eq!(stored.display_name.as_deref(), Some("Alice"));
+
+    let login = anonymous_request(
+        "mutation($input: LoginInput!) { login(input: $input) { userId } }",
+        json!({ "input": { "username": "ALICE", "password": PASSWORD } }),
+    );
+    assert_eq!(exec_ok(&schema, login).await["login"]["userId"], user_id);
+
+    let taken = (
+        "CONFLICT".to_string(),
+        "username already exists".to_string(),
+    );
+    assert_eq!(
+        exec_err(&schema, signup("aLiCe", "alice2@test.example.com")).await,
+        taken
+    );
+    let id = TestIdentity::with_version(43, StatementVersion::V2);
+    let input = signup_input(&schema, "aLiCe", &id, 93, json!({})).await;
+    assert_eq!(
+        exec_err(
+            &schema,
+            signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
+        )
+        .await,
+        taken
+    );
 }

@@ -153,6 +153,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- **Upgrade:** usernames are stored lowercase and compared without regard to case. A signup
+  stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`); `login`,
+  `requestPasswordReset`, `requestAccountDeletion`, `from:@name` in message search and the
+  `rim_server operator` commands accept a username in any case. A migration adds a unique index
+  on the lowercased username and fails while two accounts have usernames that differ only in
+  case: find them with `SELECT lower(username) FROM "user" GROUP BY 1 HAVING count(*) > 1` and
+  rename one of each pair before upgrading.
 - A confirmation of a command now lasts 60 seconds, at most 300, instead of five, so a person
   has time to read the confirmation dialog and answer it before it lapses. A proof is still good
   once, for the same caller, command, arguments and context ("Confirmation gate (H1)" in

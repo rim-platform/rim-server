@@ -541,11 +541,12 @@ impl AuthService for DefaultAuthService {
         // all pass the check before any of them fails; they are refunded below unless the
         // attempt turns out to be a failed login.
         let now = Utc::now();
+        // Usernames are compared without regard to case, so every case variant names one
+        // account and shares its known sources and failure budgets.
         let account_key = username.to_lowercase();
-        // Known sources are keyed by the exact username, which is what the lookup resolves
-        // (usernames are case-sensitive); the failure limits use the folded key, which errs
-        // toward sharing a budget between case variants.
-        let known_source = self.login_known_sources.is_known(&remote_ip, username, now);
+        let known_source = self
+            .login_known_sources
+            .is_known(&remote_ip, &account_key, now);
         let mut decision = self
             .login_ip_rate_limiter
             .check_and_record(&remote_ip, "login", now);
@@ -596,7 +597,7 @@ impl AuthService for DefaultAuthService {
         }
         if result.is_ok() {
             self.login_known_sources
-                .record(&remote_ip, username, Utc::now());
+                .record(&remote_ip, &account_key, Utc::now());
         }
         result
     }
@@ -731,9 +732,12 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let (invite_token, username, password) =
-            (invite_token.as_str(), username.as_str(), password.as_str());
-        signup::validate_username(username)?;
+        let normalized_username = signup::normalize_username(&username)?;
+        let (invite_token, username, password) = (
+            invite_token.as_str(),
+            normalized_username.as_str(),
+            password.as_str(),
+        );
         // The display name falls back to the username.
         signup::check_reserved(&self.reserved_names, username, username)?;
         Self::validate_password(password)?;
@@ -774,7 +778,7 @@ impl AuthService for DefaultAuthService {
             .create_user(rim_core::user::model::NewUser {
                 username: username.to_string(),
                 password: Some(password_hash),
-                email: Some(format!("{}@local.invalid", username.to_lowercase())),
+                email: Some(format!("{username}@local.invalid")),
                 display_name: None,
                 key_identity: None,
             })
@@ -932,7 +936,7 @@ impl AuthService for DefaultAuthService {
         self.ensure_password_signup_allowed("instance_invite")?;
         let SignupWithInstanceInviteCmd {
             instance_invite_token: raw_token,
-            username,
+            username: typed_username,
             password,
             email,
             display_name,
@@ -940,13 +944,14 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let (username, password) = (username.as_str(), password.as_str());
+        let normalized_username = signup::normalize_username(&typed_username)?;
+        let (username, password) = (normalized_username.as_str(), password.as_str());
 
-        signup::validate_username(username)?;
         Self::validate_password(password)?;
         let email = Self::validate_email(&email)?;
+        // The display name falls back to the username as typed, keeping its case.
         let resolved_display_name =
-            signup::normalize_display_name(display_name.as_deref(), username)?;
+            signup::normalize_display_name(display_name.as_deref(), typed_username.trim())?;
         signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
 
         let token = signup::CheckedToken::InstanceInvite(
@@ -1019,7 +1024,7 @@ impl AuthService for DefaultAuthService {
     async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto> {
         self.ensure_password_signup_allowed("open")?;
         let SignupOpenCmd {
-            username,
+            username: typed_username,
             password,
             remote_ip,
             email,
@@ -1028,16 +1033,17 @@ impl AuthService for DefaultAuthService {
         } = cmd;
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let (username, password) = (username.as_str(), password.as_str());
 
         // Rate limit check.
         signup::check_open_signup_rate(&self.signup_rate_limiter, &remote_ip)?;
 
-        signup::validate_username(username)?;
+        let normalized_username = signup::normalize_username(&typed_username)?;
+        let (username, password) = (normalized_username.as_str(), password.as_str());
         Self::validate_password(password)?;
         let email = Self::validate_email(&email)?;
+        // The display name falls back to the username as typed, keeping its case.
         let resolved_display_name =
-            signup::normalize_display_name(display_name.as_deref(), username)?;
+            signup::normalize_display_name(display_name.as_deref(), typed_username.trim())?;
         signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
 
         let password_hash = self.password_hashing.hash(password).await?;

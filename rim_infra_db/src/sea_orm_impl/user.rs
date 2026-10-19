@@ -98,8 +98,12 @@ impl UserRepository for SeaOrmUserRepository {
     }
 
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>> {
+        // Matches the idx_user_username_lower_unique index.
         let model = user::Entity::find()
-            .filter(user::Column::Username.eq(username))
+            .filter(Expr::cust_with_values(
+                "LOWER(username) = $1",
+                [sea_orm::Value::from(username.to_lowercase())],
+            ))
             .filter(user::Column::DeletedAt.is_null())
             .one(&self.db)
             .await
