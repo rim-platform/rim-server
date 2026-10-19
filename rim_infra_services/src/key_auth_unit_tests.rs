@@ -1731,6 +1731,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rotations_and_recoveries_push_the_identity_to_hosts() {
+        let mut h = harness();
+        let mut e = h.enroll(1).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut relay = rim_services::relay::service::MockRelayService::new();
+        relay.expect_identity_changed().returning(move |user_id| {
+            let _ = tx.send(user_id);
+            Box::pin(async { Ok(()) })
+        });
+        h.svc = h.svc.with_relay_service(Arc::new(relay));
+
+        let rotation = e.id.rotate_with_identity(&e.state, 3);
+        e.state = e.state.apply(&rotation).unwrap().0;
+        h.svc
+            .rotate(RotateIdentityKeyCmd {
+                actor: Some(Actor::new(e.user_id)),
+                entry: payload(rotation),
+                device: None,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap();
+        let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+        assert_eq!(pushed.expect("an identity push"), Some(e.user_id));
+
+        let recovery = e.id.recover(&e.state, 4);
+        let next = e.state.apply(&recovery).unwrap().0;
+        let cert =
+            e.id.device_cert(&next, Uuid::now_v7(), &signing_key(80), "New");
+        h.svc
+            .rotate(RotateIdentityKeyCmd {
+                actor: None,
+                entry: payload(recovery),
+                device: Some(payload(cert)),
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap();
+        let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+        assert_eq!(pushed.expect("an identity push"), Some(e.user_id));
+    }
+
+    #[tokio::test]
     async fn anonymous_recovery_for_an_unknown_principal_is_unauthenticated() {
         let h = harness();
         let mut stranger = TestIdentity::new(5);

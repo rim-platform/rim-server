@@ -522,13 +522,17 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
   (version + 1) and calls `publishProfileCard` on each listed relay it has an account on; each relay
   pushes it to every host that holds the person as remote (`POST /s2s/v1/identity`): the hosts it
   queued items or filed requests from for the person, and in S5-4 those holding their
-  subscriptions. Device additions and revocations are pushed the same way. The answer is
-  `{"applied":true|false}`.
+  subscriptions. Device additions and revocations, identity rotations and recoveries are pushed
+  the same way. The answer is `{"applied":true|false}`.
 - **Identity endpoint** (relays, for local users): `GET /s2s/v1/principals/<principalId>` →
   `{"principalId","keyLog":[…],"devices":[{"deviceId","certificate","revocation","mlsActive"}],"card"}`,
-  `404` for others. `POST /s2s/v1/identity` takes the same JSON; the receiver applies it only for
-  principals it holds as remote: a log extending its copy, new devices with valid certificates,
-  revocations, a card of higher version.
+  `404` for others. `devices` lists at most 64 devices, leaving out those whose certificate a
+  recovery rotation voided (`keySeq` before the log's last recovery entry); past 64 it keeps the
+  unrevoked devices, then the most recently revoked. `POST /s2s/v1/identity` takes the same
+  JSON; the receiver applies it only for principals it holds as remote: a log extending its
+  copy, new devices with valid certificates, revocations, a card of higher version. A receiver
+  ignores a listed device whose certificate a recovery voided, after checking its signature like
+  any other; a recovery entry new to the receiver revokes every device it held for the person.
 - **Fetching.** `remoteIdentity(principalId, relayUrl)` answers local principals directly and
   otherwise fetches from `relayUrl` (pinning it), cached 24 hours. The app verifies the log against
   the principal id, each certificate against the log and the card against the head, as
