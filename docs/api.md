@@ -206,12 +206,16 @@ reports `https`. These mutations set it, and need no session or CSRF header:
 - **Key-only signup.** `signupWithKey` creates the account and signs it in. An instance invite
   bound to an email address gives the account that address (`EMAIL_TAKEN` when another account
   has it); otherwise the account has no email.
-- **Password login.** `login(input: { username, password })`. An account without a password,
-  such as a key-only account or one that enrolled an identity key, cannot sign in this way.
+- **Password login.** `login(input: { username, password })`. The username is matched without
+  regard to case, since usernames are stored lowercase. An account without a password, such as a
+  key-only account or one that enrolled an identity key, cannot sign in this way.
 - **Invite signup.** `signupWithInvite` creates a password account and signs it in. It is
   refused with `FORBIDDEN` while `serverInfo.signupRequiresKeys` is true, which is the default
   (`RIM_SIGNUP_REQUIRE_KEYS`); new accounts then sign up with `signupWithKey`. Password login of
   existing accounts works either way.
+
+Both signups store the username trimmed and in lowercase, so `Alice` signs up as `alice`, and a
+username that differs from an existing account's only in case answers `CONFLICT`.
 
 When the server has terms of service (`serverInfo.termsUrl` is set), both signups must accept
 them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup without it, or with
@@ -252,8 +256,9 @@ can be neither handed over nor deleted (`VALIDATION`).
 ### Deleting an account
 
 `requestAccountDeletion(input: { confirmUsername })` schedules the signed-in account for
-deletion and answers `{ scheduledFor }`. The caller types their username again; a different one
-answers `VALIDATION`, and so does a request from the owner of a workspace that has other
+deletion and answers `{ scheduledFor }`. The caller types their username again, matched
+without regard to case since usernames are stored lowercase; a different one answers
+`VALIDATION`, and so does a request from the owner of a workspace that has other
 members, who hands it over or deletes it first (previous section; a workspace where the account
 is the only member is deleted with the account). A request while one is pending answers `CONFLICT`, and a person from
 another server, who deletes their account at their relay, gets `FORBIDDEN`. The request ends

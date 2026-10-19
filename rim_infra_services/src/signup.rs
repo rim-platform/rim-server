@@ -69,12 +69,14 @@ pub(crate) const BLOCKED_EMAIL_REFUSAL: &str = "this email cannot sign up here";
 /// may not use it, in either case.
 pub(crate) const REMOTE_USERNAME_PREFIX: &str = "r_";
 
-/// Check a username: 3 to 32 characters after trimming, ASCII letters, digits, `_` and `-`,
-/// not starting with the remote users' `r_` prefix or the purged accounts' `deleted-` prefix.
+/// Check a username and return the form it is stored and compared in: trimmed and folded to
+/// ASCII lowercase. The trimmed name is 3 to 32 characters of ASCII letters, digits, `_` and
+/// `-`, not starting with the remote users' `r_` prefix or the purged accounts' `deleted-`
+/// prefix in either case.
 ///
 /// # Errors
 /// `Validation` naming the rule that failed.
-pub(crate) fn validate_username(username: &str) -> ServiceResult<()> {
+pub(crate) fn normalize_username(username: &str) -> ServiceResult<String> {
     let trimmed = username.trim();
     let len = trimmed.len();
     if !(3..=32).contains(&len) {
@@ -91,23 +93,18 @@ pub(crate) fn validate_username(username: &str) -> ServiceResult<()> {
                 .to_string(),
         ));
     }
-    if trimmed
-        .get(..REMOTE_USERNAME_PREFIX.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(REMOTE_USERNAME_PREFIX))
-    {
+    let normalized = trimmed.to_ascii_lowercase();
+    if normalized.starts_with(REMOTE_USERNAME_PREFIX) {
         return Err(ServiceError::Validation(format!(
             "usernames starting with {REMOTE_USERNAME_PREFIX} are reserved for people from other servers"
         )));
     }
-    if trimmed
-        .get(..TOMBSTONE_USERNAME_PREFIX.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(TOMBSTONE_USERNAME_PREFIX))
-    {
+    if normalized.starts_with(TOMBSTONE_USERNAME_PREFIX) {
         return Err(ServiceError::Validation(format!(
             "usernames starting with {TOMBSTONE_USERNAME_PREFIX} are reserved for deleted accounts"
         )));
     }
-    Ok(())
+    Ok(normalized)
 }
 
 /// Normalise an optional display name, falling back to `username` when absent or blank after
@@ -571,18 +568,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn validate_username_accepts_and_refuses() {
-        assert!(validate_username("alice_01-x").is_ok());
+    fn normalize_username_accepts_and_refuses() {
+        assert_eq!(normalize_username("alice_01-x").unwrap(), "alice_01-x");
         assert!(matches!(
-            validate_username("ab"),
+            normalize_username("ab"),
             Err(ServiceError::Validation(_))
         ));
         assert!(matches!(
-            validate_username("a".repeat(33).as_str()),
+            normalize_username("a".repeat(33).as_str()),
             Err(ServiceError::Validation(_))
         ));
         assert!(matches!(
-            validate_username("ali ce"),
+            normalize_username("ali ce"),
+            Err(ServiceError::Validation(_))
+        ));
+        assert!(matches!(
+            normalize_username("alicé"),
             Err(ServiceError::Validation(_))
         ));
         for reserved in [
@@ -591,18 +592,47 @@ pub(crate) mod tests {
             " r_x1 ",
             "deleted-0199d1a0",
             "Deleted-x",
+            "DELETED-X",
         ] {
             assert!(
                 matches!(
-                    validate_username(reserved),
+                    normalize_username(reserved),
                     Err(ServiceError::Validation(_))
                 ),
                 "{reserved}"
             );
         }
-        assert!(validate_username("ra_alice").is_ok());
-        assert!(validate_username("r-alice").is_ok());
-        assert!(validate_username("deleted_alice").is_ok());
+        assert_eq!(normalize_username("ra_alice").unwrap(), "ra_alice");
+        assert_eq!(normalize_username("r-alice").unwrap(), "r-alice");
+        assert_eq!(
+            normalize_username("deleted_alice").unwrap(),
+            "deleted_alice"
+        );
+    }
+
+    #[test]
+    fn normalize_username_folds_to_lowercase() {
+        assert_eq!(normalize_username("Alice").unwrap(), "alice");
+        assert_eq!(normalize_username("ALICE_01-X").unwrap(), "alice_01-x");
+        assert_eq!(normalize_username("aLiCe").unwrap(), "alice");
+    }
+
+    #[test]
+    fn normalize_username_checks_the_length_after_trimming() {
+        assert_eq!(normalize_username("  Bob  ").unwrap(), "bob");
+        assert!(matches!(
+            normalize_username("  ab  "),
+            Err(ServiceError::Validation(_))
+        ));
+        let longest = "A".repeat(32);
+        assert_eq!(
+            normalize_username(&format!(" {longest} ")).unwrap(),
+            "a".repeat(32)
+        );
+        assert!(matches!(
+            normalize_username(&format!(" {longest}A ")),
+            Err(ServiceError::Validation(_))
+        ));
     }
 
     #[test]

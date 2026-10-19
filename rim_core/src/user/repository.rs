@@ -24,7 +24,8 @@ pub trait UserRepository: Send + Sync {
     /// a password nor a principal id is refused by the database (an `Internal` error: no caller
     /// builds one on purpose).
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User>;
-    /// The account signing in or named by `username`; a purged account is nobody.
+    /// The account signing in or named by `username`, compared without regard to case; a purged
+    /// account is nobody.
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>>;
 
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;

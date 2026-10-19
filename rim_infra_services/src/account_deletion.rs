@@ -221,7 +221,11 @@ impl AccountDeletionService for DefaultAccountDeletionService {
                 "a person from another server deletes their account at their relay".to_string(),
             ));
         }
-        if cmd.confirm_username.trim() != standing.username {
+        if !cmd
+            .confirm_username
+            .trim()
+            .eq_ignore_ascii_case(&standing.username)
+        {
             return Err(ServiceError::Validation(
                 "the username does not match this account".to_string(),
             ));
@@ -494,10 +498,27 @@ mod tests {
     async fn a_request_with_another_username_is_refused() {
         let user_id = UserId::new();
         let err = service(refusing(standing(user_id)), no_sessions_ended())
-            .request_deletion(request(user_id, SessionId::new(), "Alice"))
+            .request_deletion(request(user_id, SessionId::new(), "alicia"))
             .await
             .expect_err("refused");
         assert!(matches!(err, ServiceError::Validation(m) if m.contains("username")));
+    }
+
+    #[tokio::test]
+    async fn the_typed_username_is_matched_without_regard_to_case() {
+        let user_id = UserId::new();
+        let mut repo = repo_for(standing(user_id), vec![]);
+        repo.expect_record_request()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(true) }));
+        let mut sessions = MockSessionRepository::new();
+        sessions
+            .expect_revoke_all_for_user_except()
+            .returning(|_, _| Ok(0));
+        service(repo, sessions)
+            .request_deletion(request(user_id, SessionId::new(), " ALICE "))
+            .await
+            .expect("scheduled");
     }
 
     #[tokio::test]

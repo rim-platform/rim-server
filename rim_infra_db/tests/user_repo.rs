@@ -89,6 +89,41 @@ async fn find_by_username() {
 }
 
 #[tokio::test]
+async fn find_by_username_ignores_case() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let created = ctx.create_user("u_test_case").await;
+
+    for typed in ["U_Test_Case", "U_TEST_CASE", "u_test_case"] {
+        let found = repo.find_by_username(typed).await.unwrap().unwrap();
+        assert_eq!(found.id, created.id, "{typed}");
+    }
+    assert!(repo.find_by_username("u_test_cas").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_username_differing_only_in_case_is_conflict() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    ctx.create_user("u_test_fold").await;
+
+    let err = repo
+        .create_user(rim_core::user::model::NewUser {
+            username: "U_Test_Fold".to_string(),
+            password: Some("pw".to_string()),
+            email: Some("u_test_fold2@test.example.com".to_string()),
+            display_name: None,
+            key_identity: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rim_core::repository::error::RepoErrorKind::Conflict
+    ));
+}
+
+#[tokio::test]
 async fn record_terms_acceptance_stores_the_url_and_time() {
     use sea_orm::EntityTrait;
 

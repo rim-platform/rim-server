@@ -621,7 +621,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
         let username = self
             .texts(
                 r#"SELECT t.c AS value FROM unnest($2::text[]) WITH ORDINALITY AS t(c, n)
-                   WHERE NOT EXISTS (SELECT 1 FROM "user" u WHERE u.username = t.c AND u.id <> $1)
+                   WHERE NOT EXISTS (SELECT 1 FROM "user" u WHERE lower(u.username) = t.c AND u.id <> $1)
                    ORDER BY t.n LIMIT 1"#,
                 vec![uuid(user_id), tombstone_username_candidates(user_id).into()],
             )
