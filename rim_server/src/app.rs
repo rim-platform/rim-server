@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rim_api::broadcast::InMemoryBroadcaster;
 use rim_api::{AppSchema, build_schema};
+use rim_core::monitoring::MonitoringRepository;
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_infra_services::file_storage::LocalFileStorage;
@@ -20,6 +21,7 @@ use crate::s2s::{S2sSettings, S2sState};
 use rim_api::federation::FederationContext;
 use rim_core::s2s::repository::{PeerServerRepository, ServerIdentityRepository};
 use rim_infra_db::DbHandle;
+use rim_infra_db::sea_orm_impl::monitoring::SeaOrmMonitoringRepository;
 use rim_infra_db::sea_orm_impl::s2s::{
     SeaOrmPeerServerRepository, SeaOrmS2sNonceRepository, SeaOrmServerIdentityRepository,
 };
@@ -62,6 +64,8 @@ pub struct AppRuntime {
     pub s2s: S2sRuntime,
     /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
+    /// Aggregate storage reads used by the private metrics sampler.
+    pub(crate) monitoring_repo: Arc<dyn MonitoringRepository>,
     /// The background tasks' stop signal: they stop once it is dropped.
     pub shutdown_tx: watch::Sender<bool>,
     /// The IP deny list the edge refuses, kept current by a background task.
@@ -892,6 +896,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         plugin_bundle_service,
         feature_gate,
         s2s,
+        monitoring_repo: Arc::new(SeaOrmMonitoringRepository::new(
+            raw_db_for_tasks.clone().into(),
+        )),
         db: raw_db_for_tasks,
         shutdown_tx,
         ip_deny_list,

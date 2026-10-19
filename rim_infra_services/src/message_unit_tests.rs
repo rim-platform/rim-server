@@ -169,91 +169,122 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_creates_message_and_updates_activity() {
-        let actor_id = UserId::new();
-        let server_id = ServerId::new();
-        let conv_id = ConversationId::new();
-        let conv = conversation(server_id);
-        let msg = message(actor_id, conv_id);
-        let msg_id = msg.id;
-        let sent_at = msg.sent_at;
+        for fail_write in [false, true] {
+            let recorder = metrics_util::debugging::DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let _guard = metrics::set_default_local_recorder(&recorder);
 
-        let mut server_member_repo = MockServerMemberRepository::new();
-        server_member_repo
-            .expect_is_member()
-            .returning(|_sid, _uid| Ok(true));
-        server_member_repo
-            .expect_get_member_standing()
-            .returning(|_, _| {
-                Ok(Some(rim_core::server_member::model::MemberStanding::new(
-                    rim_core::server_member::model::ServerMemberRole::Member,
-                )))
+            let actor_id = UserId::new();
+            let server_id = ServerId::new();
+            let conv_id = ConversationId::new();
+            let conv = conversation(server_id);
+            let msg = message(actor_id, conv_id);
+            let msg_id = msg.id;
+            let sent_at = msg.sent_at;
+
+            let mut server_member_repo = MockServerMemberRepository::new();
+            server_member_repo
+                .expect_is_member()
+                .returning(|_sid, _uid| Ok(true));
+            server_member_repo
+                .expect_get_member_standing()
+                .returning(|_, _| {
+                    Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                        rim_core::server_member::model::ServerMemberRole::Member,
+                    )))
+                });
+
+            let mut conversation_repo = MockConversationRepository::new();
+            let conv_for_repo = conv.clone();
+            conversation_repo.expect_get_by_id().returning(move |_id| {
+                let c = conv_for_repo.clone();
+                Box::pin(async move { Ok(Some(c)) })
             });
+            conversation_repo
+                .expect_touch_last_activity_at()
+                .returning(move |_cid, _at| {
+                    Box::pin(async move {
+                        if fail_write {
+                            Err(rim_core::repository::error::RepoError::with_message(
+                                rim_core::repository::error::RepoErrorKind::Internal,
+                                "write failed",
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                });
 
-        let mut conversation_repo = MockConversationRepository::new();
-        let conv_for_repo = conv.clone();
-        conversation_repo.expect_get_by_id().returning(move |_id| {
-            let c = conv_for_repo.clone();
-            Box::pin(async move { Ok(Some(c)) })
-        });
-        conversation_repo
-            .expect_touch_last_activity_at()
-            .returning(move |_cid, _at| Box::pin(async { Ok(()) }));
+            let mut conversation_member_repo = MockConversationMemberRepository::new();
+            conversation_member_repo
+                .expect_is_member()
+                .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
+            conversation_member_repo
+                .expect_list_member_ids()
+                .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id]) }));
 
-        let mut conversation_member_repo = MockConversationMemberRepository::new();
-        conversation_member_repo
-            .expect_is_member()
-            .returning(|_cid, _uid| Box::pin(async { Ok(true) }));
-        conversation_member_repo
-            .expect_list_member_ids()
-            .returning(move |_cid| Box::pin(async move { Ok(vec![actor_id]) }));
+            let mut message_repo = MockMessageRepository::new();
+            let msg_for_repo = msg.clone();
+            message_repo
+                .expect_create_message()
+                .returning(move |new: &NewMessage| {
+                    assert!(new.text.as_ref().unwrap().contains('h'));
+                    let m = msg_for_repo.clone();
+                    Box::pin(async move { Ok(m) })
+                });
+            let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+            message_attachment_repo
+                .expect_get_attachments_for_message()
+                .times(usize::from(!fail_write))
+                .return_once(move |_| Box::pin(async { Ok(vec![]) }));
 
-        let mut message_repo = MockMessageRepository::new();
-        let msg_for_repo = msg.clone();
-        message_repo
-            .expect_create_message()
-            .returning(move |new: &NewMessage| {
-                assert!(new.text.as_ref().unwrap().contains('h'));
-                let m = msg_for_repo.clone();
-                Box::pin(async move { Ok(m) })
-            });
-        let mut message_attachment_repo = MockMessageAttachmentRepository::new();
-        message_attachment_repo
-            .expect_get_attachments_for_message()
-            .return_once(move |_| Box::pin(async { Ok(vec![]) }));
+            let mut thread_repo = MockMessageThreadRepository::new();
+            thread_repo
+                .expect_get_by_root_message()
+                .times(usize::from(!fail_write))
+                .return_once(move |_| Box::pin(async { Ok(None) }));
 
-        let mut thread_repo = MockMessageThreadRepository::new();
-        thread_repo
-            .expect_get_by_root_message()
-            .return_once(move |_| Box::pin(async { Ok(None) }));
+            let svc = DefaultMessageService::new(
+                MessageRepos {
+                    conversation_repo: Arc::new(conversation_repo),
+                    conversation_member_repo: Arc::new(conversation_member_repo),
+                    message_repo: Arc::new(message_repo),
+                    message_attachment_repo: Arc::new(message_attachment_repo),
+                    message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                    message_thread_repo: Arc::new(thread_repo),
+                    server_member_repo: Arc::new(server_member_repo),
+                    user_repo: Arc::new(MockUserRepository::new()),
+                },
+                None,
+                test_observers(),
+            );
 
-        let svc = DefaultMessageService::new(
-            MessageRepos {
-                conversation_repo: Arc::new(conversation_repo),
-                conversation_member_repo: Arc::new(conversation_member_repo),
-                message_repo: Arc::new(message_repo),
-                message_attachment_repo: Arc::new(message_attachment_repo),
-                message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
-                message_thread_repo: Arc::new(thread_repo),
-                server_member_repo: Arc::new(server_member_repo),
-                user_repo: Arc::new(MockUserRepository::new()),
-            },
-            None,
-            test_observers(),
-        );
-
-        let dto = svc
-            .send_message(SendMessageCmd {
-                actor: Actor::new(actor_id),
-                server_id,
-                conversation_id: conv_id,
-                text: Some("hi".to_string()),
-                parent_message_id: None,
-                forwarded_from_message_id: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(dto.id, msg_id);
-        assert_eq!(dto.sent_at, sent_at);
+            let result = svc
+                .send_message(SendMessageCmd {
+                    actor: Actor::new(actor_id),
+                    server_id,
+                    conversation_id: conv_id,
+                    text: Some("hi".to_string()),
+                    parent_message_id: None,
+                    forwarded_from_message_id: None,
+                })
+                .await;
+            if fail_write {
+                assert!(result.is_err());
+            } else {
+                let dto = result.expect("sent");
+                assert_eq!(dto.id, msg_id);
+                assert_eq!(dto.sent_at, sent_at);
+            }
+            let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+            assert_eq!(
+                got.counter(
+                    crate::metrics::MESSAGES_CREATED,
+                    &[("encryption", "plaintext")]
+                ),
+                u64::from(!fail_write)
+            );
+        }
     }
 
     #[tokio::test]

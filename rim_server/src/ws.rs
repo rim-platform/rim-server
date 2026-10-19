@@ -32,9 +32,37 @@ use async_graphql::Data;
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, WebSocket, WebSocketProtocols, WsMessage};
 use chrono::{DateTime, Utc};
 use futures_util::Stream;
+use metrics::{Unit, describe_gauge, gauge};
 
 use rim_api::AppSchema;
 use rim_services::session_revocation::SessionWatch;
+
+const CONNECTIONS: &str = "rim_websocket_connections";
+
+/// Register and initialize the authenticated WebSocket connection gauge.
+pub(crate) fn describe_metrics() {
+    describe_gauge!(
+        CONNECTIONS,
+        Unit::Count,
+        "Open authenticated GraphQL WebSocket connections."
+    );
+    gauge!(CONNECTIONS).increment(0.0);
+}
+
+struct ConnectionGuard;
+
+impl ConnectionGuard {
+    fn new() -> Self {
+        gauge!(CONNECTIONS).increment(1.0);
+        Self
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        gauge!(CONNECTIONS).decrement(1.0);
+    }
+}
 
 /// The close code of a connection whose session ended.
 pub(crate) const SESSION_ENDED: u16 = 4401;
@@ -94,6 +122,7 @@ where
         continuation: Vec::new(),
         frame_too_large: Rc::clone(&payload.too_large),
         ended: false,
+        metric_guard: None,
     };
     WsResponseBuilder::new(connection, request, payload)
         .protocols(&ALL_WEBSOCKET_PROTOCOLS)
@@ -119,6 +148,7 @@ struct Connection {
     frame_too_large: Rc<Cell<bool>>,
     /// Set once the server ended the connection: it sends nothing more and reads nothing more.
     ended: bool,
+    metric_guard: Option<ConnectionGuard>,
 }
 
 impl Connection {
@@ -177,6 +207,7 @@ impl Actor for Connection {
     type Context = WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        self.metric_guard = Some(ConnectionGuard::new());
         ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
             if Instant::now().duration_since(act.last_heartbeat) > CLIENT_TIMEOUT {
                 ctx.stop();
@@ -375,9 +406,104 @@ where
 mod tests {
     use actix_http::ws::{OpCode, Parser};
     use actix_web::web::BytesMut;
-    use futures_util::StreamExt;
+    use futures_util::{FutureExt, StreamExt};
 
     use super::*;
+
+    #[test]
+    fn connection_guards_track_concurrent_connections_and_release_on_drop() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            describe_metrics();
+            assert!(handle.render().contains("rim_websocket_connections 0"));
+            let first = ConnectionGuard::new();
+            let second = ConnectionGuard::new();
+            describe_metrics();
+            assert!(handle.render().contains("rim_websocket_connections 2"));
+            drop(first);
+            assert!(handle.render().contains("rim_websocket_connections 1"));
+            drop(second);
+            assert!(handle.render().contains("rim_websocket_connections 0"));
+        });
+    }
+
+    #[test]
+    fn an_unstarted_connection_has_no_metric_guard() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            describe_metrics();
+            let schema = async_graphql::Schema::new(
+                rim_api::query::Query::default(),
+                rim_api::mutation::Mutation::default(),
+                rim_api::subscription::Subscription,
+            );
+            let request = actix_web::test::TestRequest::default().to_http_request();
+            let result = start(
+                schema,
+                Data::default(),
+                SessionBound {
+                    watch: None,
+                    expires_at: None,
+                },
+                &request,
+                futures_util::stream::pending(),
+            );
+            assert!(result.is_err());
+            assert!(handle.render().contains("rim_websocket_connections 0"));
+        });
+    }
+
+    fn connection_for_test(session: SessionBound) -> Connection {
+        Connection {
+            schema: async_graphql::Schema::new(
+                rim_api::query::Query::default(),
+                rim_api::mutation::Mutation::default(),
+                rim_api::subscription::Subscription,
+            ),
+            data: Some(Data::default()),
+            protocol: WebSocketProtocols::GraphQLWS,
+            session: Some(session),
+            last_heartbeat: Instant::now(),
+            messages: None,
+            engine: None,
+            continuation: Vec::new(),
+            frame_too_large: Rc::new(Cell::new(false)),
+            ended: false,
+            metric_guard: None,
+        }
+    }
+
+    #[actix_web::test]
+    async fn started_connections_release_the_gauge_on_transport_drop_and_session_revocation() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
+        describe_metrics();
+        for revoked in [false, true] {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let session = SessionBound {
+                watch: Some(SessionWatch::new(receiver, ())),
+                expires_at: None,
+            };
+            let mut stream = Box::pin(WebsocketContext::create(
+                connection_for_test(session),
+                futures_util::stream::pending::<Result<Bytes, PayloadError>>(),
+            ));
+            assert!(stream.next().now_or_never().is_none());
+            assert!(handle.render().contains("rim_websocket_connections 1"));
+            if revoked {
+                sender.send(()).expect("watch is live");
+                let close = tokio::time::timeout(Duration::from_secs(1), stream.next())
+                    .await
+                    .expect("revocation closes connection");
+                assert!(close.is_some());
+            }
+            drop(stream);
+            assert!(handle.render().contains("rim_websocket_connections 0"));
+        }
+    }
 
     /// A client frame of `len` payload bytes, masked as a client sends it.
     fn frame(len: usize) -> BytesMut {

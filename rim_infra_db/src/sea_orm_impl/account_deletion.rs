@@ -466,6 +466,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
             .run_all(
                 &[
                     ("sessions", "DELETE FROM session WHERE user_id = $1"),
+                    ("activity", "DELETE FROM user_activity WHERE user_id = $1"),
                     (
                         "password_reset_tokens",
                         "DELETE FROM password_reset_token WHERE user_id = $1",

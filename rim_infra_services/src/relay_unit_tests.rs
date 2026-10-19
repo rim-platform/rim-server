@@ -734,6 +734,7 @@ async fn deliver_one(svc: &DefaultRelayService) -> Vec<RelayNotice> {
 
 fn dropped_space(host: &str, workspace: u128) -> DroppedSpace {
     DroppedSpace {
+        removed_items: 1,
         host_server_id: host.to_string(),
         workspace_id: Uuid::from_u128(workspace),
     }
@@ -743,6 +744,9 @@ fn dropped_space(host: &str, workspace: u128) -> DroppedSpace {
 /// dropped from in one notice.
 #[tokio::test]
 async fn a_queue_over_its_cap_drops_the_overflow_and_names_the_spaces() {
+    let recorder = metrics_util::debugging::DebuggingRecorder::new();
+    let snapshot = recorder.snapshotter();
+    let _guard = metrics::set_default_local_recorder(&recorder);
     let drops = Arc::new(Mutex::new(Vec::new()));
     let (svc, bob) = queueing_relay(
         peers_resolving(peer_keys(&host_signer(40), 0), None),
@@ -754,6 +758,20 @@ async fn a_queue_over_its_cap_drops_the_overflow_and_names_the_spaces() {
     let notices = deliver_one(&svc).await;
 
     assert_eq!(*drops.lock().expect("lock"), vec![300]);
+    let values = snapshot.snapshot().into_vec();
+    for (name, count) in [
+        ("rim_relay_enqueued_items_total", 1),
+        ("rim_relay_removed_items_total", 2),
+    ] {
+        assert!(
+            values
+                .iter()
+                .any(|(key, _, _, value)| key.key().name() == name
+                    && *value == metrics_util::debugging::DebugValue::Counter(count)),
+            "missing {name}"
+        );
+    }
+
     assert_eq!(
         notices,
         vec![

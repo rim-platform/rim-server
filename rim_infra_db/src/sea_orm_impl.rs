@@ -24,6 +24,8 @@ pub mod message_pin;
 pub mod message_reaction;
 pub mod message_thread;
 pub mod moderation;
+// Public for rim_server composition of the database metrics sampler.
+pub mod monitoring;
 pub mod notification;
 pub mod notification_preference;
 pub mod password_reset_token;

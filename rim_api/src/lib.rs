@@ -20,6 +20,7 @@ pub mod federation;
 pub mod graphql;
 pub mod ids;
 pub mod loaders;
+pub(crate) mod metrics;
 pub mod mutation;
 // pub: rim_server classifies requests for the CSRF check and the mutation budget.
 pub mod operation;
@@ -143,6 +144,7 @@ pub fn build_schema(
         .data(crate::types::AuditRetention(
             registration.audit_retention_days,
         ))
+        .extension(crate::metrics::OperationMetrics)
         .extension(crate::subscription_limit::SubscriptionLimit)
         .extension(crate::session_guard::SessionGuard)
         .extension(crate::subscriptions_only::SubscriptionsOnly)
@@ -155,4 +157,10 @@ pub fn build_schema(
         Some(federation) => builder.data(federation).finish(),
         None => builder.finish(),
     }
+}
+
+/// Register and initialize GraphQL metrics with the installed recorder.
+/// Called by `rim_server` after it installs the production metrics recorder.
+pub fn describe_metrics() {
+    metrics::describe();
 }

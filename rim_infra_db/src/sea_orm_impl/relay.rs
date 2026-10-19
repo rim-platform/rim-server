@@ -71,6 +71,7 @@ impl From<ItemRow> for RelayItemRecord {
 
 #[derive(FromQueryResult)]
 struct DroppedRow {
+    removed_items: i64,
     host_server_id: String,
     workspace_id: Uuid,
 }
@@ -358,14 +359,16 @@ impl RelayRepository for SeaOrmRelayRepository {
                      DELETE FROM relay_item i USING ranked r
                      WHERE i.id = r.id AND r.running - r.size_bytes < $2
                      RETURNING i.envelope_id)
-                 SELECT DISTINCT e.host_server_id, e.workspace_id
-                 FROM relay_envelope e JOIN deleted d ON d.envelope_id = e.id",
+                 SELECT e.host_server_id, e.workspace_id, count(*) AS removed_items
+                 FROM relay_envelope e JOIN deleted d ON d.envelope_id = e.id
+                 GROUP BY e.host_server_id, e.workspace_id",
                 vec![uuid(user_id), bytes.into()],
             )
             .await?;
         Ok(rows
             .into_iter()
             .map(|r| DroppedSpace {
+                removed_items: r.removed_items.max(0) as u64,
                 host_server_id: r.host_server_id,
                 workspace_id: r.workspace_id,
             })

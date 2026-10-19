@@ -1020,6 +1020,7 @@ impl MessageService for DefaultMessageService {
             .await?;
 
         Self::commit_if_present(scope).await?;
+        crate::metrics::message_created(false);
 
         info!(message_id = %message.id, is_reply = parent_message_id.is_some(), "created timeline message");
         info!(
@@ -1164,6 +1165,7 @@ impl MessageService for DefaultMessageService {
 
         // 9. Commit transaction
         Self::commit_if_present(scope).await?;
+        crate::metrics::message_created(false);
 
         info!(
             message_id = %message.id,
@@ -1768,6 +1770,7 @@ impl MessageService for DefaultMessageService {
             .await?;
 
         Self::commit_if_present(scope).await?;
+        crate::metrics::message_created(false);
 
         info!(
             message_id = %message.id,
@@ -2040,6 +2043,7 @@ impl MessageService for DefaultMessageService {
                 .await?;
         }
         Self::commit_if_present(scope).await?;
+        crate::metrics::message_created(true);
         info!(
             message_id = %message.id,
             incarnation,

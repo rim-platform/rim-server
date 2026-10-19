@@ -20,11 +20,14 @@ futures-util = "0.3"
 async-stream = "0.3"
 tracing = "0.1"
 base64 = "0.22"
+metrics = "0.24.6"
+async-trait = "0.1.89"
 
 [features]
 e2e-tests = []
 
 [dev-dependencies]
+metrics-util = { version = "0.20.4", default-features = false, features = ["debugging"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "time"] }
 sea-orm = { version = "2.0.0-rc.20", features = ["runtime-tokio-rustls", "sqlx-postgres"] }

@@ -32,6 +32,35 @@ scrape_configs:
 Names start with `rim_`; counters end in `_total`, and the unit is part of the name
 (`_seconds`, `_bytes`, `_connections`, `_items`).
 
+Labels describe a fixed set of categories. They never contain user or device ids, conversation
+ids, message contents, raw paths, GraphQL aliases or client-chosen operation names.
+
+### Accounts and activity
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_registered_accounts` | gauge | | Current local accounts, excluding remote identities and deleted accounts. |
+| `rim_registrations_total` | counter | | Successful local registrations since this process started. |
+| `rim_active_users` | gauge | `window` | Distinct local accounts with authenticated application activity in the last `24h` or `7d`. |
+
+Registered accounts are accounts, not verified individual people. Activity means a successfully
+authenticated session request; it can include background synchronization and does not prove
+that a person is reading. Heartbeats on an already-open socket do not refresh this value by
+themselves. A persistent last-activity timestamp survives session removal and process restarts;
+writes are throttled to once per five minutes per user, so window boundaries can lag by that
+much. The gauge is sampled from the database rather than summing session or per-process counts.
+
+### Messages
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_messages_created_total` | counter | `encryption` | New committed messages, including replies and forwards; `plaintext` or `encrypted`. |
+
+Edits and retries returning an existing encrypted message do not create another count. A message
+is counted once where its creation commits, regardless of the number of recipients, devices or
+relays. Encrypted message contents are never inspected for monitoring. This measures server
+acceptance, not delivery or a human read receipt.
+
 ### Requests
 
 | Metric | Type | Labels | Meaning |
@@ -54,6 +83,42 @@ Names start with `rim_`; counters end in `_total`, and the unit is part of the n
 | `other` | everything else, including unknown paths that answer `404` |
 
 `status` is the status class: `1xx`, `2xx`, `3xx`, `4xx` or `5xx`.
+
+### GraphQL and connected clients
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_graphql_operations_total` | counter | `operation_type`, `field`, `outcome` | Executed GraphQL requests, including errors returned with HTTP 200. |
+| `rim_graphql_operation_duration_seconds` | histogram | `operation_type`, `field`, `outcome` | GraphQL request duration, separate from subscription lifetimes. |
+| `rim_graphql_failed_operations_total` | counter | `kind` | Failed requests classified as `internal`, `unknown` or `client`, counted once per request. |
+| `rim_websocket_connections` | gauge | | Open authenticated GraphQL WebSocket connections. |
+| `rim_graphql_subscriptions` | gauge | | Active GraphQL subscription streams. |
+| `rim_graphql_subscription_responses_total` | counter | `outcome` | Responses yielded by subscription streams. |
+| `rim_graphql_subscription_duration_seconds` | histogram | | Subscription stream lifetime, including cancellation. |
+
+`outcome` is `success` or `error`. `operation_type` is `query`, `mutation`, `subscription` or
+`unknown`. `field` names the selected root field only for `sendMessage`, `replyToMessage`,
+`forwardMessage`, `sendEncryptedMessage`, `messages`, `threadMessages` and `messageChanges`;
+other fields use `other`, several selected fields use `multiple`, and unclassifiable requests
+use `unknown`. Aliases and fragments do not introduce client-chosen labels. A request selecting
+several fields still counts once; this is a request rate rather than a count of resolver calls.
+
+A failed request containing an internal error is classified as `internal`; an unrecognized or
+missing error code is `unknown`; known authentication, authorization, validation and business
+errors are `client`. Parsing and schema validation failures are also `client`, even without an
+error code. Internal takes precedence over unknown, then client. Alert on internal
+and unknown failures separately from expected client refusals. Subscription response errors are
+counted on the stream metrics instead of treating the socket's successful HTTP upgrade as proof
+that all its operations succeed.
+
+These metrics observe requests that reach the GraphQL schema. Transport refusals before schema
+execution, such as CSRF checks or edge rate limiting, appear in HTTP and refusal metrics.
+
+Connections are not people: one account may have several tabs or devices, and one connection
+may have several subscriptions. Connection and subscription gauges return to zero when their
+last live connection or stream ends, including timeout, cancellation and session revocation.
+
+### Server-to-server and forwarded requests
 
 `rim_s2s_requests_total{outcome}`:
 
@@ -129,10 +194,75 @@ Slow mode in a conversation is not counted here.
 | `rim_pending_migrations` | gauge | | Migrations this binary has that the database has not applied. |
 | `rim_build_info` | gauge | `version` | Always `1`; `version` is the server version. |
 
-`state` is `queued` for items waiting for devices to read them, `held` for items behind a DM
-request the recipient has not answered. The relay queue and the pending migrations are read from
-the database when the listener starts and every 30 seconds after; a read that fails or takes over
-5 seconds leaves the last value in place and logs a warning.
+`state` is `queued` for stored items eligible for delivery, `held` for items behind a DM request
+the recipient has not answered. These gauges count stored rows: acknowledged or expired rows
+can remain until cleanup runs. They are not exact counts of pending delivery or unread messages.
+Queue byte gauges sum the bytes charged to each recipient item. Several items may share one
+stored envelope, so these gauges are not physical PostgreSQL or filesystem usage.
+
+### Pending device delivery
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_relay_pending_items` | gauge | | Recipient queue rows awaiting acknowledgement by at least one eligible device. |
+| `rim_relay_pending_bytes` | gauge | | Bytes of those recipient rows, counted once per row. |
+| `rim_relay_pending_device_items` | gauge | | Pending item/device pairs; one row waiting for two devices counts twice. |
+| `rim_relay_pending_users` | gauge | | Users with at least one pending delivery. |
+| `rim_relay_pending_devices` | gauge | | Non-revoked devices with at least one pending delivery. |
+| `rim_relay_oldest_pending_age_seconds` | gauge | | Age of the oldest pending recipient row; zero when there is no pending delivery. |
+| `rim_relay_enqueued_items_total` | counter | | Recipient queue rows inserted by committed deliveries, including held items. |
+| `rim_relay_ack_requests_total` | counter | | Successful device acknowledgement requests, including repeated cursors. |
+| `rim_relay_removed_items_total` | counter | `reason` | Actual queue rows removed as `acknowledged`, `expired` or `overflow`. |
+
+Pending delivery uses each eligible device's acknowledgement cursor. Held DM requests, expired
+items, revoked devices and items a newly added device is not eligible to receive do not count.
+A device-specific item only counts against its target device. One disconnected device can keep
+an item pending even after another device has acknowledged it.
+
+Relay items include message events and other events, such as membership or notification changes.
+Label these panels as relay items rather than messages. Acknowledgement means the client device
+has processed an item, not that its user has read a message. Items remain subject to the relay's
+retention period and byte cap; see [Relay delivery](../relay.md).
+
+For conversations hosted here, accepted local members fetch persisted conversation history
+when they reconnect. Their messages do not become relay queue rows merely because a local
+device is offline. Pending relay delivery therefore does not count every message an offline
+client could fetch, nor the messages its user has not read.
+
+The acknowledgement request rate is not a delivered-item rate: one request can acknowledge
+many items or repeat a previous cursor. A row removed as acknowledged has completed delivery
+to all its eligible devices. Cleanup and overflow counters describe rows actually removed,
+not the number of affected conversations. Other deletion paths, such as rejecting a DM request
+or deleting an account, are not included in those removal counters.
+
+### Database sampling health
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_database_sample_success` | gauge | `sample` | `1` when the most recent sample succeeded, `0` when it failed or timed out. |
+| `rim_database_sample_last_success_timestamp_seconds` | gauge | `sample` | Unix time of the last successful sample; zero until the first success. |
+| `rim_database_sample_failures_total` | counter | `sample` | Failed or timed-out samples. |
+
+`sample` is `usage`, `delivery`, `relay` (stored queue rows) or `migrations`.
+
+Database-backed gauges are read when the metrics listener starts and every 30 seconds after.
+A read that fails or takes over five seconds leaves its last successful values in place. Check
+sampler freshness alongside these values instead of treating an unchanged gauge as proof that
+collection is healthy.
+
+### Scope and history
+
+Metrics describe the deployment being scraped. A relay measures its local accounts and delivery
+queue; message creation is measured by the workspace host that commits the message. A relay
+does not learn how many messages another server has stored or whether another server's users
+have read them.
+
+Counters reset when a process restarts; use `rate()` or `increase()` over the desired interval.
+Prometheus only has history from when collection started, and events between the last scrape
+and a crash can be lost. These counters are operational measurements, not an accounting ledger.
+Do not interpret missing metrics or stale samples as zero. Database-backed gauges describe a
+shared database: scraping multiple processes using that database does not create additional
+users or queue items, so do not sum their identical gauges.
 
 ### Audit retention
 

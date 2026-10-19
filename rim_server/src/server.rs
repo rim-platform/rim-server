@@ -114,7 +114,12 @@ pub async fn serve(
     let s2s_state = s2s_runtime.state.clone();
     let shutdown_tx = runtime.shutdown_tx;
     if let Some(addr) = metrics_addr {
-        crate::metrics::start(addr, runtime.db.clone(), shutdown_tx.subscribe())?;
+        crate::metrics::start(
+            addr,
+            runtime.db.clone(),
+            runtime.monitoring_repo,
+            shutdown_tx.subscribe(),
+        )?;
         rim_infra_services::metrics::set_audit_retention_days(
             config.audit_retention_days().ok().flatten(),
         );

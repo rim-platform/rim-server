@@ -3,7 +3,7 @@
 //! listener that serves them on its own address.
 
 use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use actix_web::body::MessageBody;
@@ -15,6 +15,7 @@ use metrics::{
     Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use rim_core::monitoring::MonitoringRepository;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use sea_orm::{DatabaseConnection, DbBackend};
 use tokio::sync::watch;
@@ -207,12 +208,27 @@ fn describe() {
         "Always 1; the version label is the server version."
     );
     rim_infra_services::metrics::describe();
+    rim_infra_services::usage_metrics::describe();
+    rim_api::describe_metrics();
+    crate::ws::describe_metrics();
 }
 
 /// The exporter configuration: histogram buckets for the request duration.
 fn builder() -> Result<PrometheusBuilder, String> {
     PrometheusBuilder::new()
         .set_buckets_for_metric(Matcher::Full(HTTP_DURATION.to_string()), DURATION_BUCKETS)
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full("rim_graphql_operation_duration_seconds".to_string()),
+                DURATION_BUCKETS,
+            )
+        })
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full("rim_graphql_subscription_duration_seconds".to_string()),
+                &[1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0],
+            )
+        })
         .map_err(|e| format!("metrics buckets: {e}"))
 }
 
@@ -254,7 +270,7 @@ fn sample_pool(db: &DatabaseConnection) {
 
 /// Read the relay queue and the pending migrations and set their gauges; a read that fails or
 /// takes too long leaves its gauge as it was.
-async fn sample_database(db: &DatabaseConnection) {
+async fn sample_database(db: &DatabaseConnection, monitoring_repo: &dyn MonitoringRepository) {
     let relay_repo = SeaOrmRelayRepository::new(db.clone().into());
     match tokio::time::timeout(
         SAMPLE_TIMEOUT,
@@ -262,16 +278,34 @@ async fn sample_database(db: &DatabaseConnection) {
     )
     .await
     {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "could not read the relay queue for metrics"),
-        Err(_) => tracing::warn!("reading the relay queue for metrics timed out"),
+        Ok(Ok(())) => rim_infra_services::usage_metrics::sample_outcome("relay", true),
+        result => {
+            rim_infra_services::usage_metrics::sample_outcome("relay", false);
+            tracing::warn!(?result, "could not sample the relay queue");
+        }
     }
     match tokio::time::timeout(SAMPLE_TIMEOUT, crate::health::count_pending_migrations(db)).await {
         Ok(Ok(pending)) => {
             gauge!(PENDING_MIGRATIONS).set(pending as f64);
+            rim_infra_services::usage_metrics::sample_outcome("migrations", true);
         }
-        Ok(Err(e)) => tracing::warn!(error = %e, "could not read the pending migrations"),
-        Err(_) => tracing::warn!("reading the pending migrations timed out"),
+        result => {
+            rim_infra_services::usage_metrics::sample_outcome("migrations", false);
+            tracing::warn!(?result, "could not sample the pending migrations");
+        }
+    }
+    for sample in ["usage", "delivery"] {
+        let result = tokio::time::timeout(SAMPLE_TIMEOUT, async {
+            match sample {
+                "usage" => rim_infra_services::usage_metrics::sample_usage(monitoring_repo).await,
+                _ => rim_infra_services::usage_metrics::sample_delivery(monitoring_repo).await,
+            }
+        })
+        .await;
+        rim_infra_services::usage_metrics::sample_outcome(sample, matches!(result, Ok(Ok(()))));
+        if !matches!(result, Ok(Ok(()))) {
+            tracing::warn!(sample, ?result, "could not sample database aggregates");
+        }
     }
 }
 
@@ -311,6 +345,7 @@ pub(crate) fn configure(state: MetricsState) -> impl FnOnce(&mut web::ServiceCon
 pub(crate) fn start(
     addr: SocketAddr,
     db: DatabaseConnection,
+    monitoring_repo: Arc<dyn MonitoringRepository>,
     shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let handle = install().map_err(std::io::Error::other)?;
@@ -336,7 +371,7 @@ pub(crate) fn start(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = tick.tick() => sample_database(&db).await,
+                _ = tick.tick() => sample_database(&db, monitoring_repo.as_ref()).await,
                 _ = shutdown_for_sampler.changed() => break,
             }
         }
@@ -481,6 +516,13 @@ mod tests {
             "rim_s2s_requests_total{outcome=\"signature_invalid\"} 1",
             "rim_forwarded_requests_total{direction=\"outgoing\",outcome=\"upstream_unavailable\"} 1",
             "rim_rate_limit_rejections_total{limiter=\"s2s_peer\"} 1",
+            "rim_registrations_total 0",
+            "rim_messages_created_total{encryption=\"plaintext\"} 0",
+            "rim_messages_created_total{encryption=\"encrypted\"} 0",
+            "rim_websocket_connections 0",
+            "rim_graphql_subscriptions 0",
+            "rim_graphql_failed_operations_total{kind=\"internal\"} 0",
+            "rim_database_sample_success{sample=\"usage\"} 0",
             "# TYPE rim_http_request_duration_seconds histogram",
             "# HELP rim_s2s_requests_total Server-to-server requests received, by outcome.",
         ] {

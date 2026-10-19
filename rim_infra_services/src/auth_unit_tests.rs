@@ -993,6 +993,10 @@ mod tests {
     /// A signup through an instance invite creates a user with no server_member row.
     #[tokio::test]
     async fn instance_invite_creates_user_with_no_workspace() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let chain = (uuid::Uuid::from(bt.id), bt.created_by_user_id);
         let user_id = UserId::new();
@@ -1049,6 +1053,8 @@ mod tests {
             res.server_id.is_none(),
             "should have no server_id for an instance invite signup"
         );
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
     }
 
     /// `max_uses=1` instance invite: first use succeeds, second returns `InvalidToken`.
@@ -1270,6 +1276,10 @@ mod tests {
     /// `signup_open` with no tokens and valid creds succeeds in open mode.
     #[tokio::test]
     async fn signup_open_accepts_no_token() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let user_id = UserId::new();
         let session_id = SessionId::new();
 
@@ -1313,6 +1323,8 @@ mod tests {
 
         assert_eq!(res.user_id, user_id);
         assert!(res.server_id.is_none());
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
     }
 
     const TERMS: &str = "https://rim.example.org/terms";
@@ -1533,6 +1545,10 @@ mod tests {
     /// signup with username already taken returns `Conflict`.
     #[tokio::test]
     async fn signup_username_already_taken_returns_conflict() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let bt = make_instance_invite(InstanceInviteId::new(), 1, 0);
         let existing_id = UserId::new();
 
@@ -1565,6 +1581,8 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, ServiceError::Conflict(_)), "got: {err:?}");
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 0);
     }
 
     /// signup with password shorter than 8 chars returns `Validation`.

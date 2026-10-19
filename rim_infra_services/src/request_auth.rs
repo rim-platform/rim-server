@@ -57,7 +57,9 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
         }
 
         // Best-effort: update last_seen_at for activity tracking.
-        let _ = self.repos.session_repo.touch_last_seen_at(session.id).await;
+        if let Err(error) = self.repos.session_repo.touch_last_seen_at(session.id).await {
+            tracing::warn!(%error, "could not record authenticated activity");
+        }
 
         Ok(RequestAuthResultDto {
             user_id: Some(session.user_id),

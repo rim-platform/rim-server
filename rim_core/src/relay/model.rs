@@ -75,6 +75,8 @@ pub struct RelayItemRecord {
 /// A space whose queued items were dropped over the byte cap.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DroppedSpace {
+    /// Actual queue rows deleted from this host and workspace.
+    pub removed_items: u64,
     pub host_server_id: String,
     pub workspace_id: Uuid,
 }
